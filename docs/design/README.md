@@ -4,7 +4,7 @@ Design notes record exploration, research, alternatives, experiments, tradeoffs,
 
 Use [the template](template.md), allocate the next `DN-NNNN` ID, and link related artifacts. When a non-language choice converges, record it in an architectural decision. When a language-semantic change becomes concrete, write a change proposal.
 
-Current notes:
+## Current notes
 
 ### Foundations
 
