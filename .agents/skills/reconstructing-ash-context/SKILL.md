@@ -18,6 +18,8 @@ Reconstruct the smallest evidence set that can answer the task. Do not scan the 
 
 ## Boundaries
 
+Context reconstruction is read-only. It assembles evidence but does not authorize repository changes; the governing proposal, decision, or task determines any later write scope.
+
 Do not read bootstrap plans, templates, unrelated notes, or historical Ash for background. Consult history only to answer a provenance question that current artifacts cannot answer.
 
 Never promote a design note, trajectory item, proposal, task, test, or implementation detail into current Ash semantics.
