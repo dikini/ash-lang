@@ -2,7 +2,7 @@
 
 - ID: `DN-0002`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md)
 
 > This design note is informative. It does not accept a Core representation or define Ash semantics.
 

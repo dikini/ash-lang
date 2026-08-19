@@ -26,7 +26,12 @@ No repository evidence currently prefers a language, build system, package manag
 
 ## Evidence and experiments
 
-After the Core and parser investigations identify representative operations, compare a small set of candidate environments by implementing equivalent bounded probes. Record how each candidate expresses invariants, transformations, parser organization, diagnostics, tests, and project setup.
+After the Core and parser investigations identify representative operations, compare two or three candidate environments by implementing the same two prototypes in each:
+
+- one Core prototype selected from [DN-0002](DN-0002-core-representation.md), including typed transformation and validation;
+- one parser prototype selected from [DN-0003](DN-0003-parser-architecture.md), including grammar growth, source spans, diagnostics, and recovery.
+
+The comparison ends when every candidate either produces those observations or records why it cannot. It excludes a complete language implementation, production packaging, backend selection, and unrelated ecosystem evaluation. Record how each candidate expresses invariants, transformations, parser organization, diagnostics, tests, and contributor setup.
 
 Choose based on those results and documented tradeoffs, not on familiarity or broad claims about a tool's qualities.
 

@@ -2,7 +2,7 @@
 
 - ID: `DN-0003`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md)
 
 > This design note is informative. It does not accept a parser architecture or define Ash grammar.
 
