@@ -9,6 +9,8 @@ Use the artifact that matches the change:
 - propose a language-semantic change in a change proposal;
 - organize authorized implementation in a task.
 
+A design note may authorize a bounded prototype or experiment needed to compare candidates. Label it as experimental, state the question and evidence it serves, and do not expose it as Ash behavior or treat it as production architecture. Product implementation still requires an accepted proposal or decision and an active task.
+
 Language changes move from exploration to a proposal, then to implementation, tests, and the specification update that makes the new statements true. Merge those last three together. Architectural changes move from exploration to a decision, then to implementation tasks.
 
 Keep changes narrow. State uncertainty rather than hiding it. Do not use historical Ash, speculative design, tasks, or implementation behavior as a substitute for the canonical specification. If implementation exposes a semantic gap, update the proposal before proceeding.

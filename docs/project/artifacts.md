@@ -10,13 +10,15 @@ The [specification](../../spec/README.md) answers “What is Ash now?” It is n
 
 Design notes answer “What are we considering, and what remains uncertain?” They hold research, alternatives, experiments, tradeoffs, and future pressure. They are informative, not normative.
 
+A design note may govern a bounded disposable prototype when code is needed as evidence. Such a prototype tests a named question and comparison criteria. It is not product implementation, does not create specification truth, and must not become production architecture without a decision and task.
+
 ## Architectural decisions
 
 Architectural decisions record accepted non-language choices such as parser architecture, Core representation, pass organization, repository workflow, or implementation tooling. Create one only after relevant exploration has converged.
 
 ## Change proposals
 
-Change proposals describe proposed transitions in Ash semantics. They state current behavior, proposed behavior, semantic delta, affected specification areas, resulting truth, interactions, non-goals, and required evidence. A proposal does not describe current Ash until its implementation, tests, and specification update merge together.
+Change proposals describe proposed transitions in Ash semantics. They state current behavior, proposed behavior, semantic delta, affected specification areas, resulting truth, interactions, non-goals, and required evidence. A `proposed` proposal is under consideration. An `accepted` proposal may authorize tasks, but still does not describe current Ash. After its implementation, tests, and specification update merge together, remove the proposal from the current tree; Git retains it as transition evidence.
 
 ## Tasks
 
@@ -31,7 +33,7 @@ Use a stable ID and a descriptive filename:
 - `CP-0001-short-name.md` — change proposal;
 - `TASK-0001-short-name.md` — task.
 
-Allocate the next unused number within the artifact class. Never reuse an ID. Keep metadata to `ID`, `Status`, and links to `Related` artifacts when relevant. Reference another artifact by both ID and relative link so the relationship remains readable without a generated index.
+Allocate the next number unused in both the current tree and Git history. Never reuse an ID. Keep metadata to `ID`, `Status`, and links to `Related` artifacts when relevant. Reference another artifact by both ID and relative link so the relationship remains readable without a generated index.
 
 Templates are not numbered artifacts. Remove completed, rejected, or superseded artifacts when they no longer describe current project state; Git retains their reasoning and identity.
 

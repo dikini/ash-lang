@@ -6,6 +6,8 @@
 
 > This proposal is not current Ash.
 
+Use `proposed` while the change is under consideration. Change status to `accepted` only when its semantics and required evidence have converged enough to authorize tasks.
+
 ## Current behavior
 
 What does the canonical specification and implementation do now?

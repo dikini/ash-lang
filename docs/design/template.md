@@ -26,6 +26,8 @@ What alternatives merit comparison, and why?
 
 What would distinguish the candidates?
 
+If a prototype is needed, what question does it test, what comparison criteria apply, and when will it be discarded or retained as current design evidence?
+
 ## Open questions
 
 What remains unknown?

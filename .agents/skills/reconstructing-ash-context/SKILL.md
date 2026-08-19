@@ -9,11 +9,11 @@ Reconstruct the smallest evidence set that can answer the task. Do not scan the 
 
 ## Route
 
-1. Read `/AGENTS.md`; consult `/docs/project/artifacts.md` only when an authority or lifecycle rule is unclear.
+1. Read the repository's [AGENTS.md](../../../AGENTS.md); consult the [artifact guide](../../../docs/project/artifacts.md) only when an authority or lifecycle rule is unclear.
 2. State the question, work role, and facts needed to answer it.
 3. Open the target artifact through its index. Start with that artifact and one authority check.
 4. Add a source only to answer a named gap. `Related` links are candidates, not a reading queue. Inspect headings before loading sections of a long file.
-5. Read relevant `/spec/` sections when making semantic claims. For implementation, require an authorizing proposal or decision, an active task, and relevant tests or invariants; stop if one is missing.
+5. Read relevant [specification](../../../spec/README.md) sections when making semantic claims. For product implementation, require an accepted proposal or decision, an active task, and relevant tests or invariants; stop if one is missing. A bounded design prototype instead requires a design note with a named question, comparison criteria, and disposal or retention conditions.
 6. Record each source's authority and unresolved questions. Stop as soon as every required fact has evidence.
 
 ## Boundaries

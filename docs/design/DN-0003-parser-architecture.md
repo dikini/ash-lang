@@ -23,9 +23,7 @@ Current work need not support the full expected future language. It should use e
 
 ## Candidate directions
 
-Research hand-written and generated approaches, including combinations where appropriate. Compare concrete organization and behavior rather than selecting a framework by reputation or adjectives.
-
-No implementation language, parser framework, or parsing strategy is currently preferred by repository evidence.
+No concrete candidate is yet supported by repository evidence. Research should identify multiple parser organizations and compare their concrete behavior rather than selecting a framework by reputation or adjectives. No implementation language, parser framework, or parsing strategy is currently preferred.
 
 ## Experiments
 
