@@ -1,4 +1,10 @@
-# Ash Reboot Foundations
+# DN-0001: Ash Reboot Foundations
+
+- ID: `DN-0001`
+- Status: exploring
+- Related: [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0003: Parser Architecture](DN-0003-parser-architecture.md)
+
+> This design note is informative. It records reboot principles, constraints, and open directions; it is not the Ash specification and does not accept the speculative designs it discusses.
 
 ## Purpose
 
