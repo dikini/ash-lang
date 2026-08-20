@@ -19,6 +19,10 @@ evaluator may use explicit environments and function data, while an
 explicit-machine candidate may use frames; both must produce the same results
 and observable traces.
 
+Grouping parentheses have already been removed by surface elaboration before
+the reduction relation applies. Their delimiters remain in source provenance,
+so a diagnostic can still label the grouping written by the user.
+
 ## Presentation elaboration
 
 For binder-only definitions, the two surface forms can produce the same semantic
@@ -35,6 +39,24 @@ This diagram is explanatory text rather than an inference rule. A multi-clause
 equational definition instead elaborates to a function whose body is a typed
 match. The equivalent inline operational definition writes that match
 explicitly. Pattern typing and coverage occur before both reach comparable Core.
+
+Whole-program elaboration binds each checked global over the remainder of the
+file in source order:
+
+```text
+definition₁
+definition₂
+result
+  ⇝ let name₁ = function₁;
+       let name₂ = function₂;
+         result
+```
+
+Each generated initializer is outside its own binding's scope, while its body
+contains the later definitions and result. Globals are therefore nonrecursive
+and visible only to the source that follows them in this stratum. Generated
+bindings and function values retain the interface, presentation, and source
+origins from which they were elaborated.
 
 For X-001, the equational clauses build the match that the inline operational
 definition writes explicitly:
@@ -82,6 +104,32 @@ For this comparison only, a tuple of values is a value and its elements evaluate
 strictly from left to right. The operational parameter list elaborates to one
 tuple pattern over that value; general tuple dynamics remain outside the first
 retained boundary.
+
+The following probe-only rules make that claim executable for a two-component
+product. The tuple steps its left component first, then its right component. An
+inserted tuple binding substitutes both components only after they are values.
+
+```sequent
+family product-pressure-steps:
+  E-Tuple-Left :=
+    left -> left'
+    ===>
+    (left, right) -> (left', right)
+
+  E-Tuple-Right :=
+    right -> right'
+    ===>
+    (left_value, right) -> (left_value, right')
+
+  E-Let-Tuple :=
+    ===>
+    let (x, y) = (left_value, right_value); body -> substitute(substitute(body, x, left_value), y, right_value)
+```
+
+Here `left_value` and `right_value` range over values, and `x` and `y` are
+distinct resolved binders that are not in scope in the initializer. These rules
+exist only to make X-003's product-domain comparison derivable; they do not add
+general product data or pattern bindings to the retained boundary.
 
 ## Bindings
 
@@ -236,17 +284,39 @@ let value₁ = 1; let value₂ = value₁ + 1; value₂
 → 2
 ```
 
-V-008 demonstrates nested strict applications. The trace abbreviates the already
-elaborated function values as `increment` and `double`; a candidate's detailed
-trace must make their bindings explicit rather than treating the names as magic.
+V-008 demonstrates whole-program elaboration and nested strict applications.
+The trace uses short resolved binder names but makes both generated global
+bindings explicit:
 
 ```text
-double (increment 20)
-→ double (20 + 1)
-→ double 21
+let increment = fn(i) { i + 1 };
+  let double = fn(d) { d * 2 };
+    double (increment 20)
+→ let double = fn(d) { d * 2 };
+    double ((fn(i) { i + 1 }) 20)
+→ (fn(d) { d * 2 }) ((fn(i) { i + 1 }) 20)
+→ (fn(d) { d * 2 }) (20 + 1)
+→ (fn(d) { d * 2 }) 21
 → 21 * 2
 → 42
 ```
+
+X-003's operational form reduces through one tuple argument and the generated
+product binding:
+
+```text
+(fn(arguments) {
+    let (left, right) = arguments;
+    left + right
+}) (20, 22)
+→ let (left, right) = (20, 22); left + right
+→ 20 + 22
+→ 42
+```
+
+The trace is cross-stratum evidence only. It demonstrates the product shape
+without making tuple construction or destructuring a retained first-stratum
+feature.
 
 ## Evaluator comparison
 

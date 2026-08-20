@@ -10,6 +10,9 @@ The judgment `Γ |- e ⇒ τ` synthesizes a type from an expression, while
 `Γ |- e ⇐ τ` checks an expression against an expected type. This begins from the
 bidirectional suggestion in [DN-0006](../../DN-0006-initial-type-system.md)
 rather than inventing mandatory parameter annotations for anonymous functions.
+Grouping parentheses have already been removed by surface elaboration before
+these judgments apply. Their source origin remains available for diagnostics,
+but they require no separate typing rule.
 
 ## Primitive values and variables
 
@@ -200,12 +203,20 @@ family two-parameter-definition-typing:
     GAMMA, x : domain_1, y : domain_2 |- body ⇐ codomain
     ===>
     GAMMA |- fn name(x : domain_1, y : domain_2) -> codomain { body } ⇐ (domain_1, domain_2) -> codomain
+
+  T-Let-Product-Two :=
+    GAMMA |- initializer ⇒ (domain_1, domain_2)
+    GAMMA, x : domain_1, y : domain_2 |- body ⇒ result_type
+    ===>
+    GAMMA |- let (x, y) = initializer; body ⇒ result_type
 ```
 
 These rules do not give Core two function types. Core retains one
 `Function(domain, codomain)` constructor: the equational type nests it, while
 the operational type uses a product as its one domain. A tuple-domain equation
-uses one tuple pattern instead of a multi-pattern curried head.
+uses one tuple pattern instead of a multi-pattern curried head. The final rule
+checks the product destructuring inserted when an operational parameter tuple
+elaborates to a single semantic argument.
 
 ## Primitive operations
 

@@ -31,7 +31,9 @@ establishes simplify a consumer enough to warrant another representation.
 The surface form preserves tokens or equivalent source coverage, block and
 definition grouping, equational external interfaces, inline operational
 interfaces, clause and explicit-match structure, and parser recovery nodes. It
-does not claim that names resolve or types agree.
+does not claim that names resolve or types agree. Grouping parentheses may
+disappear as semantic nodes after parsing, but their delimiter spans remain in
+source provenance.
 
 ### Resolved form
 
@@ -79,6 +81,10 @@ A validator must independently check at least:
   agrees with the codomain;
 - both V-002 definitions elaborate to valid callable semantic structure without
   losing their presentation provenance;
+- sequential global elaboration binds every checked definition over the
+  remaining program without placing the name in its own initializer's scope;
+- X-003's generated product destructuring agrees with the single product domain
+  and its two component binder types;
 - every source and generated node has a valid provenance record;
 - nodes forbidden by a named representation contract cannot appear.
 

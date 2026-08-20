@@ -72,6 +72,11 @@ Blank lines do not add `line_end` tokens. The words `fn`, `let`, `match`, `Int`,
 `Bool`, `Unit`, `true`, and `false` are reserved. Comments, Unicode identifier
 rules, numeric ranges, and source encodings remain outside this corpus slice.
 
+A `parenthesized_expression` changes grouping but does not introduce a semantic
+expression form. Surface representation retains both delimiters and their spans;
+elaboration passes the enclosed expression to resolution, typing, and dynamics
+with that grouping already reflected in its structure.
+
 An equational interface and its body must use the same name. This agreement is a
 resolution obligation rather than a context-sensitive EBNF production. An
 inline operational definition supplies its interface exactly once through its
