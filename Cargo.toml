@@ -7,6 +7,7 @@ rust-version = "1.97.1"
 publish = false
 
 [workspace]
+members = ["xtask"]
 resolver = "3"
 
 [lints]
