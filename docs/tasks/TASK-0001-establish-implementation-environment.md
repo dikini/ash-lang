@@ -68,4 +68,6 @@ for `ash` and `xtask`; it did not execute either package on that target.
 
 ## Deviations
 
-None.
+- The plan's final broad `TASK-0001` search also matched the artifact guide's
+  generic task-filename example. The stale-reference check instead searched for
+  the completed task's full filename. The artifact guide remained unchanged.
