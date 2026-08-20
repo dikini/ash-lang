@@ -16,3 +16,15 @@ Language changes move from exploration to a proposal, then to implementation, te
 Keep changes narrow. State uncertainty rather than hiding it. Do not use historical Ash, speculative design, tasks, or implementation behavior as a substitute for the canonical specification. If implementation exposes a semantic gap, update the proposal before proceeding.
 
 Follow the [writing guide](docs/project/writing.md). Before submitting a change, review every changed file, verify its required evidence, check relative links, and confirm that normative and informative statements remain distinct.
+
+## Implementation environment
+
+Ash uses Rust and Cargo as accepted by
+[AD-0001](docs/decisions/AD-0001-implementation-environment.md). Rustup reads
+`rust-toolchain.toml` automatically and selects the pinned toolchain. Run
+`cargo xtask verify` before submitting a change.
+
+Whenever `Cargo.toml` or `Cargo.lock` changes, record the evidence required by
+the [dependency policy](docs/project/dependencies.md). Package trouble does not
+authorize an automatic toolchain change; review the package, its configuration,
+available replacements, or a local patch first.

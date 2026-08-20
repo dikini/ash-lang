@@ -3,6 +3,7 @@
 These documents define how Ash development artifacts relate and how contributors keep current truth separate from exploration and future work:
 
 - [Artifact guide](artifacts.md)
+- [Dependency policy](dependencies.md)
 - [Specification discipline](specification.md)
 - [Writing guide](writing.md)
 
