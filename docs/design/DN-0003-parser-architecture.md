@@ -29,7 +29,9 @@ No concrete candidate is yet supported by repository evidence. Research should i
 
 Use progressively richer provisional grammar and diagnostic cases from the
 [Mini-Ash evaluation corpus](DN-0015-mini-ash-phase.md#corpus-strata). The corpus
-is experimental input rather than accepted Ash syntax.
+is experimental input rather than accepted Ash syntax. Start with the
+[first-stratum grammar and cases](DN-0016-first-mini-ash-corpus.md), including
+the equational and inline operational definition pressure.
 
 - express a small provisional grammar separately from each parser prototype;
 - add an operator with precedence and associativity;
