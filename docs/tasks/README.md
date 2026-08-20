@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0002: Establish the Documentation System](TASK-0002-establish-documentation-system.md)
+No implementation task is active.
