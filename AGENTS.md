@@ -22,3 +22,5 @@ Read only the relevant slice:
 Do not import historical Ash as current authority. Do not infer semantics from a task, implementation detail, test accident, design note, or proposal. If product implementation reveals missing or incorrect proposed semantics, return to the proposal or design work instead of making a local semantic decision.
 
 The project-local skill under `.agents/skills/` provides a focused context-reconstruction workflow. Verify changes using the evidence required by the governing artifact, then check links and authority boundaries in any documentation you change.
+
+Before creating or editing project prose, follow the [writing guide](docs/project/writing.md).
