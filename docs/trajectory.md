@@ -2,8 +2,8 @@
 
 This is a dependency and maturity view, not a sequential roadmap. Maturity uses: `idea → speculative → outlined → designed → specified → implementation`.
 
-TASK-0005 is aligning current planning with the Mini-Ash phase. Other work still
-needs enough evidence to authorize implementation.
+No implementation task is active. Other work still needs enough evidence to
+authorize implementation.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |

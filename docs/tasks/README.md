@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0005: Align Mini-Ash Planning](TASK-0005-align-mini-ash-planning.md)
+No implementation task is active.
