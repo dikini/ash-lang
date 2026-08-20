@@ -8,3 +8,4 @@ Use [the template](template.md) and allocate the next `AD-NNNN` ID.
 
 - [AD-0001: Implementation Environment](AD-0001-implementation-environment.md)
 - [AD-0002: Documentation System](AD-0002-documentation-system.md)
+- [AD-0003: Formal Notation Fences](AD-0003-formal-notation-fences.md)
