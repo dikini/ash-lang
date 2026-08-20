@@ -2,7 +2,7 @@
 
 - ID: `DN-0003`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md)
 
 > This design note is informative. It does not accept a parser architecture or define Ash grammar.
 
@@ -27,11 +27,16 @@ No concrete candidate is yet supported by repository evidence. Research should i
 
 ## Experiments
 
+Use progressively richer provisional grammar and diagnostic cases from the
+[Mini-Ash evaluation corpus](DN-0015-mini-ash-phase.md#corpus-strata). The corpus
+is experimental input rather than accepted Ash syntax.
+
 - express a small provisional grammar separately from each parser prototype;
 - add an operator with precedence and associativity;
 - add a nested construct without changing unrelated parser modules;
 - preserve source spans through successful parses;
-- compare diagnostics and recovery for incomplete and ambiguous input;
+- compare specific Elm- and Rust-style diagnostics and recovery for malformed,
+  incomplete, and ambiguous input;
 - note how each candidate supports formatter or editor tooling without making that tooling a current requirement.
 
 The provisional grammar exists only as experimental input. It must not be published as current Ash syntax.
