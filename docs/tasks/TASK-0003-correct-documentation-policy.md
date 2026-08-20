@@ -25,8 +25,9 @@ The execution steps are in the
 
 ## Progress
 
-The correction design is approved and this task is active. No policy correction
-has been applied yet.
+The language/tool and Rust crate sections now state when obsolete documentation
+leaves the current tree. Agent guidance links directly to the policy, and the
+project index describes its full policy scope.
 
 ## Verification
 
@@ -38,7 +39,9 @@ has been applied yet.
 
 ## Discoveries
 
-None.
+- AD-0002 already states the required lifecycle and routing outcomes; the
+  correction did not require a new decision.
+- The correction required no Rust or verification-runner change.
 
 ## Deviations
 
