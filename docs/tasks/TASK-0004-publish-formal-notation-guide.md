@@ -27,8 +27,9 @@ The execution steps are in the
 
 ## Progress
 
-AD-0003 is accepted and this task is active. The operational notation guide has
-not been published yet.
+The operational guide now defines both fence formats and the complete alias
+vocabulary. Project, writing, and documentation guidance route authors and
+reviewers to it. Manual and repository checks pass.
 
 ## Verification
 
@@ -43,7 +44,11 @@ not been published yet.
 
 ## Discoveries
 
-None.
+- The railroad renderer supports the accepted expression forms but still needs
+  `::=` support.
+- The sequent renderer supports the accepted inference forms and aliases but
+  still needs hyphenated rule and family names.
+- Neither external gap prevents unrendered Markdown from remaining readable.
 
 ## Deviations
 
