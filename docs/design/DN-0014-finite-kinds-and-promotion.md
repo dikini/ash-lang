@@ -140,6 +140,13 @@ A finite closed declaration gives complete inhabitant information and nominal eq
 
 Finite kinds can give a state-indexed API a named closed domain and can name resource, multiplicity, or continuation modes. They solve naming and indexing, not stale endpoint reuse, cleanup, duplication, or other usage-discipline problems. [DN-0013](DN-0013-session-and-resource-protocol-stress-tests.md) supplies those harder tests and must not be treated as justification for privileged session syntax.
 
+A continuation design should not assume that one finite domain captures every
+control property. Usage, escape, and handler replayability are independent
+enough to require separate indices, evidence, or intrinsic checking rules. A
+finite kind may let a continuation type state a mode such as one-shot, but the
+usage analysis must reject a second resumption and account for discard, while
+the operational semantics defines what resumption and discard do.
+
 The mechanism also must not decide whether multiplicity is an ordinary index or intrinsic type-system machinery. It only provides a finite domain when indexing is appropriate.
 
 ### Namespaces and diagnostics

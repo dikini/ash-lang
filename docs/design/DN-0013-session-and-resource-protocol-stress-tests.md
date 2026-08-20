@@ -76,6 +76,12 @@ The client protocol and the handler's implementation protocol may differ. A hand
 
 A one-shot continuation may move from `Available` to `Resumed` or `Discarded`; a suspensive continuation may move through `Suspended` before later resumption. Multi-shot resumption is only safe when duplicating the continuation also safely duplicates everything it captures. Continuation multiplicity and resource multiplicity may be instances of one deeper usage property rather than unrelated features.
 
+A continuation type may carry a finite mode index, but naming the mode does not
+establish safe use. The analysis must still consume or update continuation
+authority, propagate restrictions from captured values, and preserve those
+facts across calls and handler boundaries. Usage, escape, and replayability may
+require separate indices or evidence rather than one closed enumeration.
+
 ### Require compositional safety
 
 > Suggested rule: Multiplicity safety must compose across function calls, effect operations, handler boundaries, continuation capture, and public hooks.
@@ -143,6 +149,14 @@ answers and should not be conflated.
 ## Evidence and experiments
 
 The following corpus is a minimum, not a feature checklist. Each experiment should record the accepted and rejected program, the inferred usage or transition facts, the mechanism responsible for the result, and any special rule required.
+
+Begin continuation experiments with a non-escaping one-shot handler. First
+require one resumption; then admit checked discard to complete the at-most-once
+case. Compare suspensive one-shot and multi-shot extensions with unrestricted
+captures and a replayable interpretation separately, and schedule them according
+to the additional semantic and implementation machinery each requires. Test
+combinations only after the individual usage, escape, capture, lifetime, and
+replay obligations are visible.
 
 | Stress category | Success observation | Failure observation |
 | --- | --- | --- |

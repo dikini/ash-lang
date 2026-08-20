@@ -2,7 +2,7 @@
 
 - ID: `DN-0009`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0010: Identities and Resource Lifetimes](DN-0010-identities-and-resource-lifetimes.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md), [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0010: Identities and Resource Lifetimes](DN-0010-identities-and-resource-lifetimes.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md), [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md), [DN-0014: Finite Kinds and Promotion](DN-0014-finite-kinds-and-promotion.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md), [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md)
 
 > This design note is informative. It explores possible future effect semantics; it does not define current Ash, accept an architecture, or authorize roadmap work. The syntax and type notation in this note are illustrative.
 
@@ -134,6 +134,19 @@ At least these modes merit comparison:
 
 The eventual design may combine axes rather than encode four exclusive labels. It must still make enough information available to type-check libraries whose safety changes across those cases.
 
+Future continuation experiments should use a non-escaping one-shot handler as
+their primary case. The first case should resume once so that capture, handler
+boundaries, row transformation, and resumption can be studied without discard,
+escape, or duplication. The next case should complete the at-most-once contract
+by permitting discard and checking every captured cleanup obligation.
+
+Later cases should vary usage, escape, and interpretation separately. A
+suspensive one-shot continuation adds lifetime and storage obligations without
+adding duplication. A multi-shot continuation adds duplication and replay
+obligations without necessarily adding escape. Experiments should schedule
+these branches by their measured semantic and implementation complexity, then
+combine them only after each obligation is understood in isolation.
+
 A conservative candidate would make one-shot use the ordinary continuation
 contract and admit repeated resumption only when two independent obligations are
 met:
@@ -146,6 +159,14 @@ Pure computation with an unrestricted capture is one sufficient test case, not
 a complete definition of replay safety. An effect API alone cannot establish the
 second obligation because different handlers may interpret the same API by
 sharing state, cloning state, or rejecting replay.
+
+A finite continuation-mode kind could name one or more of these contracts, but
+the index would not enforce them by itself. Usage analysis must enforce
+duplication and discard restrictions; capture and lifetime checking must govern
+escape; and handler evidence may need to establish replayability. Operational
+semantics must still define capture, resume, discard, suspension, and
+duplication. The type system constrains which of those transitions a program may
+perform.
 
 ### Prefer checked relationships over dynamic convention
 
@@ -316,7 +337,19 @@ Retain a model only if its typing and operational rules agree on these cases. Di
 
 ### Continuation stress cases
 
-Exercise each continuation contract with:
+Grow the continuation corpus in this dependency order:
+
+1. a non-escaping continuation that is resumed exactly once;
+2. the full one-shot case, with either one resumption or checked discard;
+3. separate suspensive one-shot and multi-shot probes with unrestricted
+   captures and a replayable interpretation, ordered by measured complexity
+   rather than a fixed feature ranking;
+4. compositions that combine escape, repeated resumption, restricted captures,
+   cleanup, and stateful interpretations.
+
+For each stage, record the small-step rules, static facts, Core representation,
+diagnostics, runtime obligations, and the implementation mechanisms that the
+case requires. Exercise the resulting continuation contracts with:
 
 - a transaction that commits or rolls back;
 - a linear resource captured by a possible multi-shot continuation;

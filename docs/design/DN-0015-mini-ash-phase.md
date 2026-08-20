@@ -2,7 +2,7 @@
 
 - ID: `DN-0015`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0003: Parser Architecture](DN-0003-parser-architecture.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0003: Parser Architecture](DN-0003-parser-architecture.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md), [DN-0014: Finite Kinds and Promotion](DN-0014-finite-kinds-and-promotion.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md), [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md)
 
 > This design note is informative. It does not define current Ash, accept
 > Mini-Ash semantics, or accept a parser, Core, typing, or evaluation
@@ -105,6 +105,15 @@ CPS conversion belongs primarily to later effect work. If Mini-Ash requires
 continuations, a candidate should provide at least a theoretical CPS account.
 Otherwise it should record the relevant extension seam and redesign risks
 without implementing CPS prematurely.
+
+Later effect experiments should use a non-escaping one-shot handler as the
+primary continuation case, then add discard, escape, and repeated resumption as
+separate pressures. Continuation modes may eventually appear as type indices,
+but usage, capture, lifetime, and handler replayability remain distinct checking
+obligations. This ordering does not add handlers, continuation typing, or CPS to
+the Mini-Ash deliverable. It asks Mini-Ash representation candidates to preserve
+an explicit, typed extension seam and to record any redesign that the later
+control rules would require.
 
 ### Make composition observable
 
