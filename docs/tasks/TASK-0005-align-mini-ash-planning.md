@@ -8,10 +8,12 @@
 
 ## Dependencies
 
+This task began from the following state:
+
 - DN-0015 defines the current informative phase structure and evidence model.
-- The trajectory still presents Core as independent of the Mini-Ash corpus and
-  links the nucleus only to DN-0001.
-- The Core and parser notes do not yet route their experiments through DN-0015.
+- The trajectory presented Core as independent of the Mini-Ash corpus and
+  linked the nucleus only to DN-0001.
+- The Core and parser notes did not route their experiments through DN-0015.
 
 ## Work
 
@@ -27,8 +29,9 @@ The execution steps are in the
 ## Progress
 
 The trajectory now routes Mini-Ash and its component research through the
-growing evaluation corpus. Core and parser experiments link DN-0015 and include
-diagnostic evidence. Repository and documentation checks pass.
+growing evaluation corpus. Core and parser experiment routes link DN-0015 and
+now require diagnostic comparison criteria. Repository and documentation checks
+pass.
 
 ## Verification
 
@@ -41,12 +44,13 @@ diagnostic evidence. Repository and documentation checks pass.
 
 ## Discoveries
 
-- The current design notes already contain the necessary Core and parser
-  comparison questions; they needed a shared corpus route rather than new
-  architecture.
+- The current design notes already contain Core and parser comparison questions
+  sufficient for this planning alignment; they needed a shared corpus route
+  rather than new architecture.
 - Aligning the plan did not require an accepted semantic or architectural
   choice.
 
 ## Deviations
 
-None.
+- Review tightened the recorded evidence wording to distinguish required
+  diagnostic comparison from completed diagnostic evidence.
