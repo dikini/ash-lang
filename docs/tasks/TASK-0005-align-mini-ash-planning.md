@@ -26,8 +26,9 @@ The execution steps are in the
 
 ## Progress
 
-DN-0015 is indexed and this planning-alignment task is active. The trajectory
-and component-note routes have not been updated yet.
+The trajectory now routes Mini-Ash and its component research through the
+growing evaluation corpus. Core and parser experiments link DN-0015 and include
+diagnostic evidence. Repository and documentation checks pass.
 
 ## Verification
 
@@ -40,7 +41,11 @@ and component-note routes have not been updated yet.
 
 ## Discoveries
 
-None.
+- The current design notes already contain the necessary Core and parser
+  comparison questions; they needed a shared corpus route rather than new
+  architecture.
+- Aligning the plan did not require an accepted semantic or architectural
+  choice.
 
 ## Deviations
 
