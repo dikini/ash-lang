@@ -14,6 +14,8 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 - [DN-0002: Core Representation](DN-0002-core-representation.md)
 - [DN-0003: Parser Architecture](DN-0003-parser-architecture.md)
+- [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md) — growing evaluation
+  corpus, component experiments, and retained product increments.
 
 ### Surface language, typing, and elaboration
 
