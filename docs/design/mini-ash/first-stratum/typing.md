@@ -4,12 +4,13 @@
 > [DN-0016](../../DN-0016-first-mini-ash-corpus.md). They support comparison and
 > do not define current Ash static semantics or accept a typechecker algorithm.
 
-The provisional type language contains `Int`, `Bool`, `Unit`, and monomorphic
-function types `τ₁ -> τ₂`. A context `Γ` maps resolved binders to one monotype.
-The judgment `Γ |- e ⇒ τ` synthesizes a type from an expression, while
-`Γ |- e ⇐ τ` checks an expression against an expected type. This begins from the
-bidirectional suggestion in [DN-0006](../../DN-0006-initial-type-system.md)
-rather than inventing mandatory parameter annotations for anonymous functions.
+The retained-boundary type language contains `Int`, `Bool`, `Unit`, and
+monomorphic function types `τ₁ -> τ₂`; X-003 additionally uses one probe-only
+product type. A context `Γ` maps resolved binders to one monotype. The judgment
+`Γ |- e ⇒ τ` synthesizes a type from an expression, while `Γ |- e ⇐ τ` checks an
+expression against an expected type. This begins from the bidirectional
+suggestion in [DN-0006](../../DN-0006-initial-type-system.md) rather than
+inventing mandatory parameter annotations for anonymous functions.
 Grouping parentheses have already been removed by surface elaboration before
 these judgments apply. Their source origin remains available for diagnostics,
 but they require no separate typing rule.
