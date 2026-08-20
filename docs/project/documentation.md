@@ -39,6 +39,9 @@ not present an implementation accident as a language rule. Update tool
 documentation with changes to documented commands, inputs, outputs, diagnostics,
 configuration, or platform behavior.
 
+When language or tool behavior ceases to be current, update or remove its
+documentation in the same change. Git retains the superseded text.
+
 Verify semantic claims against `spec/`, language examples against required tests,
 and documented tool behavior against the implementation. Test examples when
 executable support exists.
@@ -52,6 +55,10 @@ The implemented Rust API and its tests constrain this documentation. Crate
 documentation explains implementation interfaces; it does not define Ash
 semantics. Update it with the API, invariant, error behavior, or safety obligation
 it describes.
+
+When an API, error behavior, invariant, or safety obligation ceases to exist,
+update or remove its documentation in the same change. Git retains the
+superseded text.
 
 `cargo xtask verify` builds workspace documentation with warnings denied. The
 workspace denies broken intra-doc links. Review API contracts, examples, errors,

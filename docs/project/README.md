@@ -1,6 +1,7 @@
 # Project documentation
 
-These documents define how Ash development artifacts relate and how contributors keep current truth separate from exploration and future work:
+These documents govern Ash documentation and development: artifacts,
+dependencies, specification discipline, and writing:
 
 - [Artifact guide](artifacts.md)
 - [Dependency policy](dependencies.md)
