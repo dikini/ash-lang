@@ -6,6 +6,7 @@ dependencies, specification discipline, and writing:
 - [Artifact guide](artifacts.md)
 - [Dependency policy](dependencies.md)
 - [Documentation policy](documentation.md)
+- [Formal notation](notation.md)
 - [Specification discipline](specification.md)
 - [Writing guide](writing.md)
 

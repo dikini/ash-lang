@@ -15,3 +15,12 @@ Write to reduce uncertainty.
 - Do not design mechanisms or requirements for hypothetical needs.
 
 For example, replace “Core is extensible” with “Adding an effect family does not require a new recursive Core expression form.” The second sentence names a property that design and implementation can test.
+
+## Formal notation
+
+Follow the [formal-notation guide](notation.md) for grammar productions and
+Gentzen-style inference rules. Use `ebnf` fences for grammar productions and
+`sequent` fences for inference rules with premises and one conclusion. Explain
+every formal-notation fence in prose and keep the explanation consistent with
+the notation. Use ordinary prose or inline notation when no production or
+inference structure is needed.

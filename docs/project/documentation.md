@@ -7,6 +7,10 @@ When documentation disagrees with its source of truth, correct the documentation
 unless the governing workflow changes both together. A document cannot create
 language semantics, architecture, or tool behavior merely by describing it.
 
+Grammar productions and Gentzen-style inference rules follow the
+[formal-notation guide](notation.md). The notation controls their Markdown
+representation; it does not change the authority of the containing document.
+
 ## Project-management documentation
 
 This domain contains design notes, architectural decisions, change proposals,
@@ -88,3 +92,7 @@ links, command accuracy, and authority review remain manual requirements.
 
 Adding automated documentation checks requires an authorized task. A missing
 automatic check does not remove the manual requirement.
+
+Manual review also checks formal-notation fence syntax, accompanying verbal
+explanations, source readability without a renderer, and agreement between prose
+and notation.
