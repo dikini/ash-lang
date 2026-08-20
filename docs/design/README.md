@@ -33,9 +33,11 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md) — passive modules and typed composition at static-link and runtime-load stages.
 - [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md) — typed handler hook points, subscription, composition, effects, and lifetime.
 
-### Downstream type-system stress and exploration
+### Downstream type-system and resource exploration
 
 - [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md) — tests for protocol, multiplicity, continuation, and handler composition machinery.
 - [DN-0014: Finite Kinds and Promotion](DN-0014-finite-kinds-and-promotion.md) — finite nominal static domains and restricted datatype promotion.
+- [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md) — deterministic cleanup, plural storage policies, transfer, sharing, and cost visibility.
+- [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md) — generative evidence for checked values and relationships, with possible place decomposition.
 
 `DN-0005` through `DN-0014` adapt user-supplied explorations preserved in Git history at commit `abd793c`. Their placement here records useful design context; it does not add them to the development trajectory.

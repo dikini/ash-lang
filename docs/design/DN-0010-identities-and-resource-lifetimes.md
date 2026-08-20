@@ -2,7 +2,7 @@
 
 - ID: `DN-0010`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md), [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md), [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md)
 
 > This design note is informative. It explores possible future identity and lifetime semantics; it does not define current Ash, accept an architecture, or authorize roadmap work. The syntax and type notation in this note are illustrative.
 
@@ -40,6 +40,24 @@ runtime witness for a
 ```
 
 An effect instance might therefore use `Database<a>` rather than a string key. A handler and provider parameterized by `a` can be known to agree, while a provider parameterized by fresh `b` does not match merely because it implements the same named API.
+
+### Keep identity, state, usage, and authority distinct
+
+> Suggested rule: A resource type may relate an identity to state and authority,
+> but those indices do not by themselves determine whether a value may be
+> duplicated or discarded.
+
+Illustrative types such as `File<f, Open>` and `View<a, Shared, T>` answer
+different questions: which resource, which protocol state, and which access
+authority. Usage discipline answers whether the value carrying those facts may
+be copied or abandoned. [DN-0013](DN-0013-session-and-resource-protocol-stress-tests.md)
+owns that usage question; [DN-0014](DN-0014-finite-kinds-and-promotion.md)
+explores only one way to name finite states.
+
+Keeping the axes distinct avoids treating a promoted state as proof of unique
+ownership or treating every fresh identity as a security capability. A later
+design may derive restrictions from their combination, but it must state the
+derivation explicitly.
 
 ### Use one identity concept across introduction stages
 
@@ -149,6 +167,22 @@ exists a.
 ```
 
 Outside code cannot name `a`, but opening the package preserves the equality shared by its members. The working hypothesis is that parametric polymorphism, associated types, opaque or existential types, and identity witnesses cover the important cases without allowing arbitrary runtime values in types.
+
+### Scoped identity candidates
+
+Existential packaging expresses that some identity exists. A higher-rank scope
+could instead express that a fresh identity cannot appear in the result:
+
+```text
+with_region : (forall r. Region<r> -> A) -> A
+```
+
+This notation is illustrative and higher-rank polymorphism is not part of the
+initial type-system candidate. The comparison matters because an existential
+can return a hidden owned resource, while a rank-delimited identity can reject a
+borrow or arena reference that escapes its scope. A dedicated lifetime language
+is another candidate if ordinary quantification cannot express useful cases or
+diagnose failures clearly.
 
 The hypothesis must be tested. If it fails, the failure should identify the missing relationship before Ash considers stronger type machinery.
 
@@ -330,6 +364,14 @@ Cross continuation modes with immutable, synchronized mutable, linear, transacti
 
 Compare candidate runtime witnesses for equality, hashing, compact storage, and lifetime tracking. Verify that statically proven equalities can erase checks while dynamically introduced witnesses survive opaque packaging. This experiment selects representation evidence, not language semantics.
 
+### Scope and transfer cases
+
+Compare existential ownership return, rank-delimited borrowing, explicit
+ownership transfer, and an attempted scope escape. Include a suspended
+continuation that retains the identity. A useful candidate accepts transfer
+without changing identity, rejects a borrow that outlives its scope, and does
+not use lexical scope alone to reclaim a resource retained by a continuation.
+
 ## Open questions
 
 - What constitutes identity equality statically and dynamically?
@@ -340,6 +382,11 @@ Compare candidate runtime witnesses for equality, hashing, compact storage, and 
 - What does removal mean to code that still holds a value parameterized by the identity?
 - Which relations are ownership, dependency, borrowing, leasing, or provenance, and which affect liveness?
 - Can ownership transfer, and how is it checked?
+- Are existential packages sufficient for owned resource creation while
+  higher-rank quantification or another mechanism is needed for non-escaping
+  scopes?
+- Which state and authority indices are ordinary type parameters, and which
+  usage restrictions must be intrinsic or derived?
 - How are shared ownership and dependency cycles collected or broken?
 - Who initiates and completes draining, and how are failures or cancellation handled?
 - Can a weakly captured identity make continuation resumption fallible in a typed way?

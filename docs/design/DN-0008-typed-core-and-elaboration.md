@@ -2,7 +2,7 @@
 
 - ID: `DN-0008`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md), [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md)
 
 > This design note is informative and non-normative. It explores typed Core and elaboration candidates; it does not define current Ash, accept an architecture, or require downstream capabilities. All syntax and internal forms are illustrative.
 
@@ -216,6 +216,24 @@ Potentially useful seams include:
 
 A seam is justified only if it keeps an existing responsibility clear or supports an experiment with named cases, comparison observations, and retention conditions. “Extensibility” alone is not evidence.
 
+### Preserve established facts until their last checked use
+
+> Suggested rule: A Core transformation retains or revalidates every static fact
+> needed by a later checked transformation, then erases that fact only after its
+> last consumer.
+
+Possible future resource work could establish facts such as unique authority,
+disjoint places, one-shot control, or the locality of an identity. Those facts
+could justify in-place update, ownership transfer, frame reuse, or removal of an
+internal effect requirement. A low-level backend need not understand the source
+type mechanism, but erasure must not happen before the transformation that relies
+on it.
+
+This is a representation pressure, not acceptance of any resource discipline or
+optimization. A candidate must identify the producer, validator, consumers, and
+invalidation conditions for each retained fact. Attaching unchecked metadata to
+Core would move the semantic decision rather than make it explicit.
+
 ## Candidate directions
 
 ### Fully explicit typed Core
@@ -274,6 +292,9 @@ Required probes include:
 - differential evaluation before and after pattern compilation and simplification;
 - invalid Core containing a scope error, bad type application, wrong branch type, or dialect-forbidden node;
 - a mock generated evidence parameter passed through ordinary bindings and applications, without implementing an interface system;
+- a mock fact that is established, preserved through one rewrite, consumed by a
+  later rewrite, and erased before low-level lowering, including a stale-fact
+  rejection case;
 - a mock opaque or continuation-bearing boundary sufficient to test traversal and validation, without exposing it as surface Ash.
 
 Compare direct interpreters on:
@@ -304,6 +325,8 @@ Retain a prototype only if it supplies current design evidence that cannot be ca
 - What continuation representation remains inspectable without making ordinary pure terms awkward?
 - Which semantic rules belong to Core validation, surface elaboration, or shared static infrastructure?
 - How are proof obligations or established facts attached to transformed Core without trusting stale evidence?
+- Which facts belong in types, explicit evidence terms, validated side tables, or
+  analysis results, and what invalidates each representation?
 - What minimal mock evidence test is useful without designing interfaces prematurely?
 - How can an opaque CPS or other representation region expose a typed interface without pretending Core can inspect its contents?
 - Which transformations are simpler before pattern lowering, and which after?

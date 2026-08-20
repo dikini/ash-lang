@@ -2,7 +2,7 @@
 
 - ID: `DN-0013`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0010: Identities and Resource Lifetimes](DN-0010-identities-and-resource-lifetimes.md), [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md), [DN-0014: Finite Kinds and Promotion](DN-0014-finite-kinds-and-promotion.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0010: Identities and Resource Lifetimes](DN-0010-identities-and-resource-lifetimes.md), [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md), [DN-0014: Finite Kinds and Promotion](DN-0014-finite-kinds-and-promotion.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md), [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md)
 
 > This design note is informative. It does not define current Ash, accept an architecture, or propose privileged session types. Its protocols and examples are an evaluation corpus for general Ash mechanisms.
 
@@ -52,6 +52,16 @@ At minimum, the investigation must distinguish unrestricted, affine, and linear 
 
 The diagnostic example is a closure that captures a restricted resource and is called twice. A successful design explains, without special treatment of the resource type, whether the captured value makes the closure restricted, changes its arrow, appears in a capture set, or creates an enclosing obligation. A design fails if the second call is accepted despite duplicating single-use authority, or if it rejects safe uses without identifying the relevant obligation.
 
+Usage and alias authority are separate axes. A unique mutable value may be
+non-duplicable, but uniqueness states that incompatible aliases do not exist;
+affinity states that a particular value may be discarded but not duplicated.
+One property must not stand in for the other.
+
+The first useful static distinction may be qualitative—whether duplication and
+discard are permitted—without tracking exact use counts. A candidate should add
+quantitative multiplicities only when the corpus contains a soundness or
+expressiveness case that runtime state or separate analysis cannot cover.
+
 ### Keep handler workflows private by default
 
 > Suggested rule: Permit a handler implementation to use a private protocol, and expose only explicitly selected workflow points as public hooks.
@@ -87,6 +97,9 @@ The corpus should compare at least these mechanism families, alone and in combin
 - resource or effect obligations;
 - generative identities;
 - state-token approaches.
+- structural inference from the restrictions of fields and captures;
+- runtime counters or [certificates](DN-0018-runtime-established-static-evidence.md)
+  for exact-use policies that do not affect qualitative soundness.
 
 No mechanism should win because its vocabulary resembles session types. The useful candidate is the one that also explains closure capture, generalization, continuation use, effect handling, and composition with the fewest special cases.
 
@@ -118,6 +131,15 @@ Branches must reconcile obligations at their join; recursion must thread the cur
 
 Publishing a restricted capability to multiple hook subscribers can duplicate it. Nested handlers can change continuation multiplicity around a captured resource. Both cases test whether public composition preserves private protocol guarantees.
 
+### Destruction and cancellation
+
+Affine discard does not by itself define deterministic destruction. A candidate
+must state whether discarding an owned value elaborates to a destructor, which
+effects that destructor may perform, how destruction is ordered, and what
+happens during abort, cancellation, or partial failure. Linear completion
+obligations and affine values with implicit cleanup may produce different
+answers and should not be conflated.
+
 ## Evidence and experiments
 
 The following corpus is a minimum, not a feature checklist. Each experiment should record the accepted and rejected program, the inferred usage or transition facts, the mechanism responsible for the result, and any special rule required.
@@ -137,6 +159,9 @@ The following corpus is a minimum, not a feature checklist. Each experiment shou
 | Suspension | Escaping control carries its resource state and resumes with that same authority later. | Suspension loses, duplicates, or reconstructs the captured resource state. |
 | Parallel coeffects | Parallel subscribers receive only duplicable data or a soundly mediated capability. | A hook broadcasts a restricted capability as though it were unrestricted. |
 | Nested handler composition | Continuation and resource multiplicities remain safe across handlers with different policies. | Independently accepted handlers compose into duplication or loss. |
+| Composite propagation | A product or closure is no more duplicable or discardable than its restricted contents. | Wrapping a restricted value restores unrestricted use. |
+| Deterministic cleanup | Every accepted exit path runs or transfers the required cleanup exactly as its contract states. | Return, abort, cancellation, or destructor failure silently leaks or repeats cleanup. |
+| Dynamic exact bound | A runtime counter enforces an exact-use policy without weakening static non-duplication. | Encoding the count dynamically permits duplication of the underlying authority. |
 
 Additional comparison cases should establish whether:
 
@@ -160,6 +185,10 @@ A prototype, if needed, is disposable. Retain it only as design evidence if it c
 - Can resource-sensitive generalization reuse the candidate seam explored in [DN-0006: Initial Type System](DN-0006-initial-type-system.md) without changing ordinary `let` semantics?
 - What identity mechanism prevents endpoints from distinct protocol instances from being mixed?
 - How are branch joins, abort, exceptions, and cleanup obligations reconciled?
+- Does affine elimination invoke implicit destruction, require explicit cleanup,
+  or vary by resource type, and how are destructor effects ordered?
+- Which real program requires static exact-use arithmetic rather than a runtime
+  counter or separate bounded-resource analysis?
 - How should hook publication describe sequencing, concurrency, and the multiplicity of payloads?
 - Can one continuation/resource analysis cover one-shot, multi-shot, abortive, and suspensive handlers?
 - Which experiment, if any, demonstrates irreducible need for language support specific to protocols?

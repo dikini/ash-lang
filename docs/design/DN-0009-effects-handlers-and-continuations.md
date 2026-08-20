@@ -2,7 +2,7 @@
 
 - ID: `DN-0009`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0010: Identities and Resource Lifetimes](DN-0010-identities-and-resource-lifetimes.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0010: Identities and Resource Lifetimes](DN-0010-identities-and-resource-lifetimes.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md), [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md)
 
 > This design note is informative. It explores possible future effect semantics; it does not define current Ash, accept an architecture, or authorize roadmap work. The syntax and type notation in this note are illustrative.
 
@@ -134,6 +134,19 @@ At least these modes merit comparison:
 
 The eventual design may combine axes rather than encode four exclusive labels. It must still make enough information available to type-check libraries whose safety changes across those cases.
 
+A conservative candidate would make one-shot use the ordinary continuation
+contract and admit repeated resumption only when two independent obligations are
+met:
+
+- duplicating the captured environment preserves every usage and authority rule;
+- the installed interpretation gives the outstanding interactions a meaningful
+  replay semantics.
+
+Pure computation with an unrestricted capture is one sufficient test case, not
+a complete definition of replay safety. An effect API alone cannot establish the
+second obligation because different handlers may interpret the same API by
+sharing state, cloning state, or rejecting replay.
+
 ### Prefer checked relationships over dynamic convention
 
 > Suggested rule: Express effect compatibility, handler transformations, provider requirements, and continuation restrictions through Ash types and witnesses where practical; retain runtime machinery for facts learned only at runtime.
@@ -168,6 +181,19 @@ Rows would describe which operations may escape a computation. A useful formaliz
 - aliases or groupings without hiding identity distinctions.
 
 Row algebra and handler composition need separate judgments. Conflating them would make an unordered collection of requirements accidentally dictate ordered control flow.
+
+### Identity-local requirements
+
+A generative resource scope pressures the row model to distinguish a hidden
+implementation interaction from a requirement that remains outstanding at the
+scope boundary. A candidate may remove an identity-indexed requirement only
+when the responsible scope or handler has interpreted it and proves that the
+identity, its authority, and any suspended computation that retains them do not
+escape.
+
+This is semantic discharge, not display-only row hiding. It must not erase
+external I/O merely because an internal resource identity is fresh, and it must
+remain sound when a continuation suspends past the apparent lexical scope.
 
 ### Handler boundaries
 
@@ -299,6 +325,11 @@ Exercise each continuation contract with:
 - a handler that publishes pre- and post-operation hooks;
 - a nondeterministic handler that resumes more than once.
 
+The matrix should separately vary capture duplicability and handler replay
+semantics. It should include an unrestricted capture under a non-replayable
+handler and a restricted capture under an otherwise replayable handler; neither
+case should gain multi-shot use from the other property alone.
+
 Compare rejection points, required type annotations, runtime checks, and whether cleanup can be proved to occur once.
 
 ### Representation probes
@@ -308,6 +339,14 @@ Extend the [DN-0002](DN-0002-core-representation.md) Core experiments with one o
 ### Static and dynamic equivalence
 
 Resolve the same handler/provider graph once with all identities known and once with one package introduced at runtime. Compare resulting behavior and typing. Dynamic resolution may retain witnesses and indirection; it should not invent different composition semantics.
+
+### Local-requirement elimination
+
+Compare a handled identity-local state operation, an unhandled external write,
+and a local operation captured by an escaping continuation. Record the inferred
+row at each boundary and the evidence used to remove a requirement. Reject a
+model that hides the external write or eliminates the local operation while a
+continuation can still resume it outside the scope.
 
 ## Open questions
 
@@ -320,6 +359,10 @@ Resolve the same handler/provider graph once with all identities known and once 
 - May a handler strengthen or weaken a continuation contract, and under what subtyping or compatibility relation?
 - Does a non-resuming handler need a distinct result type?
 - Which resource properties constrain multi-shot resumption: linearity, ownership, borrowing, synchronization, or effect restrictions?
+- Is one-shot use the conservative default, and which checked facts are
+  sufficient to admit multi-shot use without making purity its definition?
+- What exact non-escape and interpretation evidence permits an identity-local
+  requirement to leave a public row?
 - How do exceptions, cancellation, and ordinary failure interact with handler unwinding and continuation contracts?
 - When can handler reordering or fusion be proved safe?
 - How do nested handlers determine which public hook identities they publish?
