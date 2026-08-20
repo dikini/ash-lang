@@ -16,6 +16,8 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0003: Parser Architecture](DN-0003-parser-architecture.md)
 - [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md) — growing evaluation
   corpus, component experiments, and retained product increments.
+- [DN-0016: First Mini-Ash Corpus Stratum](DN-0016-first-mini-ash-corpus.md) —
+  shared evidence for the initial monomorphic functional nucleus.
 
 ### Surface language, typing, and elaboration
 

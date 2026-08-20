@@ -25,7 +25,7 @@ The initial feature pressure is:
 
 - primitive values;
 - immutable bindings;
-- functions and calls;
+- functions and applications;
 - recursion;
 - algebraic data types;
 - pattern matching;
@@ -181,7 +181,7 @@ The leading direction has three layers:
 A provisional product decomposition is:
 
 1. primitive values, variables, immutable bindings, monomorphic functions, and
-   calls;
+   applications;
 2. recursive definitions;
 3. algebraic data types, constructors, and pattern matching;
 4. rank-1 parametric polymorphism.
@@ -208,8 +208,9 @@ representation boundaries current architecture.
 
 Grow the corpus through:
 
-1. primitive values, variables, immutable bindings, functions, and calls;
-2. recursive definitions and calls;
+1. [primitive values, variables, immutable bindings, functions, and
+   applications](DN-0016-first-mini-ash-corpus.md);
+2. recursive definitions and applications;
 3. algebraic data types and constructor values;
 4. pattern bindings, matching, and coverage failures;
 5. basic rank-1 polymorphism with explicit typed operations.

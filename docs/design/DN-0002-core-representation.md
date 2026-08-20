@@ -37,9 +37,11 @@ These are candidates for experiments, not a complete set and not accepted choice
 
 Use progressively richer slices of the
 [Mini-Ash evaluation corpus](DN-0015-mini-ash-phase.md#corpus-strata). Begin with
-the pure features that distinguish representation boundaries. Treat effects,
-continuations, and CPS as downstream pressure; use a theoretical account or a
-disposable probe only when the pure corpus cannot distinguish a candidate.
+the [first monomorphic stratum](DN-0016-first-mini-ash-corpus.md) and its
+definition, capture, application, validation, and source-provenance pressure.
+Treat effects, continuations, and CPS as downstream pressure; use a theoretical
+account or a disposable probe only when the pure corpus cannot distinguish a
+candidate.
 
 Compare small concrete representations by implementing or sketching the operations that will stress them:
 
