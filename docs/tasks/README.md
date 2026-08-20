@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0001: Establish the Implementation Environment](TASK-0001-establish-implementation-environment.md)
+No implementation task is active.

@@ -2,14 +2,13 @@
 
 This is a dependency and maturity view, not a sequential roadmap. Maturity uses: `idea → speculative → outlined → designed → specified → implementation`.
 
-TASK-0001 is establishing the accepted implementation environment. Other work
-still needs enough evidence to authorize implementation.
+No implementation task is active. Other work still needs enough evidence to
+authorize implementation.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
 | [Core representation](design/DN-0002-core-representation.md) | outlined | none | Compare concrete representations with representative compiler operations. |
 | [Parser architecture](design/DN-0003-parser-architecture.md) | outlined | initial syntax needs, kept separate from architecture | Research candidates and test grammar growth, diagnostics, spans, and recovery. |
-| [Implementation environment](decisions/AD-0001-implementation-environment.md) | implementation | none | Complete [TASK-0001](tasks/TASK-0001-establish-implementation-environment.md): create the Rust workspace, pin stable tooling, and establish dependency and verification controls. |
 | [Specification methodology](project/specification.md) | outlined | needs of the first language nucleus and expected future runtime state | Compare semantic notations and accept one method before substantial semantic specification. |
 | [Small pure functional nucleus](design/DN-0001-reboot-foundations.md#7-initial-language-trajectory) | speculative | implementation environment, sufficient Core and parser decisions | Propose complete increments; each requires implementation, tests, and a specification update. |
 
