@@ -23,4 +23,4 @@ Do not import historical Ash as current authority. Do not infer semantics from a
 
 The project-local skill under `.agents/skills/` provides a focused context-reconstruction workflow. Verify changes using the evidence required by the governing artifact, then check links and authority boundaries in any documentation you change.
 
-Before creating or editing project prose, follow the [writing guide](docs/project/writing.md).
+Apply the [writing guide](docs/project/writing.md) to all Ash communication, including chat, reviews, plans, commit and PR messages, and repository prose.

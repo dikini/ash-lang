@@ -1,5 +1,7 @@
 # Writing guide
 
+These rules apply to repository prose and agent communication, including chat.
+
 Write to reduce uncertainty.
 
 - Prefer plain, direct language and active voice.
