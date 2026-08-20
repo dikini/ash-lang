@@ -7,9 +7,9 @@ needs enough evidence to authorize implementation.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
-| [Core representation](design/DN-0002-core-representation.md) | outlined | none | Compare concrete representations with representative compiler operations. |
-| [Parser architecture](design/DN-0003-parser-architecture.md) | outlined | initial syntax needs, kept separate from architecture | Research candidates and test grammar growth, diagnostics, spans, and recovery. |
-| [Specification methodology](project/specification.md) | outlined | needs of the first language nucleus and expected future runtime state | Compare semantic notations and accept one method before substantial semantic specification. |
-| [Small pure functional nucleus](design/DN-0001-reboot-foundations.md#7-initial-language-trajectory) | speculative | implementation environment, sufficient Core and parser decisions | Propose complete increments; each requires implementation, tests, and a specification update. |
+| [Mini-Ash phase](design/DN-0015-mini-ash-phase.md) | outlined | implementation environment, growing evaluation corpus, accepted specification method, and sufficient component decisions | Develop the first corpus stratum and use it to compare component boundaries without accepting syntax or semantics. |
+| [Core representation](design/DN-0002-core-representation.md) | outlined | growing Mini-Ash corpus and downstream representation pressure | Compare typed representations against progressively richer corpus cases; accept an architecture only after invariants, diagnostics, and extension behavior converge. |
+| [Parser architecture](design/DN-0003-parser-architecture.md) | outlined | provisional Mini-Ash grammar and diagnostic cases, kept separate from language authority | Compare composable parser organizations on grammar growth, precedence, recovery, spans, and user-facing diagnostics. |
+| [Specification methodology](project/specification.md) | outlined | Mini-Ash operational cases and downstream runtime-state pressure | Accept small-step operational semantics as the primary method before substantial normative semantics. |
 
 Planning detail must decrease with distance. Effects, providers, processes, propositions, laws, proofs, and optimizer search are future design pressure, not planned language inventory. Immediate work should preserve relevant options without implementing those features.
