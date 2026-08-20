@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0004: Publish the Formal Notation Guide](TASK-0004-publish-formal-notation-guide.md)
+No implementation task is active.
