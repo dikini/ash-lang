@@ -11,6 +11,7 @@ Project artifacts answer different questions:
 - [change proposals](docs/proposals/README.md) propose language-semantic changes;
 - [tasks](docs/tasks/README.md) organize active implementation work;
 - the [development trajectory](docs/trajectory.md) records dependencies and maturity;
-- [project documentation](docs/project/README.md) defines the development discipline.
+- [project documentation](docs/project/README.md) defines documentation,
+  dependencies, and the development discipline.
 
 Human contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md). Agents should start with [AGENTS.md](AGENTS.md) and reconstruct only the context needed for their task.

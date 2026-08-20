@@ -15,7 +15,10 @@ Language changes move from exploration to a proposal, then to implementation, te
 
 Keep changes narrow. State uncertainty rather than hiding it. Do not use historical Ash, speculative design, tasks, or implementation behavior as a substitute for the canonical specification. If implementation exposes a semantic gap, update the proposal before proceeding.
 
-Follow the [writing guide](docs/project/writing.md). Before submitting a change, review every changed file, verify its required evidence, check relative links, and confirm that normative and informative statements remain distinct.
+Follow the [documentation policy](docs/project/documentation.md) and
+[writing guide](docs/project/writing.md). Before submitting a change, review
+every changed file, verify its required evidence, check relative links, and
+confirm that normative and informative statements remain distinct.
 
 ## Implementation environment
 

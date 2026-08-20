@@ -24,6 +24,13 @@ Change proposals describe proposed transitions in Ash semantics. They state curr
 
 Tasks plan and record authorized work, dependencies, progress, verification, discoveries, and deviations. They do not define language semantics. A semantic gap returns to the governing proposal or design work.
 
+### Execution plans
+
+An execution plan is a temporary project-management document owned by one active
+task. It translates authorized work into ordered changes and verification steps.
+It has no independent authority and cannot define semantics or architecture.
+Link it from its task and remove it when the task finishes; Git retains the plan.
+
 ## Identity and references
 
 Use a stable ID and a descriptive filename:
@@ -35,7 +42,9 @@ Use a stable ID and a descriptive filename:
 
 Allocate the next number unused in both the current tree and Git history. Never reuse an ID. Keep metadata to `ID`, `Status`, and links to `Related` artifacts when relevant. Reference another artifact by both ID and relative link so the relationship remains readable without a generated index.
 
-Templates are not numbered artifacts. Remove completed, rejected, or superseded artifacts when they no longer describe current project state; Git retains their reasoning and identity.
+Templates are not numbered artifacts. Execution plans do not receive artifact
+IDs. Remove completed, rejected, or superseded artifacts when they no longer
+describe current project state; Git retains their reasoning and identity.
 
 ## Typical flows
 
