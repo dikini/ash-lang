@@ -25,7 +25,10 @@ The execution steps are in the
 
 ## Progress
 
-AD-0002 is accepted and this task is active. The policy is not yet implemented.
+AD-0002 is accepted. The documentation policy defines all four domains, their
+sources of truth, update and lifecycle rules, and current verification boundary.
+Repository indexes and contributor guidance route documentation work through the
+policy.
 
 ## Verification
 
@@ -38,7 +41,10 @@ AD-0002 is accepted and this task is active. The policy is not yet implemented.
 
 ## Discoveries
 
-None.
+- `cargo xtask verify` checks Rust documentation but does not check repository
+  Markdown or relative links.
+- The existing `docs/project/` index can hold the policy without a directory move
+  or new documentation scaffold.
 
 ## Deviations
 
