@@ -2,7 +2,7 @@
 
 - ID: `DN-0002`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md)
+- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md)
 
 > This design note is informative. It does not accept a Core representation or define Ash semantics.
 
@@ -35,6 +35,12 @@ These are candidates for experiments, not a complete set and not accepted choice
 
 ## Experiments
 
+Use progressively richer slices of the
+[Mini-Ash evaluation corpus](DN-0015-mini-ash-phase.md#corpus-strata). Begin with
+the pure features that distinguish representation boundaries. Treat effects,
+continuations, and CPS as downstream pressure; use a theoretical account or a
+disposable probe only when the pure corpus cannot distinguish a candidate.
+
 Compare small concrete representations by implementing or sketching the operations that will stress them:
 
 - pure evaluation and beta reduction;
@@ -44,7 +50,11 @@ Compare small concrete representations by implementing or sketching the operatio
 - an opaque typed CPS fragment;
 - typed traversal and rewriting followed by validation.
 
-Record representation size, invariants, traversal mechanics, failure modes, and which facts each transformation must establish.
+Record for each Core candidate:
+
+- representation size, invariants, traversal mechanics, failure modes, and which
+  facts each transformation must establish;
+- source-provenance and diagnostic information preserved by each representation;
 
 ## Open questions
 
