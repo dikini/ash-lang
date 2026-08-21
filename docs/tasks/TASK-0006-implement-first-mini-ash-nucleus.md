@@ -216,11 +216,10 @@ HEAD `019ba4eb3a6f13704e5d933a73e272e931636fb1`:
   x86_64-unknown-linux-gnu` and the corresponding command with target
   `aarch64-unknown-linux-gnu` both passed. The complete test suite ran natively
   on the current `x86_64-unknown-linux-gnu` host;
-- `mapfile -t markdown_files < <(rg --files -g '*.md' | sort); markdownlint
-  --disable MD013 -- "${markdown_files[@]}"` passed all 69 current Markdown
-  files;
-- a one-shot read-only Ruby checker over `rg --files -g '*.md'` validated every
-  relative Markdown link, target, and heading anchor in all 69 current Markdown
+- `mapfile -t markdown_files < <(git ls-files '*.md'); markdownlint --disable
+  MD013 -- "${markdown_files[@]}"` passed all 70 tracked Markdown files;
+- a one-shot read-only Ruby checker over `git ls-files '*.md'` validated every
+  relative Markdown link, target, and heading anchor in all 70 tracked Markdown
   files;
 - a second one-shot read-only Ruby checker over the same file set validated all
   five `ebnf` and 32 `sequent` fences against the registered source contract
