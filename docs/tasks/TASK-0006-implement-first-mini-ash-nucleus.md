@@ -86,20 +86,25 @@ returns to the proposal before work continues.
 ## Progress
 
 - CP-0001 received explicit semantic acceptance.
-- The task and execution plan are active.
+- The retained Mini-Ash pipeline, executable, normative specification, tool
+  documentation, and complete first-stratum corpus are implemented.
 - Dependency preflight selected `num-bigint` 0.5.1. The resolved-graph review
   below approved that selection for the first implementation increment.
-- Product implementation has started with the arbitrary-precision integer
-  boundary.
-- The typed pure Core families and their consuming independent validator are
-  implemented in the task worktree. The composition evidence below retains
-  handwritten closed dialect wrappers.
+- The typed pure Core families, their consuming independent validator, the
+  explicit evaluator machine, and the complete source-to-observation pipeline
+  are implemented. The composition evidence below retains handwritten closed
+  dialect wrappers.
 - An independent language/specification review found that the accepted block
   rules described synthesis but did not make contextual block checking
   derivable. The user approved completing CP-0001 with the implied checking
   rules. CP-0001, the normative static semantics, and executable specification
   examples now cover contextual block results and higher-order inline
   operational bodies.
+- The line-by-line CP-0001 evidence audit is complete. Independent whole-change
+  reviews of language/specification agreement, Rust architecture and failure
+  handling, tests and corpus completeness, dependency policy, and
+  documentation authority and links all passed after their findings were
+  resolved.
 
 ### Dependency review: 2026-08-21
 
@@ -185,19 +190,58 @@ integer wrapper remains safe Rust.
 
 ## Verification
 
-Completion requires every item in CP-0001's Required evidence section and the
-execution plan's final evidence matrix. At minimum:
+The final evidence run on 2026-08-21 used the following commands on committed
+HEAD `019ba4eb3a6f13704e5d933a73e272e931636fb1`:
 
-- `cargo xtask verify`;
-- direct unit and integration tests for every accepted semantic stage;
-- end-to-end corpus, diagnostic, CLI, large-integer, provenance, validator,
-  transformation, locality, and deep-frame tests;
-- independent review of implementation, tests, normative specification, tool
-  documentation, dependency evidence, and authority boundaries;
-- Markdown lint plus relative-link, anchor, formal-notation, and verbal-
-  explanation review;
-- a clean worktree and confirmation that no disposable probe or temporary
-  execution plan remains in the completed merge.
+- `cargo test --workspace --all-targets --all-features --locked` passed all
+  273 tests with no failure, ignored test, or filtered test;
+- `cargo audit` exited successfully after scanning all six locked workspace and
+  dependency packages. It reported no dependency advisory and only the allowed
+  `RUSTSEC-2021-0090` name-collision warning for the private workspace package
+  `ash` 0.0.0; that advisory concerns the unrelated crates.io Vulkan package;
+- `cargo deny check advisories sources bans` passed all three checks. It used
+  the default configuration and warned that no configuration path was present;
+- `cargo metadata --locked --format-version 1 | jq -r '.packages[] |
+  [.name, .version, (.license // "MISSING"), (.source // "workspace")] |
+  @tsv'` reported the two private workspace packages with no selected license,
+  `autocfg` 1.5.1 as `Apache-2.0 OR MIT`, and `num-bigint` 0.5.1,
+  `num-integer` 0.1.47, and `num-traits` 0.2.19 as
+  `MIT OR Apache-2.0`, all dependency packages from the crates.io registry;
+- `cargo xtask verify` passed formatting, Clippy with warnings denied, the
+  complete locked workspace test suite, and documentation generation;
+- `cargo test --test corpus --test cli --test spec_examples --locked` passed
+  36 tests. The corpus tests invoke the executable for every valid and invalid
+  retained fixture and assert the exact owning-stage and CLI observations;
+- `cargo check --workspace --all-targets --all-features --locked --target
+  x86_64-unknown-linux-gnu` and the corresponding command with target
+  `aarch64-unknown-linux-gnu` both passed. The complete test suite ran natively
+  on the current `x86_64-unknown-linux-gnu` host;
+- `mapfile -t markdown_files < <(rg --files -g '*.md' | sort); markdownlint
+  --disable MD013 -- "${markdown_files[@]}"` passed all 69 current Markdown
+  files;
+- a one-shot read-only Ruby checker over `rg --files -g '*.md'` validated every
+  relative Markdown link, target, and heading anchor in all 69 current Markdown
+  files;
+- a second one-shot read-only Ruby checker over the same file set validated all
+  five `ebnf` and 32 `sequent` fences against the registered source contract
+  and confirmed nearby verbal context. Independent documentation and language
+  reviews also read the notation and its explanations for agreement;
+- `git diff --check` passed, and `git status --short --branch` reported only
+  `## task/0006-first-mini-ash`.
+
+The independent whole-change reviews produced these final verdicts:
+
+- language and specification: pass with no remaining finding after the
+  contextual block-checking correction and executable examples;
+- Rust architecture, invariants, and failure handling: pass with no finding;
+- tests and corpus: pass with no remaining finding after direct evidence for
+  `false`, unequal arbitrary-precision equality, evaluator invariant failures,
+  and the internal-runtime CLI path was added;
+- dependency policy: pass with no finding after review of the locked graph,
+  features, sources, licenses and license files, target metadata, minimum Rust
+  versions, maintenance, unsafe code, packaging role, and advisory output;
+- documentation authority and links: pass for evidence recording, with the
+  planned lifecycle removals and updates required before final integration.
 
 ## Discoveries
 
@@ -364,6 +408,15 @@ the result while retaining the existing inferred and annotated initializer
 policies. Two executable specification examples cover an annotated binding with
 a contextual block initializer and a higher-order inline operational function.
 
+The first tests/corpus review found that accepted `false` had no direct
+projection-through-CLI observation, unequal arbitrary-precision equality was
+not exercised, and defensive evaluator failures plus their internal CLI
+rendering were not directly tested. Test-first evidence now covers `false` as a
+`Bool` value and exact CLI output, equality of distinct integers beyond
+unsigned 128-bit range, every structured defensive evaluator failure, and the
+status-2 `internal.runtime` boundary. The production behavior and public API
+did not change.
+
 ## Deviations
 
 The execution plan expected the first whole-change review to confirm semantic
@@ -372,3 +425,8 @@ checking-mode block rules described above. Work returned to CP-0001 and the
 normative static semantics before closure. The user explicitly approved this
 formal completion; it does not add behavior beyond the accepted grammar,
 global-checking rule, and retained implementation.
+
+The evidence audit also returned the missing test observations above to their
+owning test layer. Because the production paths already existed, the added
+tests passed without a behavior change; the deviation was incomplete evidence,
+not a semantic or architectural change.
