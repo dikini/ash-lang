@@ -1,0 +1,533 @@
+//! Closed assembly of the grammar forms accepted by this parser dialect.
+
+use crate::lexer::TokenKind;
+
+use super::{ExpectedForm, NodeKind, ParseReason, Parser, SynchronizationBoundary, expression};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GlobalDefinitionForm {
+    Equational,
+    InlineOperational,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ExpressionPrefixForm {
+    Block,
+    Function,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PrimaryForm {
+    Integer,
+    Boolean,
+    Identifier,
+    Parenthesized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AtomicTypeForm {
+    Int,
+    Bool,
+    Unit,
+    Parenthesized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PatternForm {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum OperatorToken {
+    EqualEqual,
+    Plus,
+    Star,
+}
+
+impl OperatorToken {
+    pub(super) fn matches(self, kind: &TokenKind) -> bool {
+        matches!(
+            (self, kind),
+            (Self::EqualEqual, TokenKind::EqualEqual)
+                | (Self::Plus, TokenKind::Plus)
+                | (Self::Star, TokenKind::Star)
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Associativity {
+    Left,
+    NonAssociative,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InfixDescriptor {
+    pub(super) token: OperatorToken,
+    pub(super) precedence: u8,
+    pub(super) associativity: Associativity,
+    pub(super) result: NodeKind,
+}
+
+impl InfixDescriptor {
+    pub(super) const fn binding_powers(self) -> (u8, u8) {
+        match self.associativity {
+            Associativity::Left | Associativity::NonAssociative => {
+                (self.precedence, self.precedence.saturating_add(1))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ApplicationDescriptor {
+    pub(super) left_binding_power: u8,
+    pub(super) right_binding_power: u8,
+    pub(super) result: NodeKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ExpressionDialect {
+    pub(super) primary_forms: &'static [PrimaryForm],
+    pub(super) infix: &'static [InfixDescriptor],
+    pub(super) application: ApplicationDescriptor,
+}
+
+pub(super) struct ParserDialect {
+    global_definitions: &'static [GlobalDefinitionForm],
+    expression_prefixes: &'static [ExpressionPrefixForm],
+    pub(super) expression: ExpressionDialect,
+    pattern_forms: &'static [PatternForm],
+    atomic_types: &'static [AtomicTypeForm],
+}
+
+/// The sole closed assembly of syntax forms selected for Mini-Ash.
+const MINI_ASH_DIALECT: ParserDialect = ParserDialect {
+    global_definitions: &[
+        GlobalDefinitionForm::Equational,
+        GlobalDefinitionForm::InlineOperational,
+    ],
+    expression_prefixes: &[ExpressionPrefixForm::Block, ExpressionPrefixForm::Function],
+    expression: ExpressionDialect {
+        primary_forms: &[
+            PrimaryForm::Integer,
+            PrimaryForm::Boolean,
+            PrimaryForm::Identifier,
+            PrimaryForm::Parenthesized,
+        ],
+        infix: &[
+            InfixDescriptor {
+                token: OperatorToken::EqualEqual,
+                precedence: 10,
+                associativity: Associativity::NonAssociative,
+                result: NodeKind::EqualityExpression,
+            },
+            InfixDescriptor {
+                token: OperatorToken::Plus,
+                precedence: 20,
+                associativity: Associativity::Left,
+                result: NodeKind::AdditiveExpression,
+            },
+            InfixDescriptor {
+                token: OperatorToken::Star,
+                precedence: 30,
+                associativity: Associativity::Left,
+                result: NodeKind::MultiplicativeExpression,
+            },
+        ],
+        application: ApplicationDescriptor {
+            left_binding_power: 40,
+            right_binding_power: 41,
+            result: NodeKind::ApplicationExpression,
+        },
+    },
+    pattern_forms: &[],
+    atomic_types: &[
+        AtomicTypeForm::Int,
+        AtomicTypeForm::Bool,
+        AtomicTypeForm::Unit,
+        AtomicTypeForm::Parenthesized,
+    ],
+};
+
+pub(super) const fn selected_dialect() -> &'static ParserDialect {
+    &MINI_ASH_DIALECT
+}
+
+pub(super) fn program(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Program);
+    let mut preceding_global_end = None;
+    while starts_global(parser) {
+        let global_start = parser.current_span();
+        let diagnostics_before = parser.diagnostic_count();
+        global_definition(parser);
+        if parser.diagnostic_count() == diagnostics_before
+            && let (Some(start), Some(end)) = (global_start, parser.previous_span())
+        {
+            preceding_global_end = Some((start, end));
+        }
+        if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
+            break;
+        }
+    }
+
+    if starts_expression(parser) {
+        let recovery_start = parser.pending_recovery_count();
+        expression(parser);
+        resolve_line_or_eof(parser, recovery_start);
+    } else {
+        parser.report_expected_result(preceding_global_end);
+    }
+    if parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::EndOfFile) {
+        let _ = parser.bump();
+    } else {
+        if parser.at(&TokenKind::Semicolon) {
+            parser.error_at_current(ParseReason::Semicolon);
+        } else {
+            parser.error_at_current(ParseReason::UnexpectedToken);
+        }
+        parser.consume_rest();
+    }
+    parser.finish();
+}
+
+fn starts_global(parser: &Parser<'_>) -> bool {
+    global_definition_form(parser).is_some()
+}
+
+fn global_definition(parser: &mut Parser<'_>) {
+    match global_definition_form(parser) {
+        Some(GlobalDefinitionForm::Equational) => equational_global(parser),
+        Some(GlobalDefinitionForm::InlineOperational) => inline_operational_global(parser),
+        None => parser.report(ParseReason::UnexpectedToken, ExpectedForm::Expression),
+    }
+}
+
+fn global_definition_form(parser: &Parser<'_>) -> Option<GlobalDefinitionForm> {
+    selected_dialect()
+        .global_definitions
+        .iter()
+        .copied()
+        .find(|form| match form {
+            GlobalDefinitionForm::Equational => matches!(
+                (parser.current(), parser.nth(1)),
+                (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon))
+            ),
+            GlobalDefinitionForm::InlineOperational => matches!(
+                (parser.current(), parser.nth(1)),
+                (Some(TokenKind::Fn), Some(TokenKind::Identifier(_)))
+            ),
+        })
+}
+
+fn equational_global(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::EquationalGlobal);
+    parser.start(NodeKind::ExternalInterface);
+    binder(parser);
+    let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
+    type_expression(parser);
+    parser.finish();
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+
+    parser.start(NodeKind::Equation);
+    binder(parser);
+    binder(parser);
+    if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+        parser.error_at_current(ParseReason::MultipleBinders);
+        while matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+            let _ = parser.bump();
+        }
+    }
+    let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
+    let recovery_start = parser.pending_recovery_count();
+    expression(parser);
+    resolve_line_or_eof(parser, recovery_start);
+    parser.finish();
+    parser.finish();
+}
+
+fn inline_operational_global(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::InlineOperationalGlobal);
+    parser.start(NodeKind::InlineOperationalHeader);
+    let _ = parser.bump();
+    binder(parser);
+    reject_polymorphic_header(parser);
+    let _ = parser.expect(&TokenKind::LeftParen, ExpectedForm::LeftParen);
+    typed_binder(parser);
+    if parser.at(&TokenKind::Comma) {
+        parser.error_at_current(ParseReason::MultipleParameters);
+        while !matches!(
+            parser.current(),
+            Some(TokenKind::RightParen | TokenKind::EndOfFile)
+        ) {
+            let _ = parser.bump();
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+    let _ = parser.expect(&TokenKind::Arrow, ExpectedForm::Arrow);
+    type_expression(parser);
+    parser.finish();
+    block(parser);
+    parser.finish();
+}
+
+pub(super) fn expression(parser: &mut Parser<'_>) {
+    if looks_like_match_expression(parser) {
+        rejected_match_expression(parser);
+        return;
+    }
+    match expression_prefix_form(parser) {
+        Some(ExpressionPrefixForm::Block) => block_expression(parser),
+        Some(ExpressionPrefixForm::Function) => function_expression(parser),
+        None => expression::operator_expression(parser),
+    }
+}
+
+fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
+    selected_dialect()
+        .expression_prefixes
+        .iter()
+        .copied()
+        .find(|form| match form {
+            ExpressionPrefixForm::Block => parser.at(&TokenKind::LeftBrace),
+            ExpressionPrefixForm::Function => parser.at(&TokenKind::Fn),
+        })
+}
+
+fn looks_like_match_expression(parser: &Parser<'_>) -> bool {
+    if !matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "match") {
+        return false;
+    }
+    let mut offset = 1;
+    let mut parenthesis_depth = 0_u32;
+    loop {
+        match parser.nth(offset) {
+            Some(TokenKind::LeftParen) => parenthesis_depth += 1,
+            Some(TokenKind::RightParen) if parenthesis_depth > 0 => parenthesis_depth -= 1,
+            Some(TokenKind::LeftBrace) if parenthesis_depth == 0 => return true,
+            Some(TokenKind::LineEnd | TokenKind::RightBrace | TokenKind::EndOfFile)
+                if parenthesis_depth == 0 =>
+            {
+                return false;
+            }
+            Some(_) => {}
+            None => return false,
+        }
+        offset += 1;
+    }
+}
+
+fn rejected_match_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    parser.error_at_current(ParseReason::MatchSyntax);
+    let mut brace_depth = 0_u32;
+    loop {
+        match parser.current() {
+            Some(TokenKind::LeftBrace) => {
+                brace_depth += 1;
+                let _ = parser.bump();
+            }
+            Some(TokenKind::RightBrace) if brace_depth == 1 => {
+                let _ = parser.bump();
+                break;
+            }
+            Some(TokenKind::RightBrace) => {
+                brace_depth = brace_depth.saturating_sub(1);
+                let _ = parser.bump();
+            }
+            Some(TokenKind::EndOfFile) | None => break,
+            Some(_) => {
+                let _ = parser.bump();
+            }
+        }
+    }
+    parser.finish();
+}
+
+fn block_expression(parser: &mut Parser<'_>) {
+    block(parser);
+}
+
+fn block(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Block);
+    if !parser.enter_structure() {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
+    let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    while parser.at(&TokenKind::Let) {
+        local_binding(parser);
+        let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    }
+    let recovery_start = parser.pending_recovery_count();
+    if starts_expression(parser) {
+        expression(parser);
+    } else {
+        parser.report(ParseReason::ExpectedResult, ExpectedForm::Expression);
+    }
+    if parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::RightBrace) {
+        parser
+            .resolve_pending_at_current(recovery_start, SynchronizationBoundary::BlockClosingBrace);
+    } else if parser.at(&TokenKind::EndOfFile) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.leave_structure();
+    parser.finish();
+}
+
+fn local_binding(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::LocalBinding);
+    let _ = parser.bump();
+    binder(parser);
+    if parser.at(&TokenKind::Colon) {
+        let _ = parser.bump();
+        type_expression(parser);
+    }
+    let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
+    let recovery_start = parser.pending_recovery_count();
+    expression(parser);
+    resolve_line_or_eof(parser, recovery_start);
+    parser.finish();
+}
+
+fn resolve_line_or_eof(parser: &mut Parser<'_>, recovery_start: usize) {
+    if parser.at(&TokenKind::LineEnd) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
+    } else if parser.at(&TokenKind::EndOfFile) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
+    } else if parser.at(&TokenKind::RightBrace) {
+        parser
+            .resolve_pending_at_current(recovery_start, SynchronizationBoundary::BlockClosingBrace);
+    }
+}
+
+fn function_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::FunctionExpression);
+    if !parser.enter_structure() {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    let _ = parser.expect(&TokenKind::LeftParen, ExpectedForm::LeftParen);
+    binder(parser);
+    if parser.at(&TokenKind::Comma) {
+        parser.error_at_current(ParseReason::MultipleParameters);
+        while !matches!(
+            parser.current(),
+            Some(TokenKind::RightParen | TokenKind::EndOfFile)
+        ) {
+            let _ = parser.bump();
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+    block(parser);
+    parser.leave_structure();
+    parser.finish();
+}
+
+fn reject_polymorphic_header(parser: &mut Parser<'_>) {
+    if !matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+        return;
+    }
+    parser.error_at_current(ParseReason::PolymorphicHeader);
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::LeftParen | TokenKind::LineEnd | TokenKind::EndOfFile)
+    ) {
+        let _ = parser.bump();
+    }
+}
+
+fn binder(parser: &mut Parser<'_>) {
+    debug_assert!(selected_dialect().pattern_forms.is_empty());
+    parser.start(NodeKind::Binder);
+    if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    parser.finish();
+}
+
+fn typed_binder(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::TypedBinder);
+    binder(parser);
+    let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
+    type_expression(parser);
+    parser.finish();
+}
+
+fn type_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Type);
+    atomic_type(parser);
+    if parser.at(&TokenKind::Arrow) {
+        let _ = parser.bump();
+        if parser.enter_structure() {
+            type_expression(parser);
+            parser.leave_structure();
+        } else {
+            parser.consume_rest();
+        }
+    }
+    parser.finish();
+}
+
+fn atomic_type(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::AtomicType);
+    match atomic_type_form(parser) {
+        Some(AtomicTypeForm::Int | AtomicTypeForm::Bool | AtomicTypeForm::Unit) => {
+            let _ = parser.bump();
+        }
+        Some(AtomicTypeForm::Parenthesized) => parenthesized_type(parser),
+        _ => parser.report(ParseReason::ExpectedForm, ExpectedForm::Type),
+    }
+    parser.finish();
+}
+
+fn atomic_type_form(parser: &Parser<'_>) -> Option<AtomicTypeForm> {
+    selected_dialect()
+        .atomic_types
+        .iter()
+        .copied()
+        .find(|form| {
+            matches!(
+                (form, parser.current()),
+                (AtomicTypeForm::Int, Some(TokenKind::IntType))
+                    | (AtomicTypeForm::Bool, Some(TokenKind::BoolType))
+                    | (AtomicTypeForm::Unit, Some(TokenKind::UnitType))
+                    | (AtomicTypeForm::Parenthesized, Some(TokenKind::LeftParen))
+            )
+        })
+}
+
+fn parenthesized_type(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ParenthesizedType);
+    let opening = parser.current_span();
+    let _ = parser.bump();
+    if parser.enter_structure() {
+        type_expression(parser);
+        parser.leave_structure();
+    } else {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
+    if parser.at(&TokenKind::RightParen) {
+        let _ = parser.bump();
+    } else {
+        expression::report_unclosed_group(parser, opening);
+    }
+    parser.finish();
+}
+
+fn starts_expression(parser: &Parser<'_>) -> bool {
+    expression_prefix_form(parser).is_some() || expression::starts_primary(parser)
+}
