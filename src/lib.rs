@@ -4,4 +4,5 @@
 
 pub mod diagnostic;
 pub mod integer;
+pub mod lexer;
 pub mod source;
