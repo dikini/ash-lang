@@ -2,6 +2,11 @@
 
 > Reconstruct the minimum sufficient context for the task from the repository rather than relying on remembered knowledge of Ash.
 
+Context is sufficient when it forms a causal semantic model: explain affected
+current behavior, crossed boundaries, transferable evidence, downstream
+pressure, simplification opportunities, and intentional exclusions. A list of
+documents read is not a substitute.
+
 Start with the [artifact guide](docs/project/artifacts.md). Treat sources according to their authority:
 
 1. `spec/` is current, normative language truth.

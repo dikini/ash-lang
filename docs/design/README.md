@@ -14,6 +14,8 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 - [DN-0002: Core Representation](DN-0002-core-representation.md)
 - [DN-0003: Parser Architecture](DN-0003-parser-architecture.md)
+- [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md)
+  — transferable findings from the retained Float composition experiment.
 - [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md) — growing evaluation
   corpus, component experiments, and retained product increments.
 - [DN-0016: First Mini-Ash Corpus Stratum](DN-0016-first-mini-ash-corpus.md) —
