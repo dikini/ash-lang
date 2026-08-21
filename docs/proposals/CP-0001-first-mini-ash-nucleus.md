@@ -206,7 +206,9 @@ type or add parameter annotations to anonymous functions.
 
 A block is typed from left to right. An annotated initializer checks against its
 annotation. An unannotated initializer must synthesize a type. In either case,
-the new binder has that type only in the remaining bindings and result.
+the new binder has that type only in the remaining bindings and result. A block
+can synthesize from its result or check by passing an expected type to its
+result.
 
 ```sequent
 family block-typing:
@@ -226,10 +228,31 @@ family block-typing:
     GAMMA, x : binding_type |- { remainder } ⇒ result_type
     ===>
     GAMMA |- { let x : binding_type = initializer; remainder } ⇒ result_type
+
+  T-Block-Check-Result :=
+    GAMMA |- result ⇐ expected_type
+    ===>
+    GAMMA |- { result } ⇐ expected_type
+
+  T-Block-Check-Let-Inferred :=
+    GAMMA |- initializer ⇒ binding_type
+    GAMMA, x : binding_type |- { remainder } ⇐ expected_type
+    ===>
+    GAMMA |- { let x = initializer; remainder } ⇐ expected_type
+
+  T-Block-Check-Let-Annotated :=
+    GAMMA |- initializer ⇐ binding_type
+    GAMMA, x : binding_type |- { remainder } ⇐ expected_type
+    ===>
+    GAMMA |- { let x : binding_type = initializer; remainder } ⇐ expected_type
 ```
 
-The semicolons in these block judgments separate semantic fields. They do not
-add semicolons to the surface language.
+The first three rules synthesize a block type. The last three rules check a
+block, carrying the expected type through its bindings to the result. The
+checking rules overlap with `T-Check-Inferred` when the result synthesizes, but
+also admit a result that itself needs an expected type, such as an anonymous
+function. The semicolons in these block judgments separate semantic fields.
+They do not add semicolons to the surface language.
 
 Addition and multiplication require two `Int` operands and synthesize
 `Int`. Equality in this increment compares only integers and synthesizes

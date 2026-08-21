@@ -15,9 +15,11 @@ more decimal digits. Its value is the corresponding mathematical non-negative
 integer. There is no fixed-width overflow. A leading zero in a multi-digit
 integer is invalid. A leading `-` is not part of an integer literal.
 
-The remaining tokens are `(`, `)`, `{`, `}`, `:`, `=`, `==`, `+`, `*`, and
-`->`. The longest token wins where one spelling prefixes another, as with `=`
-and `==`.
+The remaining punctuation admitted by Mini-Ash is `(`, `)`, `{`, `}`, `:`,
+`=`, `==`, `+`, `*`, and `->`. The longest token wins where one spelling
+prefixes another, as with `=` and `==`. Comma and semicolon are recognized only
+to provide their specified source rejection. No grammar production admits
+either as source-language punctuation.
 
 Mini-Ash has no comments, string or character literals, escapes, Unicode
 identifiers, or negative literals. An uppercase-starting word other than a

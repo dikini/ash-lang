@@ -72,7 +72,8 @@ a parameter type for that case.
 
 Block bindings are checked from left to right. An annotated initializer checks
 against its annotation. An unannotated initializer must synthesize its binding
-type. The new binder is available only in the remainder.
+type. The new binder is available only in the remainder. A block can synthesize
+from its result or check by passing an expected type to its result.
 
 ```sequent
 family block-typing:
@@ -92,10 +93,61 @@ family block-typing:
     GAMMA, x : binding_type |- { remainder } ⇒ result_type
     ===>
     GAMMA |- { let x : binding_type = initializer; remainder } ⇒ result_type
+
+  T-Block-Check-Result :=
+    GAMMA |- result ⇐ expected_type
+    ===>
+    GAMMA |- { result } ⇐ expected_type
+
+  T-Block-Check-Let-Inferred :=
+    GAMMA |- initializer ⇒ binding_type
+    GAMMA, x : binding_type |- { remainder } ⇐ expected_type
+    ===>
+    GAMMA |- { let x = initializer; remainder } ⇐ expected_type
+
+  T-Block-Check-Let-Annotated :=
+    GAMMA |- initializer ⇐ binding_type
+    GAMMA, x : binding_type |- { remainder } ⇐ expected_type
+    ===>
+    GAMMA |- { let x : binding_type = initializer; remainder } ⇐ expected_type
 ```
 
-The semicolons in the two binding conclusions separate semantic fields. They do
-not add semicolon punctuation to Ash source.
+The first three rules synthesize a block type. The last three rules check a
+block, carrying the expected type through its bindings to the result. The
+checking rules overlap with `T-Check-Inferred` when the result synthesizes, but
+also admit a result that itself needs an expected type, such as an anonymous
+function. The semicolons in the binding conclusions separate semantic fields.
+They do not add semicolon punctuation to Ash source.
+
+The executable test
+`static_semantics_contextual_block_example_is_executable` checks a block whose
+anonymous-function result receives the binding annotation's expected type:
+
+```ash
+{
+    let constant : Unit -> Int = {
+        fn(ignored) {
+            1
+        }
+    }
+    constant ()
+}
+```
+
+The executable test
+`static_semantics_higher_order_operational_example_is_executable` checks the
+same rule path in an inline operational body with a function-valued result
+annotation:
+
+```ash
+fn add(left : Int) -> Int -> Int {
+    fn(right) {
+        left + right
+    }
+}
+
+add 20 22
+```
 
 ## Primitive operations
 

@@ -21,6 +21,8 @@ const V004: &str = include_str!("fixtures/first-stratum/valid/v004-capture.ash")
 const V008: &str = include_str!("fixtures/first-stratum/valid/v008-mixed.ash");
 const CURRIED_EQUATIONAL: &str =
     "add : Int -> Int -> Int\nadd left = fn(right) {\n    left + right\n}\n\nadd 20 22\n";
+const CONTEXTUAL_BLOCK: &str = "{\n    let constant : Unit -> Int = {\n        fn(ignored) {\n            1\n        }\n    }\n    constant ()\n}\n";
+const HIGHER_ORDER_OPERATIONAL: &str = "fn add(left : Int) -> Int -> Int {\n    fn(right) {\n        left + right\n    }\n}\n\nadd 20 22\n";
 const FUNCTION_RESULT: &str = "identity : Int -> Int\nidentity value = value\n\nidentity\n";
 const COMMENT_REJECTION: &str = "// comments are not in Mini-Ash\n1\n";
 const UNKNOWN_NAME_REJECTION: &str = "missing 1\n";
@@ -160,6 +162,23 @@ fn static_semantics_operand_example_has_its_documented_reason() {
     };
     assert_eq!(actual.reason, TypeReason::OperatorOperand);
     assert_documented("spec/static-semantics.md", TYPE_REJECTION);
+}
+
+#[test]
+fn static_semantics_contextual_block_example_is_executable() {
+    assert_observation("spec-contextual-block.ash", CONTEXTUAL_BLOCK, "1", "Int");
+    assert_documented("spec/static-semantics.md", CONTEXTUAL_BLOCK);
+}
+
+#[test]
+fn static_semantics_higher_order_operational_example_is_executable() {
+    assert_observation(
+        "spec-higher-order-operational.ash",
+        HIGHER_ORDER_OPERATIONAL,
+        "42",
+        "Int",
+    );
+    assert_documented("spec/static-semantics.md", HIGHER_ORDER_OPERATIONAL);
 }
 
 #[test]

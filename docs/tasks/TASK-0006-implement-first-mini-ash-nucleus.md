@@ -94,6 +94,12 @@ returns to the proposal before work continues.
 - The typed pure Core families and their consuming independent validator are
   implemented in the task worktree. The composition evidence below retains
   handwritten closed dialect wrappers.
+- An independent language/specification review found that the accepted block
+  rules described synthesis but did not make contextual block checking
+  derivable. The user approved completing CP-0001 with the implied checking
+  rules. CP-0001, the normative static semantics, and executable specification
+  examples now cover contextual block results and higher-order inline
+  operational bodies.
 
 ### Dependency review: 2026-08-21
 
@@ -346,6 +352,23 @@ without proportional Rust call depth. Separate end-to-end and machine tests
 cover literal, sum, product, equality, rendered output, and traced integer
 nodes beyond both signed and unsigned 64-bit ranges.
 
+The first whole-change language/specification review exposed an incomplete
+formal account of block checking. The accepted grammar already allowed an
+inline operational body with a function-valued result annotation, and the
+accepted global rule checked that body against its codomain. The implementation
+also propagated an expected type through block bindings to the final result.
+However, the proposal and normative block rule family only showed synthesis,
+so a block ending in an anonymous function had no derivation. After explicit
+user approval, three checking-mode block rules now carry the expected type to
+the result while retaining the existing inferred and annotated initializer
+policies. Two executable specification examples cover an annotated binding with
+a contextual block initializer and a higher-order inline operational function.
+
 ## Deviations
 
-None.
+The execution plan expected the first whole-change review to confirm semantic
+agreement before Task 14 cleanup. Instead, that review found the missing
+checking-mode block rules described above. Work returned to CP-0001 and the
+normative static semantics before closure. The user explicitly approved this
+formal completion; it does not add behavior beyond the accepted grammar,
+global-checking rule, and retained implementation.
