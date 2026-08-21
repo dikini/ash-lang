@@ -9,4 +9,8 @@ Status has two current-tree values:
 
 Remove the proposal after the complete change merges. Git preserves the transition and its evidence.
 
-Use [the template](template.md) and allocate the next `CP-NNNN` ID. No language changes are currently proposed.
+Use [the template](template.md) and allocate the next `CP-NNNN` ID.
+
+## Proposed changes
+
+- [CP-0001: First Mini-Ash Nucleus](CP-0001-first-mini-ash-nucleus.md)

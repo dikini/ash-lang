@@ -144,7 +144,7 @@ first. A status does not accept syntax, semantics, or architecture.
 | [Parser architecture](mini-ash/first-stratum/comparisons/parser-architecture.md) | Complete | The provisional grammar, every valid source presentation, and `P-001` through `P-003` | At least two composable organizations are compared on locality, precedence, ambiguity, recovery, spans, diagnostics, and tooling pressure. |
 | [Component convergence](mini-ash/first-stratum/comparisons/component-convergence.md) | Complete | Completed component comparisons | The evidence identifies which choices require architectural decisions and records unresolved alternatives without selecting them implicitly. |
 | [Architectural decisions](../decisions/README.md) | Complete | The completed convergence record and five decision boundaries | AD-0004 through AD-0008 accept only the converged non-language choices and keep the listed syntax, semantics, and concrete implementation mechanisms unresolved. |
-| First semantic proposal | Ready | Accepted specification method and component decisions | A proposal states the first user-visible semantic increment and its required executable, tests, diagnostics, and specification evidence. |
+| [First semantic proposal](../proposals/CP-0001-first-mini-ash-nucleus.md) | Proposed | Accepted specification method, component decisions, and `V-001` through `V-008` | CP-0001 states the first user-visible semantic increment and its required executable, tests, diagnostics, and specification evidence; it still requires semantic review and acceptance. |
 
 The completed consistency review found no blocking disagreement in the named
 cases. Grouping parentheses erase consistently before typing and dynamics,
@@ -168,7 +168,7 @@ tool updates do not change the canonical Markdown or block component research.
    question. This gate is complete.
 3. Accept the specification method and converged component architectures in
    separate decisions. This gate is complete through AD-0004 to AD-0008.
-4. Propose the first user-visible semantic increment.
+4. Review and accept the proposed first user-visible semantic increment.
 5. Implement the accepted increment as a retained single-file executable.
 
 ## Open questions
