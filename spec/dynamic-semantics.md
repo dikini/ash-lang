@@ -2,8 +2,10 @@
 
 Mini-Ash evaluation is defined by one deterministic small-step relation
 `expression -> expression'` over elaborated semantic terms. Integer values are
-arbitrary-precision mathematical integers. The other values are `true`,
-`false`, `()`, and anonymous functions.
+arbitrary-precision mathematical integers. The source-level value forms are
+`true`, `false`, `()`, and anonymous functions. Recursive closures introduced
+below are an internal representation of function values, not another
+observable value form.
 
 The notation `substitute(body, x, value)` means capture-avoiding substitution.
 It specifies lexical binding without requiring an implementation to rewrite

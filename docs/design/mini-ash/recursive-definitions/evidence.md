@@ -1,11 +1,11 @@
 # Recursive Definition Integration Evidence
 
-This report records implementation evidence for
-[CP-0002](../../../proposals/CP-0002-recursive-function-definitions.md) and
-compares it with the informative findings in
+This report records implementation evidence for the accepted transition
+CP-0002 and compares it with the informative findings in
 [DN-0019](../../DN-0019-primitive-feature-composition.md). It does not define
-Ash semantics. CP-0002 authorizes the transition, and `spec/` becomes current
-language truth only when the complete implementation branch merges.
+Ash semantics. CP-0002 supplied transition authority during implementation;
+`spec/` becomes current language truth only when the complete implementation
+branch merges.
 
 ## Scope and environment
 
@@ -28,13 +28,24 @@ difficulty.
 
 ## Changed production boundaries
 
-| Boundary | Files | Evidence and classification |
-| --- | --- | --- |
-| Tokens and concrete syntax | `lexer/token.rs`, `lexer/mod.rs`, `parser/mod.rs`, `parser/grammar.rs`, `parser/project.rs` | `rec`, `and`, two concrete node kinds, group parsing, recovery, shape validation, and projection are feature behavior plus closed syntax joins. |
-| Surface and resolved syntax | `surface.rs`, `resolved.rs`, `resolve.rs` | Ordered declarations are a cross-stage representation change. Two-pass global and group allocation is semantic scope behavior. |
-| Typing and lowering | `elaborate.rs`, `source.rs` | Simultaneous monotype installation, initialization safety, diagnostics, provenance, and lowering are required semantic behavior concentrated in an existing stage owner. |
-| Typed Core | `core/recursion.rs`, `core/mod.rs`, `core/dialect.rs`, `core/validate.rs`, `core/transform.rs` | The group payload localized in one new file. Construction, variable-arity traversal, validation, scope analysis, and transforms remain explicit closed-dialect joins. |
-| Evaluation | `eval/machine.rs` | Templates, recursive environment frames, lookup materialization, and entry transitions are semantic ownership and execution behavior, not registration plumbing. |
+- Tokens and concrete syntax changed `lexer/token.rs`, `lexer/mod.rs`,
+  `parser/mod.rs`, `parser/grammar.rs`, and `parser/project.rs`. The reserved
+  words, two concrete node kinds, group parsing, recovery, shape validation,
+  and projection are feature behavior plus closed syntax joins.
+- Surface and resolved syntax changed `surface.rs`, `resolved.rs`, and
+  `resolve.rs`. Ordered declarations are a cross-stage representation change.
+  Two-pass global and group allocation is semantic scope behavior.
+- Typing and lowering changed `elaborate.rs` and `source.rs`. Simultaneous
+  monotype installation, initialization safety, diagnostics, provenance, and
+  lowering are required semantic behavior concentrated in an existing stage
+  owner.
+- Typed Core changed `core/recursion.rs`, `core/mod.rs`, `core/dialect.rs`,
+  `core/validate.rs`, and `core/transform.rs`. The group payload localized in
+  one new file. Construction, variable-arity traversal, validation, scope
+  analysis, and transforms remain explicit closed-dialect joins.
+- Evaluation changed `eval/machine.rs`. Templates, recursive environment
+  frames, lookup materialization, and entry transitions are semantic ownership
+  and execution behavior, not registration plumbing.
 
 Only `src/core/recursion.rs` is a new feature-owned production file. This is
 not a failure to package the feature: most of recursion's cost changes the
@@ -45,7 +56,12 @@ remove their interactions.
 One exact-name audit currently returns 38 locations in 10 production files:
 
 ```text
-rg -n 'PureComputation::RecursiveBind|SurfaceLocalDeclaration::Recursive|ResolvedLocalDeclaration::Recursive|NodeKind::RecursiveBinding(Group|Member)|TokenKind::(Rec|And)' src
+rg -n \
+  -e 'PureComputation::RecursiveBind' \
+  -e 'SurfaceLocalDeclaration::Recursive' \
+  -e 'ResolvedLocalDeclaration::Recursive' \
+  -e 'NodeKind::RecursiveBinding(Group|Member)' \
+  -e 'TokenKind::(Rec|And)' src
 ```
 
 The hits include declarations, constructors, recognition, and consumers, so
@@ -103,11 +119,47 @@ Three deliberate, uncommitted mutations tested discoverability. Each was
 reverted with a targeted patch, and `cargo check --locked --all-targets`
 passed afterward.
 
-| Probe | Initial compiler evidence | Complete discovery | Interpretation |
-| --- | --- | --- | --- |
-| Rename `RecursiveBindingMember::binder` | Eight errors in three production files: transform, validation, and evaluation | `rg -n 'member\.binder\(\)' src tests` also finds six assertions in two integration-test files | Rust immediately exposes production consumers. Because the library fails first, one exact search is still needed to see later test-target updates without iterating compilation. |
-| Change `RecursiveBindingNode::child_at` from `Option` to `Result` | One actionable type mismatch in `core/dialect.rs` | `rg -n '\.child_at\(' src tests` shows that all other traversals consume the normalized `PureExprKind` contract | The feature-specific variable-arity contract has one central composition point. Validator and transform callers do not depend on the group representation. |
-| Add a required field to `RecursiveFunctionTemplate` | Missing-field errors at two unique initializers in `eval/machine.rs`, one production and one private test | `rg -n 'RecursiveFunctionTemplate \{' src tests` returns exactly those sites plus the definition | The private concrete runtime representation gives precise compiler feedback and cannot compile partially updated construction. |
+### Member accessor
+
+Renaming `RecursiveBindingMember::binder` produced eight errors in three
+production files: transform, validation, and evaluation. The complete query
+
+```text
+rg -n 'member\.binder\(\)' src tests
+```
+
+also found six assertions in two integration-test files. Rust immediately
+exposes production consumers. Because the library fails first, one exact
+search is still needed to see later test-target updates without iterating
+compilation.
+
+### Child traversal contract
+
+Changing `RecursiveBindingNode::child_at` from `Option` to `Result` produced
+one actionable type mismatch in `core/dialect.rs`. The query
+
+```text
+rg -n '\.child_at\(' src tests
+```
+
+showed that all other traversals consume the normalized `PureExprKind`
+contract. The feature-specific variable-arity contract therefore has one
+central composition point. Validator and transform callers do not depend on
+the group representation.
+
+### Runtime template field
+
+Adding a required field to `RecursiveFunctionTemplate` produced missing-field
+errors at two unique initializers in `eval/machine.rs`, one production and one
+private test. The query
+
+```text
+rg -n 'RecursiveFunctionTemplate \{' src tests
+```
+
+returned exactly those sites plus the definition. The private concrete
+runtime representation gives precise compiler feedback and cannot compile
+partially updated construction.
 
 These probes show favorable mechanical maintenance for the new Core and
 runtime APIs. They do not make semantic changes mechanical. For example,

@@ -12,10 +12,12 @@ use crate::{
 
 /// Inspectable lexical values available while evaluating one expression.
 ///
-/// Environments are immutable entry-chain snapshots. Cloning and extension are
-/// O(1); lookup is O(depth), walking from the newest binding toward the oldest.
-/// Entry destruction dismantles uniquely owned tails iteratively so lexical
-/// depth does not become Rust call-stack depth.
+/// Environments are immutable entry-chain snapshots. Cloning and ordinary
+/// single-binder extension are O(1). A recursive group is sorted once and
+/// stored in one entry; lookup walks entries from newest to oldest and uses a
+/// binary search within each recursive entry. Entry destruction dismantles
+/// uniquely owned tails iteratively so lexical depth does not become Rust
+/// call-stack depth.
 #[derive(Clone, Default)]
 pub struct Environment {
     head: Option<Arc<EnvironmentEntry>>,

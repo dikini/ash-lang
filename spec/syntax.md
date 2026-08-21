@@ -19,7 +19,8 @@ equation ::= identifier binder "=" expression ;
 inline_operational_global ::=
   "fn" identifier "(" typed_binder ")" "->" type block ;
 
-block ::= "{" line_end { local_declaration line_end } expression [ line_end ] "}" ;
+block ::=
+  "{" line_end { local_declaration line_end } expression [ line_end ] "}" ;
 local_declaration ::= local_binding | recursive_binding_group ;
 local_binding ::= "let" identifier [ ":" type ] "=" expression ;
 recursive_binding_group ::=
