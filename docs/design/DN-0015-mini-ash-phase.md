@@ -2,7 +2,7 @@
 
 - ID: `DN-0015`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0003: Parser Architecture](DN-0003-parser-architecture.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md), [DN-0014: Finite Kinds and Promotion](DN-0014-finite-kinds-and-promotion.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md), [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md)
+- Related: [AD-0004: Small-Step Semantic Method](../decisions/AD-0004-small-step-semantic-method.md), [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0003: Parser Architecture](DN-0003-parser-architecture.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md), [DN-0014: Finite Kinds and Promotion](DN-0014-finite-kinds-and-promotion.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md), [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md)
 
 > This design note is informative. It does not define current Ash, accept
 > Mini-Ash semantics, or accept a parser, Core, typing, or evaluation
@@ -67,10 +67,10 @@ of the normative specification.
 
 ### Use small-step operational semantics
 
-The leading phase direction is one primary small-step account of operational
-behavior. Explanatory views may derive from it but should not become a competing
-normative semantics. The specification method requires an accepted decision
-before substantial normative semantics are written.
+[AD-0004](../decisions/AD-0004-small-step-semantic-method.md) selects one
+primary small-step account of operational behavior. Explanatory views may
+derive from it but should not become a competing normative semantics. Concrete
+behavior still requires accepted semantic proposals and specification changes.
 
 The retained evaluator must behave consistently with the accepted small-step
 rules. An experimental evaluator may compare an approach, but it cannot silently

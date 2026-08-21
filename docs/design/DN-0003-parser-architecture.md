@@ -2,7 +2,7 @@
 
 - ID: `DN-0003`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md)
+- Related: [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md)
 
 > This design note is informative. It does not accept a parser architecture or define Ash grammar.
 
@@ -11,6 +11,16 @@
 Choose a parser architecture that can grow with the language without repeatedly restructuring unrelated parser code. Keep the normative grammar independent of parser implementation structure.
 
 EBNF is the likely notation for a future normative grammar, but neither the notation nor any Ash grammar is accepted by this note.
+
+## Accepted implementation boundary
+
+[AD-0005](../decisions/AD-0005-parser-architecture.md) accepts separate lexing,
+event-producing grammar-shaped recursive descent, one explicit application and
+infix precedence layer, token-complete error-bearing concrete syntax, and a
+recovery-free surface-AST projection. It does not accept Ash grammar, layout, a
+parser library, concrete event or tree types, incremental parsing, or trivia
+policy. This note continues to explore those open implementation and grammar
+pressures without overriding the accepted architecture.
 
 ## Constraints
 
@@ -23,7 +33,13 @@ Current work need not support the full expected future language. It should use e
 
 ## Candidate directions
 
-No concrete candidate is yet supported by repository evidence. Research should identify multiple parser organizations and compare their concrete behavior rather than selecting a framework by reputation or adjectives. No implementation language, parser framework, or parsing strategy is currently preferred.
+[AD-0005](../decisions/AD-0005-parser-architecture.md) selects the parser
+organization. Remaining comparisons concern concrete event and tree
+representations, recovery synchronization, trivia coverage, storage, and
+libraries within that boundary. Research should compare their concrete
+behavior rather than selecting a framework by reputation or adjectives. It
+should reopen the accepted organization only when contrary evidence identifies
+a named failure.
 
 ## Experiments
 

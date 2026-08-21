@@ -2,7 +2,7 @@
 
 - ID: `DN-0008`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md), [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md)
+- Related: [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md), [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md), [DN-0018: Runtime-Established Static Evidence](DN-0018-runtime-established-static-evidence.md)
 
 > This design note is informative and non-normative. It explores typed Core and elaboration candidates; it does not define current Ash, accept an architecture, or require downstream capabilities. All syntax and internal forms are illustrative.
 
@@ -26,6 +26,17 @@ The scope is:
 - representational seams for later evidence passing, effects, CPS, opacity, and existentials.
 
 This note does not choose the concrete recursive Core encoding, CPS representation, runtime layout, normative semantic notation, effect semantics, or optimizer architecture. Those questions remain open or belong to other artifacts.
+
+## Accepted first-stratum boundaries
+
+[AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md) accepts a
+distinct binder-resolution boundary followed by bidirectional typed elaboration
+to structured Core. [AD-0007](../decisions/AD-0007-typed-core-dialects.md)
+accepts named typed Core dialects, independent validation, and the pure
+operation-family boundary. [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
+accepts direct execution through an explicit first-order machine. They leave
+the richer polymorphism, pattern-compilation, evidence, effect, CPS, storage,
+and optimizer questions in this note open.
 
 ## Suggested design rules
 
@@ -248,13 +259,22 @@ Core nodes could carry final types while leaving instantiation and abstraction i
 
 Keeping only structured patterns preserves source-level meaning but forces decision-oriented transforms and execution to rediscover tests. Keeping only decision forms simplifies execution but discards useful high-level structure early. Keeping both adds a transform and two validators; experiments should show whether each side enables materially simpler work.
 
-### One permissive Core rather than dialects
+### Dialect granularity and conversions
 
-A single node set with optional forms avoids conversions and naming. It can also make every transform defend against every possible node and weaken guarantees about what a pass receives. Explicit dialects are worthwhile only where those guarantees have measurable value.
+[AD-0007](../decisions/AD-0007-typed-core-dialects.md) rejects one permissive
+node set as the retained semantic Core boundary. The exact dialect granularity,
+node-family assembly, conversion ownership, and validation evidence remain
+open. Experiments should justify each additional dialect by the guarantees it
+provides to consumers.
 
-### Host-recursive or explicit-machine interpretation
+### Explicit-machine composition
 
-A host-recursive interpreter is likely shorter for the pure nucleus. An explicit machine makes evaluation order and continuations data, which may improve semantic inspection and later experiments. The comparison should measure complexity and diagnostics rather than select the more future-looking architecture by reputation.
+[AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md) selects an
+explicit first-order machine for the retained evaluator. A host-recursive
+interpreter may remain a disposable differential oracle. Further comparison
+should concern transition ownership, frame composition, inspectable code and
+environment storage, diagnostics, and resource accounting within the accepted
+machine boundary.
 
 ### Rules as functions, modules, or declarative data
 
@@ -270,7 +290,9 @@ Lowering only to a backend may reduce duplicate execution machinery. It weakens 
 - [DN-0005](DN-0005-surface-function-definitions.md) requires equivalent elaboration for equation groups and operational bodies plus source provenance for form-specific diagnostics.
 - [DN-0006](DN-0006-initial-type-system.md) supplies candidate kinding, instantiation, equality, generalization, recursion, and unification rules that Core must represent and revalidate.
 - [DN-0007](DN-0007-data-and-pattern-typing.md) supplies typed patterns, visibility, irrefutability, and coverage obligations. Pattern compilation should preserve those established facts or revalidate their relevant consequences.
-- The semantic-specification discussion in [DN-0001](DN-0001-reboot-foundations.md) treats small-step semantics as a candidate because later control features may expose continuations. An explicit machine can provide evidence for that choice without becoming normative semantics.
+- [AD-0004](../decisions/AD-0004-small-step-semantic-method.md) selects
+  small-step semantics as the primary normative method. An explicit machine can
+  provide implementation evidence without becoming normative semantics.
 - Possible Core/CPS movement pressures dialect interfaces not to assume one irreversible lowering pipeline. CPS reconstruction and opaque CPS regions are not requirements for the first Core.
 - Possible optimization search pressures transform applicability to remain checkable and output to be revalidated. Heuristic search or ML ranking is not part of the trusted semantic core and is not an initial requirement.
 - Possible interfaces, handlers, existentials, and proof evidence pressure explicit binders and applications. They should not be encoded speculatively before their semantics exist.
@@ -321,7 +343,8 @@ Retain a prototype only if it supplies current design evidence that cannot be ca
 - Do structured and decision patterns justify two dialects, two node families in one dialect, or one form plus ephemeral lowering data?
 - Which invariants must `compile_patterns` establish beyond type preservation?
 - Which representation changes qualify as retained semantic Core dialects subject to direct execution, and which are only lowering artifacts?
-- Does an explicit machine materially improve the first pure interpreter enough to offset its complexity?
+- Which transition and frame composition keeps the accepted explicit machine
+  reviewable as the pure interpreter grows?
 - What continuation representation remains inspectable without making ordinary pure terms awkward?
 - Which semantic rules belong to Core validation, surface elaboration, or shared static infrastructure?
 - How are proof obligations or established facts attached to transformed Core without trusting stale evidence?

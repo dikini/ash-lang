@@ -127,14 +127,47 @@ task. Retaining language behavior additionally requires an accepted change
 proposal whose implementation, tests, executable path, and specification update
 land together.
 
+## Tracked experiment program
+
+This table tracks current research progress. `Ready` means that the governing
+question, corpus cases, comparison criteria, and retention boundary are
+sufficient to begin. `Pending` means that an earlier comparison must finish
+first. A status does not accept syntax, semantics, or architecture.
+
+| Work | Status | Evidence scope | Completion condition |
+| --- | --- | --- | --- |
+| Corpus consistency review | Complete | Every `V`, `X`, `P`, `R`, `T`, and `I` case across all evidence slices | No blocking disagreement remains among syntax, scope, typing, dynamics, diagnostics, and representation obligations. |
+| [Specification method](mini-ash/first-stratum/comparisons/specification-method.md) | Complete | First-stratum small-step rules and traces, plus downstream runtime-state pressure | The written comparison favors small-step semantics as the one primary normative method and identifies the decision boundary without accepting it. |
+| [Core representation](mini-ash/first-stratum/comparisons/core-representation.md) | Complete | `V-001` through `V-008`, `X-001`, `X-003`, and `I-001` through `I-004` | The three named encodings are compared on types, validation, traversal, transformation, provenance, ownership, and downstream extension pressure. |
+| [Resolution, typechecker, and elaboration](mini-ash/first-stratum/comparisons/static-semantics-organization.md) | Complete | `V-001` through `V-008`, `R-001`, `R-002`, `T-001` through `T-004`, and `X-001` through `X-003` | Candidate rule boundaries and data flow are compared on binder identity, scope, expected typing, grouping, patterns, structured failures, and provenance. |
+| [Evaluator](mini-ash/first-stratum/comparisons/evaluator-architecture.md) | Complete | `V-001` through `V-008`, `X-001`, and `X-003` | A direct evaluator and an explicit first-order machine are compared against the reduction rules, traces, lexical capture, inspectability, and host-stack risk. |
+| [Parser architecture](mini-ash/first-stratum/comparisons/parser-architecture.md) | Complete | The provisional grammar, every valid source presentation, and `P-001` through `P-003` | At least two composable organizations are compared on locality, precedence, ambiguity, recovery, spans, diagnostics, and tooling pressure. |
+| [Component convergence](mini-ash/first-stratum/comparisons/component-convergence.md) | Complete | Completed component comparisons | The evidence identifies which choices require architectural decisions and records unresolved alternatives without selecting them implicitly. |
+| [Architectural decisions](../decisions/README.md) | Complete | The completed convergence record and five decision boundaries | AD-0004 through AD-0008 accept only the converged non-language choices and keep the listed syntax, semantics, and concrete implementation mechanisms unresolved. |
+| First semantic proposal | Ready | Accepted specification method and component decisions | A proposal states the first user-visible semantic increment and its required executable, tests, diagnostics, and specification evidence. |
+
+The completed consistency review found no blocking disagreement in the named
+cases. Grouping parentheses erase consistently before typing and dynamics,
+X-003 has the product typing and reduction rules needed to derive its result,
+and every rejected case has a compatible stage and diagnostic obligation. The
+grammar admits a few uncased generalizations, including anonymous
+multi-parameter functions and products above arity two. Parser experiments may
+observe those forms, but only named cases carry static or dynamic expectations;
+the grammar must be narrowed or the extra forms specified before a semantic
+proposal relies on them.
+
+The railroad and sequent renderers still need the conformance updates recorded
+by [AD-0003](../decisions/AD-0003-formal-notation-fences.md). Those external
+tool updates do not change the canonical Markdown or block component research.
+
 ## Convergence gates
 
 1. Review the corpus for agreement among programs, grammar, typing, dynamics,
-   diagnostics, and representation pressure.
+   diagnostics, and representation pressure. This gate is complete.
 2. Compare component candidates against only the cases needed to answer each
-   question.
+   question. This gate is complete.
 3. Accept the specification method and converged component architectures in
-   separate decisions.
+   separate decisions. This gate is complete through AD-0004 to AD-0008.
 4. Propose the first user-visible semantic increment.
 5. Implement the accepted increment as a retained single-file executable.
 
@@ -144,10 +177,11 @@ land together.
   result binding?
 - Which primitive operations provide enough precedence and evaluation-order
   pressure without expanding the semantic nucleus?
-- Which parser candidates merit code probes after written comparison?
 - Which concrete Rust encoding composes typed Core fragments while retaining
   exhaustive validation and useful traversal?
-- Does an explicit first-order machine justify its machinery for the pure
-  stratum, or is a direct structured evaluator sufficient?
-- Which findings require an architectural decision before the first semantic
-  proposal can be reviewed?
+- Which concrete event and tree types implement AD-0005 without deciding trivia
+  or layout prematurely?
+- How should AD-0008's frame transitions compose by Core feature without one
+  monolithic transition function?
+- Which provisional cases belong in the first semantic proposal, and which
+  grammar generalizations must be narrowed before that proposal?

@@ -8,4 +8,9 @@ A language change begins outside the specification. Exploration belongs in a des
 
 Infrastructure may merge before surface syntax can reach it. Such infrastructure does not create specification truth. If implementation reveals that proposed semantics are incomplete or wrong, revise the proposal and its required evidence rather than encoding a local choice in code or tests.
 
-The formal-semantic method is unresolved. The foundation note identifies small-step operational semantics as a strong candidate because expected future work includes effects, explicit continuations, concurrency, cancellation, and runtime state. This is design evidence, not an accepted method. Settle the method explicitly before substantial semantic specification work and avoid two competing normative semantic systems.
+[AD-0004](../decisions/AD-0004-small-step-semantic-method.md) establishes one
+small-step operational account as the primary normative method for dynamic
+semantics. Big-step explanations, representative traces, executable evaluators,
+and mechanized models remain derived or non-normative views checked against
+that account. The decision selects a documentation and semantic-accounting
+method; it does not add Ash behavior to the specification.

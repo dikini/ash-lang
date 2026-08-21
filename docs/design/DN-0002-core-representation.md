@@ -2,7 +2,7 @@
 
 - ID: `DN-0002`
 - Status: exploring
-- Related: [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md)
+- Related: [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [DN-0001: Ash Reboot Foundations](DN-0001-reboot-foundations.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md)
 
 > This design note is informative. It does not accept a Core representation or define Ash semantics.
 
@@ -11,6 +11,16 @@
 Find a typed Core representation that fits a small pure functional Ash now and can support later effects and representation-changing compiler work without forcing those features into the first language.
 
 The current semantic direction is Freer-like: pure results and effect operations with continuations. This direction does not commit the implementation to a literal textbook Freer Monad encoding.
+
+## Accepted Mini-Ash boundary
+
+[AD-0007](../decisions/AD-0007-typed-core-dialects.md) accepts named closed
+typed Core dialects assembled from feature-local families, independent
+validation, a pure value/computation boundary with no inhabitable effect
+operations, and an explicit future operation-family seam. It leaves the exact
+Rust composition mechanism, ownership, storage, provenance tables, effects,
+continuations, and CPS questions open. This note continues to explore those
+broader representation questions without overriding the accepted boundary.
 
 ## Constraints
 
@@ -26,12 +36,14 @@ Current work need not implement effects, handlers, CPS reconstruction, opaque CP
 
 ## Candidate directions
 
-- a direct first-order Freer-like representation;
-- a value/computation split;
-- an explicit bind or step representation;
-- an explicit continuation graph.
+- a direct first-order encoding of the accepted Freer-like operation seam;
+- different concrete encodings of the accepted value/computation split;
+- an explicit bind or step representation within a future computation dialect;
+- an explicit continuation graph when accepted effects or CPS require one.
 
-These are candidates for experiments, not a complete set and not accepted choices.
+These are candidates for concrete representation experiments, not a complete
+set. They do not reopen AD-0007's accepted dialect, typing, validation, or
+value/computation boundaries.
 
 ## Experiments
 

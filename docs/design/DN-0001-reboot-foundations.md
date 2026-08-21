@@ -2,7 +2,7 @@
 
 - ID: `DN-0001`
 - Status: exploring
-- Related: [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0003: Parser Architecture](DN-0003-parser-architecture.md)
+- Related: [AD-0004: Small-Step Semantic Method](../decisions/AD-0004-small-step-semantic-method.md), [DN-0002: Core Representation](DN-0002-core-representation.md), [DN-0003: Parser Architecture](DN-0003-parser-architecture.md)
 
 > This design note is informative. It records reboot principles, constraints, and open directions; it is not the Ash specification and does not accept the speculative designs it discusses.
 
@@ -103,9 +103,7 @@ A design note records exploration.
 It answers questions such as:
 
 > What options are we considering?
-
 > What pressures should influence the current design?
-
 > What remains uncertain?
 
 Design notes may contain:
@@ -420,11 +418,13 @@ Using big-step semantics for some constructs and small-step semantics for others
 
 Ash is expected to include effects, handlers, explicit continuations, concurrency, cancellation, and runtime state.
 
-Small-step operational semantics therefore appears to be the stronger candidate for the primary normative operational semantics.
+[AD-0004](../decisions/AD-0004-small-step-semantic-method.md) selects
+small-step operational semantics as the primary normative method.
 
 Derived explanatory or big-step views may still be useful, but they should not become competing sources of truth.
 
-This remains a design question that should be settled explicitly in the specification methodology before substantial semantic specification work.
+Concrete language behavior remains to be accepted through semantic proposals
+and recorded in the specification; the method decision does not define it.
 
 The chosen semantics should be as complete as practical rather than selectively formal only around difficult features.
 
