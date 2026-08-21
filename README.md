@@ -19,7 +19,7 @@ Project artifacts answer different questions:
 - [tasks](docs/tasks/README.md) organize active implementation work;
 - the [development trajectory](docs/trajectory.md) records dependencies and maturity;
 - [project documentation](docs/project/README.md) defines documentation,
-  dependencies, and the development discipline.
+  dependencies, and the development discipline;
 - [tool documentation](docs/tools/README.md) describes the retained Ash
   executables.
 

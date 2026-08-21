@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0006: Implement the First Mini-Ash Nucleus](TASK-0006-implement-first-mini-ash-nucleus.md)
+No implementation task is currently active.
