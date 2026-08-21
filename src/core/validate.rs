@@ -24,6 +24,8 @@ pub enum ValidationReason {
     NodeType,
     /// An application disagrees with its function domain or codomain.
     ApplicationType,
+    /// A recursive binding violates its group-shape invariants.
+    RecursiveBinding,
     /// Required causal source provenance is missing or invalid.
     Provenance,
     /// A stored node does not belong to the selected pure dialect.
@@ -44,6 +46,7 @@ impl fmt::Display for ValidationReason {
             Self::Scope => "core.validation.scope",
             Self::NodeType => "core.validation.node-type",
             Self::ApplicationType => "core.validation.application-type",
+            Self::RecursiveBinding => "core.validation.recursive-binding",
             Self::Provenance => "core.validation.provenance",
             Self::DialectMembership => "core.validation.dialect-membership",
             Self::NodeBounds => "core.validation.node-bounds",
@@ -229,7 +232,13 @@ impl<'program, 'source> Validator<'program, 'source> {
                     colors[index] = Color::Gray;
                     work.push(GraphTask::Exit(id));
                     let node = self.node(id)?;
-                    for child in node.kind.children().into_iter().flatten().rev() {
+                    for child_index in (0..node.kind.child_count()).rev() {
+                        let Some(child) = node.kind.child_at(child_index) else {
+                            return Err(ValidationError::new(
+                                ValidationReason::NodeBounds,
+                                Some(id),
+                            ));
+                        };
                         if self.node(child).is_err() {
                             return Err(ValidationError::new(
                                 ValidationReason::NodeBounds,
@@ -258,27 +267,41 @@ impl<'program, 'source> Validator<'program, 'source> {
     fn collect_binders(&mut self) -> Result<(), ValidationError> {
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
-            let binder = match &node.kind {
-                PureExprKind::Value(PureValue::Function(function)) => Some(function.parameter()),
-                PureExprKind::Computation(PureComputation::Bind(binding)) => Some(binding.binder()),
+            match &node.kind {
+                PureExprKind::Value(PureValue::Function(function)) => {
+                    self.collect_binder(id, function.parameter())?;
+                }
+                PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                    self.collect_binder(id, binding.binder())?;
+                }
+                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                    for member in group.members() {
+                        self.collect_binder(id, member.binder())?;
+                    }
+                }
                 PureExprKind::Value(
                     PureValue::Integer(_) | PureValue::Boolean(_) | PureValue::Unit(_),
                 )
                 | PureExprKind::Variable(_)
                 | PureExprKind::Computation(
                     PureComputation::Apply(_) | PureComputation::Primitive(_),
-                ) => None,
-            };
-            let Some(binder) = binder else {
-                continue;
-            };
-            if binder.arena() != self.program.arena {
-                return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+                ) => {}
             }
-            self.validate_origin(binder.origin(), id)?;
-            if self.binders.insert(binder.id(), binder).is_some() {
-                return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
-            }
+        }
+        Ok(())
+    }
+
+    fn collect_binder(
+        &mut self,
+        node: NodeId,
+        binder: &'program TypedBinder,
+    ) -> Result<(), ValidationError> {
+        if binder.arena() != self.program.arena {
+            return Err(ValidationError::new(ValidationReason::Scope, Some(node)));
+        }
+        self.validate_origin(binder.origin(), node)?;
+        if self.binders.insert(binder.id(), binder).is_some() {
+            return Err(ValidationError::new(ValidationReason::Scope, Some(node)));
         }
         Ok(())
     }
@@ -339,6 +362,33 @@ impl<'program, 'source> Validator<'program, 'source> {
                 let initializer = self.node(binding.initializer())?;
                 let body = self.node(binding.body())?;
                 if initializer.ty != *binding.binder().ty() || node.ty != body.ty {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
+            PureComputation::RecursiveBind(group) => {
+                if group.members().is_empty() {
+                    return Err(ValidationError::new(
+                        ValidationReason::RecursiveBinding,
+                        Some(id),
+                    ));
+                }
+                for member in group.members() {
+                    let initializer = self.node(member.initializer())?;
+                    if !matches!(
+                        initializer.kind,
+                        PureExprKind::Value(PureValue::Function(_))
+                    ) {
+                        return Err(ValidationError::new(
+                            ValidationReason::RecursiveBinding,
+                            Some(id),
+                        ));
+                    }
+                    if initializer.ty != *member.binder().ty() {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                    }
+                }
+                let body = self.node(group.body())?;
+                if node.ty != body.ty {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
             }
@@ -403,7 +453,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                     }
                     scheduled[index] = true;
                     work.push(ScopeAnalysisTask::Finish(id));
-                    for child in self.node(id)?.kind.children().into_iter().flatten().rev() {
+                    let kind = &self.node(id)?.kind;
+                    for child_index in (0..kind.child_count()).rev() {
+                        let child = kind.child_at(child_index).ok_or_else(|| {
+                            ValidationError::new(ValidationReason::Scope, Some(id))
+                        })?;
                         work.push(ScopeAnalysisTask::Enter(child));
                     }
                 }
@@ -424,6 +478,18 @@ impl<'program, 'source> Validator<'program, 'source> {
                             let mut body = self.requirements_for(&requirements, binding.body())?;
                             body.remove(&binding.binder().id());
                             union_requirements(initializer, body)
+                        }
+                        PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                            let mut free = self.requirements_for(&requirements, group.body())?;
+                            for member in group.members() {
+                                let initializer =
+                                    self.requirements_for(&requirements, member.initializer())?;
+                                free = union_requirements(free, initializer);
+                            }
+                            for member in group.members() {
+                                free.remove(&member.binder().id());
+                            }
+                            free
                         }
                         PureExprKind::Computation(PureComputation::Apply(application)) => {
                             let function =

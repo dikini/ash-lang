@@ -80,12 +80,20 @@ fn rebuild(
 ) -> Result<UnvalidatedProgram, TransformError> {
     let order = postorder(program, fold_literal_primitives)?;
     let mut builder = CoreBuilder::new();
-    let binders = order.iter().filter_map(|id| {
-        let expression = program.node(*id)?;
+    let mut binders = Vec::new();
+    for id in &order {
+        let expression = program
+            .node(*id)
+            .ok_or(TransformError::InvalidValidatedInput)?;
         match &expression.kind {
-            PureExprKind::Value(PureValue::Function(function)) => Some(function.parameter().id()),
+            PureExprKind::Value(PureValue::Function(function)) => {
+                binders.push(function.parameter().id());
+            }
             PureExprKind::Computation(PureComputation::Bind(binding)) => {
-                Some(binding.binder().id())
+                binders.push(binding.binder().id());
+            }
+            PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                binders.extend(group.members().iter().map(|member| member.binder().id()));
             }
             PureExprKind::Value(
                 PureValue::Integer(_) | PureValue::Boolean(_) | PureValue::Unit(_),
@@ -93,9 +101,9 @@ fn rebuild(
             | PureExprKind::Variable(_)
             | PureExprKind::Computation(
                 PureComputation::Apply(_) | PureComputation::Primitive(_),
-            ) => None,
+            ) => {}
         }
-    });
+    }
     builder.reserve_resolved_binders(binders)?;
 
     let mut remapped = vec![None; program.node_count()];
@@ -198,6 +206,25 @@ fn rebuild_node(
                 )
                 .map_err(TransformError::from)
         }
+        PureExprKind::Computation(PureComputation::RecursiveBind(node)) => {
+            let mut members = Vec::with_capacity(node.members().len());
+            for member in node.members() {
+                let binder = builder.resolved_binder(
+                    member.binder().id(),
+                    member.binder().ty().clone(),
+                    member.binder().origin().clone(),
+                )?;
+                members.push((binder, remap(remapped, member.initializer())?));
+            }
+            builder
+                .recursive_binding(
+                    members,
+                    remap(remapped, node.body())?,
+                    expression.ty.clone(),
+                    expression.origin.clone(),
+                )
+                .map_err(TransformError::from)
+        }
         PureExprKind::Computation(PureComputation::Apply(node)) => builder
             .application(
                 remap(remapped, node.function())?,
@@ -245,17 +272,21 @@ fn postorder(
                 let expression = program
                     .node(id)
                     .ok_or(TransformError::InvalidValidatedInput)?;
-                let children = if fold_literal_primitives
+                let child_count = if fold_literal_primitives
                     && matches!(
-                        &expression.kind,
-                        PureExprKind::Computation(PureComputation::Primitive(operation))
-                            if is_foldable_literal(program, *operation)
+                            &expression.kind,
+                            PureExprKind::Computation(PureComputation::Primitive(operation))
+                                if is_foldable_literal(program, *operation)
                     ) {
-                    [None, None]
+                    0
                 } else {
-                    expression.kind.children()
+                    expression.kind.child_count()
                 };
-                for child in children.into_iter().flatten().rev() {
+                for child_index in (0..child_count).rev() {
+                    let child = expression
+                        .kind
+                        .child_at(child_index)
+                        .ok_or(TransformError::InvalidValidatedInput)?;
                     work.push(Task::Enter(child));
                 }
             }

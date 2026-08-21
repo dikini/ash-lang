@@ -23,9 +23,26 @@ pub struct Environment {
 }
 
 struct EnvironmentEntry {
-    binder: BinderId,
-    value: Value,
+    kind: EnvironmentEntryKind,
     parent: Option<Arc<Self>>,
+    visible_len: usize,
+}
+
+enum EnvironmentEntryKind {
+    Binding {
+        binder: BinderId,
+        value: Value,
+    },
+    Recursive {
+        members: Box<[RecursiveFunctionTemplate]>,
+    },
+}
+
+struct RecursiveFunctionTemplate {
+    binder: BinderId,
+    parameter: BinderId,
+    body: NodeId,
+    origin: crate::source::Origin,
 }
 
 impl Drop for EnvironmentEntry {
@@ -49,7 +66,11 @@ impl EnvironmentEntry {
         if let Some(parent) = self.parent.take() {
             pending.push(parent);
         }
-        if let Value::Function(closure) = &mut self.value {
+        if let EnvironmentEntryKind::Binding {
+            value: Value::Function(closure),
+            ..
+        } = &mut self.kind
+        {
             if let Some(captured) = closure.environment.head.take() {
                 pending.push(captured);
             }
@@ -64,7 +85,17 @@ impl fmt::Debug for Environment {
         let mut binders = Vec::with_capacity(self.len.min(BINDER_LIMIT));
         let mut current = self.head.as_deref();
         while let Some(entry) = current.filter(|_| binders.len() < BINDER_LIMIT) {
-            binders.push(entry.binder);
+            match &entry.kind {
+                EnvironmentEntryKind::Binding { binder, .. } => binders.push(*binder),
+                EnvironmentEntryKind::Recursive { members } => {
+                    binders.extend(
+                        members
+                            .iter()
+                            .map(|member| member.binder)
+                            .take(BINDER_LIMIT - binders.len()),
+                    );
+                }
+            }
             current = entry.parent.as_deref();
         }
         formatter
@@ -95,13 +126,34 @@ impl Environment {
         self.head.is_none()
     }
 
-    fn lookup(&self, binder: BinderId) -> Option<&Value> {
-        let mut current = self.head.as_deref();
+    fn lookup(&self, binder: BinderId, program: &Arc<PureProgram>) -> Option<Value> {
+        let mut current = self.head.as_ref();
         while let Some(entry) = current {
-            if entry.binder == binder {
-                return Some(&entry.value);
+            match &entry.kind {
+                EnvironmentEntryKind::Binding {
+                    binder: entry_binder,
+                    value,
+                } if *entry_binder == binder => return Some(value.clone()),
+                EnvironmentEntryKind::Recursive { members } => {
+                    if let Ok(index) = members
+                        .binary_search_by_key(&binder.value(), |member| member.binder.value())
+                    {
+                        let member = &members[index];
+                        return Some(Value::Function(Closure {
+                            parameter: member.parameter,
+                            body: member.body,
+                            program: Arc::clone(program),
+                            environment: Self {
+                                head: Some(Arc::clone(entry)),
+                                len: entry.visible_len,
+                            },
+                            origin: member.origin.clone(),
+                        }));
+                    }
+                }
+                EnvironmentEntryKind::Binding { .. } => {}
             }
-            current = entry.parent.as_deref();
+            current = entry.parent.as_ref();
         }
         None
     }
@@ -113,9 +165,37 @@ impl Environment {
             .ok_or(RuntimeFailure::EnvironmentCapacity)?;
         Ok(Self {
             head: Some(Arc::new(EnvironmentEntry {
-                binder,
-                value,
+                kind: EnvironmentEntryKind::Binding { binder, value },
                 parent: self.head.take(),
+                visible_len: len,
+            })),
+            len,
+        })
+    }
+
+    fn extend_recursive(
+        mut self,
+        mut members: Vec<RecursiveFunctionTemplate>,
+    ) -> Result<Self, RuntimeFailure> {
+        let len = self
+            .len
+            .checked_add(members.len())
+            .ok_or(RuntimeFailure::EnvironmentCapacity)?;
+        members.sort_unstable_by_key(|member| member.binder.value());
+        if members.is_empty()
+            || members
+                .windows(2)
+                .any(|pair| pair[0].binder == pair[1].binder)
+        {
+            return Err(RuntimeFailure::UnexpectedRecursiveBinding);
+        }
+        Ok(Self {
+            head: Some(Arc::new(EnvironmentEntry {
+                kind: EnvironmentEntryKind::Recursive {
+                    members: members.into_boxed_slice(),
+                },
+                parent: self.head.take(),
+                visible_len: len,
             })),
             len,
         })
@@ -160,6 +240,8 @@ pub enum RuntimeFailure {
     UnexpectedFunctionValue,
     /// A validated variable did not have a runtime lexical binding.
     MissingBinding,
+    /// A validated recursive group did not contain function templates.
+    UnexpectedRecursiveBinding,
     /// The runtime cannot represent another lexical environment entry.
     EnvironmentCapacity,
     /// Machine control completed without exactly one final value.
@@ -177,6 +259,9 @@ impl fmt::Display for RuntimeFailure {
                 "runtime application received a value outside its validated function type"
             }
             Self::MissingBinding => "runtime lexical binding is absent",
+            Self::UnexpectedRecursiveBinding => {
+                "runtime recursive binding violates its validated function-group shape"
+            }
             Self::EnvironmentCapacity => "runtime lexical environment capacity is exhausted",
             Self::InvalidControlState => "runtime machine control state is inconsistent",
         })
@@ -304,9 +389,12 @@ fn dispatch_entry(
             environment,
             expression.origin.clone(),
         ),
-        PureExprKind::Variable(variable) => enter_variable(*variable, environment)?,
+        PureExprKind::Variable(variable) => enter_variable(program, *variable, environment)?,
         PureExprKind::Computation(PureComputation::Bind(binding)) => {
             enter_binding(binding, environment)
+        }
+        PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+            enter_recursive_binding(program, group, environment)?
         }
         PureExprKind::Computation(PureComputation::Primitive(operation)) => {
             enter_primitive(*operation, environment)
@@ -345,14 +433,40 @@ fn enter_function(
 }
 
 fn enter_variable(
+    program: &Arc<PureProgram>,
     variable: crate::core::variable::VariableNode,
     environment: Environment,
 ) -> Result<Transition, RuntimeFailure> {
     let value = environment
-        .lookup(variable.binder())
-        .cloned()
+        .lookup(variable.binder(), program)
         .ok_or(RuntimeFailure::MissingBinding)?;
     Ok(Transition::direct(Control::Return(value)))
+}
+
+fn enter_recursive_binding(
+    program: &Arc<PureProgram>,
+    group: &crate::core::recursion::RecursiveBindingNode,
+    environment: Environment,
+) -> Result<Transition, RuntimeFailure> {
+    let mut members = Vec::with_capacity(group.members().len());
+    for member in group.members() {
+        let initializer = program
+            .node(member.initializer())
+            .ok_or(RuntimeFailure::MissingNode)?;
+        let PureExprKind::Value(PureValue::Function(function)) = &initializer.kind else {
+            return Err(RuntimeFailure::UnexpectedRecursiveBinding);
+        };
+        members.push(RecursiveFunctionTemplate {
+            binder: member.binder().id(),
+            parameter: function.parameter().id(),
+            body: function.body(),
+            origin: initializer.origin.clone(),
+        });
+    }
+    Ok(Transition::direct(Control::Evaluate(
+        group.body(),
+        environment.extend_recursive(members)?,
+    )))
 }
 
 fn enter_binding(
@@ -561,6 +675,12 @@ mod tests {
             returns: &["return_binding"],
         },
         TransitionOwner {
+            feature: "recursive binding",
+            entry: "enter_recursive_binding",
+            frames: &[],
+            returns: &[],
+        },
+        TransitionOwner {
             feature: "application",
             entry: "enter_application",
             frames: &["Frame::ApplyFunction", "Frame::ApplyArgument"],
@@ -614,8 +734,17 @@ mod tests {
             Environment,
             crate::source::Origin,
         ) -> Transition = enter_function;
-        let _: fn(VariableNode, Environment) -> Result<Transition, RuntimeFailure> = enter_variable;
+        let _: fn(
+            &Arc<PureProgram>,
+            VariableNode,
+            Environment,
+        ) -> Result<Transition, RuntimeFailure> = enter_variable;
         let _: fn(&BindingNode, Environment) -> Transition = enter_binding;
+        let _: fn(
+            &Arc<PureProgram>,
+            &crate::core::recursion::RecursiveBindingNode,
+            Environment,
+        ) -> Result<Transition, RuntimeFailure> = enter_recursive_binding;
         let _: fn(ApplicationNode, Environment) -> Transition = enter_application;
         let _: fn(PrimitiveNode, Environment) -> Transition = enter_primitive;
         let _: fn(BinderId, NodeId, Environment, Value) -> Result<Transition, RuntimeFailure> =
@@ -628,7 +757,7 @@ mod tests {
         let _: fn(Closure, Value) -> Result<Transition, RuntimeFailure> =
             return_application_argument;
 
-        assert_eq!(TRANSITION_OWNERSHIP.len(), 8);
+        assert_eq!(TRANSITION_OWNERSHIP.len(), 9);
         assert_eq!(
             TRANSITION_OWNERSHIP
                 .iter()
@@ -641,6 +770,7 @@ mod tests {
                 "function",
                 "variable",
                 "binding",
+                "recursive binding",
                 "application",
                 "primitive",
             ]
@@ -656,9 +786,16 @@ mod tests {
                 .all(|owner| owner.frames.is_empty() && owner.returns.is_empty())
         );
         assert!(
-            TRANSITION_OWNERSHIP[5..]
-                .iter()
-                .all(|owner| !owner.frames.is_empty() && !owner.returns.is_empty())
+            [
+                &TRANSITION_OWNERSHIP[5],
+                &TRANSITION_OWNERSHIP[7],
+                &TRANSITION_OWNERSHIP[8]
+            ]
+            .iter()
+            .all(|owner| !owner.frames.is_empty() && !owner.returns.is_empty())
+        );
+        assert!(
+            TRANSITION_OWNERSHIP[6].frames.is_empty() && TRANSITION_OWNERSHIP[6].returns.is_empty()
         );
     }
 

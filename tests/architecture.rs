@@ -8,6 +8,7 @@ use ash::{
         function::{ApplicationNode, FunctionNode},
         literal::{BooleanNode, IntegerNode, UnitNode},
         primitive::PrimitiveNode,
+        recursion::RecursiveBindingNode,
         validate,
         variable::VariableNode,
     },
@@ -134,6 +135,7 @@ enum ShadowValue {
 
 enum ShadowPureComputation {
     Bind(BindingNode),
+    RecursiveBind(RecursiveBindingNode),
     Apply(ApplicationNode),
     Primitive(PrimitiveNode),
 }
@@ -149,6 +151,9 @@ fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
         PureExprKind::Variable(node) => ShadowExprKind::Variable(*node),
         PureExprKind::Computation(computation) => ShadowExprKind::Computation(match computation {
             PureComputation::Bind(node) => ShadowPureComputation::Bind(node.clone()),
+            PureComputation::RecursiveBind(node) => {
+                ShadowPureComputation::RecursiveBind(node.clone())
+            }
             PureComputation::Apply(node) => ShadowPureComputation::Apply(*node),
             PureComputation::Primitive(node) => ShadowPureComputation::Primitive(*node),
         }),
@@ -220,6 +225,13 @@ fn validate_shadow_computation(
             facts.node_type(node.initializer()) == Some(node.binder().ty())
                 && facts.node_type(node.body()) == Some(ty)
         }
+        ShadowPureComputation::RecursiveBind(node) => {
+            !node.members().is_empty()
+                && facts.node_type(node.body()) == Some(ty)
+                && node.members().iter().all(|member| {
+                    facts.node_type(member.initializer()) == Some(member.binder().ty())
+                })
+        }
         ShadowPureComputation::Apply(node) => {
             let Some(Type::Function(domain, codomain)) = facts.node_type(node.function()) else {
                 return false;
@@ -238,47 +250,58 @@ fn validate_shadow_computation(
     }
 }
 
-fn traverse_shadow(expression: &ShadowTypedExpr) -> [Option<NodeId>; 2] {
+fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
     match &expression.kind {
         ShadowExprKind::Value(value) => match value {
-            ShadowValue::Function(node) => [Some(node.body()), None],
-            ShadowValue::Integer(_) | ShadowValue::Boolean(_) | ShadowValue::Unit(_) => {
-                [None, None]
-            }
+            ShadowValue::Function(node) => vec![node.body()],
+            ShadowValue::Integer(_) | ShadowValue::Boolean(_) | ShadowValue::Unit(_) => Vec::new(),
         },
-        ShadowExprKind::Variable(_) | ShadowExprKind::Mock(_) => [None, None],
+        ShadowExprKind::Variable(_) | ShadowExprKind::Mock(_) => Vec::new(),
         ShadowExprKind::Computation(computation) => match computation {
-            ShadowPureComputation::Bind(node) => [Some(node.initializer()), Some(node.body())],
-            ShadowPureComputation::Apply(node) => [Some(node.function()), Some(node.argument())],
-            ShadowPureComputation::Primitive(node) => [Some(node.left()), Some(node.right())],
+            ShadowPureComputation::Bind(node) => vec![node.initializer(), node.body()],
+            ShadowPureComputation::RecursiveBind(node) => node
+                .members()
+                .iter()
+                .map(|member| member.initializer())
+                .chain(std::iter::once(node.body()))
+                .collect(),
+            ShadowPureComputation::Apply(node) => vec![node.function(), node.argument()],
+            ShadowPureComputation::Primitive(node) => vec![node.left(), node.right()],
         },
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
 enum ShadowTransformPlan {
-    Preserve([Option<NodeId>; 2]),
+    Preserve(Vec<NodeId>),
     ReplaceWithMockUnit,
 }
 
 fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
     match &expression.kind {
         ShadowExprKind::Value(value) => match value {
-            ShadowValue::Function(node) => ShadowTransformPlan::Preserve([Some(node.body()), None]),
+            ShadowValue::Function(node) => ShadowTransformPlan::Preserve(vec![node.body()]),
             ShadowValue::Integer(_) | ShadowValue::Boolean(_) | ShadowValue::Unit(_) => {
-                ShadowTransformPlan::Preserve([None, None])
+                ShadowTransformPlan::Preserve(Vec::new())
             }
         },
-        ShadowExprKind::Variable(_) => ShadowTransformPlan::Preserve([None, None]),
+        ShadowExprKind::Variable(_) => ShadowTransformPlan::Preserve(Vec::new()),
         ShadowExprKind::Computation(computation) => match computation {
             ShadowPureComputation::Bind(node) => {
-                ShadowTransformPlan::Preserve([Some(node.initializer()), Some(node.body())])
+                ShadowTransformPlan::Preserve(vec![node.initializer(), node.body()])
             }
+            ShadowPureComputation::RecursiveBind(node) => ShadowTransformPlan::Preserve(
+                node.members()
+                    .iter()
+                    .map(|member| member.initializer())
+                    .chain(std::iter::once(node.body()))
+                    .collect(),
+            ),
             ShadowPureComputation::Apply(node) => {
-                ShadowTransformPlan::Preserve([Some(node.function()), Some(node.argument())])
+                ShadowTransformPlan::Preserve(vec![node.function(), node.argument()])
             }
             ShadowPureComputation::Primitive(node) => {
-                ShadowTransformPlan::Preserve([Some(node.left()), Some(node.right())])
+                ShadowTransformPlan::Preserve(vec![node.left(), node.right()])
             }
         },
         ShadowExprKind::Mock(_) => ShadowTransformPlan::ReplaceWithMockUnit,
@@ -296,6 +319,7 @@ fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
         ShadowExprKind::Variable(_) => "variable",
         ShadowExprKind::Computation(computation) => match computation {
             ShadowPureComputation::Bind(_) => "binding",
+            ShadowPureComputation::RecursiveBind(_) => "recursive binding",
             ShadowPureComputation::Apply(_) => "application",
             ShadowPureComputation::Primitive(_) => "primitive",
         },
@@ -472,53 +496,41 @@ fn one_mock_pure_feature_changes_only_the_recorded_closed_sites() {
         binders: &representative.binders,
     };
     let cases = [
-        (representative.one, "integer", [None, None]),
-        (representative.two, "integer", [None, None]),
+        (representative.one, "integer", vec![]),
+        (representative.two, "integer", vec![]),
         (
             representative.primitive,
             "primitive",
-            [Some(representative.one), Some(representative.two)],
+            vec![representative.one, representative.two],
         ),
-        (representative.variable, "variable", [None, None]),
+        (representative.variable, "variable", vec![]),
         (
             representative.function,
             "function",
-            [Some(representative.variable), None],
+            vec![representative.variable],
         ),
         (
             representative.application,
             "application",
-            [
-                Some(representative.function),
-                Some(representative.primitive),
-            ],
+            vec![representative.function, representative.primitive],
         ),
-        (representative.result_variable, "variable", [None, None]),
+        (representative.result_variable, "variable", vec![]),
         (
             representative.inner_binding,
             "binding",
-            [
-                Some(representative.application),
-                Some(representative.result_variable),
-            ],
+            vec![representative.application, representative.result_variable],
         ),
-        (representative.boolean, "boolean", [None, None]),
+        (representative.boolean, "boolean", vec![]),
         (
             representative.boolean_binding,
             "binding",
-            [
-                Some(representative.boolean),
-                Some(representative.inner_binding),
-            ],
+            vec![representative.boolean, representative.inner_binding],
         ),
-        (representative.unit, "unit", [None, None]),
+        (representative.unit, "unit", vec![]),
         (
             representative.root,
             "binding",
-            [
-                Some(representative.unit),
-                Some(representative.boolean_binding),
-            ],
+            vec![representative.unit, representative.boolean_binding],
         ),
     ];
     for (id, label, children) in cases {
@@ -534,7 +546,7 @@ fn one_mock_pure_feature_changes_only_the_recorded_closed_sites() {
 
     let mock = mock_shadow();
     assert!(validate_shadow(&mock, &facts));
-    assert_eq!(traverse_shadow(&mock), [None, None]);
+    assert_eq!(traverse_shadow(&mock), Vec::<NodeId>::new());
     assert_eq!(
         transform_shadow(&mock),
         ShadowTransformPlan::ReplaceWithMockUnit
