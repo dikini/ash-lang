@@ -6,5 +6,7 @@ pub mod diagnostic;
 pub mod integer;
 pub mod lexer;
 pub mod parser;
+pub mod resolve;
+pub mod resolved;
 pub mod source;
 pub mod surface;
