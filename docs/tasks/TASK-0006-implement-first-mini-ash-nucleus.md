@@ -87,9 +87,92 @@ returns to the proposal before work continues.
 
 - CP-0001 received explicit semantic acceptance.
 - The task and execution plan are active.
-- Dependency preflight selected `num-bigint` 0.5.1 subject to the
-  required resolved-graph review.
-- No product implementation or specification change has started.
+- Dependency preflight selected `num-bigint` 0.5.1. The resolved-graph review
+  below approved that selection for the first implementation increment.
+- Product implementation has started with the arbitrary-precision integer
+  boundary.
+
+### Dependency review: 2026-08-21
+
+The Rust standard library has no arbitrary-precision integer type. The direct
+dependency is therefore exactly `num-bigint = { version = "=0.5.1",
+default-features = false, features = ["std"] }`. It is a runtime dependency:
+the distributed interpreter will contain its compiled code behind an Ash-owned
+`Integer` type. Ash APIs do not expose package-owned types.
+
+`Cargo.lock` resolves this graph from the crates.io registry:
+
+- `num-bigint` 0.5.1 depends normally on `num-integer` 0.1.47 and
+  `num-traits` 0.2.19;
+- `num-integer` 0.1.47 depends normally on `num-traits` 0.2.19;
+- `num-traits` 0.2.19 uses `autocfg` 1.5.1 only while building.
+
+The enabled features are `std` on all three runtime packages and `i128` on
+`num-integer` and `num-traits`. `autocfg` has no features. Random-number,
+serialization, arbitrary-data, quickcheck, and `libm` support are disabled.
+The runtime dependency metadata has no target-specific dependency edges or
+native-library targets. Locked checks succeeded on
+`x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`. The packages declare
+minimum Rust versions 1.60, 1.31, 1.60, and 1.0 respectively, all below Ash's
+Rust 1.97.1 pin.
+
+`cargo search` reported every resolved version as current on 2026-08-21. The
+unarchived upstream repositories reported activity in May through August 2026:
+`rust-num/num-bigint` last pushed on August 12,
+`rust-num/num-integer` on August 12, `rust-num/num-traits` on July 7, and
+`cuviper/autocfg` on May 22.
+
+The registry metadata and packaged license files agree:
+
+- `num-bigint`, `num-integer`, and `num-traits` declare
+  `MIT OR Apache-2.0` and contain both license texts;
+- `autocfg` declares `Apache-2.0 OR MIT` and contains both license texts.
+
+The three rust-num packages have identical packaged license-file hashes:
+Apache-2.0 `a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2`
+and MIT `6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb`.
+`autocfg` has the same Apache-2.0 hash and MIT
+`27995d58ad5c1145c1a8cd86244ce844886958a35eb2b78c6b772748669999ac`.
+None of the four packaged crates contains a `NOTICE`, `COPYING`, or separate
+copyright file. Their only packaged licensing files are `LICENSE-MIT` and
+`LICENSE-APACHE`. The rust-num MIT text identifies “The Rust Project
+Developers” as the 2014 copyright holder. The `autocfg` MIT text identifies
+Josh Stone as the 2018 copyright holder.
+
+A later distribution review must evaluate both alternatives for the embedded
+runtime packages `num-bigint`, `num-integer`, and `num-traits`:
+
+- under the MIT alternative, copies or substantial portions must include the
+  applicable copyright notice and the MIT permission notice;
+- under the Apache-2.0 alternative, recipients must receive a copy of the
+  Apache-2.0 license, modified files must carry prominent change notices, and
+  a distributed source form must retain applicable copyright, patent,
+  trademark, and attribution notices. Apache-2.0's additional NOTICE
+  redistribution condition is not triggered by these locked packages because
+  none includes a NOTICE file.
+
+`autocfg` is a build dependency and is not embedded in the distributed
+interpreter. If Ash later redistributes that package itself, the corresponding
+MIT or Apache-2.0 obligations above must be evaluated using its Josh Stone
+copyright notice. This record supplies the obligations for later compatibility
+and packaging review; it neither selects a license alternative nor claims
+compatibility while Ash's license remains unselected.
+
+`cargo audit` succeeded with no dependency advisory. It emitted the expected
+allowed `RUSTSEC-2021-0090` warning because the private workspace package is
+named `ash`; the advisory applies to an unrelated crates.io package.
+`cargo deny check advisories sources bans` also succeeded with its default
+configuration. A license allowlist was intentionally not created.
+
+Source inspection found no unsafe blocks in `num-integer` or `autocfg`.
+`num-bigint` uses validated unchecked UTF-8 construction when rendering,
+x86/x86-64 add-carry and subtract-borrow intrinsics, and x86/x86-64 division
+assembly with a checked operand invariant. Its random-generation module also
+contains an unsafe slice construction, but that code is excluded because no
+random feature is enabled. `num-traits` uses an unchecked float-to-integer
+intrinsic only after bounds and finiteness checks. Mini-Ash uses no random,
+division, subtraction, or float-conversion API in this increment, and its own
+integer wrapper remains safe Rust.
 
 ## Verification
 
@@ -109,9 +192,10 @@ execution plan's final evidence matrix. At minimum:
 
 ## Discoveries
 
-The accepted semantics require arbitrary precision. Current upstream metadata
-supports using `num-bigint` 0.5.1 as the initial implementation candidate,
-but the resolved dependency review remains part of implementation.
+The accepted semantics require arbitrary precision. The resolved dependency
+review supports retaining `num-bigint` 0.5.1 behind an Ash-owned integer type.
+It also found reviewed unsafe float conversion in the transitive `num-traits`
+package in addition to the `num-bigint` sites noted during preflight.
 
 ## Deviations
 
