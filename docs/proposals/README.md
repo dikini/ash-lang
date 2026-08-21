@@ -11,6 +11,6 @@ Remove the proposal after the complete change merges. Git preserves the transiti
 
 Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
-## Proposed changes
+## Accepted changes
 
 - [CP-0001: First Mini-Ash Nucleus](CP-0001-first-mini-ash-nucleus.md)

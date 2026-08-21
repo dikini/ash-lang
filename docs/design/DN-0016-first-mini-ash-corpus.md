@@ -144,7 +144,8 @@ first. A status does not accept syntax, semantics, or architecture.
 | [Parser architecture](mini-ash/first-stratum/comparisons/parser-architecture.md) | Complete | The provisional grammar, every valid source presentation, and `P-001` through `P-003` | At least two composable organizations are compared on locality, precedence, ambiguity, recovery, spans, diagnostics, and tooling pressure. |
 | [Component convergence](mini-ash/first-stratum/comparisons/component-convergence.md) | Complete | Completed component comparisons | The evidence identifies which choices require architectural decisions and records unresolved alternatives without selecting them implicitly. |
 | [Architectural decisions](../decisions/README.md) | Complete | The completed convergence record and five decision boundaries | AD-0004 through AD-0008 accept only the converged non-language choices and keep the listed syntax, semantics, and concrete implementation mechanisms unresolved. |
-| [First semantic proposal](../proposals/CP-0001-first-mini-ash-nucleus.md) | Proposed | Accepted specification method, component decisions, and `V-001` through `V-008` | CP-0001 states the first user-visible semantic increment and its required executable, tests, diagnostics, and specification evidence; it still requires semantic review and acceptance. |
+| [First semantic proposal](../proposals/CP-0001-first-mini-ash-nucleus.md) | Accepted | Accepted specification method, component decisions, and `V-001` through `V-008` | CP-0001 defines the authorized semantic transition and evidence required for implementation without describing current Ash. |
+| [First implementation task](../tasks/TASK-0006-implement-first-mini-ash-nucleus.md) | Active | Accepted CP-0001 and AD-0004 through AD-0008 | TASK-0006 implements the executable, tests, specification, and documentation as one retained increment. |
 
 The completed consistency review found no blocking disagreement in the named
 cases. Grouping parentheses erase consistently before typing and dynamics,
@@ -168,20 +169,16 @@ tool updates do not change the canonical Markdown or block component research.
    question. This gate is complete.
 3. Accept the specification method and converged component architectures in
    separate decisions. This gate is complete through AD-0004 to AD-0008.
-4. Review and accept the proposed first user-visible semantic increment.
-5. Implement the accepted increment as a retained single-file executable.
+4. Propose and accept the first user-visible semantic increment. This gate is
+   complete through CP-0001.
+5. Implement the accepted increment as a retained single-file executable. This
+   gate is active through TASK-0006.
 
 ## Open questions
 
-- Should a retained source file end in an expression or expose a distinguished
-  result binding?
-- Which primitive operations provide enough precedence and evaluation-order
-  pressure without expanding the semantic nucleus?
 - Which concrete Rust encoding composes typed Core fragments while retaining
   exhaustive validation and useful traversal?
 - Which concrete event and tree types implement AD-0005 without deciding trivia
   or layout prematurely?
 - How should AD-0008's frame transitions compose by Core feature without one
   monolithic transition function?
-- Which provisional cases belong in the first semantic proposal, and which
-  grammar generalizations must be narrowed before that proposal?
