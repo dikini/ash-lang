@@ -1,7 +1,7 @@
 use ash::{
     core::{Primitive, PureComputation, PureExprKind, PureValue, validate},
     elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason},
-    eval::{RuntimeFailure, TraceEvent, Value, evaluate},
+    eval::{TraceEvent, Value, evaluate},
     integer::Integer,
     lexer::lex,
     parser::{parse, project},
@@ -251,9 +251,12 @@ fn machine_evaluates_v001_with_left_to_right_entry_events() {
     let program = validated_expression("1 + 2 * 3\n");
     let evaluation = evaluate(&program).expect("validated primitive Core should evaluate");
 
+    let Value::Integer(value) = evaluation.value else {
+        panic!("expected an integer value");
+    };
     assert_eq!(
-        evaluation.value,
-        Value::Integer(Integer::parse_decimal("7").expect("valid test integer"))
+        value,
+        Integer::parse_decimal("7").expect("valid test integer")
     );
     let entered = evaluation
         .trace
@@ -268,11 +271,11 @@ fn machine_evaluates_v001_with_left_to_right_entry_events() {
 #[test]
 fn machine_evaluates_unit_and_integer_equality_values() {
     let unit = evaluate(&validated_expression("()\n")).expect("unit should evaluate");
-    assert_eq!(unit.value, Value::Unit);
+    assert!(matches!(unit.value, Value::Unit));
 
     let equality =
         evaluate(&validated_expression("(20 + 1) == 21\n")).expect("equality should evaluate");
-    assert_eq!(equality.value, Value::Boolean(true));
+    assert!(matches!(equality.value, Value::Boolean(true)));
 }
 
 #[test]
@@ -289,7 +292,7 @@ fn machine_arithmetic_does_not_overflow_host_integers() {
 }
 
 #[test]
-fn machine_returns_a_typed_failure_for_a_pending_validated_core_form() {
+fn machine_returns_an_inspectable_closure_for_validated_function_core() {
     let source =
         SourceFile::new("function.ash", "fn(value) { value }\n").expect("test source should fit");
     let origin = Origin::Source(
@@ -318,6 +321,12 @@ fn machine_returns_a_typed_failure_for_a_pending_validated_core_form() {
     )
     .expect("function Core should validate");
 
-    let error = evaluate(&validated).expect_err("functions arrive in the next machine increment");
-    assert_eq!(error, RuntimeFailure::UnsupportedForm);
+    let evaluation = evaluate(&validated).expect("validated functions should evaluate");
+    let Value::Function(closure) = evaluation.value else {
+        panic!("expected a function value");
+    };
+    assert_eq!(closure.parameter.value(), 0);
+    assert_eq!(closure.body.value(), 0);
+    assert!(closure.environment.is_empty());
+    assert_eq!(evaluation.trace, vec![TraceEvent::Enter(validated.root())]);
 }

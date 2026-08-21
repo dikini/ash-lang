@@ -2,7 +2,7 @@
 
 use std::{error::Error, fmt, sync::Arc};
 
-use super::Value;
+use super::{Closure, Value};
 use crate::{
     core::{
         NodeId, Primitive, PureComputation, PureExprKind, PureProgram, PureValue, ValidatedProgram,
@@ -30,24 +30,40 @@ struct EnvironmentEntry {
 
 impl Drop for EnvironmentEntry {
     fn drop(&mut self) {
-        let mut parent = self.parent.take();
-        while let Some(entry) = parent {
-            // When concurrent owners each consume one clone with `into_inner`,
-            // exactly one receives the entry. That owner continues iterative
-            // dismantling; the others stop at the still-shared prefix.
+        let mut pending = Vec::new();
+        self.take_owned_edges(&mut pending);
+        while let Some(entry) = pending.pop() {
+            // Shared roots may occur more than once in `pending`. Consuming one
+            // owner can make a later owner unique; that owner then detaches all
+            // outgoing environment edges before its fields are destroyed.
             let Some(mut unique) = Arc::into_inner(entry) else {
-                break;
+                continue;
             };
-            parent = unique.parent.take();
+            unique.take_owned_edges(&mut pending);
+        }
+    }
+}
+
+impl EnvironmentEntry {
+    fn take_owned_edges(&mut self, pending: &mut Vec<Arc<Self>>) {
+        if let Some(parent) = self.parent.take() {
+            pending.push(parent);
+        }
+        if let Value::Function(closure) = &mut self.value {
+            if let Some(captured) = closure.environment.head.take() {
+                pending.push(captured);
+            }
+            closure.environment.len = 0;
         }
     }
 }
 
 impl fmt::Debug for Environment {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut binders = Vec::with_capacity(self.len);
+        const BINDER_LIMIT: usize = 16;
+        let mut binders = Vec::with_capacity(self.len.min(BINDER_LIMIT));
         let mut current = self.head.as_deref();
-        while let Some(entry) = current {
+        while let Some(entry) = current.filter(|_| binders.len() < BINDER_LIMIT) {
             binders.push(entry.binder);
             current = entry.parent.as_deref();
         }
@@ -55,6 +71,7 @@ impl fmt::Debug for Environment {
             .debug_struct("Environment")
             .field("len", &self.len)
             .field("binders_newest_first", &binders)
+            .field("truncated", &(self.len > binders.len()))
             .finish()
     }
 }
@@ -122,27 +139,27 @@ pub enum TraceEvent {
 }
 
 /// A completed value and its observational machine trace.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Evaluation {
-    /// The final primitive value.
+    /// The final runtime value.
     pub value: Value,
     /// Node-entry events in deterministic evaluation order.
     pub trace: Vec<TraceEvent>,
 }
 
-/// A structured evaluator invariant or pending-form failure.
+/// A structured evaluator invariant or runtime resource failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeFailure {
     /// A validated handle did not identify a node in the validated program.
     MissingNode,
     /// A validated primitive reached a value kind outside its signature.
     UnexpectedPrimitiveValue,
+    /// A validated application reached a non-function runtime value.
+    UnexpectedFunctionValue,
     /// A validated variable did not have a runtime lexical binding.
     MissingBinding,
     /// The runtime cannot represent another lexical environment entry.
     EnvironmentCapacity,
-    /// This retained evaluator increment does not yet execute the Core form.
-    UnsupportedForm,
     /// Machine control completed without exactly one final value.
     InvalidControlState,
 }
@@ -154,9 +171,11 @@ impl fmt::Display for RuntimeFailure {
             Self::UnexpectedPrimitiveValue => {
                 "runtime primitive received a value outside its validated signature"
             }
+            Self::UnexpectedFunctionValue => {
+                "runtime application received a value outside its validated function type"
+            }
             Self::MissingBinding => "runtime lexical binding is absent",
             Self::EnvironmentCapacity => "runtime lexical environment capacity is exhausted",
-            Self::UnsupportedForm => "validated Core form is pending evaluator implementation",
             Self::InvalidControlState => "runtime machine control state is inconsistent",
         })
     }
@@ -179,6 +198,13 @@ enum Frame {
     PrimitiveRight {
         primitive: Primitive,
         left: Value,
+    },
+    ApplyFunction {
+        argument: NodeId,
+        caller_environment: Environment,
+    },
+    ApplyArgument {
+        closure: Closure,
     },
 }
 
@@ -217,6 +243,15 @@ impl Machine {
                         PureExprKind::Value(PureValue::Unit(_)) => {
                             self.control = Control::Return(Value::Unit);
                         }
+                        PureExprKind::Value(PureValue::Function(function)) => {
+                            self.control = Control::Return(Value::Function(Closure {
+                                parameter: function.parameter().id(),
+                                body: function.body(),
+                                program: Arc::clone(&self.program),
+                                environment,
+                                origin: expression.origin.clone(),
+                            }));
+                        }
                         PureExprKind::Variable(variable) => {
                             let value = environment
                                 .lookup(variable.binder())
@@ -240,9 +275,12 @@ impl Machine {
                             });
                             self.control = Control::Evaluate(operation.left(), environment);
                         }
-                        PureExprKind::Value(PureValue::Function(_))
-                        | PureExprKind::Computation(PureComputation::Apply(_)) => {
-                            return Err(RuntimeFailure::UnsupportedForm);
+                        PureExprKind::Computation(PureComputation::Apply(application)) => {
+                            self.frames.push(Frame::ApplyFunction {
+                                argument: application.argument(),
+                                caller_environment: environment.clone(),
+                            });
+                            self.control = Control::Evaluate(application.function(), environment);
                         }
                     }
                 }
@@ -277,6 +315,22 @@ impl Machine {
                             self.control =
                                 Control::Return(apply_primitive(primitive, left, value)?);
                         }
+                        Frame::ApplyFunction {
+                            argument,
+                            caller_environment,
+                        } => {
+                            let Value::Function(closure) = value else {
+                                return Err(RuntimeFailure::UnexpectedFunctionValue);
+                            };
+                            self.frames.push(Frame::ApplyArgument { closure });
+                            self.control = Control::Evaluate(argument, caller_environment);
+                        }
+                        Frame::ApplyArgument { closure } => {
+                            self.control = Control::Evaluate(
+                                closure.body,
+                                closure.environment.extend(closure.parameter, value)?,
+                            );
+                        }
                     }
                 }
             }
@@ -289,7 +343,7 @@ impl Machine {
 /// # Errors
 ///
 /// Returns a structured runtime failure if a validated-input assumption is
-/// violated or the program contains a form assigned to a later increment.
+/// violated or a represented runtime resource is exhausted.
 pub fn evaluate(program: &ValidatedProgram) -> Result<Evaluation, RuntimeFailure> {
     Machine::new(program).run()
 }
@@ -314,7 +368,12 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     use super::*;
-    use crate::integer::Integer;
+    use crate::{
+        core::{CoreBuilder, validate},
+        integer::Integer,
+        source::{ByteRange, Origin, SourceFile},
+        types::Type,
+    };
 
     #[test]
     fn environment_clone_and_extension_share_the_existing_chain() {
@@ -342,6 +401,21 @@ mod tests {
         assert_eq!(Arc::strong_count(first_head), 2);
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 2);
+    }
+
+    #[test]
+    fn environment_debug_is_bounded_for_deep_captures() {
+        let value = Value::Unit;
+        let mut environment = Environment::new();
+        for binder in 0..100 {
+            environment = environment
+                .extend(BinderId::new(binder), value.clone())
+                .expect("environment should fit");
+        }
+
+        let debug = format!("{environment:?}");
+        assert!(debug.len() < 512);
+        assert!(debug.contains("truncated: true"));
     }
 
     #[test]
@@ -387,5 +461,59 @@ mod tests {
         for worker in workers {
             worker.join().expect("shared environment should drop");
         }
+    }
+
+    #[test]
+    fn closure_captured_environment_chains_drop_on_a_small_stack() {
+        const ENTRIES: u32 = 20_000;
+        let worker = std::thread::Builder::new()
+            .name("closure-environment-drop".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("closure-drop.ash", "1").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 1).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let mut builder = CoreBuilder::new();
+                let parameter = builder
+                    .binder(Type::Int, origin.clone())
+                    .expect("parameter should fit");
+                let body = builder
+                    .variable(parameter.id(), Type::Int, origin.clone())
+                    .expect("body should fit");
+                let function = builder
+                    .function(
+                        parameter.clone(),
+                        body,
+                        Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                        origin.clone(),
+                    )
+                    .expect("function should fit");
+                let validated = validate(
+                    builder.finish(function).expect("root should finish"),
+                    &[&source],
+                )
+                .expect("function Core should validate");
+                let program = validated.shared();
+                let mut environment = Environment::new();
+                for binder in 0..ENTRIES {
+                    let closure = Closure {
+                        parameter: parameter.id(),
+                        body,
+                        program: Arc::clone(&program),
+                        environment: environment.clone(),
+                        origin: origin.clone(),
+                    };
+                    environment = environment
+                        .extend(BinderId::new(binder), Value::Function(closure))
+                        .expect("environment should fit");
+                }
+                drop(environment);
+            })
+            .expect("test thread should start");
+
+        worker.join().expect("closure environment should drop");
     }
 }

@@ -4,4 +4,4 @@ mod machine;
 mod value;
 
 pub use machine::{Control, Environment, Evaluation, RuntimeFailure, TraceEvent, evaluate};
-pub use value::Value;
+pub use value::{Closure, Value};

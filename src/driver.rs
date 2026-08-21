@@ -5,7 +5,7 @@ use std::{error::Error, fmt, fs, io, path::PathBuf};
 use crate::{
     core::{ValidationError, validate},
     diagnostic::Diagnostic,
-    elaborate::{ElaborationFailure, Elaborator, PendingFeature, TypeContext, TypeError},
+    elaborate::{Elaborator, TypeError},
     eval::{RuntimeFailure, Value, evaluate},
     lexer::{LexReason, lex},
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure, parse, project},
@@ -15,7 +15,7 @@ use crate::{
 };
 
 /// The observable result of one successful source-file pipeline.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Observation {
     /// The evaluated Mini-Ash value.
     pub value: Value,
@@ -160,16 +160,10 @@ pub fn run_source(source: SourceFile) -> Result<Observation, PipelineFailure> {
     }
     let surface = project(&source, &tree).map_err(PipelineFailure::Projection)?;
     let resolved = resolve(&surface).map_err(PipelineFailure::Resolution)?;
-    if !resolved.definitions.is_empty() {
-        return Err(PipelineFailure::Typing(TypeError::Internal(
-            ElaborationFailure::Pending(PendingFeature::Definition),
-        )));
-    }
-
     let mut elaborator = Elaborator::for_program(&resolved)
         .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
     let typed = elaborator
-        .synthesize(&resolved.result, &TypeContext::new())
+        .synthesize_program(&resolved)
         .map_err(PipelineFailure::Typing)?;
     let ty = typed.ty;
     let unchecked = elaborator

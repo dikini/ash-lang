@@ -1,7 +1,7 @@
 use ash::{
     core::{CoreBuilder, PureComputation, PureExprKind, validate},
     driver::{PipelineFailure, run_source},
-    elaborate::{ElaborationFailure, Elaborator, PendingFeature, TypeContext, TypeError},
+    elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError},
     eval::{TraceEvent, Value, evaluate},
     integer::Integer,
     lexer::lex,
@@ -61,10 +61,10 @@ fn v003_resolves_shadowing_to_distinct_binders_and_runs_to_two() {
     assert_eq!(result_use.binder, second);
 
     let observation = run_source(source).expect("V-003 should run end to end");
-    assert_eq!(
-        observation.value,
-        Value::Integer(Integer::parse_decimal("2").expect("valid integer"))
-    );
+    let Value::Integer(value) = observation.value else {
+        panic!("expected an integer value");
+    };
+    assert_eq!(value, Integer::parse_decimal("2").expect("valid integer"));
     assert_eq!(observation.ty, Type::Int);
 }
 
@@ -77,10 +77,10 @@ fn annotated_primitive_binding_checks_then_enters_the_remainder_scope() {
     .expect("test source should fit");
 
     let observation = run_source(source).expect("annotated binding should run");
-    assert_eq!(
-        observation.value,
-        Value::Integer(Integer::parse_decimal("42").expect("valid integer"))
-    );
+    let Value::Integer(value) = observation.value else {
+        panic!("expected an integer value");
+    };
+    assert_eq!(value, Integer::parse_decimal("42").expect("valid integer"));
     assert_eq!(observation.ty, Type::Int);
 }
 
@@ -221,32 +221,25 @@ fn failed_initializer_scope_check_poisons_the_elaborator() {
 }
 
 #[test]
-fn annotated_function_reaches_the_expression_check_boundary_and_poisons() {
+fn annotated_function_is_checked_from_the_binding_annotation() {
     let source = SourceFile::new(
         "pending-function.ash",
         "{\n    let identity : Int -> Int = fn(value) {\n        value\n    }\n    1\n}\n",
     )
     .expect("test source should fit");
     let program = resolved(&source);
-    let ResolvedExprKind::Block(block) = &program.result.kind else {
-        panic!("expected a block");
-    };
-    let prior_expression = block.result.as_ref().clone();
     let mut elaborator = Elaborator::for_program(&program).expect("reservation should fit");
-    let prior = elaborator
-        .synthesize(&prior_expression, &TypeContext::new())
-        .expect("the independent primitive should synthesize");
-
-    assert!(matches!(
-        elaborator.synthesize(&program.result, &TypeContext::new()),
-        Err(TypeError::Internal(ElaborationFailure::Pending(
-            PendingFeature::FunctionChecking
-        )))
-    ));
-    assert!(matches!(
-        elaborator.finish(prior.node),
-        Err(ElaborationFailure::InvalidState)
-    ));
+    let typed = elaborator
+        .synthesize(&program.result, &TypeContext::new())
+        .expect("the annotated function should check");
+    assert_eq!(typed.ty, Type::Int);
+    let validated = validate(
+        elaborator.finish(typed.node).expect("root should finish"),
+        &[&source],
+    )
+    .expect("expected-typed function Core should validate");
+    let evaluation = evaluate(&validated).expect("unused function binding should evaluate");
+    assert!(matches!(evaluation.value, Value::Integer(value) if value.to_string() == "1"));
 }
 
 #[test]
@@ -292,10 +285,10 @@ fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() 
     );
 
     let evaluation = evaluate(&validated).expect("nested bindings should evaluate");
-    assert_eq!(
-        evaluation.value,
-        Value::Integer(Integer::parse_decimal("41").expect("valid integer"))
-    );
+    let Value::Integer(value) = evaluation.value else {
+        panic!("expected an integer value");
+    };
+    assert_eq!(value, Integer::parse_decimal("41").expect("valid integer"));
     assert_eq!(ty, Type::Int);
 }
 
@@ -366,7 +359,10 @@ fn long_flat_binding_machine_shares_extensions_and_drops_on_a_small_stack() {
             )
             .expect("long binding Core should validate");
             let evaluation = evaluate(&validated).expect("long binding Core should evaluate");
-            assert_eq!(evaluation.value, Value::Integer(one));
+            let Value::Integer(ref value) = evaluation.value else {
+                panic!("expected an integer value");
+            };
+            assert_eq!(value, &one);
             assert_eq!(evaluation.trace.len(), BINDINGS * 2 + 1);
             drop(evaluation);
             drop(validated);
