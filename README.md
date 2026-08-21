@@ -1,8 +1,15 @@
 # Ash
 
-This repository is the foundation for a reboot of the Ash programming language. The reboot keeps lessons from historical Ash while rebuilding the language from a small, coherent base. Historical Ash is evidence for design work, not authority for this project.
+This repository is a reboot of the Ash programming language. The reboot keeps
+lessons from historical Ash while rebuilding the language from a small,
+coherent base. Historical Ash is evidence for design work, not authority for
+this project.
 
-Ash is at the foundation stage. No executable language, compiler, or runtime exists in this repository yet. The [canonical specification](spec/README.md) therefore defines no language behavior.
+The first retained increment, Mini-Ash, is an executable single-file,
+monomorphic, pure-functional language. The
+[canonical specification](spec/README.md) defines its current syntax and
+semantics. The [`ash` tool guide](docs/tools/ash.md) explains how to run a
+source file.
 
 Project artifacts answer different questions:
 
@@ -13,5 +20,7 @@ Project artifacts answer different questions:
 - the [development trajectory](docs/trajectory.md) records dependencies and maturity;
 - [project documentation](docs/project/README.md) defines documentation,
   dependencies, and the development discipline.
+- [tool documentation](docs/tools/README.md) describes the retained Ash
+  executables.
 
 Human contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md). Agents should start with [AGENTS.md](AGENTS.md) and reconstruct only the context needed for their task.
