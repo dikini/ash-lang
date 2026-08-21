@@ -9,12 +9,13 @@ use crate::{
         ResolvedBlock, ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation,
         ResolvedEquationalGlobal, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
         ResolvedFunctionExpr, ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
-        ResolvedLocalDeclaration, ResolvedOccurrence, ResolvedProgram, ResolvedTypedBinder,
+        ResolvedLocalDeclaration, ResolvedOccurrence, ResolvedProgram, ResolvedRecursiveGroup,
+        ResolvedRecursiveMember, ResolvedTypedBinder,
     },
     source::Origin,
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr,
-        SurfaceExprKind, SurfaceLocalDeclaration, SurfaceProgram,
+        SurfaceExprKind, SurfaceLocalDeclaration, SurfaceProgram, SurfaceRecursiveGroup,
     },
 };
 
@@ -27,6 +28,8 @@ pub enum ResolveReason {
     EquationNameMismatch,
     /// A file contains a second global with the same spelling.
     DuplicateGlobal,
+    /// A recursive group contains a second member with the same spelling.
+    DuplicateRecursiveMember,
     /// The resolver cannot assign another distinct binder identity.
     BinderIdExhausted,
     /// An internal resolver invariant was lost.
@@ -39,6 +42,7 @@ impl fmt::Display for ResolveReason {
             Self::UnknownName => "resolve.unknown-name",
             Self::EquationNameMismatch => "resolve.equation-name-mismatch",
             Self::DuplicateGlobal => "resolve.duplicate-global",
+            Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
             Self::BinderIdExhausted => "resolve.binder-id-exhausted",
             Self::InternalState => "resolve.internal-state",
         })
@@ -120,7 +124,7 @@ impl Resolver {
         mut self,
         program: &SurfaceProgram,
     ) -> Result<ResolvedProgram, ResolveError> {
-        let mut definitions = Vec::with_capacity(program.definitions.len());
+        let mut global_binders = Vec::with_capacity(program.definitions.len());
         for definition in &program.definitions {
             let (global_name, global_name_span) = match &definition.kind {
                 SurfaceDefinitionKind::Equational(equational) => {
@@ -170,6 +174,26 @@ impl Resolver {
                 return Err(diagnostic.into());
             }
             let global = self.allocate_binder(global_name, global_name_span)?;
+            let Some(file_scope) = self.scopes.first_mut() else {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    definition.span,
+                    "the resolver lost the file scope",
+                ));
+            };
+            file_scope.insert(global.spelling.clone(), global.clone());
+            self.globals.insert(
+                global_name.to_owned(),
+                GlobalFact {
+                    name_span: global_name_span,
+                    definition_span: definition.span,
+                },
+            );
+            global_binders.push(global);
+        }
+
+        let mut definitions = Vec::with_capacity(program.definitions.len());
+        for (definition, global) in program.definitions.iter().zip(global_binders) {
             let kind = match &definition.kind {
                 SurfaceDefinitionKind::Equational(equational) => {
                     let parameter = self.allocate_binder(
@@ -228,21 +252,6 @@ impl Resolver {
                 kind,
                 span: definition.span,
             });
-            let Some(file_scope) = self.scopes.first_mut() else {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    definition.span,
-                    "the resolver lost the file scope",
-                ));
-            };
-            file_scope.insert(global.spelling.clone(), global);
-            self.globals.insert(
-                global_name.to_owned(),
-                GlobalFact {
-                    name_span: global_name_span,
-                    definition_span: definition.span,
-                },
-            );
         }
 
         let result = self.resolve_expr(&program.result)?;
@@ -328,9 +337,60 @@ impl Resolver {
                     });
                     tasks.push(ResolveTask::VisitExpr(&block.result));
                     for declaration in block.declarations.iter().rev() {
-                        let SurfaceLocalDeclaration::Binding(binding) = declaration;
-                        tasks.push(ResolveTask::FinishBinding(binding));
-                        tasks.push(ResolveTask::VisitExpr(&binding.initializer));
+                        match declaration {
+                            SurfaceLocalDeclaration::Binding(binding) => {
+                                tasks.push(ResolveTask::FinishBinding(binding));
+                                tasks.push(ResolveTask::VisitExpr(&binding.initializer));
+                            }
+                            SurfaceLocalDeclaration::Recursive(group) => {
+                                tasks.push(ResolveTask::VisitRecursiveGroup(group));
+                            }
+                        }
+                    }
+                }
+                ResolveTask::VisitRecursiveGroup(group) => {
+                    let mut first_members = HashMap::with_capacity(group.members.len());
+                    let mut binders = Vec::with_capacity(group.members.len());
+                    for member in &group.members {
+                        if let Some(first_span) =
+                            first_members.get(member.binder.name.text.as_str()).copied()
+                        {
+                            let mut diagnostic = Diagnostic::new(
+                                ResolveReason::DuplicateRecursiveMember,
+                                SourceLabel::new(
+                                    member.binder.name.span,
+                                    "this recursive member name is already defined",
+                                ),
+                            );
+                            diagnostic.related.push(SourceLabel::new(
+                                first_span,
+                                "the first recursive member is here",
+                            ));
+                            diagnostic.found = Some(member.binder.name.text.clone());
+                            return Err(diagnostic.into());
+                        }
+                        first_members
+                            .insert(member.binder.name.text.as_str(), member.binder.name.span);
+                        binders.push(
+                            self.allocate_binder(
+                                &member.binder.name.text,
+                                member.binder.name.span,
+                            )?,
+                        );
+                    }
+                    let Some(scope) = self.scopes.last_mut() else {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            group.span,
+                            "the resolver lost the current lexical scope",
+                        ));
+                    };
+                    for binder in &binders {
+                        scope.insert(binder.spelling.clone(), binder.clone());
+                    }
+                    tasks.push(ResolveTask::FinishRecursiveGroup { group, binders });
+                    for member in group.members.iter().rev() {
+                        tasks.push(ResolveTask::VisitExpr(&member.initializer));
                     }
                 }
                 ResolveTask::FinishApplication { span } => {
@@ -383,6 +443,38 @@ impl Resolver {
                         initializer,
                         span: binding.span,
                     }));
+                }
+                ResolveTask::FinishRecursiveGroup { group, binders } => {
+                    if binders.len() != group.members.len()
+                        || expressions.len() < group.members.len()
+                    {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            group.span,
+                            "the resolver lost a recursive group member",
+                        ));
+                    }
+                    let expression_start = expressions.len() - group.members.len();
+                    let initializers = expressions.split_off(expression_start);
+                    let members = group
+                        .members
+                        .iter()
+                        .zip(binders)
+                        .zip(initializers)
+                        .map(|((member, binder), initializer)| ResolvedRecursiveMember {
+                            introducer_span: member.introducer_span,
+                            binder,
+                            annotation: member.annotation.clone(),
+                            initializer,
+                            span: member.span,
+                        })
+                        .collect();
+                    declarations.push(ResolvedLocalDeclaration::Recursive(
+                        ResolvedRecursiveGroup {
+                            members,
+                            span: group.span,
+                        },
+                    ));
                 }
                 ResolveTask::FinishBlock {
                     declaration_start,
@@ -537,6 +629,7 @@ impl Resolver {
 enum ResolveTask<'a> {
     VisitExpr(&'a SurfaceExpr),
     VisitBlock(&'a SurfaceBlock),
+    VisitRecursiveGroup(&'a SurfaceRecursiveGroup),
     FinishApplication {
         span: crate::source::Span,
     },
@@ -546,6 +639,10 @@ enum ResolveTask<'a> {
         span: crate::source::Span,
     },
     FinishBinding(&'a SurfaceBinding),
+    FinishRecursiveGroup {
+        group: &'a SurfaceRecursiveGroup,
+        binders: Vec<Binder>,
+    },
     FinishBlock {
         declaration_start: usize,
         scope_checkpoint: usize,
@@ -563,11 +660,13 @@ impl ResolveTask<'_> {
         match self {
             Self::VisitExpr(expression) => expression.span,
             Self::VisitBlock(block) => block.span,
+            Self::VisitRecursiveGroup(group) => group.span,
             Self::FinishApplication { span }
             | Self::FinishBinary { span, .. }
             | Self::FinishBlock { span, .. }
             | Self::FinishFunction { span, .. } => *span,
             Self::FinishBinding(binding) => binding.span,
+            Self::FinishRecursiveGroup { group, .. } => group.span,
         }
     }
 }

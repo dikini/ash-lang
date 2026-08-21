@@ -29,7 +29,9 @@ fn resolve_error(text: &str) -> ash::resolve::ResolveError {
 }
 
 fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
-    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index];
+    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index] else {
+        panic!("expected ordinary binding")
+    };
     binding
 }
 
@@ -197,18 +199,90 @@ fn unknown_name_has_r001_reason_and_only_the_causal_occurrence() {
 }
 
 #[test]
-fn global_body_cannot_see_itself_or_a_later_global() {
-    let recursive = resolve_error("self : Int -> Int\nself value = self value\n\nself\n");
-    assert_eq!(recursive.reason, ResolveReason::UnknownName);
-    assert_eq!(recursive.primary.span().range().start(), 31);
-    assert_eq!(recursive.primary.span().range().end(), 35);
+fn recursive_global_bodies_see_the_complete_file_scope() {
+    let recursive = resolve_valid("self : Int -> Int\nself value = self value\n\nself\n");
+    let ResolvedDefinitionKind::Equational(self_definition) = &recursive.definitions[0].kind else {
+        panic!("expected self equation")
+    };
+    let ResolvedExprKind::Apply(self_application) = &self_definition.equation.body.kind else {
+        panic!("expected recursive application")
+    };
+    let ResolvedExprKind::Occurrence(self_use) = &self_application.function.kind else {
+        panic!("expected recursive occurrence")
+    };
+    assert_eq!(self_use.binder, self_definition.interface.name.id);
 
-    let forward = resolve_error(
+    let forward = resolve_valid(
         "first : Int -> Int\nfirst value = second value\n\nsecond : Int -> Int\nsecond value = value\n\nfirst\n",
     );
-    assert_eq!(forward.reason, ResolveReason::UnknownName);
-    assert_eq!(forward.primary.span().range().start(), 33);
-    assert_eq!(forward.primary.span().range().end(), 39);
+    let ResolvedDefinitionKind::Equational(first) = &forward.definitions[0].kind else {
+        panic!("expected first equation")
+    };
+    let ResolvedDefinitionKind::Equational(second) = &forward.definitions[1].kind else {
+        panic!("expected second equation")
+    };
+    let ResolvedExprKind::Apply(application) = &first.equation.body.kind else {
+        panic!("expected forward application")
+    };
+    let ResolvedExprKind::Occurrence(second_use) = &application.function.kind else {
+        panic!("expected forward occurrence")
+    };
+    assert_eq!(second_use.binder, second.interface.name.id);
+}
+
+#[test]
+fn recursive_local_members_share_scope_and_remain_visible_after_the_group() {
+    let program = resolve_valid(
+        "{\nlet rec first : Unit -> Int = fn(ignored) {\nsecond ()\n}\nand second : Unit -> Int = fn(ignored) {\nfirst ()\n}\nfirst ()\n}\n",
+    );
+    let ResolvedExprKind::Block(block) = &program.result.kind else {
+        panic!("expected block")
+    };
+    let ResolvedLocalDeclaration::Recursive(group) = &block.declarations[0] else {
+        panic!("expected recursive group")
+    };
+    assert_eq!(group.members.len(), 2);
+    let first = &group.members[0];
+    let second = &group.members[1];
+    let ResolvedExprKind::Function(first_function) = &first.initializer.kind else {
+        panic!("expected first function")
+    };
+    let ResolvedExprKind::Apply(first_body) = &first_function.body.result.kind else {
+        panic!("expected first call")
+    };
+    let ResolvedExprKind::Occurrence(second_use) = &first_body.function.kind else {
+        panic!("expected second occurrence")
+    };
+    let ResolvedExprKind::Function(second_function) = &second.initializer.kind else {
+        panic!("expected second function")
+    };
+    let ResolvedExprKind::Apply(second_body) = &second_function.body.result.kind else {
+        panic!("expected second call")
+    };
+    let ResolvedExprKind::Occurrence(first_use) = &second_body.function.kind else {
+        panic!("expected first occurrence")
+    };
+    let ResolvedExprKind::Apply(result) = &block.result.kind else {
+        panic!("expected result call")
+    };
+    let ResolvedExprKind::Occurrence(result_use) = &result.function.kind else {
+        panic!("expected result occurrence")
+    };
+
+    assert_eq!(second_use.binder, second.binder.id);
+    assert_eq!(first_use.binder, first.binder.id);
+    assert_eq!(result_use.binder, first.binder.id);
+}
+
+#[test]
+fn duplicate_recursive_member_relates_the_first_definition() {
+    let error = resolve_error(
+        "{\nlet rec same : Unit -> Int = fn(value) {\n1\n}\nand same : Unit -> Int = fn(value) {\n2\n}\nsame ()\n}\n",
+    );
+
+    assert_eq!(error.reason, ResolveReason::DuplicateRecursiveMember);
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(error.found.as_deref(), Some("same"));
 }
 
 #[test]

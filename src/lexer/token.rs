@@ -26,6 +26,10 @@ pub enum TokenKind {
     Fn,
     /// The `let` reserved word.
     Let,
+    /// The `rec` reserved word.
+    Rec,
+    /// The `and` reserved word.
+    And,
     /// The `Int` type name.
     IntType,
     /// The `Bool` type name.

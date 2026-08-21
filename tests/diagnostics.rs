@@ -39,7 +39,9 @@ fn offset(value: usize) -> u32 {
 }
 
 fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
-    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index];
+    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index] else {
+        panic!("expected ordinary binding")
+    };
     binding
 }
 

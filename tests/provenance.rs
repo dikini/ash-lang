@@ -55,11 +55,11 @@ fn successful_definition_checks_retain_the_body_and_declared_result_origins() {
         let program = resolved(&source);
         let core = validated(&source, &program);
         let root = core.node(core.root()).expect("global binding");
-        let PureExprKind::Computation(PureComputation::Bind(global)) = &root.kind else {
-            panic!("expected global binding")
+        let PureExprKind::Computation(PureComputation::RecursiveBind(global)) = &root.kind else {
+            panic!("expected global recursive group")
         };
         let function = core
-            .node(global.initializer())
+            .node(global.members()[0].initializer())
             .expect("function initializer");
         let PureExprKind::Value(PureValue::Function(function_node)) = &function.kind else {
             panic!("expected function value")
@@ -101,17 +101,17 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
         let core = validated(&source, &program);
         let definition = &program.definitions[0];
         let root = core.node(core.root()).expect("global binding");
-        let PureExprKind::Computation(PureComputation::Bind(global)) = &root.kind else {
-            panic!("expected global binding")
+        let PureExprKind::Computation(PureComputation::RecursiveBind(global)) = &root.kind else {
+            panic!("expected global recursive group")
         };
         assert_eq!(
             root.origin.generated_reason(),
-            Some(GeneratedReason::BindingLowering)
+            Some(GeneratedReason::RecursiveBindingLowering)
         );
-        assert_eq!(root.origin.primary_span(), definition.span);
+        assert_eq!(root.origin.primary_span(), program.span);
 
         let function = core
-            .node(global.initializer())
+            .node(global.members()[0].initializer())
             .expect("function initializer");
         let PureExprKind::Value(PureValue::Function(function_node)) = &function.kind else {
             panic!("expected function value")
@@ -127,9 +127,12 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
 
         match &definition.kind {
             ResolvedDefinitionKind::Equational(equational) => {
-                assert_eq!(global.binder().id(), equational.interface.name.id);
                 assert_eq!(
-                    global.binder().origin().primary_span(),
+                    global.members()[0].binder().id(),
+                    equational.interface.name.id
+                );
+                assert_eq!(
+                    global.members()[0].binder().origin().primary_span(),
                     equational.interface.name.origin.primary_span()
                 );
                 assert_eq!(function.origin.primary_span(), equational.equation.span);
@@ -147,9 +150,12 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
                 );
             }
             ResolvedDefinitionKind::InlineOperational(operational) => {
-                assert_eq!(global.binder().id(), operational.header.name.id);
                 assert_eq!(
-                    global.binder().origin().primary_span(),
+                    global.members()[0].binder().id(),
+                    operational.header.name.id
+                );
+                assert_eq!(
+                    global.members()[0].binder().origin().primary_span(),
                     operational.header.name.origin.primary_span()
                 );
                 assert_eq!(function.origin.primary_span(), definition.span);

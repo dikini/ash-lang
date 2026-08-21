@@ -42,8 +42,143 @@ fn assert_name(expression: &SurfaceExpr, expected: &str) {
 }
 
 fn binding(block: &SurfaceBlock, index: usize) -> &SurfaceBinding {
-    let SurfaceLocalDeclaration::Binding(binding) = &block.declarations[index];
+    let SurfaceLocalDeclaration::Binding(binding) = &block.declarations[index] else {
+        panic!("expected ordinary binding")
+    };
     binding
+}
+
+#[test]
+fn projects_recursive_group() {
+    let source_text = "{\nlet rec first : Unit -> Int = fn(ignored) {\nsecond ()\n}\nand second : Unit -> Int = fn(ignored) {\n42\n}\nfirst ()\n}\n";
+    let (_, program) = parse_valid(source_text);
+    let SurfaceExprKind::Block(block) = &program.result.kind else {
+        panic!("expected block");
+    };
+    assert_eq!(block.declarations.len(), 1);
+    let SurfaceLocalDeclaration::Recursive(group) = &block.declarations[0] else {
+        panic!("expected recursive declaration");
+    };
+    assert_eq!(group.members.len(), 2);
+
+    let first = &group.members[0];
+    assert_eq!(
+        &source_text[first.introducer_span.range().start() as usize
+            ..first.introducer_span.range().end() as usize],
+        "let rec"
+    );
+    assert_eq!(first.binder.name.text, "first");
+    assert_eq!(
+        &source_text[first.annotation.span.range().start() as usize
+            ..first.annotation.span.range().end() as usize],
+        "Unit -> Int"
+    );
+    assert_eq!(
+        &source_text[first.initializer.span.range().start() as usize
+            ..first.initializer.span.range().end() as usize],
+        "fn(ignored) {\nsecond ()\n}"
+    );
+    assert_eq!(
+        &source_text[first.span.range().start() as usize..first.span.range().end() as usize],
+        "first : Unit -> Int = fn(ignored) {\nsecond ()\n}"
+    );
+
+    let second = &group.members[1];
+    assert_eq!(
+        &source_text[second.introducer_span.range().start() as usize
+            ..second.introducer_span.range().end() as usize],
+        "and"
+    );
+    assert_eq!(second.binder.name.text, "second");
+    assert_eq!(
+        &source_text[second.span.range().start() as usize..second.span.range().end() as usize],
+        "second : Unit -> Int = fn(ignored) {\n42\n}"
+    );
+    assert_eq!(
+        &source_text[group.span.range().start() as usize..group.span.range().end() as usize],
+        "let rec first : Unit -> Int = fn(ignored) {\nsecond ()\n}\nand second : Unit -> Int = fn(ignored) {\n42\n}"
+    );
+}
+
+#[test]
+fn recursive_group_recovery() {
+    let cases = [
+        (
+            "{\nlet rec value = fn(item) {\nitem\n}\nvalue\n}\n",
+            ParseReason::ExpectedForm,
+        ),
+        (
+            "{\nlet rec value : Int =\nvalue\n}\n",
+            ParseReason::ExpectedForm,
+        ),
+        (
+            "{\nlet rec value : Int = 1\nand\nvalue\n}\n",
+            ParseReason::ExpectedRecursiveMember,
+        ),
+        (
+            "{\nand stray : Int = 1\n42\n}\n",
+            ParseReason::UnexpectedAnd,
+        ),
+        (
+            "{\nlet rec bad : Int =\nlet later = 1\nlater\n}\n",
+            ParseReason::ExpectedForm,
+        ),
+    ];
+
+    for (text, expected_reason) in cases {
+        let (source, tree) = parse_tree(text);
+        assert!(
+            tree.parse_diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.reason == expected_reason),
+            "missing {expected_reason:?} for {text:?}: {:?}",
+            tree.parse_diagnostics()
+        );
+        assert_eq!(
+            project(&source, &tree),
+            Err(ProjectionError::RecoveryNodesPresent)
+        );
+
+        let mut depth = 0_u32;
+        for event in tree.events() {
+            match event {
+                Event::Start(_) => depth += 1,
+                Event::Finish => {
+                    assert!(depth > 0, "unmatched finish for {text:?}");
+                    depth -= 1;
+                }
+                Event::Token(_) | Event::Missing { .. } | Event::Error(_) => {}
+            }
+        }
+        assert_eq!(depth, 0, "unclosed event for {text:?}");
+        assert_eq!(
+            tree.events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Token(index) => Some(*index),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            (0..tree.tokens().len()).collect::<Vec<_>>(),
+            "source: {text:?}"
+        );
+    }
+
+    let (_source, missing_member) = parse_tree("{\nlet rec value : Int = 1\nand\nvalue\n}\n");
+    let diagnostic = missing_member
+        .parse_diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.reason == ParseReason::ExpectedRecursiveMember)
+        .expect("missing member diagnostic");
+    assert_eq!(diagnostic.primary.span().range().start(), 29);
+    assert_eq!(diagnostic.primary.span().range().end(), 30);
+    assert!(matches!(
+        diagnostic.context.as_slice(),
+        [ParseContext::Synchronization {
+            boundary: SynchronizationBoundary::LogicalLineEnd,
+            ..
+        }]
+    ));
 }
 
 #[test]
@@ -299,7 +434,9 @@ fn blocks_bindings_annotations_and_anonymous_functions_project() {
     let SurfaceExprKind::Block(block) = &capture.result.kind else {
         panic!("expected capture block");
     };
-    let SurfaceLocalDeclaration::Binding(binding) = &block.declarations[1];
+    let SurfaceLocalDeclaration::Binding(binding) = &block.declarations[1] else {
+        panic!("expected ordinary binding")
+    };
     assert!(binding.annotation.is_some());
     assert!(matches!(
         binding.initializer.kind,

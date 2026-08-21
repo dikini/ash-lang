@@ -17,12 +17,16 @@ use ash::{
 const V003: &str = include_str!("fixtures/first-stratum/valid/v003-local-shadowing.ash");
 
 fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
-    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index];
+    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index] else {
+        panic!("expected ordinary binding")
+    };
     binding
 }
 
 fn binding_mut(block: &mut ResolvedBlock, index: usize) -> &mut ResolvedBinding {
-    let ResolvedLocalDeclaration::Binding(binding) = &mut block.declarations[index];
+    let ResolvedLocalDeclaration::Binding(binding) = &mut block.declarations[index] else {
+        panic!("expected ordinary binding")
+    };
     binding
 }
 

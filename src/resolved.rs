@@ -47,7 +47,7 @@ pub struct ResolvedOccurrence {
 /// One resolved Mini-Ash source file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedProgram {
-    /// Sequential resolved global definitions.
+    /// Resolved global definitions in source order.
     pub definitions: Vec<ResolvedDefinition>,
     /// Required final result expression.
     pub result: ResolvedExpr,
@@ -155,6 +155,32 @@ pub struct ResolvedBlock {
 pub enum ResolvedLocalDeclaration {
     /// A sequential nonrecursive binding.
     Binding(ResolvedBinding),
+    /// A simultaneous recursive function binding group.
+    Recursive(ResolvedRecursiveGroup),
+}
+
+/// One resolved simultaneous recursive binding group.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedRecursiveGroup {
+    /// Members in source order.
+    pub members: Vec<ResolvedRecursiveMember>,
+    /// Complete recursive group span.
+    pub span: Span,
+}
+
+/// One resolved recursive group member.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedRecursiveMember {
+    /// The `let rec` or `and` delimiter introducing this member.
+    pub introducer_span: Span,
+    /// Introduced definition site.
+    pub binder: Binder,
+    /// Required declared monotype.
+    pub annotation: SurfaceType,
+    /// Initializer resolved in the simultaneous group scope.
+    pub initializer: ResolvedExpr,
+    /// Complete member span.
+    pub span: Span,
 }
 
 /// A resolved immutable local binding.

@@ -197,6 +197,8 @@ pub(super) fn program(parser: &mut Parser<'_>) {
     } else {
         if parser.at(&TokenKind::Semicolon) {
             parser.error_at_current(ParseReason::Semicolon);
+        } else if parser.at(&TokenKind::And) {
+            parser.error_at_current(ParseReason::UnexpectedAnd);
         } else {
             parser.error_at_current(ParseReason::UnexpectedToken);
         }
@@ -371,9 +373,25 @@ fn block(parser: &mut Parser<'_>) {
     }
     let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
     let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
-    while parser.at(&TokenKind::Let) {
-        local_binding(parser);
-        let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    loop {
+        if parser.at(&TokenKind::Let) {
+            if parser
+                .nth(1)
+                .is_some_and(|kind| matches!(kind, TokenKind::Rec))
+            {
+                recursive_binding_group(parser);
+            } else {
+                local_binding(parser);
+            }
+            let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+        } else if parser.at(&TokenKind::And) {
+            rejected_stray_and(parser);
+            if parser.at(&TokenKind::LineEnd) {
+                let _ = parser.bump();
+            }
+        } else {
+            break;
+        }
     }
     let recovery_start = parser.pending_recovery_count();
     if starts_expression(parser) {
@@ -392,6 +410,84 @@ fn block(parser: &mut Parser<'_>) {
     }
     let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
     parser.leave_structure();
+    parser.finish();
+}
+
+fn recursive_binding_group(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::RecursiveBindingGroup);
+    let _ = parser.bump();
+    let _ = parser.expect(&TokenKind::Rec, ExpectedForm::Identifier);
+    recursive_binding_member(parser);
+    while parser.at(&TokenKind::LineEnd)
+        && parser
+            .nth(1)
+            .is_some_and(|kind| matches!(kind, TokenKind::And))
+    {
+        let _ = parser.bump();
+        let _ = parser.bump();
+        recursive_binding_member(parser);
+    }
+    parser.finish();
+}
+
+fn recursive_binding_member(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::RecursiveBindingMember);
+    let recovery_start = parser.pending_recovery_count();
+    if !matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+        if let Some(primary) = parser.current_span() {
+            if let Some(diagnostic) = parser.report_at(
+                ParseReason::ExpectedRecursiveMember,
+                ExpectedForm::Identifier,
+                primary,
+                None,
+            ) {
+                parser.mark_pending_recovery(diagnostic);
+            }
+        }
+        resolve_line_or_eof(parser, recovery_start);
+        parser.finish();
+        return;
+    }
+    binder(parser);
+    if parser.at(&TokenKind::Colon) {
+        let _ = parser.bump();
+        type_expression(parser);
+    } else if let Some(primary) = parser.current_span() {
+        if let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::Colon,
+            primary,
+            None,
+        ) {
+            parser.mark_pending_recovery(diagnostic);
+        }
+    }
+    let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
+    if starts_expression(parser) {
+        expression(parser);
+    } else if let Some(primary) = parser.current_span() {
+        if let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::Expression,
+            primary,
+            None,
+        ) {
+            parser.mark_pending_recovery(diagnostic);
+        }
+    }
+    resolve_line_or_eof(parser, recovery_start);
+    parser.finish();
+}
+
+fn rejected_stray_and(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    parser.error_at_current(ParseReason::UnexpectedAnd);
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::LineEnd | TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        let _ = parser.bump();
+    }
     parser.finish();
 }
 

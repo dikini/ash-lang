@@ -5,7 +5,7 @@ use crate::{integer::Integer, source::Span};
 /// One parsed Mini-Ash source file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceProgram {
-    /// Sequential global definitions.
+    /// Global definitions in source order.
     pub definitions: Vec<SurfaceDefinition>,
     /// The required final result expression.
     pub result: SurfaceExpr,
@@ -156,6 +156,32 @@ pub struct SurfaceBlock {
 pub enum SurfaceLocalDeclaration {
     /// A sequential nonrecursive binding.
     Binding(SurfaceBinding),
+    /// A simultaneous recursive function binding group.
+    Recursive(SurfaceRecursiveGroup),
+}
+
+/// One simultaneous local recursive binding group.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceRecursiveGroup {
+    /// Members in source order.
+    pub members: Vec<SurfaceRecursiveMember>,
+    /// The complete group from `let` through its final initializer.
+    pub span: Span,
+}
+
+/// One source member of a recursive binding group.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceRecursiveMember {
+    /// The `let rec` or `and` delimiter introducing this member.
+    pub introducer_span: Span,
+    /// The introduced binder.
+    pub binder: SurfaceBinder,
+    /// The required declared monotype.
+    pub annotation: SurfaceType,
+    /// The initializer expression.
+    pub initializer: SurfaceExpr,
+    /// The member from its binder through its initializer.
+    pub span: Span,
 }
 
 /// One immutable local binding.

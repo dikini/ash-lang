@@ -7,7 +7,7 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     resolved::{
         Binder, BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
-        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram,
+        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram, ResolvedRecursiveGroup,
     },
     source::{GeneratedReason, Origin, Span},
     surface::{SurfaceType, SurfaceTypeKind},
@@ -31,6 +31,8 @@ pub enum TypeReason {
     DefinitionResult,
     /// An equational interface did not expose one function domain.
     EquationInterfaceNotFunction,
+    /// A recursive member is not initialized directly by an anonymous function.
+    UnsafeRecursiveInitializer,
 }
 
 impl fmt::Display for TypeReason {
@@ -45,6 +47,7 @@ impl fmt::Display for TypeReason {
             Self::EquationInterfaceNotFunction => {
                 formatter.write_str("type.equation-interface-not-function")
             }
+            Self::UnsafeRecursiveInitializer => formatter.write_str("recursion.unsafe-initializer"),
         }
     }
 }
@@ -502,11 +505,11 @@ impl Elaborator {
         result
     }
 
-    /// Elaborates sequential global definitions and the required file result.
+    /// Elaborates file-wide recursive global definitions and the required result.
     ///
-    /// Definitions are checked in source order and enter the typing context
-    /// only after their complete initializer. The resulting function values are
-    /// folded right-to-left into nonrecursive Core bindings around the result.
+    /// Every declared global monotype enters the typing context before any body
+    /// is checked. The resulting functions form one recursive Core group around
+    /// the file result.
     ///
     /// # Errors
     ///
@@ -545,6 +548,47 @@ impl Elaborator {
     fn elaborate_program(&mut self, program: &ResolvedProgram) -> Result<TypedNode, TypeError> {
         let mut context = TypeContext::new();
         let mut globals = Vec::with_capacity(program.definitions.len());
+        let mut global_binders = HashMap::with_capacity(program.definitions.len());
+
+        for definition in &program.definitions {
+            let (name, function_type) = match &definition.kind {
+                ResolvedDefinitionKind::Equational(equational) => {
+                    let function_type =
+                        ProvenancedType::from_surface(&equational.interface.annotation)?;
+                    if !matches!(function_type.ty, Type::Function(_, _)) {
+                        return Err(equation_interface_not_function(
+                            &equational.interface.annotation,
+                            &equational.equation.name,
+                        ));
+                    }
+                    (&equational.interface.name, function_type)
+                }
+                ResolvedDefinitionKind::InlineOperational(operational) => {
+                    let domain =
+                        ProvenancedType::from_surface(&operational.header.parameter.annotation)?;
+                    let codomain = ProvenancedType::from_surface(&operational.header.result_type)?;
+                    (
+                        &operational.header.name,
+                        ProvenancedType::function(domain, codomain, Some(operational.header.span))?,
+                    )
+                }
+            };
+            let binder = self.builder.resolved_binder(
+                name.id,
+                function_type.ty.clone(),
+                Origin::Generated {
+                    cause: Box::new(name.origin.clone()),
+                    reason: GeneratedReason::BindingLowering,
+                },
+            )?;
+            if context
+                .insert_with_provenance(name.id, function_type.ty, function_type.provenance)?
+                .is_some()
+                || global_binders.insert(name.id, binder).is_some()
+            {
+                return Err(invalid_state());
+            }
+        }
 
         for definition in &program.definitions {
             let (name, parameter, function_type, body, presentation, result_cause) =
@@ -611,20 +655,7 @@ impl Elaborator {
             {
                 return Err(invalid_state());
             }
-            let binder = self.builder.resolved_binder(
-                name.id,
-                function_type.ty.clone(),
-                Origin::Generated {
-                    cause: Box::new(name.origin.clone()),
-                    reason: GeneratedReason::BindingLowering,
-                },
-            )?;
-            if context
-                .insert_with_provenance(name.id, function_type.ty, function_type.provenance)?
-                .is_some()
-            {
-                return Err(invalid_state());
-            }
+            let binder = global_binders.remove(&name.id).ok_or_else(invalid_state)?;
             globals.push(ElaboratedBinding {
                 binder,
                 initializer: function.node,
@@ -639,13 +670,19 @@ impl Elaborator {
             },
             &mut context,
         )?;
-        for global in globals.into_iter().rev() {
-            let node = self.builder.binding(
-                global.binder,
-                global.initializer,
+        if !globals.is_empty() {
+            let members = globals
+                .into_iter()
+                .map(|global| (global.binder, global.initializer))
+                .collect();
+            let node = self.builder.recursive_binding(
+                members,
                 result.node,
                 result.ty.clone(),
-                global.origin,
+                Origin::Generated {
+                    cause: Box::new(Origin::Source(program.span)),
+                    reason: GeneratedReason::RecursiveBindingLowering,
+                },
             )?;
             result = TypedNode {
                 node,
@@ -663,7 +700,7 @@ impl Elaborator {
     ) -> Result<TypedNode, TypeError> {
         let mut tasks = vec![initial];
         let mut values = Vec::new();
-        let mut bindings = Vec::new();
+        let mut declarations = Vec::new();
         while let Some(task) = tasks.pop() {
             match task {
                 ElaborationTask::Synthesize {
@@ -743,7 +780,7 @@ impl Elaborator {
                         });
                     }
                     ResolvedExprKind::Block(block) => {
-                        schedule_block(block, None, cause, &mut tasks, bindings.len())?;
+                        schedule_block(block, None, cause, &mut tasks, declarations.len())?;
                     }
                     ResolvedExprKind::Function(_) => {
                         return Err(function_needs_context(current.span, cause));
@@ -775,7 +812,7 @@ impl Elaborator {
                             Some((expected, kind)),
                             None,
                             &mut tasks,
-                            bindings.len(),
+                            declarations.len(),
                         )?;
                     }
                     _ => {
@@ -827,7 +864,7 @@ impl Elaborator {
                         &mut self.builder,
                         context,
                         &mut tasks,
-                        bindings.len(),
+                        declarations.len(),
                         FunctionCheck {
                             parameter,
                             domain,
@@ -991,10 +1028,71 @@ impl Elaborator {
                     {
                         return Err(invalid_state());
                     }
-                    bindings.push(ElaboratedBinding {
+                    declarations.push(ElaboratedDeclaration::Binding(ElaboratedBinding {
                         binder,
                         initializer: initializer.node,
                         origin: binding_origin(binding),
+                    }));
+                }
+                ElaborationTask::BeginRecursiveGroup(group) => {
+                    for member in &group.members {
+                        if !matches!(member.initializer.kind, ResolvedExprKind::Function(_)) {
+                            return Err(unsafe_recursive_initializer(group, member));
+                        }
+                    }
+                    let expected_types = group
+                        .members
+                        .iter()
+                        .map(|member| ProvenancedType::from_surface(&member.annotation))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut members = Vec::with_capacity(group.members.len());
+                    for (member, expected) in group.members.iter().zip(&expected_types) {
+                        let binder = self.builder.resolved_binder(
+                            member.binder.id,
+                            expected.ty.clone(),
+                            Origin::Generated {
+                                cause: Box::new(member.binder.origin.clone()),
+                                reason: GeneratedReason::BindingLowering,
+                            },
+                        )?;
+                        if context
+                            .insert_with_provenance(
+                                member.binder.id,
+                                expected.ty.clone(),
+                                expected.provenance.clone(),
+                            )?
+                            .is_some()
+                        {
+                            return Err(invalid_state());
+                        }
+                        members.push(ElaboratedRecursiveMemberSeed { binder });
+                    }
+                    tasks.push(ElaborationTask::FinishRecursiveGroup { group, members });
+                    for (member, expected) in group.members.iter().zip(expected_types).rev() {
+                        tasks.push(ElaborationTask::Check {
+                            expression: &member.initializer,
+                            expected,
+                            kind: CheckKind::BindingInitializer {
+                                initializer_span: member.initializer.span,
+                                annotation_span: member.annotation.span,
+                            },
+                        });
+                    }
+                }
+                ElaborationTask::FinishRecursiveGroup { group, members } => {
+                    if members.len() != group.members.len() || values.len() < members.len() {
+                        return Err(invalid_state());
+                    }
+                    let value_start = values.len() - members.len();
+                    let initializers = values.split_off(value_start);
+                    let members = members
+                        .into_iter()
+                        .zip(initializers)
+                        .map(|(member, initializer)| (member.binder, initializer.node))
+                        .collect();
+                    declarations.push(ElaboratedDeclaration::Recursive {
+                        members,
+                        origin: recursive_group_origin(group),
                     });
                 }
                 ElaborationTask::FinishBlock {
@@ -1002,19 +1100,24 @@ impl Elaborator {
                     declaration_start,
                 } => {
                     let mut body = values.pop().ok_or_else(invalid_state)?;
-                    if declaration_start > bindings.len()
-                        || bindings.len() - declaration_start != source_declarations.len()
+                    if declaration_start > declarations.len()
+                        || declarations.len() - declaration_start != source_declarations.len()
                     {
                         return Err(invalid_state());
                     }
-                    for binding in bindings.drain(declaration_start..).rev() {
-                        let node = self.builder.binding(
-                            binding.binder,
-                            binding.initializer,
-                            body.node,
-                            body.ty.clone(),
-                            binding.origin,
-                        )?;
+                    for declaration in declarations.drain(declaration_start..).rev() {
+                        let node = match declaration {
+                            ElaboratedDeclaration::Binding(binding) => self.builder.binding(
+                                binding.binder,
+                                binding.initializer,
+                                body.node,
+                                body.ty.clone(),
+                                binding.origin,
+                            )?,
+                            ElaboratedDeclaration::Recursive { members, origin } => self
+                                .builder
+                                .recursive_binding(members, body.node, body.ty.clone(), origin)?,
+                        };
                         body = TypedNode {
                             node,
                             ty: body.ty,
@@ -1022,9 +1125,19 @@ impl Elaborator {
                         };
                     }
                     for declaration in source_declarations {
-                        let ResolvedLocalDeclaration::Binding(binding) = declaration;
-                        if context.binders.remove(&binding.binder.id).is_none() {
-                            return Err(invalid_state());
+                        match declaration {
+                            ResolvedLocalDeclaration::Binding(binding) => {
+                                if context.binders.remove(&binding.binder.id).is_none() {
+                                    return Err(invalid_state());
+                                }
+                            }
+                            ResolvedLocalDeclaration::Recursive(group) => {
+                                for member in &group.members {
+                                    if context.binders.remove(&member.binder.id).is_none() {
+                                        return Err(invalid_state());
+                                    }
+                                }
+                            }
                         }
                     }
                     values.push(body);
@@ -1107,6 +1220,11 @@ enum ElaborationTask<'a> {
         binding: &'a ResolvedBinding,
         expected: Option<ProvenancedType>,
     },
+    BeginRecursiveGroup(&'a ResolvedRecursiveGroup),
+    FinishRecursiveGroup {
+        group: &'a ResolvedRecursiveGroup,
+        members: Vec<ElaboratedRecursiveMemberSeed>,
+    },
     FinishBlock {
         declarations: &'a [ResolvedLocalDeclaration],
         declaration_start: usize,
@@ -1159,6 +1277,18 @@ struct ElaboratedBinding {
     origin: Origin,
 }
 
+struct ElaboratedRecursiveMemberSeed {
+    binder: TypedBinder,
+}
+
+enum ElaboratedDeclaration {
+    Binding(ElaboratedBinding),
+    Recursive {
+        members: Vec<(TypedBinder, NodeId)>,
+        origin: Origin,
+    },
+}
+
 fn schedule_block<'a>(
     block: &'a ResolvedBlock,
     expected: Option<(ProvenancedType, CheckKind)>,
@@ -1183,30 +1313,36 @@ fn schedule_block<'a>(
         });
     }
     for declaration in block.declarations.iter().rev() {
-        let ResolvedLocalDeclaration::Binding(binding) = declaration;
-        let expected = binding
-            .annotation
-            .as_ref()
-            .map(lower_surface_type)
-            .transpose()?;
-        tasks.push(ElaborationTask::FinishBinding {
-            binding,
-            expected: expected.clone(),
-        });
-        match (expected, binding.annotation.as_ref()) {
-            (Some(expected), Some(annotation)) => tasks.push(ElaborationTask::Check {
-                expression: &binding.initializer,
-                expected,
-                kind: CheckKind::BindingInitializer {
-                    initializer_span: binding.initializer.span,
-                    annotation_span: annotation.span,
-                },
-            }),
-            (None, None) => tasks.push(ElaborationTask::Synthesize {
-                expression: &binding.initializer,
-                cause: Some(SynthesisCause::Binding(binding.span)),
-            }),
-            _ => return Err(invalid_state()),
+        match declaration {
+            ResolvedLocalDeclaration::Binding(binding) => {
+                let expected = binding
+                    .annotation
+                    .as_ref()
+                    .map(lower_surface_type)
+                    .transpose()?;
+                tasks.push(ElaborationTask::FinishBinding {
+                    binding,
+                    expected: expected.clone(),
+                });
+                match (expected, binding.annotation.as_ref()) {
+                    (Some(expected), Some(annotation)) => tasks.push(ElaborationTask::Check {
+                        expression: &binding.initializer,
+                        expected,
+                        kind: CheckKind::BindingInitializer {
+                            initializer_span: binding.initializer.span,
+                            annotation_span: annotation.span,
+                        },
+                    }),
+                    (None, None) => tasks.push(ElaborationTask::Synthesize {
+                        expression: &binding.initializer,
+                        cause: Some(SynthesisCause::Binding(binding.span)),
+                    }),
+                    _ => return Err(invalid_state()),
+                }
+            }
+            ResolvedLocalDeclaration::Recursive(group) => {
+                tasks.push(ElaborationTask::BeginRecursiveGroup(group));
+            }
         }
     }
     Ok(())
@@ -1523,6 +1659,45 @@ fn binding_origin(binding: &ResolvedBinding) -> Origin {
     }
 }
 
+fn recursive_group_origin(group: &ResolvedRecursiveGroup) -> Origin {
+    let related = group
+        .members
+        .iter()
+        .flat_map(|member| [member.span, member.annotation.span, member.initializer.span])
+        .collect();
+    Origin::Generated {
+        cause: Box::new(Origin::Related {
+            primary: Box::new(Origin::Source(group.span)),
+            related,
+        }),
+        reason: GeneratedReason::RecursiveBindingLowering,
+    }
+}
+
+fn unsafe_recursive_initializer(
+    group: &ResolvedRecursiveGroup,
+    member: &crate::resolved::ResolvedRecursiveMember,
+) -> TypeError {
+    let mut diagnostic = Diagnostic::new(
+        TypeReason::UnsafeRecursiveInitializer,
+        SourceLabel::new(
+            member.initializer.span,
+            "this recursive initializer is not a direct anonymous function",
+        ),
+    );
+    diagnostic.related.push(SourceLabel::new(
+        group.span,
+        "this declaration is a simultaneous recursive group",
+    ));
+    diagnostic.related.push(SourceLabel::new(
+        member.annotation.span,
+        "this is the member's declared type",
+    ));
+    diagnostic.expected = Some("a direct `fn` initializer".into());
+    diagnostic.help = Some("initialize the recursive member directly with `fn`".into());
+    TypeError::Source(Box::new(diagnostic))
+}
+
 fn global_binding_origin(definition: &crate::resolved::ResolvedDefinition) -> Origin {
     Origin::Generated {
         cause: Box::new(Origin::Source(definition.span)),
@@ -1605,9 +1780,7 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
                 binders.push(operational.header.parameter.binder.id);
                 expressions.push(&operational.body.result);
                 for declaration in &operational.body.declarations {
-                    let ResolvedLocalDeclaration::Binding(binding) = declaration;
-                    binders.push(binding.binder.id);
-                    expressions.push(&binding.initializer);
+                    collect_resolved_declaration(declaration, &mut binders, &mut expressions);
                 }
             }
         }
@@ -1627,18 +1800,14 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
             ResolvedExprKind::Block(block) => {
                 expressions.push(&block.result);
                 for declaration in &block.declarations {
-                    let ResolvedLocalDeclaration::Binding(binding) = declaration;
-                    binders.push(binding.binder.id);
-                    expressions.push(&binding.initializer);
+                    collect_resolved_declaration(declaration, &mut binders, &mut expressions);
                 }
             }
             ResolvedExprKind::Function(function) => {
                 binders.push(function.parameter.id);
                 expressions.push(&function.body.result);
                 for declaration in &function.body.declarations {
-                    let ResolvedLocalDeclaration::Binding(binding) = declaration;
-                    binders.push(binding.binder.id);
-                    expressions.push(&binding.initializer);
+                    collect_resolved_declaration(declaration, &mut binders, &mut expressions);
                 }
             }
             ResolvedExprKind::Integer(_)
@@ -1648,6 +1817,25 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
         }
     }
     binders
+}
+
+fn collect_resolved_declaration<'a>(
+    declaration: &'a ResolvedLocalDeclaration,
+    binders: &mut Vec<BinderId>,
+    expressions: &mut Vec<&'a ResolvedExpr>,
+) {
+    match declaration {
+        ResolvedLocalDeclaration::Binding(binding) => {
+            binders.push(binding.binder.id);
+            expressions.push(&binding.initializer);
+        }
+        ResolvedLocalDeclaration::Recursive(group) => {
+            for member in &group.members {
+                binders.push(member.binder.id);
+                expressions.push(&member.initializer);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1740,7 +1928,7 @@ mod tests {
     }
 
     #[test]
-    fn sequential_global_elaboration_does_not_clone_the_growing_context() {
+    fn recursive_global_elaboration_does_not_clone_the_complete_context() {
         let mut text = String::new();
         text.push_str("f0 : Int -> Int\nf0 value = value\n");
         for index in 1..32 {
@@ -1761,7 +1949,7 @@ mod tests {
 
         elaborator
             .synthesize_program(&program)
-            .expect("sequential globals should elaborate");
+            .expect("recursive globals should elaborate");
 
         TYPE_CONTEXT_CLONES.with(|clones| assert_eq!(clones.get(), 0));
     }
