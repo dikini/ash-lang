@@ -4,7 +4,7 @@ use ash::{
     lexer::lex,
     parser::{ParseContext, ParseReason, ProjectionError, SynchronizationBoundary, parse, project},
     resolve::{ResolveReason, resolve},
-    resolved::ResolvedExprKind,
+    resolved::{ResolvedBinding, ResolvedBlock, ResolvedExprKind, ResolvedLocalDeclaration},
     source::SourceFile,
 };
 
@@ -36,6 +36,11 @@ fn source(name: &str, text: &str) -> SourceFile {
 
 fn offset(value: usize) -> u32 {
     u32::try_from(value).expect("fixture offset should fit the source representation")
+}
+
+fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
+    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index];
+    binding
 }
 
 #[test]
@@ -285,7 +290,7 @@ fn annotated_binding_initializer_relates_the_expression_to_its_annotation() {
     let ResolvedExprKind::Block(block) = &resolved.result.kind else {
         panic!("fixture should resolve to a block");
     };
-    let binding = &block.bindings[0];
+    let binding = binding(block, 0);
     let annotation = binding.annotation.as_ref().expect("binding annotation");
     let error = run_source(source).expect_err("the initializer should not check");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
@@ -311,7 +316,7 @@ fn annotated_binding_keeps_the_whole_nested_initializer_as_primary() {
     let ResolvedExprKind::Block(block) = &resolved.result.kind else {
         panic!("fixture should resolve to a block");
     };
-    let binding = &block.bindings[0];
+    let binding = binding(block, 0);
     let error = run_source(source).expect_err("the nested initializer should not check");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("nested binding mismatch should be categorized");
@@ -360,7 +365,7 @@ fn anonymous_function_without_an_annotation_relates_to_the_binding_that_requires
     let ResolvedExprKind::Block(block) = &resolved.result.kind else {
         panic!("fixture should resolve to a block");
     };
-    let binding_span = block.bindings[0].span;
+    let binding_span = binding(block, 0).span;
     let error = run_source(source).expect_err("the anonymous function cannot synthesize");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("missing function context should remain a typed source diagnostic");
@@ -369,7 +374,7 @@ fn anonymous_function_without_an_annotation_relates_to_the_binding_that_requires
     assert_eq!(diagnostic.reason, TypeReason::FunctionNeedsContext);
     assert_eq!(
         diagnostic.primary.span(),
-        block.bindings[0].initializer.span
+        binding(block, 0).initializer.span
     );
     assert_eq!(diagnostic.related.len(), 1);
     assert_eq!(diagnostic.related[0].span(), binding_span);
@@ -483,7 +488,7 @@ fn nested_block_preserves_the_outer_binding_synthesis_context() {
     let ResolvedExprKind::Block(block) = &resolved.result.kind else {
         panic!("fixture should resolve to a block");
     };
-    let outer_binding = &block.bindings[0];
+    let outer_binding = binding(block, 0);
     let error = run_source(source).expect_err("the nested function still cannot synthesize");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("nested missing context should be a source diagnostic");

@@ -143,12 +143,19 @@ pub struct ApplicationExpr {
 /// A sequential block expression.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceBlock {
-    /// Sequential local bindings.
-    pub bindings: Vec<SurfaceBinding>,
+    /// Ordered local declarations.
+    pub declarations: Vec<SurfaceLocalDeclaration>,
     /// The block's required result expression.
     pub result: Box<SurfaceExpr>,
     /// The complete braced span.
     pub span: Span,
+}
+
+/// The closed local-declaration family accepted by Mini-Ash.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceLocalDeclaration {
+    /// A sequential nonrecursive binding.
+    Binding(SurfaceBinding),
 }
 
 /// One immutable local binding.

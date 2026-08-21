@@ -5,7 +5,10 @@ use ash::{
         STRUCTURAL_DEPTH_LIMIT, SynchronizationBoundary, parse, project,
     },
     source::{ByteRange, SourceFile},
-    surface::{SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceTypeKind},
+    surface::{
+        SurfaceBinding, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind,
+        SurfaceLocalDeclaration, SurfaceTypeKind,
+    },
 };
 
 fn parse_valid(text: &str) -> (ash::parser::ConcreteTree, ash::surface::SurfaceProgram) {
@@ -36,6 +39,11 @@ fn assert_name(expression: &SurfaceExpr, expected: &str) {
         panic!("expected name expression, found {expression:?}");
     };
     assert_eq!(name.text, expected);
+}
+
+fn binding(block: &SurfaceBlock, index: usize) -> &SurfaceBinding {
+    let SurfaceLocalDeclaration::Binding(binding) = &block.declarations[index];
+    binding
 }
 
 #[test]
@@ -279,13 +287,11 @@ fn blocks_bindings_annotations_and_anonymous_functions_project() {
     let SurfaceExprKind::Block(block) = &shadowing.result.kind else {
         panic!("expected block");
     };
-    assert_eq!(block.bindings.len(), 2);
-    assert!(
-        block
-            .bindings
-            .iter()
-            .all(|binding| binding.annotation.is_none())
-    );
+    assert_eq!(block.declarations.len(), 2);
+    assert!(block.declarations.iter().all(|declaration| matches!(
+        declaration,
+        SurfaceLocalDeclaration::Binding(binding) if binding.annotation.is_none()
+    )));
 
     let (_, capture) = parse_valid(
         "{\n    let offset = 40\n    let add_offset : Int -> Int = fn(value) {\n        value + offset\n    }\n    add_offset 2\n}\n",
@@ -293,9 +299,10 @@ fn blocks_bindings_annotations_and_anonymous_functions_project() {
     let SurfaceExprKind::Block(block) = &capture.result.kind else {
         panic!("expected capture block");
     };
-    assert!(block.bindings[1].annotation.is_some());
+    let SurfaceLocalDeclaration::Binding(binding) = &block.declarations[1];
+    assert!(binding.annotation.is_some());
     assert!(matches!(
-        block.bindings[1].initializer.kind,
+        binding.initializer.kind,
         SurfaceExprKind::Function(_)
     ));
 }
@@ -465,8 +472,8 @@ fn every_surface_construct_retains_its_complete_accepted_span() {
     assert_eq!(definition.header.name.span.range().start(), 3);
     assert_eq!(definition.header.parameter.span.range().start(), 13);
     assert_eq!(definition.header.parameter.span.range().end(), 24);
-    assert_eq!(definition.body.bindings[0].span.range().start(), 39);
-    assert_eq!(definition.body.bindings[0].span.range().end(), 56);
+    assert_eq!(binding(&definition.body, 0).span.range().start(), 39);
+    assert_eq!(binding(&definition.body, 0).span.range().end(), 56);
     assert_eq!(program.span.range().start(), 0);
     assert_eq!(program.span.range().end(), 89);
 }

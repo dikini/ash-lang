@@ -2,7 +2,10 @@ use ash::{
     lexer::lex,
     parser::{STRUCTURAL_DEPTH_LIMIT, parse, project},
     resolve::{ResolveReason, resolve},
-    resolved::{ResolvedDefinitionKind, ResolvedExprKind},
+    resolved::{
+        ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExprKind,
+        ResolvedLocalDeclaration,
+    },
     source::SourceFile,
     surface::SurfaceTypeKind,
 };
@@ -23,6 +26,11 @@ fn resolve_error(text: &str) -> ash::resolve::ResolveError {
     let tree = parse(lexed);
     let surface = project(&source, &tree).expect("the fixture should project");
     resolve(&surface).expect_err("the fixture should fail resolution")
+}
+
+fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
+    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index];
+    binding
 }
 
 #[test]
@@ -105,9 +113,9 @@ fn local_initializer_uses_incoming_scope_before_shadowing_binder_is_introduced()
     let ResolvedExprKind::Block(block) = &program.result.kind else {
         panic!("expected a resolved block");
     };
-    let first = &block.bindings[0].binder;
-    let second = &block.bindings[1].binder;
-    let ResolvedExprKind::Add(addition) = &block.bindings[1].initializer.kind else {
+    let first = &binding(block, 0).binder;
+    let second = &binding(block, 1).binder;
+    let ResolvedExprKind::Add(addition) = &binding(block, 1).initializer.kind else {
         panic!("expected an addition initializer");
     };
     let ResolvedExprKind::Occurrence(initializer_use) = &addition.left.kind else {
@@ -134,8 +142,8 @@ fn anonymous_parameter_shadows_outer_binder_only_inside_its_body() {
     let ResolvedExprKind::Block(block) = &program.result.kind else {
         panic!("expected a resolved block");
     };
-    let outer = &block.bindings[0].binder;
-    let ResolvedExprKind::Function(function) = &block.bindings[1].initializer.kind else {
+    let outer = &binding(block, 0).binder;
+    let ResolvedExprKind::Function(function) = &binding(block, 1).initializer.kind else {
         panic!("expected a resolved anonymous function");
     };
     let ResolvedExprKind::Occurrence(body_use) = &function.body.result.kind else {
@@ -361,10 +369,10 @@ fn resolved_presentations_retain_annotations_component_spans_and_full_spans() {
     ));
     assert_eq!(definition.header.result_type.span.range().start(), 29);
     assert_eq!(definition.header.result_type.span.range().end(), 32);
-    assert_eq!(definition.body.bindings[0].span.range().start(), 39);
-    assert_eq!(definition.body.bindings[0].span.range().end(), 56);
+    assert_eq!(binding(&definition.body, 0).span.range().start(), 39);
+    assert_eq!(binding(&definition.body, 0).span.range().end(), 56);
     assert!(matches!(
-        definition.body.bindings[0]
+        binding(&definition.body, 0)
             .annotation
             .as_ref()
             .map(|annotation| &annotation.kind),
@@ -406,8 +414,8 @@ fn local_binding_may_shadow_a_global_without_changing_the_global_identity() {
         panic!("expected a local occurrence");
     };
 
-    assert_ne!(block.bindings[0].binder.id, global.interface.name.id);
-    assert_eq!(local_use.binder, block.bindings[0].binder.id);
+    assert_ne!(binding(block, 0).binder.id, global.interface.name.id);
+    assert_eq!(local_use.binder, binding(block, 0).binder.id);
 }
 
 #[test]
@@ -418,8 +426,8 @@ fn anonymous_function_captures_outer_binder_and_keeps_parameter_identity_separat
     let ResolvedExprKind::Block(block) = &program.result.kind else {
         panic!("expected a block");
     };
-    let offset = &block.bindings[0].binder;
-    let ResolvedExprKind::Function(function) = &block.bindings[1].initializer.kind else {
+    let offset = &binding(block, 0).binder;
+    let ResolvedExprKind::Function(function) = &binding(block, 1).initializer.kind else {
         panic!("expected an anonymous function");
     };
     let ResolvedExprKind::Add(addition) = &function.body.result.kind else {

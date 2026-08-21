@@ -142,12 +142,19 @@ pub struct ResolvedTypedBinder {
 /// A resolved sequential block.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedBlock {
-    /// Sequential resolved local bindings.
-    pub bindings: Vec<ResolvedBinding>,
+    /// Ordered resolved local declarations.
+    pub declarations: Vec<ResolvedLocalDeclaration>,
     /// Required block result expression.
     pub result: Box<ResolvedExpr>,
     /// Complete braced span.
     pub span: Span,
+}
+
+/// The closed resolved local-declaration family.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResolvedLocalDeclaration {
+    /// A sequential nonrecursive binding.
+    Binding(ResolvedBinding),
 }
 
 /// A resolved immutable local binding.

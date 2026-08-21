@@ -9,12 +9,12 @@ use crate::{
         ResolvedBlock, ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation,
         ResolvedEquationalGlobal, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
         ResolvedFunctionExpr, ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
-        ResolvedOccurrence, ResolvedProgram, ResolvedTypedBinder,
+        ResolvedLocalDeclaration, ResolvedOccurrence, ResolvedProgram, ResolvedTypedBinder,
     },
     source::Origin,
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr,
-        SurfaceExprKind, SurfaceProgram,
+        SurfaceExprKind, SurfaceLocalDeclaration, SurfaceProgram,
     },
 };
 
@@ -310,7 +310,7 @@ impl Resolver {
         let initial_span = initial.span();
         let mut tasks = vec![initial];
         let mut expressions = Vec::new();
-        let mut bindings = Vec::new();
+        let mut declarations = Vec::new();
 
         while let Some(task) = tasks.pop() {
             match task {
@@ -320,14 +320,15 @@ impl Resolver {
                 ResolveTask::VisitBlock(block) => {
                     let scope_checkpoint = self.scopes.len();
                     self.scopes.push(HashMap::new());
-                    let binding_start = bindings.len();
+                    let declaration_start = declarations.len();
                     tasks.push(ResolveTask::FinishBlock {
-                        binding_start,
+                        declaration_start,
                         scope_checkpoint,
                         span: block.span,
                     });
                     tasks.push(ResolveTask::VisitExpr(&block.result));
-                    for binding in block.bindings.iter().rev() {
+                    for declaration in block.declarations.iter().rev() {
+                        let SurfaceLocalDeclaration::Binding(binding) = declaration;
                         tasks.push(ResolveTask::FinishBinding(binding));
                         tasks.push(ResolveTask::VisitExpr(&binding.initializer));
                     }
@@ -376,15 +377,15 @@ impl Resolver {
                         ));
                     };
                     scope.insert(binder.spelling.clone(), binder.clone());
-                    bindings.push(ResolvedBinding {
+                    declarations.push(ResolvedLocalDeclaration::Binding(ResolvedBinding {
                         binder,
                         annotation: binding.annotation.clone(),
                         initializer,
                         span: binding.span,
-                    });
+                    }));
                 }
                 ResolveTask::FinishBlock {
-                    binding_start,
+                    declaration_start,
                     scope_checkpoint,
                     span,
                 } => {
@@ -395,18 +396,18 @@ impl Resolver {
                             "the resolver lost a block result",
                         ));
                     };
-                    if binding_start > bindings.len() {
+                    if declaration_start > declarations.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             span,
                             "the resolver lost a block binding",
                         ));
                     }
-                    let block_bindings = bindings.split_off(binding_start);
+                    let block_declarations = declarations.split_off(declaration_start);
                     self.scopes.truncate(scope_checkpoint);
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Block(ResolvedBlock {
-                            bindings: block_bindings,
+                            declarations: block_declarations,
                             result: Box::new(result),
                             span,
                         }),
@@ -448,7 +449,7 @@ impl Resolver {
                 "the resolver produced no expression",
             ));
         };
-        if !expressions.is_empty() || !bindings.is_empty() {
+        if !expressions.is_empty() || !declarations.is_empty() {
             return Err(error(
                 ResolveReason::InternalState,
                 initial_span,
@@ -546,7 +547,7 @@ enum ResolveTask<'a> {
     },
     FinishBinding(&'a SurfaceBinding),
     FinishBlock {
-        binding_start: usize,
+        declaration_start: usize,
         scope_checkpoint: usize,
         span: crate::source::Span,
     },

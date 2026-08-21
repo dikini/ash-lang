@@ -7,12 +7,24 @@ use ash::{
     lexer::lex,
     parser::{parse, project},
     resolve::resolve,
-    resolved::{ResolvedExprKind, ResolvedProgram},
+    resolved::{
+        ResolvedBinding, ResolvedBlock, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram,
+    },
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
     types::Type,
 };
 
 const V003: &str = include_str!("fixtures/first-stratum/valid/v003-local-shadowing.ash");
+
+fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
+    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index];
+    binding
+}
+
+fn binding_mut(block: &mut ResolvedBlock, index: usize) -> &mut ResolvedBinding {
+    let ResolvedLocalDeclaration::Binding(binding) = &mut block.declarations[index];
+    binding
+}
 
 fn resolved(source: &SourceFile) -> ResolvedProgram {
     let lexed = lex(source).expect("test source should lex");
@@ -44,9 +56,9 @@ fn v003_resolves_shadowing_to_distinct_binders_and_runs_to_two() {
     let ResolvedExprKind::Block(block) = &program.result.kind else {
         panic!("expected the V-003 block");
     };
-    let first = block.bindings[0].binder.id;
-    let second = block.bindings[1].binder.id;
-    let ResolvedExprKind::Add(initializer) = &block.bindings[1].initializer.kind else {
+    let first = binding(block, 0).binder.id;
+    let second = binding(block, 1).binder.id;
+    let ResolvedExprKind::Add(initializer) = &binding(block, 1).initializer.kind else {
         panic!("expected the shadowing initializer");
     };
     let ResolvedExprKind::Occurrence(initializer_use) = &initializer.left.kind else {
@@ -116,17 +128,17 @@ fn block_elaboration_folds_bindings_right_to_left_with_causal_origins() {
     let PureExprKind::Computation(PureComputation::Bind(first_core)) = &outer.kind else {
         panic!("expected the first binding outside the second");
     };
-    assert_eq!(first_core.binder().id(), block.bindings[0].binder.id);
+    assert_eq!(first_core.binder().id(), binding(block, 0).binder.id);
     assert_eq!(first_core.binder().ty(), &Type::Int);
     assert_eq!(outer.ty, Type::Int);
     assert_eq!(
         outer.origin.generated_reason(),
         Some(GeneratedReason::BindingLowering)
     );
-    assert_eq!(outer.origin.primary_span(), block.bindings[0].span);
+    assert_eq!(outer.origin.primary_span(), binding(block, 0).span);
     assert_eq!(
         outer.origin.related_spans(),
-        &[block.bindings[0].initializer.span]
+        &[binding(block, 0).initializer.span]
     );
     assert_eq!(
         first_core.binder().origin().generated_reason(),
@@ -134,18 +146,18 @@ fn block_elaboration_folds_bindings_right_to_left_with_causal_origins() {
     );
     assert_eq!(
         first_core.binder().origin().primary_span(),
-        block.bindings[0].binder.origin.primary_span()
+        binding(block, 0).binder.origin.primary_span()
     );
 
     let inner = validated.node(first_core.body()).expect("inner binding");
     let PureExprKind::Computation(PureComputation::Bind(second_core)) = &inner.kind else {
         panic!("expected the second binding inside the first");
     };
-    assert_eq!(second_core.binder().id(), block.bindings[1].binder.id);
-    assert_eq!(inner.origin.primary_span(), block.bindings[1].span);
+    assert_eq!(second_core.binder().id(), binding(block, 1).binder.id);
+    assert_eq!(inner.origin.primary_span(), binding(block, 1).span);
     assert_eq!(
         inner.origin.related_spans(),
-        &[block.bindings[1].initializer.span]
+        &[binding(block, 1).initializer.span]
     );
 }
 
@@ -197,9 +209,9 @@ fn failed_initializer_scope_check_poisons_the_elaborator() {
     let ResolvedExprKind::Block(block) = &mut program.result.kind else {
         panic!("expected a block");
     };
-    let prior_expression = block.bindings[0].initializer.clone();
-    let second_binder = block.bindings[1].binder.id;
-    let ResolvedExprKind::Add(initializer) = &mut block.bindings[1].initializer.kind else {
+    let prior_expression = binding(block, 0).initializer.clone();
+    let second_binder = binding(block, 1).binder.id;
+    let ResolvedExprKind::Add(initializer) = &mut binding_mut(block, 1).initializer.kind else {
         panic!("expected an addition initializer");
     };
     let ResolvedExprKind::Occurrence(use_site) = &mut initializer.left.kind else {
@@ -254,16 +266,16 @@ fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() 
     let ResolvedExprKind::Block(outer_block) = &program.result.kind else {
         panic!("expected outer block");
     };
-    let ResolvedExprKind::Block(inner_block) = &outer_block.bindings[1].initializer.kind else {
+    let ResolvedExprKind::Block(inner_block) = &binding(outer_block, 1).initializer.kind else {
         panic!("expected nested initializer block");
     };
-    let ResolvedExprKind::Add(inner_initializer) = &inner_block.bindings[0].initializer.kind else {
+    let ResolvedExprKind::Add(inner_initializer) = &binding(inner_block, 0).initializer.kind else {
         panic!("expected inner initializer addition");
     };
     let ResolvedExprKind::Occurrence(outer_use) = &inner_initializer.left.kind else {
         panic!("expected outer use inside nested block");
     };
-    assert_eq!(outer_use.binder, outer_block.bindings[0].binder.id);
+    assert_eq!(outer_use.binder, binding(outer_block, 0).binder.id);
 
     let (validated, ty) = elaborate(&source, &program);
     let outer_core = validated.node(validated.root()).expect("outer binding");
@@ -282,7 +294,7 @@ fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() 
     };
     assert_eq!(
         nested_binding.binder().id(),
-        inner_block.bindings[0].binder.id
+        binding(inner_block, 0).binder.id
     );
 
     let evaluation = evaluate(&validated).expect("nested bindings should evaluate");
@@ -304,10 +316,10 @@ fn nested_block_binder_is_removed_before_the_enclosing_result() {
     let ResolvedExprKind::Block(outer) = &mut program.result.kind else {
         panic!("expected outer block");
     };
-    let ResolvedExprKind::Block(inner) = &outer.bindings[0].initializer.kind else {
+    let ResolvedExprKind::Block(inner) = &binding(outer, 0).initializer.kind else {
         panic!("expected nested block");
     };
-    let hidden = inner.bindings[0].binder.id;
+    let hidden = binding(inner, 0).binder.id;
     let ResolvedExprKind::Occurrence(result_use) = &mut outer.result.kind else {
         panic!("expected outer result occurrence");
     };

@@ -7,8 +7,8 @@ use crate::{
         ApplicationExpr, BinaryExpr, EquationalGlobal, FunctionExpr, FunctionType,
         InlineOperationalGlobal, SurfaceBinder, SurfaceBinding, SurfaceBlock, SurfaceDefinition,
         SurfaceDefinitionKind, SurfaceEquation, SurfaceExpr, SurfaceExprKind,
-        SurfaceExternalInterface, SurfaceInlineOperationalHeader, SurfaceName, SurfaceProgram,
-        SurfaceType, SurfaceTypeKind, SurfaceTypedBinder,
+        SurfaceExternalInterface, SurfaceInlineOperationalHeader, SurfaceLocalDeclaration,
+        SurfaceName, SurfaceProgram, SurfaceType, SurfaceTypeKind, SurfaceTypedBinder,
     },
 };
 
@@ -601,8 +601,8 @@ fn project_expression(
                     span,
                 });
             }
-            ExpressionTask::FinishBlock { bindings, span } => {
-                let required = bindings.len().saturating_add(1);
+            ExpressionTask::FinishBlock { declarations, span } => {
+                let required = declarations.len().saturating_add(1);
                 let split =
                     projected
                         .len()
@@ -611,17 +611,18 @@ fn project_expression(
                             InternalReason::UnexpectedShape,
                         ))?;
                 let mut expressions = projected.split_off(split).into_iter();
-                let mut projected_bindings = Vec::with_capacity(bindings.len());
-                for binding in bindings {
+                let mut projected_declarations = Vec::with_capacity(declarations.len());
+                for declaration in declarations {
                     let initializer = expressions.next().ok_or(ProjectionError::MalformedTree(
                         InternalReason::UnexpectedShape,
                     ))?;
-                    projected_bindings.push(SurfaceBinding {
+                    let PendingLocalDeclaration::Binding(binding) = declaration;
+                    projected_declarations.push(SurfaceLocalDeclaration::Binding(SurfaceBinding {
                         binder: binding.binder,
                         annotation: binding.annotation,
                         initializer,
                         span: binding.span,
-                    });
+                    }));
                 }
                 let result = expressions.next().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
@@ -631,7 +632,7 @@ fn project_expression(
                 }
                 projected.push(SurfaceExpr {
                     kind: SurfaceExprKind::Block(SurfaceBlock {
-                        bindings: projected_bindings,
+                        declarations: projected_declarations,
                         result: Box::new(result),
                         span,
                     }),
@@ -674,7 +675,7 @@ enum ExpressionTask<'a> {
     },
     FinishApplication,
     FinishBlock {
-        bindings: Vec<PendingBinding>,
+        declarations: Vec<PendingLocalDeclaration>,
         span: Span,
     },
     FinishFunction {
@@ -682,6 +683,10 @@ enum ExpressionTask<'a> {
         span: Span,
     },
     ApplyGroupingSpan(Span),
+}
+
+enum PendingLocalDeclaration {
+    Binding(PendingBinding),
 }
 
 struct PendingBinding {
@@ -697,7 +702,7 @@ fn schedule_block<'a>(
     tasks: &mut Vec<ExpressionTask<'a>>,
 ) -> Result<(), ProjectionError> {
     require_kind(node, NodeKind::Block)?;
-    let mut bindings = Vec::new();
+    let mut declarations = Vec::new();
     let mut initializers = Vec::new();
     let mut result = None;
     for child in child_nodes(node) {
@@ -706,11 +711,11 @@ fn schedule_block<'a>(
             let annotation = optional_child_of_kind(child, NodeKind::Type)?
                 .map(|annotation| project_type(source, annotation, tokens))
                 .transpose()?;
-            bindings.push(PendingBinding {
+            declarations.push(PendingLocalDeclaration::Binding(PendingBinding {
                 binder,
                 annotation,
                 span: node_span(source, child, tokens)?,
-            });
+            }));
             initializers.push(expression_child(child)?);
         } else if is_expression_kind(child.kind) {
             if result.replace(child).is_some() {
@@ -724,7 +729,7 @@ fn schedule_block<'a>(
         InternalReason::UnexpectedShape,
     ))?;
     tasks.push(ExpressionTask::FinishBlock {
-        bindings,
+        declarations,
         span: node_span(source, node, tokens)?,
     });
     tasks.push(ExpressionTask::Visit(result));

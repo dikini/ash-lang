@@ -7,7 +7,7 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     resolved::{
         Binder, BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
-        ResolvedExprKind, ResolvedProgram,
+        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram,
     },
     source::{GeneratedReason, Origin, Span},
     surface::{SurfaceType, SurfaceTypeKind},
@@ -998,16 +998,16 @@ impl Elaborator {
                     });
                 }
                 ElaborationTask::FinishBlock {
-                    bindings: source_bindings,
-                    binding_start,
+                    declarations: source_declarations,
+                    declaration_start,
                 } => {
                     let mut body = values.pop().ok_or_else(invalid_state)?;
-                    if binding_start > bindings.len()
-                        || bindings.len() - binding_start != source_bindings.len()
+                    if declaration_start > bindings.len()
+                        || bindings.len() - declaration_start != source_declarations.len()
                     {
                         return Err(invalid_state());
                     }
-                    for binding in bindings.drain(binding_start..).rev() {
+                    for binding in bindings.drain(declaration_start..).rev() {
                         let node = self.builder.binding(
                             binding.binder,
                             binding.initializer,
@@ -1021,7 +1021,8 @@ impl Elaborator {
                             provenance: body.provenance,
                         };
                     }
-                    for binding in source_bindings {
+                    for declaration in source_declarations {
+                        let ResolvedLocalDeclaration::Binding(binding) = declaration;
                         if context.binders.remove(&binding.binder.id).is_none() {
                             return Err(invalid_state());
                         }
@@ -1107,8 +1108,8 @@ enum ElaborationTask<'a> {
         expected: Option<ProvenancedType>,
     },
     FinishBlock {
-        bindings: &'a [ResolvedBinding],
-        binding_start: usize,
+        declarations: &'a [ResolvedLocalDeclaration],
+        declaration_start: usize,
     },
 }
 
@@ -1163,11 +1164,11 @@ fn schedule_block<'a>(
     expected: Option<(ProvenancedType, CheckKind)>,
     synthesis_cause: Option<SynthesisCause>,
     tasks: &mut Vec<ElaborationTask<'a>>,
-    binding_start: usize,
+    declaration_start: usize,
 ) -> Result<(), TypeError> {
     tasks.push(ElaborationTask::FinishBlock {
-        bindings: &block.bindings,
-        binding_start,
+        declarations: &block.declarations,
+        declaration_start,
     });
     if let Some((expected, kind)) = expected {
         tasks.push(ElaborationTask::Check {
@@ -1181,7 +1182,8 @@ fn schedule_block<'a>(
             cause: synthesis_cause,
         });
     }
-    for binding in block.bindings.iter().rev() {
+    for declaration in block.declarations.iter().rev() {
+        let ResolvedLocalDeclaration::Binding(binding) = declaration;
         let expected = binding
             .annotation
             .as_ref()
@@ -1602,7 +1604,8 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
                 binders.push(operational.header.name.id);
                 binders.push(operational.header.parameter.binder.id);
                 expressions.push(&operational.body.result);
-                for binding in &operational.body.bindings {
+                for declaration in &operational.body.declarations {
+                    let ResolvedLocalDeclaration::Binding(binding) = declaration;
                     binders.push(binding.binder.id);
                     expressions.push(&binding.initializer);
                 }
@@ -1623,7 +1626,8 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
             }
             ResolvedExprKind::Block(block) => {
                 expressions.push(&block.result);
-                for binding in &block.bindings {
+                for declaration in &block.declarations {
+                    let ResolvedLocalDeclaration::Binding(binding) = declaration;
                     binders.push(binding.binder.id);
                     expressions.push(&binding.initializer);
                 }
@@ -1631,7 +1635,8 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
             ResolvedExprKind::Function(function) => {
                 binders.push(function.parameter.id);
                 expressions.push(&function.body.result);
-                for binding in &function.body.bindings {
+                for declaration in &function.body.declarations {
+                    let ResolvedLocalDeclaration::Binding(binding) = declaration;
                     binders.push(binding.binder.id);
                     expressions.push(&binding.initializer);
                 }
