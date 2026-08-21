@@ -434,15 +434,15 @@ fn recursive_binding_member(parser: &mut Parser<'_>) {
     parser.start(NodeKind::RecursiveBindingMember);
     let recovery_start = parser.pending_recovery_count();
     if !matches!(parser.current(), Some(TokenKind::Identifier(_))) {
-        if let Some(primary) = parser.current_span() {
-            if let Some(diagnostic) = parser.report_at(
+        if let Some(primary) = parser.current_span()
+            && let Some(diagnostic) = parser.report_at(
                 ParseReason::ExpectedRecursiveMember,
                 ExpectedForm::Identifier,
                 primary,
                 None,
-            ) {
-                parser.mark_pending_recovery(diagnostic);
-            }
+            )
+        {
+            parser.mark_pending_recovery(diagnostic);
         }
         resolve_line_or_eof(parser, recovery_start);
         parser.finish();
@@ -452,28 +452,28 @@ fn recursive_binding_member(parser: &mut Parser<'_>) {
     if parser.at(&TokenKind::Colon) {
         let _ = parser.bump();
         type_expression(parser);
-    } else if let Some(primary) = parser.current_span() {
-        if let Some(diagnostic) = parser.report_at(
+    } else if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
             ParseReason::ExpectedForm,
             ExpectedForm::Colon,
             primary,
             None,
-        ) {
-            parser.mark_pending_recovery(diagnostic);
-        }
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
     }
     let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
     if starts_expression(parser) {
         expression(parser);
-    } else if let Some(primary) = parser.current_span() {
-        if let Some(diagnostic) = parser.report_at(
+    } else if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
             ParseReason::ExpectedForm,
             ExpectedForm::Expression,
             primary,
             None,
-        ) {
-            parser.mark_pending_recovery(diagnostic);
-        }
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
     }
     resolve_line_or_eof(parser, recovery_start);
     parser.finish();

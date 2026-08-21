@@ -154,7 +154,7 @@ pub struct ResolvedBlock {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedLocalDeclaration {
     /// A sequential nonrecursive binding.
-    Binding(ResolvedBinding),
+    Binding(Box<ResolvedBinding>),
     /// A simultaneous recursive function binding group.
     Recursive(ResolvedRecursiveGroup),
 }

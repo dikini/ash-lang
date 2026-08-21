@@ -437,12 +437,14 @@ impl Resolver {
                         ));
                     };
                     scope.insert(binder.spelling.clone(), binder.clone());
-                    declarations.push(ResolvedLocalDeclaration::Binding(ResolvedBinding {
-                        binder,
-                        annotation: binding.annotation.clone(),
-                        initializer,
-                        span: binding.span,
-                    }));
+                    declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
+                        ResolvedBinding {
+                            binder,
+                            annotation: binding.annotation.clone(),
+                            initializer,
+                            span: binding.span,
+                        },
+                    )));
                 }
                 ResolveTask::FinishRecursiveGroup { group, binders } => {
                     if binders.len() != group.members.len()
