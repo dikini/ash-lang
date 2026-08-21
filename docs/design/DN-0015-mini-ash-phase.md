@@ -10,16 +10,17 @@
 
 ## Question
 
-How should Ash use a growing pure-functional corpus to evaluate syntax,
-semantics, representations, typing, parsing, diagnostics, transformations, and
-evaluation before retaining the first working Mini-Ash interpreter?
+How should Ash continue using a growing pure-functional corpus to evaluate
+syntax, semantics, representations, typing, parsing, diagnostics,
+transformations, and evaluation as the retained Mini-Ash interpreter grows?
 
 ## Context
 
-Current Ash has no implemented language semantics. The intended phase result is
-not a disposable prototype: it is a retained single-file interpreter for a
-coherent pure-functional subset, with normative specification and tests.
-Component experiments performed before decisions remain disposable evidence.
+Current Ash has a retained single-file interpreter for its first coherent
+pure-functional subset, with a [normative specification](../../spec/README.md)
+and tests. Later Mini-Ash increments should extend that base rather than replace
+it with a disposable prototype. Component experiments performed before
+decisions remain disposable evidence.
 
 The initial feature pressure is:
 
@@ -269,16 +270,14 @@ A retained increment requires:
 
 ## Open questions
 
-- What exact surface program structure and entry point should the first
-  executable accept?
-- Which initial feature boundaries form coherent semantic proposals?
-- Which representation stages are justified by distinct invariants and
-  consumers?
-- Which parser organizations merit comparison against the growing corpus?
-- What concrete Rust encoding provides feature-local Core extension while
-  retaining useful exhaustive reasoning?
-- Which Mini-Ash typing and elaboration rules should be accepted from the strong
-  suggestions in DN-0006 through DN-0008?
+- Which next feature boundary forms a coherent semantic proposal while adding
+  enough pressure to evaluate the retained implementation?
+- How do the retained surface entry point, representation stages, parser,
+  elaborator, typed Core, and evaluator scale as the corpus grows?
+- When does a later feature justify refining a retained stage invariant or
+  architectural boundary rather than extending it locally?
+- Which later Mini-Ash typing and elaboration rules should be proposed from the
+  strong suggestions in DN-0006 through DN-0008?
 - Which richer internal mechanisms are justified before their surface exposure?
 - Which downstream pressures can be settled by analysis, and which require a
   disposable probe?

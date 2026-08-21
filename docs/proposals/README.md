@@ -13,4 +13,4 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Accepted changes
 
-- [CP-0001: First Mini-Ash Nucleus](CP-0001-first-mini-ash-nucleus.md)
+No change proposal is currently accepted and awaiting implementation.

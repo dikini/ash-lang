@@ -17,8 +17,10 @@ allocation, copying, suspension, and destruction visible enough to reason about?
 
 ## Context and scope
 
-Current Ash has no language or runtime semantics. Existing notes explore the
-pieces that would constrain this question:
+Current Ash has the pure language and runtime semantics defined by the
+[Mini-Ash specification](../../spec/README.md), but it has no resource-sensitive
+semantics or storage policy. Existing notes explore the pieces that would
+constrain this question:
 
 - [DN-0009](DN-0009-effects-handlers-and-continuations.md) owns effect rows,
   handlers, and continuation contracts;

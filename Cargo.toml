@@ -6,6 +6,9 @@ edition = "2024"
 rust-version = "1.97.1"
 publish = false
 
+[dependencies]
+num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
+
 [workspace]
 members = ["xtask"]
 resolver = "3"

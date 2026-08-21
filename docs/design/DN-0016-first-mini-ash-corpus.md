@@ -10,22 +10,27 @@
 
 ## Question
 
-What shared evidence should the first Mini-Ash corpus stratum provide before Ash
-accepts and retains a monomorphic pure-functional increment?
+What evidence did the first Mini-Ash corpus stratum provide for the retained
+monomorphic pure-functional increment, and which questions remain useful for
+later strata?
 
 ## Context
 
 [DN-0015](DN-0015-mini-ash-phase.md) directs Mini-Ash research through a growing
-corpus rather than an immediate retained walking skeleton. The first stratum
-combines primitive values, variables, immutable bindings, monomorphic functions,
-and applications because together they expose scope, evaluation order,
-typed representation, source provenance, and diagnostics.
+corpus. The first stratum combined primitive values, variables, immutable
+bindings, monomorphic functions, and applications because together they expose
+scope, evaluation order, typed representation, source provenance, and
+diagnostics. That stratum now has a retained implementation; the
+[current specification](../../spec/README.md), not this note or its evidence
+documents, defines its language behavior.
 
 The corpus is split into [linked evidence documents](mini-ash/first-stratum/)
 rather than placing grammar, typing, dynamics, diagnostics, and representation
 discussion in one note. Stable case IDs connect the documents. A case remains
 provisional until an accepted change proposal selects it as evidence for an
-implemented semantic increment.
+implemented semantic increment. The retained `V-001` through `V-008` cases and
+their rejection boundary have completed that lifecycle. Other probes and
+uncased alternatives in these documents remain informative.
 
 ## Constraints
 
@@ -144,18 +149,16 @@ first. A status does not accept syntax, semantics, or architecture.
 | [Parser architecture](mini-ash/first-stratum/comparisons/parser-architecture.md) | Complete | The provisional grammar, every valid source presentation, and `P-001` through `P-003` | At least two composable organizations are compared on locality, precedence, ambiguity, recovery, spans, diagnostics, and tooling pressure. |
 | [Component convergence](mini-ash/first-stratum/comparisons/component-convergence.md) | Complete | Completed component comparisons | The evidence identifies which choices require architectural decisions and records unresolved alternatives without selecting them implicitly. |
 | [Architectural decisions](../decisions/README.md) | Complete | The completed convergence record and five decision boundaries | AD-0004 through AD-0008 accept only the converged non-language choices and keep the listed syntax, semantics, and concrete implementation mechanisms unresolved. |
-| [First semantic proposal](../proposals/CP-0001-first-mini-ash-nucleus.md) | Accepted | Accepted specification method, component decisions, and `V-001` through `V-008` | CP-0001 defines the authorized semantic transition and evidence required for implementation without describing current Ash. |
-| [First implementation task](../tasks/TASK-0006-implement-first-mini-ash-nucleus.md) | Active | Accepted CP-0001 and AD-0004 through AD-0008 | TASK-0006 implements the executable, tests, specification, and documentation as one retained increment. |
+| [First retained Mini-Ash increment](../../spec/README.md) | Complete | Accepted specification and component decisions, plus `V-001` through `V-008` and the selected rejection boundary | The current specification, retained implementation, tests, and [`ash` tool documentation](../tools/ash.md) agree on one executable single-file increment. |
 
 The completed consistency review found no blocking disagreement in the named
-cases. Grouping parentheses erase consistently before typing and dynamics,
-X-003 has the product typing and reduction rules needed to derive its result,
-and every rejected case has a compatible stage and diagnostic obligation. The
-grammar admits a few uncased generalizations, including anonymous
-multi-parameter functions and products above arity two. Parser experiments may
-observe those forms, but only named cases carry static or dynamic expectations;
-the grammar must be narrowed or the extra forms specified before a semantic
-proposal relies on them.
+cases. The retained increment selected and narrowed the first-stratum boundary;
+its current grammar, typing, dynamics, and rejection behavior now live in the
+[normative specification](../../spec/README.md). The broader evidence corpus
+also records deliberately unretained probes such as product-domain operational
+functions, Boolean patterns, anonymous multi-parameter functions, and products
+above arity two. Those forms remain future design pressure and require a later
+semantic proposal before they can become current Ash.
 
 The railroad and sequent renderers still need the conformance updates recorded
 by [AD-0003](../decisions/AD-0003-formal-notation-fences.md). Those external
@@ -170,15 +173,17 @@ tool updates do not change the canonical Markdown or block component research.
 3. Accept the specification method and converged component architectures in
    separate decisions. This gate is complete through AD-0004 to AD-0008.
 4. Propose and accept the first user-visible semantic increment. This gate is
-   complete through CP-0001.
+   complete; Git retains the implemented proposal as transition evidence.
 5. Implement the accepted increment as a retained single-file executable. This
-   gate is active through TASK-0006.
+   gate is complete in the [current specification](../../spec/README.md),
+   retained implementation and tests, and [`ash` tool guide](../tools/ash.md).
 
 ## Open questions
 
-- Which concrete Rust encoding composes typed Core fragments while retaining
-  exhaustive validation and useful traversal?
-- Which concrete event and tree types implement AD-0005 without deciding trivia
-  or layout prematurely?
-- How should AD-0008's frame transitions compose by Core feature without one
-  monolithic transition function?
+- How far can the retained closed pure Core dialect and its operation-family
+  seam extend before later effects require a different composition boundary?
+- How do the retained event and tree types scale when later syntax adds layout,
+  patterns, products, or richer recovery obligations?
+- How should the retained first-order evaluator machine represent one-shot
+  handlers first, then any more complex continuation kinds required by later
+  semantics and typing?
