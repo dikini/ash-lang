@@ -6,9 +6,9 @@ identity, not spelling, to distinguish shadowed binders.
 
 ## Global scope
 
-Global definitions are sequential and nonrecursive. A definition can refer to
-earlier globals. Its own name and the names of later globals are not in scope in
-its body. The new global enters scope only after its complete definition.
+All global function names in one file form a simultaneous scope. Each global
+body can refer to itself, an earlier global, or a later global. The file result
+uses the same complete global scope.
 
 Two globals cannot have the same name. In an equational definition, the name in
 the external interface must equal the name at the equation head.
@@ -20,8 +20,34 @@ scope before its binder, so the binding is nonrecursive. The binder is visible
 in later bindings and in the block result. A local may shadow an earlier local
 or global. The stable identities keep the two definitions distinct.
 
+A `let rec ... and ...` group allocates every member identity before resolving
+any initializer. Every initializer therefore sees all members, and all members
+remain visible in the following block remainder. A member may shadow an outer
+binder, but two members of one group cannot have the same spelling.
+
 A function parameter is visible only in its body and may shadow an outer
 binder. Parentheses and other grouping syntax do not introduce a scope.
+
+Forward references exist only among file globals and members of one explicit
+local recursive group. An ordinary `let` does not see itself or a later local
+declaration.
+
+The executable test `resolution_global_recursive_scope_example_is_executable`
+checks mutual visibility across the two global presentations:
+
+```ash
+first : Unit -> Int
+first ignored = second ()
+
+fn second(ignored : Unit) -> Int {
+    let retain : Unit -> Int = fn(value) {
+        first value
+    }
+    42
+}
+
+first ()
+```
 
 ## Unresolved names
 

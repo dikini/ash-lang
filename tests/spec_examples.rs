@@ -19,6 +19,10 @@ const V002_OPERATIONAL: &str = include_str!("fixtures/first-stratum/valid/v002-o
 const V003: &str = include_str!("fixtures/first-stratum/valid/v003-local-shadowing.ash");
 const V004: &str = include_str!("fixtures/first-stratum/valid/v004-capture.ash");
 const V008: &str = include_str!("fixtures/first-stratum/valid/v008-mixed.ash");
+const RECURSIVE_GLOBAL: &str = include_str!("fixtures/recursion/valid/global-mutual.ash");
+const RECURSIVE_LOCAL: &str = include_str!("fixtures/recursion/valid/local-mutual.ash");
+const UNSAFE_RECURSIVE_INITIALIZER: &str =
+    include_str!("fixtures/recursion/type/unsafe-initializer.ash");
 const CURRIED_EQUATIONAL: &str =
     "add : Int -> Int -> Int\nadd left = fn(right) {\n    left + right\n}\n\nadd 20 22\n";
 const CONTEXTUAL_BLOCK: &str = "{\n    let constant : Unit -> Int = {\n        fn(ignored) {\n            1\n        }\n    }\n    constant ()\n}\n";
@@ -111,6 +115,47 @@ fn syntax_equational_global_example_v002_is_executable() {
 fn syntax_inline_operational_global_example_v002_is_executable() {
     assert_observation("spec-v002-operational.ash", V002_OPERATIONAL, "42", "Int");
     assert_documented("spec/syntax.md", V002_OPERATIONAL);
+}
+
+#[test]
+fn syntax_local_recursive_group_example_is_executable() {
+    assert_observation("spec-local-recursion.ash", RECURSIVE_LOCAL, "42", "Int");
+    assert_documented("spec/syntax.md", RECURSIVE_LOCAL);
+}
+
+#[test]
+fn resolution_global_recursive_scope_example_is_executable() {
+    assert_observation("spec-global-recursion.ash", RECURSIVE_GLOBAL, "42", "Int");
+    assert_documented("spec/name-resolution.md", RECURSIVE_GLOBAL);
+}
+
+#[test]
+fn static_semantics_rejects_unsafe_recursive_initialization() {
+    let failure = run("spec-unsafe-recursion.ash", UNSAFE_RECURSIVE_INITIALIZER)
+        .expect_err("recursive values require direct function initialization");
+    let PipelineFailure::Typing(TypeError::Source(actual)) = failure else {
+        panic!("unsafe recursive initialization should fail during typing")
+    };
+    assert_eq!(actual.reason, TypeReason::UnsafeRecursiveInitializer);
+    assert_documented("spec/static-semantics.md", UNSAFE_RECURSIVE_INITIALIZER);
+}
+
+#[test]
+fn dynamic_recursive_group_example_is_executable() {
+    assert_observation("spec-dynamic-recursion.ash", RECURSIVE_LOCAL, "42", "Int");
+    assert_documented("spec/dynamic-semantics.md", RECURSIVE_LOCAL);
+}
+
+#[test]
+fn tool_recursive_example_has_exact_cli_observation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg("tests/fixtures/recursion/valid/global-mutual.ash")
+        .output()
+        .expect("the documented executable should start");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : Int\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", RECURSIVE_GLOBAL);
 }
 
 #[test]

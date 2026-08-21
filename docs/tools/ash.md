@@ -43,6 +43,31 @@ Its exact standard output is:
 42 : Int
 ```
 
+Global functions have file-wide recursive scope. The executable test
+`tool_recursive_example_has_exact_cli_observation` runs this mutually recursive
+file, in which the earlier equational definition refers forward to the later
+inline operational definition:
+
+```ash
+first : Unit -> Int
+first ignored = second ()
+
+fn second(ignored : Unit) -> Int {
+    let retain : Unit -> Int = fn(value) {
+        first value
+    }
+    42
+}
+
+first ()
+```
+
+Its exact standard output is also:
+
+```text
+42 : Int
+```
+
 The executable test `tool_function_result_uses_opaque_rendering` runs a file
 whose result is a function:
 

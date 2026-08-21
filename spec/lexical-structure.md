@@ -8,7 +8,8 @@ not part of the source language.
 
 An identifier starts with an ASCII lowercase letter or underscore and continues
 with ASCII letters, decimal digits, or underscores. The reserved words `fn`,
-`let`, `Int`, `Bool`, `Unit`, `true`, and `false` cannot be identifiers.
+`let`, `rec`, `and`, `Int`, `Bool`, `Unit`, `true`, and `false` cannot be
+identifiers.
 
 An integer literal is either `0` or a nonzero decimal digit followed by zero or
 more decimal digits. Its value is the corresponding mathematical non-negative

@@ -19,8 +19,13 @@ equation ::= identifier binder "=" expression ;
 inline_operational_global ::=
   "fn" identifier "(" typed_binder ")" "->" type block ;
 
-block ::= "{" line_end { local_binding line_end } expression [ line_end ] "}" ;
+block ::= "{" line_end { local_declaration line_end } expression [ line_end ] "}" ;
+local_declaration ::= local_binding | recursive_binding_group ;
 local_binding ::= "let" identifier [ ":" type ] "=" expression ;
+recursive_binding_group ::=
+  "let" "rec" recursive_member
+  { line_end "and" recursive_member } ;
+recursive_member ::= identifier ":" type "=" expression ;
 function_expression ::= "fn" "(" binder ")" block ;
 
 expression ::= block | function_expression | equality_expression ;
@@ -53,8 +58,34 @@ line_end ::= /logical-newline-in-file-or-block-context/ ;
 `line_end` is the logical boundary defined by
 [lexical structure](lexical-structure.md#whitespace-and-logical-lines).
 Braces delimit blocks, and parentheses group expressions and types. A block
-contains sequential local bindings and one result expression. Neither the file
-nor a block uses a trailing semicolon.
+contains ordered local declarations and one result expression. An ordinary
+`let` is sequential. A `let rec` declaration is one simultaneous group; each
+following `and` member occupies another logical line. Neither the file nor a
+block uses a trailing semicolon.
+
+Every recursive member has a required type annotation. The grammar accepts an
+arbitrary initializer expression so static semantics can distinguish an unsafe
+recursive initializer from malformed syntax. Static semantics restricts the
+initializer to a direct anonymous function.
+
+The executable test `syntax_local_recursive_group_example_is_executable`
+checks a two-member recursive group. The second function retains a reference
+back to the first without calling it, so the program terminates with `42`:
+
+```ash
+{
+    let rec first : Unit -> Int = fn(ignored) {
+        second ()
+    }
+    and second : Unit -> Int = fn(ignored) {
+        let retain : Unit -> Int = fn(value) {
+            first value
+        }
+        42
+    }
+    first ()
+}
+```
 
 ## Precedence and associativity
 

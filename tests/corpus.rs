@@ -110,6 +110,20 @@ const VALID_CASES: &[ValidCase] = &[
         expected_type: "Int",
         expected_stdout: "42 : Int\n",
     },
+    ValidCase {
+        id: "recursion-global-mutual",
+        path: "tests/fixtures/recursion/valid/global-mutual.ash",
+        expected_value: "42",
+        expected_type: "Int",
+        expected_stdout: "42 : Int\n",
+    },
+    ValidCase {
+        id: "recursion-local-mutual",
+        path: "tests/fixtures/recursion/valid/local-mutual.ash",
+        expected_value: "42",
+        expected_type: "Int",
+        expected_stdout: "42 : Int\n",
+    },
 ];
 
 const INVALID_CASES: &[InvalidCase] = &[
@@ -249,18 +263,6 @@ const INVALID_CASES: &[InvalidCase] = &[
         reason: ExpectedReason::Resolution(ResolveReason::EquationNameMismatch),
     },
     InvalidCase {
-        id: "excluded-recursion",
-        path: "tests/fixtures/first-stratum/resolve/excluded-recursion.ash",
-        stage: Stage::Resolution,
-        reason: ExpectedReason::Resolution(ResolveReason::UnknownName),
-    },
-    InvalidCase {
-        id: "excluded-forward-reference",
-        path: "tests/fixtures/first-stratum/resolve/excluded-forward-reference.ash",
-        stage: Stage::Resolution,
-        reason: ExpectedReason::Resolution(ResolveReason::UnknownName),
-    },
-    InvalidCase {
         id: "T-001",
         path: "tests/fixtures/first-stratum/type/t001-definition-result.ash",
         stage: Stage::Typing,
@@ -313,6 +315,12 @@ const INVALID_CASES: &[InvalidCase] = &[
         path: "tests/fixtures/first-stratum/type/function-non-function-context.ash",
         stage: Stage::Typing,
         reason: ExpectedReason::Typing(TypeReason::FunctionNeedsContext),
+    },
+    InvalidCase {
+        id: "recursion-unsafe-initializer",
+        path: "tests/fixtures/recursion/type/unsafe-initializer.ash",
+        stage: Stage::Typing,
+        reason: ExpectedReason::Typing(TypeReason::UnsafeRecursiveInitializer),
     },
 ];
 
