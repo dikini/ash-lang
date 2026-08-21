@@ -91,6 +91,9 @@ returns to the proposal before work continues.
   below approved that selection for the first implementation increment.
 - Product implementation has started with the arbitrary-precision integer
   boundary.
+- The typed pure Core families and their consuming independent validator are
+  implemented in the task worktree. The composition evidence below retains
+  handwritten closed dialect wrappers.
 
 ### Dependency review: 2026-08-21
 
@@ -196,6 +199,86 @@ The accepted semantics require arbitrary precision. The resolved dependency
 review supports retaining `num-bigint` 0.5.1 behind an Ash-owned integer type.
 It also found reviewed unsafe float conversion in the transitive `num-traits`
 package in addition to the `num-bigint` sites noted during preflight.
+
+The Core composition gate compared the current handwritten assembly with
+generic injection helpers. Eight small `CoreBuilder` methods in
+`core::dialect` are the only construction sites that wrap feature-owned
+payloads. Generic injection would add traits and type parameters without
+removing the dialect's required closed dispatch, so the implementation retains
+the handwritten assembly.
+
+The production exhaustive-match sites are binder collection, node-type
+validation, value validation, computation validation, scope traversal, and
+child traversal in `core::validate`. The pure-feature probe added a test-only
+`mock_feature` module to a shadow dialect that explicitly mirrors the value,
+variable, and computation layers. The addition changed exactly six sites: the
+feature module, the `ShadowExprKind` closed assembly, the `mock_shadow`
+construction site, and the top-level validation, traversal, and consumer
+dispatches. Existing feature assembly, validation helpers, and payload modules
+did not change. The probe checks feature-owned structural types and exact child
+handles: functions expose one child; bindings, applications, and primitives
+expose two; literals, variables, and the mock expose none. Temporarily omitting
+the mock arm from `consume_shadow` produced Rust error `E0004` for the uncovered
+`ShadowExprKind::Mock` case; restoring the arm made the architecture test pass.
+
+The separate operation-family probe defines an uninhabited test-only pure
+operation type and a mock future operation family. A test-only typed
+`Computation<F>` boundary contains either a production `PureComputation` or an
+operation from `F`, with a structural result type on both arms. Its pure
+instantiation contains a validated primitive computation, and the compiler
+treats the pure pattern as irrefutable because the pure operation type has no
+inhabitants. The mock request crosses the operation arm of the same boundary
+without changing a pure feature payload or adding an operation variant to
+`PureExprKind`. This is compile-time evidence for the future seam only;
+Mini-Ash Core contains no effect operation, continuation, handler, CPS region,
+or placeholder `Impure` node.
+
+An arena-local numeric index alone allowed a handle from one `CoreBuilder` to
+alias the same index in another builder. `NodeId` now pairs that index with a
+lazily allocated process-local arena identity. The allocator reserves its
+maximum value as an exhaustion sentinel. Construction rejects a foreign root,
+independent validation rejects a foreign child, and validated lookup rejects a
+foreign handle even when its numeric index exists locally. The identity remains
+an implementation handle, not a stable language identity.
+
+The first scope pass revisited a shared child once per incoming path. A chain in
+which each primitive used its predecessor twice therefore expanded
+exponentially. The validator now computes free-binder requirements once per
+arena node in iterative DAG postorder and retains one occurrence handle for
+each required binder. A 65-node doubled-edge chain records exactly 65 analyzed
+nodes. Requirement-map copying costs the sum of copied map sizes and can remain
+quadratic for an adversarial DAG with many distinct free binders; it no longer
+expands shared paths exponentially.
+
+Public `Type` and `Origin` values use recursive ownership outside Core. Core
+admission now consumes and rebuilds both payloads iteratively before allocating
+an arena, constructing a binder, or storing a node. The current replaceable
+resource budget admits 128 recursive wrappers, aligned with the parser's
+structural budget; this is compiler resource behavior rather than Ash
+semantics. Exact-limit Type, Generated Origin, and Related Origin payloads
+validate and drop on a 256 KiB stack. Payloads at 129 and 50,000 wrappers return
+distinct typed construction failures, and the rejection path dismantles both
+inputs iteratively.
+
+The complete resolver-assigned binder namespace is reserved transactionally in
+`CoreBuilder` before binder construction starts. Generated binders skip the
+whole reserved set, including sparse high identities. Resolved materialization
+requires a reservation and succeeds once per identity; later reservation is a
+typed phase failure. Failed payload admission leaves the reserved namespace
+intact but does not materialize the binder, so a corrected payload can be
+retried. Independent validation still rejects a cloned binder used at two
+definition sites.
+
+Numeric binder identity alone allowed a `TypedBinder` from one `CoreBuilder` to
+be inserted into another builder whose next generated binder had the same
+number. `TypedBinder` now carries a private arena capability established by
+successful binder construction after payload admission. Function and binding
+construction reject a capability from another arena without adding a node or
+consuming a binder identity. A 50,000-wrapper payload probe on a 256 KiB stack
+confirms that payload resource failures take precedence and dismantle their
+inputs before the foreign-capability error. Independent validation also rejects
+a privately corrupted binder capability under its existing scope-invariant
+reason, while same-arena cloned definition reuse remains independently rejected.
 
 ## Deviations
 

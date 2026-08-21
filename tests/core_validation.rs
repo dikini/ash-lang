@@ -1,0 +1,575 @@
+use ash::{
+    core::{
+        BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, Primitive, PureComputation,
+        PureExprKind, PureValue, ValidationReason, validate,
+    },
+    integer::Integer,
+    source::{ByteRange, GeneratedReason, Origin, SourceFile},
+    types::Type,
+};
+
+#[test]
+fn structural_types_render_with_unambiguous_function_association() {
+    assert_eq!(Type::Int.to_string(), "Int");
+    assert_eq!(Type::Bool.to_string(), "Bool");
+    assert_eq!(Type::Unit.to_string(), "Unit");
+
+    let curried = Type::Function(
+        Box::new(Type::Int),
+        Box::new(Type::Function(Box::new(Type::Bool), Box::new(Type::Unit))),
+    );
+    assert_eq!(curried.to_string(), "Int -> Bool -> Unit");
+
+    let higher_order = Type::Function(
+        Box::new(Type::Function(Box::new(Type::Int), Box::new(Type::Bool))),
+        Box::new(Type::Unit),
+    );
+    assert_eq!(higher_order.to_string(), "(Int -> Bool) -> Unit");
+}
+
+fn source(text: &str) -> SourceFile {
+    SourceFile::new("test.ash", text).expect("test source should be representable")
+}
+
+fn whole_origin(source: &SourceFile) -> Origin {
+    let end = u32::try_from(source.text().len()).expect("test source should fit u32");
+    let range = ByteRange::new(0, end).expect("ordered test range");
+    Origin::Source(
+        source
+            .span(range)
+            .expect("test range should belong to source"),
+    )
+}
+
+fn integer(text: &str) -> Integer {
+    Integer::parse_decimal(text).expect("test integer should be valid")
+}
+
+fn function_type(depth: usize) -> Type {
+    let mut ty = Type::Unit;
+    for _ in 0..depth {
+        ty = Type::Function(Box::new(Type::Unit), Box::new(ty));
+    }
+    ty
+}
+
+fn generated_origin(source: &SourceFile, depth: usize) -> Origin {
+    let mut origin = whole_origin(source);
+    for _ in 0..depth {
+        origin = Origin::Generated {
+            cause: Box::new(origin),
+            reason: GeneratedReason::TypeChecking,
+        };
+    }
+    origin
+}
+
+#[test]
+fn rejects_cross_builder_binders_without_consuming_receiver_state() {
+    let file = source("()");
+    let origin = whole_origin(&file);
+    let mut owner = CoreBuilder::new();
+    let foreign = owner
+        .binder(Type::Unit, origin.clone())
+        .expect("owner binder");
+
+    let mut function_receiver = CoreBuilder::new();
+    let body = function_receiver
+        .unit(Type::Unit, origin.clone())
+        .expect("receiver body");
+    assert_eq!(
+        function_receiver.function(
+            foreign.clone(),
+            body,
+            Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+            origin.clone(),
+        ),
+        Err(BuildError::ForeignBinder)
+    );
+    let first_generated = function_receiver
+        .binder(Type::Unit, origin.clone())
+        .expect("rejection does not consume a binder identity");
+    assert_eq!(first_generated.id().value(), 0);
+    let program = validate(
+        function_receiver
+            .finish(body)
+            .expect("only the original body node remains"),
+        &[&file],
+    )
+    .expect("the receiver remains valid");
+    assert_eq!(program.node_count(), 1);
+
+    let mut binding_receiver = CoreBuilder::new();
+    let unit = binding_receiver
+        .unit(Type::Unit, origin.clone())
+        .expect("receiver unit");
+    assert_eq!(
+        binding_receiver.binding(foreign, unit, unit, Type::Unit, origin.clone()),
+        Err(BuildError::ForeignBinder)
+    );
+    let first_generated = binding_receiver
+        .binder(Type::Unit, origin)
+        .expect("binding rejection does not consume a binder identity");
+    assert_eq!(first_generated.id().value(), 0);
+    let program = validate(
+        binding_receiver
+            .finish(unit)
+            .expect("only the original unit node remains"),
+        &[&file],
+    )
+    .expect("the binding receiver remains valid");
+    assert_eq!(program.node_count(), 1);
+}
+
+#[test]
+fn foreign_binder_rejection_admits_payloads_before_checking_capability() {
+    std::thread::Builder::new()
+        .name("foreign-binder-payload-order".to_owned())
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let file = source("()");
+            let origin = whole_origin(&file);
+            let mut owner = CoreBuilder::new();
+            let foreign = owner
+                .binder(Type::Unit, origin.clone())
+                .expect("owner binder");
+            let mut receiver = CoreBuilder::new();
+            let body = receiver
+                .unit(Type::Unit, origin.clone())
+                .expect("receiver body");
+
+            assert_eq!(
+                receiver.function(
+                    foreign.clone(),
+                    body,
+                    function_type(50_000),
+                    generated_origin(&file, 50_000),
+                ),
+                Err(BuildError::TypeDepthExceeded)
+            );
+            assert_eq!(
+                receiver.function(
+                    foreign,
+                    body,
+                    function_type(CORE_PAYLOAD_DEPTH_LIMIT),
+                    generated_origin(&file, CORE_PAYLOAD_DEPTH_LIMIT),
+                ),
+                Err(BuildError::ForeignBinder)
+            );
+            let first_generated = receiver
+                .binder(Type::Unit, origin)
+                .expect("rejections leave binder allocation untouched");
+            assert_eq!(first_generated.id().value(), 0);
+            let program = validate(receiver.finish(body).expect("receiver root"), &[&file])
+                .expect("receiver remains valid");
+            assert_eq!(program.node_count(), 1);
+        })
+        .expect("test thread should start")
+        .join()
+        .expect("foreign payload rejection should remain stack safe");
+}
+
+#[test]
+fn validates_all_pure_value_and_computation_families() {
+    let file = source("core");
+    let origin = whole_origin(&file);
+
+    let mut builder = CoreBuilder::new();
+    let one = builder
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("small arena");
+    let two = builder
+        .integer(integer("2"), Type::Int, origin.clone())
+        .expect("small arena");
+    let sum = builder
+        .primitive(Primitive::Add, one, two, Type::Int, origin.clone())
+        .expect("small arena");
+    let binder = builder
+        .binder(Type::Int, origin.clone())
+        .expect("small binder set");
+    let variable = builder
+        .variable(binder.id(), Type::Int, origin.clone())
+        .expect("small arena");
+    let function = builder
+        .function(
+            binder.clone(),
+            variable,
+            Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+            origin.clone(),
+        )
+        .expect("small arena");
+    let application = builder
+        .application(function, sum, Type::Int, origin.clone())
+        .expect("small arena");
+    let result_binder = builder
+        .binder(Type::Int, origin.clone())
+        .expect("small binder set");
+    let result_variable = builder
+        .variable(result_binder.id(), Type::Int, origin.clone())
+        .expect("small arena");
+    let root = builder
+        .binding(
+            result_binder,
+            application,
+            result_variable,
+            Type::Int,
+            origin.clone(),
+        )
+        .expect("small arena");
+
+    let validated = validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&file],
+    )
+    .expect("well-typed Core should validate");
+
+    assert_eq!(validated.root(), root);
+    assert_eq!(validated.node(root).expect("validated root").ty, Type::Int);
+    assert!(matches!(
+        validated.node(root).expect("validated root").kind,
+        PureExprKind::Computation(PureComputation::Bind(_))
+    ));
+    assert_eq!(validated.node_count(), 8);
+    let function_node = validated.node(function).expect("validated function");
+    let PureExprKind::Value(PureValue::Function(function_node)) = &function_node.kind else {
+        panic!("expected function payload");
+    };
+    assert_eq!(function_node.parameter().ty(), &Type::Int);
+    assert_eq!(function_node.parameter().origin(), &origin);
+
+    for (ty, build) in [
+        (Type::Bool, 0_u8),
+        (Type::Unit, 1_u8),
+        (Type::Bool, 2_u8),
+        (Type::Int, 3_u8),
+    ] {
+        let mut builder = CoreBuilder::new();
+        let root = match build {
+            0 => builder.boolean(true, ty.clone(), origin.clone()),
+            1 => builder.unit(ty.clone(), origin.clone()),
+            2 => {
+                let left = builder
+                    .integer(integer("1"), Type::Int, origin.clone())
+                    .expect("small arena");
+                let right = builder
+                    .integer(integer("1"), Type::Int, origin.clone())
+                    .expect("small arena");
+                builder.primitive(Primitive::Equal, left, right, ty.clone(), origin.clone())
+            }
+            _ => {
+                let left = builder
+                    .integer(integer("2"), Type::Int, origin.clone())
+                    .expect("small arena");
+                let right = builder
+                    .integer(integer("3"), Type::Int, origin.clone())
+                    .expect("small arena");
+                builder.primitive(Primitive::Multiply, left, right, ty.clone(), origin.clone())
+            }
+        }
+        .expect("small arena");
+        let validated = validate(
+            builder.finish(root).expect("root belongs to arena"),
+            &[&file],
+        )
+        .expect("well-typed value should validate");
+        let kind = &validated.node(root).expect("validated root").kind;
+        assert!(matches!(
+            kind,
+            PureExprKind::Value(PureValue::Boolean(_))
+                | PureExprKind::Value(PureValue::Unit(_))
+                | PureExprKind::Computation(PureComputation::Primitive(_))
+        ));
+    }
+}
+
+#[test]
+fn binding_initializer_does_not_see_the_binder_it_defines() {
+    let file = source("let x = x; x");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let binder = builder
+        .binder(Type::Int, origin.clone())
+        .expect("small binder set");
+    let initializer = builder
+        .variable(binder.id(), Type::Int, origin.clone())
+        .expect("small arena");
+    let body = builder
+        .variable(binder.id(), Type::Int, origin.clone())
+        .expect("small arena");
+    let root = builder
+        .binding(binder, initializer, body, Type::Int, origin)
+        .expect("small arena");
+
+    let error = validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&file],
+    )
+    .expect_err("binding initializer must use the incoming scope");
+    assert_eq!(error.reason(), ValidationReason::Scope);
+    assert_eq!(error.node(), Some(initializer));
+}
+
+#[test]
+fn rejects_reusing_one_binder_identity_at_two_definition_sites() {
+    let file = source("let x = (); let x = (); ()");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let binder = builder
+        .binder(Type::Unit, origin.clone())
+        .expect("small binder set");
+    let unit = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("small arena");
+    let inner = builder
+        .binding(binder.clone(), unit, unit, Type::Unit, origin.clone())
+        .expect("small arena");
+    let root = builder
+        .binding(binder, unit, inner, Type::Unit, origin)
+        .expect("small arena");
+
+    let error = validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&file],
+    )
+    .expect_err("a binder identity must name one definition site");
+    assert_eq!(error.reason(), ValidationReason::Scope);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn shared_variable_reached_only_under_its_binder_is_valid() {
+    let file = source("let x = 1; x + x");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let binder = builder
+        .binder(Type::Int, origin.clone())
+        .expect("small binder set");
+    let initializer = builder
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("small arena");
+    let variable = builder
+        .variable(binder.id(), Type::Int, origin.clone())
+        .expect("small arena");
+    let sum = builder
+        .primitive(
+            Primitive::Add,
+            variable,
+            variable,
+            Type::Int,
+            origin.clone(),
+        )
+        .expect("small arena");
+    let root = builder
+        .binding(binder, initializer, sum, Type::Int, origin)
+        .expect("small arena");
+
+    validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&file],
+    )
+    .expect("both shared paths introduce the binder");
+}
+
+#[test]
+fn shared_variable_reached_inside_and_outside_its_binder_is_rejected_at_the_occurrence() {
+    let file = source("malformed shared variable");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let binder = builder
+        .binder(Type::Int, origin.clone())
+        .expect("small binder set");
+    let variable = builder
+        .variable(binder.id(), Type::Int, origin.clone())
+        .expect("small arena");
+    let root = builder
+        .binding(binder, variable, variable, Type::Int, origin)
+        .expect("small arena");
+
+    let error = validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&file],
+    )
+    .expect_err("the initializer path does not introduce the binder");
+    assert_eq!(error.reason(), ValidationReason::Scope);
+    assert_eq!(error.node(), Some(variable));
+}
+
+#[test]
+fn rejects_i001_variable_outside_its_binder_scope() {
+    let file = source("x");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let binder = builder
+        .binder(Type::Int, origin.clone())
+        .expect("small binder set");
+    let root = builder
+        .variable(binder.id(), Type::Int, origin)
+        .expect("small arena");
+
+    let error = validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&file],
+    )
+    .expect_err("free Core variable must be rejected");
+    assert_eq!(error.reason(), ValidationReason::Scope);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn rejects_i002_primitive_with_wrong_result_type() {
+    let file = source("1 + 2");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let left = builder
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("small arena");
+    let right = builder
+        .integer(integer("2"), Type::Int, origin.clone())
+        .expect("small arena");
+    let root = builder
+        .primitive(Primitive::Add, left, right, Type::Bool, origin)
+        .expect("small arena");
+
+    let error = validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&file],
+    )
+    .expect_err("mis-typed primitive must be rejected");
+    assert_eq!(error.reason(), ValidationReason::NodeType);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn rejects_i003_application_domain_disagreement() {
+    let file = source("f true");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let parameter = builder
+        .binder(Type::Int, origin.clone())
+        .expect("small binder set");
+    let body = builder
+        .variable(parameter.id(), Type::Int, origin.clone())
+        .expect("small arena");
+    let function = builder
+        .function(
+            parameter,
+            body,
+            Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+            origin.clone(),
+        )
+        .expect("small arena");
+    let argument = builder
+        .boolean(true, Type::Bool, origin.clone())
+        .expect("small arena");
+    let root = builder
+        .application(function, argument, Type::Int, origin)
+        .expect("small arena");
+
+    let error = validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&file],
+    )
+    .expect_err("application domain mismatch must be rejected");
+    assert_eq!(error.reason(), ValidationReason::ApplicationType);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn rejects_i004_origin_outside_the_admitted_source_set() {
+    let admitted = source("1");
+    let foreign = source("2");
+    let mut builder = CoreBuilder::new();
+    let root = builder
+        .integer(integer("1"), Type::Int, whole_origin(&foreign))
+        .expect("small arena");
+
+    let error = validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&admitted],
+    )
+    .expect_err("foreign provenance must be rejected");
+    assert_eq!(error.reason(), ValidationReason::Provenance);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn rejects_related_provenance_that_crosses_source_files() {
+    let primary = source("1");
+    let related = source("2");
+    let origin = Origin::Related {
+        primary: Box::new(whole_origin(&primary)),
+        related: vec![whole_origin(&related).primary_span()],
+    };
+    let mut builder = CoreBuilder::new();
+    let root = builder
+        .integer(integer("1"), Type::Int, origin)
+        .expect("small arena");
+
+    let error = validate(
+        builder.finish(root).expect("root belongs to arena"),
+        &[&primary, &related],
+    )
+    .expect_err("relations must stay within the primary source file");
+    assert_eq!(error.reason(), ValidationReason::Provenance);
+}
+
+#[test]
+fn rejects_a_root_handle_from_another_arena_even_when_its_index_exists() {
+    let file = source("()");
+    let origin = whole_origin(&file);
+    let mut first = CoreBuilder::new();
+    let foreign_root = first
+        .unit(Type::Unit, origin.clone())
+        .expect("small first arena");
+    let mut second = CoreBuilder::new();
+    let _local_root = second.unit(Type::Unit, origin).expect("small second arena");
+
+    let error = second
+        .finish(foreign_root)
+        .expect_err("a root handle must identify its own arena");
+    assert_eq!(error, ash::core::BuildError::InvalidNodeId);
+}
+
+#[test]
+fn validation_rejects_a_foreign_child_even_when_its_index_exists_locally() {
+    let file = source("1 + 2");
+    let origin = whole_origin(&file);
+    let mut first = CoreBuilder::new();
+    let foreign_left = first
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("small first arena");
+
+    let mut second = CoreBuilder::new();
+    let _local_left = second
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("small second arena");
+    let right = second
+        .integer(integer("2"), Type::Int, origin.clone())
+        .expect("small second arena");
+    let root = second
+        .primitive(Primitive::Add, foreign_left, right, Type::Int, origin)
+        .expect("unchecked construction accepts child handles");
+    let error = validate(second.finish(root).expect("local root"), &[&file])
+        .expect_err("validation must reject a child from another arena");
+    assert_eq!(error.reason(), ValidationReason::NodeBounds);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn validated_lookup_rejects_a_handle_from_another_arena() {
+    let file = source("()");
+    let origin = whole_origin(&file);
+    let mut first = CoreBuilder::new();
+    let first_root = first
+        .unit(Type::Unit, origin.clone())
+        .expect("small first arena");
+    let first = validate(first.finish(first_root).expect("local root"), &[&file])
+        .expect("valid first arena");
+
+    let mut second = CoreBuilder::new();
+    let second_root = second.unit(Type::Unit, origin).expect("small second arena");
+    let _second = validate(second.finish(second_root).expect("local root"), &[&file])
+        .expect("valid second arena");
+
+    assert!(first.node(second_root).is_none());
+}
