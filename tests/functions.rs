@@ -260,7 +260,7 @@ fn operational_returned_function_argument_uses_the_inner_domain_provenance() {
 }
 
 #[test]
-fn both_v002_presentations_converge_to_function_and_binding_core_with_distinct_origins() {
+fn both_v002_presentations_converge_to_function_and_recursive_core_with_distinct_origins() {
     let equational_source =
         SourceFile::new("v002-equational.ash", V002_EQUATIONAL).expect("fixture should fit");
     let operational_source =
@@ -276,21 +276,21 @@ fn both_v002_presentations_converge_to_function_and_binding_core_with_distinct_o
     let operational_root = operational_core
         .node(operational_core.root())
         .expect("root");
-    let PureExprKind::Computation(PureComputation::Bind(equational_binding)) =
+    let PureExprKind::Computation(PureComputation::RecursiveBind(equational_group)) =
         &equational_root.kind
     else {
-        panic!("expected an outer global binding");
+        panic!("expected an outer recursive group");
     };
-    let PureExprKind::Computation(PureComputation::Bind(operational_binding)) =
+    let PureExprKind::Computation(PureComputation::RecursiveBind(operational_group)) =
         &operational_root.kind
     else {
-        panic!("expected an outer global binding");
+        panic!("expected an outer recursive group");
     };
     let equational_function = equational_core
-        .node(equational_binding.initializer())
+        .node(equational_group.members()[0].initializer())
         .expect("equational function");
     let operational_function = operational_core
-        .node(operational_binding.initializer())
+        .node(operational_group.members()[0].initializer())
         .expect("operational function");
     assert!(matches!(
         equational_function.kind,
@@ -457,15 +457,15 @@ fn application_trace_enters_function_before_argument_then_runs_the_closure_body(
     let program = resolved(&source);
     let (validated, _) = validated_program(&source, &program);
     let root = validated.node(validated.root()).expect("global binding");
-    let PureExprKind::Computation(PureComputation::Bind(binding)) = &root.kind else {
-        panic!("expected global binding");
+    let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &root.kind else {
+        panic!("expected global recursive group");
     };
-    let application = validated.node(binding.body()).expect("application");
+    let application = validated.node(group.body()).expect("application");
     let PureExprKind::Computation(PureComputation::Apply(application)) = &application.kind else {
         panic!("expected application Core");
     };
     let function = validated
-        .node(binding.initializer())
+        .node(group.members()[0].initializer())
         .expect("function initializer");
     let PureExprKind::Value(PureValue::Function(function)) = &function.kind else {
         panic!("expected function Core");
@@ -489,8 +489,7 @@ fn application_trace_enters_function_before_argument_then_runs_the_closure_body(
         entered,
         vec![
             validated.root(),
-            binding.initializer(),
-            binding.body(),
+            group.body(),
             application.function(),
             application.argument(),
             function.body(),

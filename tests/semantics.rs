@@ -67,6 +67,22 @@ fn assert_exact_core(
                 work.push((before.initializer(), after.initializer()));
             }
             (
+                PureExprKind::Computation(PureComputation::RecursiveBind(before)),
+                PureExprKind::Computation(PureComputation::RecursiveBind(after)),
+            ) => {
+                assert_eq!(after.members().len(), before.members().len());
+                for (before_member, after_member) in before.members().iter().zip(after.members()) {
+                    assert_eq!(after_member.binder().id(), before_member.binder().id());
+                    assert_eq!(after_member.binder().ty(), before_member.binder().ty());
+                    assert_eq!(
+                        after_member.binder().origin(),
+                        before_member.binder().origin()
+                    );
+                    work.push((before_member.initializer(), after_member.initializer()));
+                }
+                work.push((before.body(), after.body()));
+            }
+            (
                 PureExprKind::Computation(PureComputation::Apply(before)),
                 PureExprKind::Computation(PureComputation::Apply(after)),
             ) => {
@@ -108,6 +124,169 @@ fn elaborated(source: &SourceFile) -> ash::core::ValidatedProgram {
         &[source],
     )
     .expect("elaborated Core should validate")
+}
+
+fn recursive_machine_core() -> (SourceFile, ash::core::ValidatedProgram) {
+    let source =
+        SourceFile::new("recursive-machine.ash", "recursive core").expect("test source should fit");
+    let span = source
+        .span(ash::source::ByteRange::new(0, 14).expect("ordered range"))
+        .expect("source span");
+    let origin = Origin::Source(span);
+    let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+    let mut builder = CoreBuilder::new();
+    let first = builder
+        .binder(function_type.clone(), origin.clone())
+        .expect("first binder");
+    let second = builder
+        .binder(function_type.clone(), origin.clone())
+        .expect("second binder");
+    let first_parameter = builder
+        .binder(Type::Unit, origin.clone())
+        .expect("first parameter");
+    let second_use = builder
+        .variable(second.id(), function_type.clone(), origin.clone())
+        .expect("second occurrence");
+    let first_argument = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("first argument");
+    let first_body = builder
+        .application(second_use, first_argument, Type::Int, origin.clone())
+        .expect("first body");
+    let first_function = builder
+        .function(
+            first_parameter,
+            first_body,
+            function_type.clone(),
+            origin.clone(),
+        )
+        .expect("first function");
+    let second_parameter = builder
+        .binder(Type::Unit, origin.clone())
+        .expect("second parameter");
+    let first_use = builder
+        .variable(first.id(), function_type.clone(), origin.clone())
+        .expect("first occurrence");
+    let forty_two = builder
+        .integer(
+            ash::integer::Integer::parse_decimal("42").expect("valid integer"),
+            Type::Int,
+            origin.clone(),
+        )
+        .expect("second result");
+    let retained_first = builder
+        .binder(function_type.clone(), origin.clone())
+        .expect("retained alias");
+    let second_body = builder
+        .binding(
+            retained_first,
+            first_use,
+            forty_two,
+            Type::Int,
+            origin.clone(),
+        )
+        .expect("second body");
+    let second_function = builder
+        .function(
+            second_parameter,
+            second_body,
+            function_type.clone(),
+            origin.clone(),
+        )
+        .expect("second function");
+    let entry = builder
+        .variable(first.id(), function_type, origin.clone())
+        .expect("entry occurrence");
+    let entry_argument = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("entry argument");
+    let result = builder
+        .application(entry, entry_argument, Type::Int, origin.clone())
+        .expect("entry application");
+    let root = builder
+        .recursive_binding(
+            vec![(first, first_function), (second, second_function)],
+            result,
+            Type::Int,
+            origin,
+        )
+        .expect("recursive group");
+    let validated = validate(builder.finish(root).expect("root"), &[&source])
+        .expect("recursive machine Core should validate");
+    (source, validated)
+}
+
+#[test]
+fn recursive_machine_evaluates_mutual_function_templates() {
+    let (_source, program) = recursive_machine_core();
+
+    let evaluation = evaluate(&program).expect("recursive group should evaluate");
+
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn recursive_machine_evaluates_a_self_reference() {
+    let source = SourceFile::new(
+        "recursive-self.ash",
+        "{\nlet rec self : Unit -> Int = fn(ignored) {\nlet retain : Unit -> Int = self\n42\n}\nself ()\n}\n",
+    )
+    .expect("test source should fit");
+    let program = elaborated(&source);
+
+    let evaluation = evaluate(&program).expect("recursive self lookup should evaluate");
+
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn identity_traversal_preserves_recursive_groups() {
+    let (source, before) = recursive_machine_core();
+
+    let after = validate(
+        identity_traversal(&before).expect("recursive Core should traverse"),
+        &[&source],
+    )
+    .expect("rebuilt recursive Core should validate");
+
+    let remapped = assert_exact_core(&before, &after);
+    assert_eq!(remapped.len(), before.node_count());
+    assert_eq!(
+        evaluate(&after)
+            .expect("rebuilt Core should run")
+            .value
+            .to_string(),
+        "42"
+    );
+}
+
+#[test]
+fn recursive_group_survives_literal_folding_and_independent_validation() {
+    let source = SourceFile::new(
+        "recursive-fold.ash",
+        "{\nlet rec answer : Unit -> Int = fn(ignored) {\n20 + 22\n}\nanswer ()\n}\n",
+    )
+    .expect("test source should fit");
+    let before = elaborated(&source);
+    let after = validate(
+        fold_literal_primitives(&before).expect("recursive Core should transform"),
+        &[&source],
+    )
+    .expect("transformed recursive Core should validate independently");
+
+    let root = after.node(after.root()).expect("recursive root");
+    assert!(matches!(
+        root.kind,
+        PureExprKind::Computation(PureComputation::RecursiveBind(_))
+    ));
+    assert!(after.node_count() < before.node_count());
+    assert_eq!(
+        evaluate(&after)
+            .expect("folded recursive Core should evaluate")
+            .value
+            .to_string(),
+        "42"
+    );
 }
 
 #[test]

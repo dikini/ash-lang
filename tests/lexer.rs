@@ -13,6 +13,23 @@ fn token_kinds(source: &SourceFile) -> Vec<TokenKind> {
     lexed.tokens.into_iter().map(|token| token.kind).collect()
 }
 
+#[test]
+fn recognizes_recursion_reserved_words() {
+    let source = SourceFile::new("recursion-words.ash", "rec and record android")
+        .expect("the token source should fit");
+
+    assert_eq!(
+        token_kinds(&source),
+        vec![
+            TokenKind::Rec,
+            TokenKind::And,
+            TokenKind::Identifier("record".into()),
+            TokenKind::Identifier("android".into()),
+            TokenKind::EndOfFile,
+        ]
+    );
+}
+
 fn assert_range(token: &Token, start: u32, end: u32) {
     assert_eq!(token.span.range().start(), start);
     assert_eq!(token.span.range().end(), end);

@@ -5,9 +5,10 @@ describes exactly the implemented language and runtime behavior.
 
 ## Current Ash
 
-Ash currently has one retained language increment: Mini-Ash, a single-file,
-monomorphic, pure-functional language. Every accepted file contains zero or
-more sequential function definitions followed by one result expression.
+Ash currently implements Mini-Ash, a single-file, monomorphic, pure-functional
+language. Every accepted file contains zero or more mutually visible global
+function definitions followed by one result expression. Blocks also support
+sequential bindings and explicit recursive function groups.
 
 The specification is split by concern:
 

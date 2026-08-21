@@ -7,8 +7,9 @@ use crate::{
         ApplicationExpr, BinaryExpr, EquationalGlobal, FunctionExpr, FunctionType,
         InlineOperationalGlobal, SurfaceBinder, SurfaceBinding, SurfaceBlock, SurfaceDefinition,
         SurfaceDefinitionKind, SurfaceEquation, SurfaceExpr, SurfaceExprKind,
-        SurfaceExternalInterface, SurfaceInlineOperationalHeader, SurfaceName, SurfaceProgram,
-        SurfaceType, SurfaceTypeKind, SurfaceTypedBinder,
+        SurfaceExternalInterface, SurfaceInlineOperationalHeader, SurfaceLocalDeclaration,
+        SurfaceName, SurfaceProgram, SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceType,
+        SurfaceTypeKind, SurfaceTypedBinder,
     },
 };
 
@@ -223,8 +224,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         NodeKind::Block => {
             shape.token(&TokenKind::LeftBrace)?;
             shape.token(&TokenKind::LineEnd)?;
-            while shape.peek_node_is(NodeKind::LocalBinding) {
-                shape.node(NodeKind::LocalBinding)?;
+            while shape.peek_node_is(NodeKind::LocalBinding)
+                || shape.peek_node_is(NodeKind::RecursiveBindingGroup)
+            {
+                shape.any_node()?;
                 shape.token(&TokenKind::LineEnd)?;
             }
             shape.expression()?;
@@ -238,6 +241,23 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.token(&TokenKind::Colon)?;
                 shape.node(NodeKind::Type)?;
             }
+            shape.token(&TokenKind::Equal)?;
+            shape.expression()?;
+        }
+        NodeKind::RecursiveBindingGroup => {
+            shape.token(&TokenKind::Let)?;
+            shape.token(&TokenKind::Rec)?;
+            shape.node(NodeKind::RecursiveBindingMember)?;
+            while shape.peek_token_is(&TokenKind::LineEnd) {
+                shape.token(&TokenKind::LineEnd)?;
+                shape.token(&TokenKind::And)?;
+                shape.node(NodeKind::RecursiveBindingMember)?;
+            }
+        }
+        NodeKind::RecursiveBindingMember => {
+            shape.node(NodeKind::Binder)?;
+            shape.token(&TokenKind::Colon)?;
+            shape.node(NodeKind::Type)?;
             shape.token(&TokenKind::Equal)?;
             shape.expression()?;
         }
@@ -601,8 +621,12 @@ fn project_expression(
                     span,
                 });
             }
-            ExpressionTask::FinishBlock { bindings, span } => {
-                let required = bindings.len().saturating_add(1);
+            ExpressionTask::FinishBlock { declarations, span } => {
+                let required = declarations
+                    .iter()
+                    .map(PendingLocalDeclaration::initializer_count)
+                    .sum::<usize>()
+                    .saturating_add(1);
                 let split =
                     projected
                         .len()
@@ -611,17 +635,44 @@ fn project_expression(
                             InternalReason::UnexpectedShape,
                         ))?;
                 let mut expressions = projected.split_off(split).into_iter();
-                let mut projected_bindings = Vec::with_capacity(bindings.len());
-                for binding in bindings {
-                    let initializer = expressions.next().ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                    projected_bindings.push(SurfaceBinding {
-                        binder: binding.binder,
-                        annotation: binding.annotation,
-                        initializer,
-                        span: binding.span,
-                    });
+                let mut projected_declarations = Vec::with_capacity(declarations.len());
+                for declaration in declarations {
+                    match declaration {
+                        PendingLocalDeclaration::Binding(binding) => {
+                            let initializer = expressions.next().ok_or(
+                                ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                            )?;
+                            projected_declarations.push(SurfaceLocalDeclaration::Binding(
+                                SurfaceBinding {
+                                    binder: binding.binder,
+                                    annotation: binding.annotation,
+                                    initializer,
+                                    span: binding.span,
+                                },
+                            ));
+                        }
+                        PendingLocalDeclaration::Recursive(group) => {
+                            let mut members = Vec::with_capacity(group.members.len());
+                            for member in group.members {
+                                let initializer = expressions.next().ok_or(
+                                    ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                                )?;
+                                members.push(SurfaceRecursiveMember {
+                                    introducer_span: member.introducer_span,
+                                    binder: member.binder,
+                                    annotation: member.annotation,
+                                    initializer,
+                                    span: member.span,
+                                });
+                            }
+                            projected_declarations.push(SurfaceLocalDeclaration::Recursive(
+                                SurfaceRecursiveGroup {
+                                    members,
+                                    span: group.span,
+                                },
+                            ));
+                        }
+                    }
                 }
                 let result = expressions.next().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
@@ -631,7 +682,7 @@ fn project_expression(
                 }
                 projected.push(SurfaceExpr {
                     kind: SurfaceExprKind::Block(SurfaceBlock {
-                        bindings: projected_bindings,
+                        declarations: projected_declarations,
                         result: Box::new(result),
                         span,
                     }),
@@ -674,7 +725,7 @@ enum ExpressionTask<'a> {
     },
     FinishApplication,
     FinishBlock {
-        bindings: Vec<PendingBinding>,
+        declarations: Vec<PendingLocalDeclaration>,
         span: Span,
     },
     FinishFunction {
@@ -684,9 +735,35 @@ enum ExpressionTask<'a> {
     ApplyGroupingSpan(Span),
 }
 
+enum PendingLocalDeclaration {
+    Binding(PendingBinding),
+    Recursive(PendingRecursiveGroup),
+}
+
+impl PendingLocalDeclaration {
+    fn initializer_count(&self) -> usize {
+        match self {
+            Self::Binding(_) => 1,
+            Self::Recursive(group) => group.members.len(),
+        }
+    }
+}
+
 struct PendingBinding {
     binder: SurfaceBinder,
     annotation: Option<SurfaceType>,
+    span: Span,
+}
+
+struct PendingRecursiveGroup {
+    members: Vec<PendingRecursiveMember>,
+    span: Span,
+}
+
+struct PendingRecursiveMember {
+    introducer_span: Span,
+    binder: SurfaceBinder,
+    annotation: SurfaceType,
     span: Span,
 }
 
@@ -697,7 +774,7 @@ fn schedule_block<'a>(
     tasks: &mut Vec<ExpressionTask<'a>>,
 ) -> Result<(), ProjectionError> {
     require_kind(node, NodeKind::Block)?;
-    let mut bindings = Vec::new();
+    let mut declarations = Vec::new();
     let mut initializers = Vec::new();
     let mut result = None;
     for child in child_nodes(node) {
@@ -706,12 +783,57 @@ fn schedule_block<'a>(
             let annotation = optional_child_of_kind(child, NodeKind::Type)?
                 .map(|annotation| project_type(source, annotation, tokens))
                 .transpose()?;
-            bindings.push(PendingBinding {
+            declarations.push(PendingLocalDeclaration::Binding(PendingBinding {
                 binder,
                 annotation,
                 span: node_span(source, child, tokens)?,
-            });
+            }));
             initializers.push(expression_child(child)?);
+        } else if child.kind == NodeKind::RecursiveBindingGroup {
+            let mut introducers = direct_tokens(child, tokens);
+            let let_token = introducers.next().ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+            let rec_token = introducers.next().ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+            if !matches!(let_token.kind, TokenKind::Let)
+                || !matches!(rec_token.kind, TokenKind::Rec)
+            {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            let first_introducer = join_spans(source, let_token.span, rec_token.span)?;
+            let mut member_introducers = std::iter::once(first_introducer).chain(
+                introducers
+                    .filter(|token| matches!(token.kind, TokenKind::And))
+                    .map(|token| token.span),
+            );
+            let mut members = Vec::new();
+            for member in child_nodes(child) {
+                if member.kind != NodeKind::RecursiveBindingMember {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+                members.push(PendingRecursiveMember {
+                    introducer_span: member_introducers.next().ok_or(
+                        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+                    )?,
+                    binder: project_binder(only_child_of_kind(member, NodeKind::Binder)?, tokens)?,
+                    annotation: project_type(
+                        source,
+                        only_child_of_kind(member, NodeKind::Type)?,
+                        tokens,
+                    )?,
+                    span: node_span(source, member, tokens)?,
+                });
+                initializers.push(expression_child(member)?);
+            }
+            if member_introducers.next().is_some() {
+                return malformed(InternalReason::UnexpectedShape);
+            }
+            declarations.push(PendingLocalDeclaration::Recursive(PendingRecursiveGroup {
+                members,
+                span: node_span(source, child, tokens)?,
+            }));
         } else if is_expression_kind(child.kind) {
             if result.replace(child).is_some() {
                 return malformed(InternalReason::UnexpectedShape);
@@ -724,7 +846,7 @@ fn schedule_block<'a>(
         InternalReason::UnexpectedShape,
     ))?;
     tasks.push(ExpressionTask::FinishBlock {
-        bindings,
+        declarations,
         span: node_span(source, node, tokens)?,
     });
     tasks.push(ExpressionTask::Visit(result));

@@ -372,6 +372,8 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "false" => Some(TokenKind::False),
         "fn" => Some(TokenKind::Fn),
         "let" => Some(TokenKind::Let),
+        "rec" => Some(TokenKind::Rec),
+        "and" => Some(TokenKind::And),
         "Int" => Some(TokenKind::IntType),
         "Bool" => Some(TokenKind::BoolType),
         "Unit" => Some(TokenKind::UnitType),

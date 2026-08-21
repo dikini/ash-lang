@@ -147,6 +147,8 @@ pub enum GeneratedReason {
     FunctionLowering,
     /// A source binding presentation was lowered to a binding node.
     BindingLowering,
+    /// A simultaneous recursive binding group was lowered to one Core node.
+    RecursiveBindingLowering,
     /// A node records checking against a source-supplied type.
     TypeChecking,
     /// A generated literal replaces a literal primitive operation.
@@ -158,6 +160,7 @@ impl fmt::Display for GeneratedReason {
         formatter.write_str(match self {
             Self::FunctionLowering => "function lowering",
             Self::BindingLowering => "binding lowering",
+            Self::RecursiveBindingLowering => "recursive binding lowering",
             Self::TypeChecking => "type checking",
             Self::ConstantFolding => "constant folding",
         })

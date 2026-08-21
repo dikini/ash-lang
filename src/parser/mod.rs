@@ -57,6 +57,10 @@ pub enum NodeKind {
     Block,
     /// A local immutable binding.
     LocalBinding,
+    /// A simultaneous local recursive binding group.
+    RecursiveBindingGroup,
+    /// One member of a recursive binding group.
+    RecursiveBindingMember,
     /// An anonymous function expression.
     FunctionExpression,
     /// The non-associative equality layer.
@@ -139,6 +143,10 @@ pub enum ParseReason {
     MultipleBinders,
     /// A polymorphic header is excluded from this increment.
     PolymorphicHeader,
+    /// A recursive delimiter is not followed by a member.
+    ExpectedRecursiveMember,
+    /// `and` appears outside a recursive binding group.
+    UnexpectedAnd,
     /// Semicolons are excluded from this increment.
     Semicolon,
     /// Tokens remain where the selected grammar requires another boundary.
@@ -217,6 +225,8 @@ impl fmt::Display for ParseReason {
             Self::MultipleParameters => "parse.multiple-parameters",
             Self::MultipleBinders => "parse.multiple-binders",
             Self::PolymorphicHeader => "parse.polymorphic-header",
+            Self::ExpectedRecursiveMember => "parse.expected-recursive-member",
+            Self::UnexpectedAnd => "parse.unexpected-and",
             Self::Semicolon => "parse.semicolon",
             Self::UnexpectedToken => "parse.unexpected-token",
         })
@@ -509,6 +519,8 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::False => "false",
         TokenKind::Fn => "fn",
         TokenKind::Let => "let",
+        TokenKind::Rec => "rec",
+        TokenKind::And => "and",
         TokenKind::IntType => "Int",
         TokenKind::BoolType => "Bool",
         TokenKind::UnitType => "Unit",
@@ -541,6 +553,10 @@ const fn primary_message(reason: ParseReason) -> &'static str {
         ParseReason::MultipleParameters => "Mini-Ash functions have one parameter",
         ParseReason::MultipleBinders => "Mini-Ash equations have one binder",
         ParseReason::PolymorphicHeader => "polymorphic headers are not available in Mini-Ash",
+        ParseReason::ExpectedRecursiveMember => {
+            "the recursive delimiter requires another binding member"
+        }
+        ParseReason::UnexpectedAnd => "and is only accepted within a recursive binding group",
         ParseReason::Semicolon => "semicolons are not available in Mini-Ash",
         ParseReason::UnexpectedToken => "token is not accepted at this grammar position",
     }

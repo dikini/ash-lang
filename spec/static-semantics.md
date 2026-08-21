@@ -149,6 +149,50 @@ fn add(left : Int) -> Int -> Int {
 add 20 22
 ```
 
+### Recursive block groups
+
+Let `GAMMA_R` map every member of one nonempty recursive group to its required
+declared monotype. The initialization-safety judgment `safe_rec` holds only for
+a direct anonymous function. All members enter the type environment before any
+initializer is checked, and the same environment applies to the block
+remainder.
+
+```sequent
+family recursive-binding-typing:
+  T-Block-Let-Rec-Synthesize :=
+    GAMMA_R = { x_i : type_i | 1 <= i <= n }
+    for each i, safe_rec(initializer_i)
+    for each i, GAMMA, GAMMA_R |- initializer_i ⇐ type_i
+    GAMMA, GAMMA_R |- { remainder } ⇒ result_type
+    ===>
+    GAMMA |- { let rec group; remainder } ⇒ result_type
+
+  T-Block-Let-Rec-Check :=
+    GAMMA_R = { x_i : type_i | 1 <= i <= n }
+    for each i, safe_rec(initializer_i)
+    for each i, GAMMA, GAMMA_R |- initializer_i ⇐ type_i
+    GAMMA, GAMMA_R |- { remainder } ⇐ expected_type
+    ===>
+    GAMMA |- { let rec group; remainder } ⇐ expected_type
+```
+
+Here each `initializer_i` is the direct anonymous function assigned to `x_i`.
+The semicolon separates the recursive declaration from the semantic remainder;
+it is not Ash source punctuation. A non-function or computed-function
+initializer is rejected with `recursion.unsafe-initializer` before ordinary
+expression checking.
+
+The executable test
+`static_semantics_rejects_unsafe_recursive_initialization` checks this rejected
+program:
+
+```ash
+{
+    let rec value : Int = 1
+    value
+}
+```
+
 ## Primitive operations
 
 Addition and multiplication require two `Int` operands and synthesize `Int`.
@@ -188,7 +232,8 @@ true + 1
 An equational interface must expose one function domain and codomain. Its
 binder has the domain type while its body checks against the codomain. An
 inline operational header supplies those same two types directly. Either form
-contributes a function type only to the following program scope.
+contributes one explicit global function type. All global function types form
+`GAMMA_G` before any body is checked.
 
 ```sequent
 family global-and-program-typing:
@@ -202,23 +247,21 @@ family global-and-program-typing:
     ===>
     GAMMA |-definition fn name(parameter : domain) -> codomain { body } ⇒ name : Function(domain, codomain)
 
-  T-Program-Definition :=
-    GAMMA |-definition definition ⇒ name : definition_type
-    GAMMA, name : definition_type |-program remainder ⇒ result_type
+  T-Recursive-Program :=
+    GAMMA_G = { name_i : definition_type_i | 1 <= i <= n }
+    for each i, GAMMA_G |-definition definition_i ⇒ name_i : definition_type_i
+    GAMMA_G |- result ⇒ result_type
     ===>
-    GAMMA |-program definition; remainder ⇒ result_type
-
-  T-Program-Result :=
-    GAMMA |- result ⇒ result_type
-    ===>
-    GAMMA |-program result ⇒ result_type
+    |-program definitions; result ⇒ result_type
 ```
 
-The definition judgment returns the name and type added to the following
-scope. The program rules process definitions sequentially and synthesize the
-file type from its required result expression. Semicolons in these judgments
-separate semantic fields and are not source punctuation. Resolution has already
-ensured global-name freshness and equational name agreement.
+The definition judgments check parameters and bodies but do not determine
+global visibility. `T-Recursive-Program` establishes all global monotypes and
+synthesizes the file type from its required result expression. Semicolons in
+these judgments separate semantic fields and are not source punctuation.
+Resolution has already ensured global-name freshness and equational name
+agreement.
 
 There are no inference variables, generalization, polymorphism, overloading,
-subtyping, implicit conversions, or recursive typing environments in Mini-Ash.
+subtyping, implicit conversions, recursive types, or polymorphic recursion in
+Mini-Ash.

@@ -2,8 +2,10 @@
 
 Mini-Ash evaluation is defined by one deterministic small-step relation
 `expression -> expression'` over elaborated semantic terms. Integer values are
-arbitrary-precision mathematical integers. The other values are `true`,
-`false`, `()`, and anonymous functions.
+arbitrary-precision mathematical integers. The source-level value forms are
+`true`, `false`, `()`, and anonymous functions. Recursive closures introduced
+below are an internal representation of function values, not another
+observable value form.
 
 The notation `substitute(body, x, value)` means capture-avoiding substitution.
 It specifies lexical binding without requiring an implementation to rewrite
@@ -29,6 +31,61 @@ family binding-steps:
 `E-Let-Step` propagates one initializer step. `E-Let-Value` removes a completed
 binding through capture-avoiding substitution. Semicolons separate semantic
 fields; Mini-Ash source does not contain semicolons.
+
+## Recursive bindings
+
+The value `rec_closure(group, i)` denotes member `i` of a recursive group
+together with the lexical group needed to resolve all of its recursive binder
+references. It is specification notation for an internal value, not an Ash
+surface form or an observable closure identity.
+
+Entering a recursive binding makes all member closures available
+simultaneously in its body. Applying a member first evaluates its argument,
+then substitutes that argument for the parameter and all group closures for
+their respective binders.
+
+```sequent
+family recursive-binding-steps:
+  E-Let-Rec :=
+    closures = { x_i := rec_closure(group, i) | 1 <= i <= n }
+    ===>
+    let rec group; body -> substitute_many(body, closures)
+
+  E-Rec-Apply-Argument :=
+    argument -> argument'
+    ===>
+    rec_closure(group, i) argument -> rec_closure(group, i) argument'
+
+  E-Rec-Beta :=
+    closures = { x_j := rec_closure(group, j) | 1 <= j <= n }
+    body_i' = substitute(body_i, parameter_i, value)
+    ===>
+    rec_closure(group, i) value -> substitute_many(body_i', closures)
+```
+
+The ordinary application relation still evaluates the function position
+first. `E-Rec-Apply-Argument` is the corresponding strict argument step once
+that position is a recursive closure. All substitutions are capture-avoiding,
+so recursive and parameter binders retain their lexical identities. These
+rules add no observable laziness, continuation, or second evaluation relation.
+
+The executable test `dynamic_recursive_group_example_is_executable` exercises
+mutual scope and lexical recursive closure materialization:
+
+```ash
+{
+    let rec first : Unit -> Int = fn(ignored) {
+        second ()
+    }
+    and second : Unit -> Int = fn(ignored) {
+        let retain : Unit -> Int = fn(value) {
+            first value
+        }
+        42
+    }
+    first ()
+}
+```
 
 ## Application
 
@@ -147,9 +204,9 @@ binders where needed to show distinct lexical identities.
 | --- | --- | --- |
 | `V-003` | `dynamic_binding_derivation_example_v003_is_executable` | `E-Let-Value`, `E-Let-Step`, `E-Add-Values`, `E-Let-Value` |
 | `V-001` | `dynamic_primitive_derivation_example_v001_is_executable` | `E-Add-Right`, `E-Multiply-Values`, `E-Add-Values` |
-| `V-002` | `dynamic_application_derivation_example_v002_is_executable` | `E-Let-Value`, `E-Beta`, `E-Add-Values` |
+| `V-002` | `dynamic_application_derivation_example_v002_is_executable` | `E-Let-Rec`, `E-Rec-Beta`, `E-Add-Values` |
 | `V-004` | `dynamic_capture_derivation_example_v004_is_executable` | `E-Let-Value`, `E-Let-Value`, `E-Beta`, `E-Add-Values` |
-| `V-008` | `dynamic_nested_application_derivation_example_v008_is_executable` | two `E-Let-Value` steps, `E-Apply-Argument` with `E-Beta`, `E-Apply-Argument` with `E-Add-Values`, `E-Beta`, `E-Multiply-Values` |
+| `V-008` | `dynamic_nested_application_derivation_example_v008_is_executable` | `E-Let-Rec`, `E-Rec-Apply-Argument` with `E-Rec-Beta` and `E-Add-Values`, `E-Rec-Beta`, `E-Multiply-Values` |
 
 ### Binding and shadowing: V-003
 
@@ -185,10 +242,10 @@ increment value = value + 1
 increment 41
 ```
 
-The global elaborates to a binding of `increment` to a function value.
-`E-Let-Value` substitutes that function into the file result, `E-Beta`
-substitutes `41` for its parameter, and `E-Add-Values` reduces `41 + 1` to
-`42`.
+The global elaborates as a one-member recursive binding. `E-Let-Rec` exposes
+its recursive closure in the file result, `E-Rec-Beta` substitutes `41` for
+its parameter and restores the group bindings in its body, and
+`E-Add-Values` reduces `41 + 1` to `42`.
 
 ### Lexical capture: V-004
 
@@ -221,8 +278,8 @@ fn double(value : Int) -> Int {
 double (increment 20)
 ```
 
-The two global bindings first substitute their function values into the result.
-The outer function is already a value, so `E-Apply-Argument` reduces
-`increment 20` first: `E-Beta` exposes `20 + 1`, then `E-Add-Values` produces
-`21`. The outer `E-Beta` exposes `21 * 2`, and `E-Multiply-Values` produces
-`42`.
+The two globals elaborate as one recursive group. `E-Let-Rec` exposes both
+recursive closures in the file result. The outer closure is already a value,
+so `E-Rec-Apply-Argument` reduces `increment 20` first:
+`E-Rec-Beta` exposes `20 + 1`, then `E-Add-Values` produces `21`. The outer
+`E-Rec-Beta` exposes `21 * 2`, and `E-Multiply-Values` produces `42`.

@@ -5,7 +5,9 @@ use ash::{
     lexer::lex,
     parser::{parse, project},
     resolve::resolve,
-    resolved::{ResolvedDefinitionKind, ResolvedProgram},
+    resolved::{
+        ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram,
+    },
     source::{GeneratedReason, Origin, SourceFile, Span},
 };
 
@@ -40,6 +42,73 @@ fn assert_check_origin(origin: &Origin, expression: Span, expected: Span) {
 }
 
 #[test]
+fn recursive_group_retains_group_member_function_and_occurrence_causes() {
+    let source = SourceFile::new(
+        "recursive-origins.ash",
+        "{\nlet rec repeat : Unit -> Int = fn(ignored) {\nrepeat ()\n}\nrepeat ()\n}\n",
+    )
+    .expect("test source should fit");
+    let program = resolved(&source);
+    let ResolvedExprKind::Block(block) = &program.result.kind else {
+        panic!("expected block")
+    };
+    let ResolvedLocalDeclaration::Recursive(source_group) = &block.declarations[0] else {
+        panic!("expected recursive group")
+    };
+    let source_member = &source_group.members[0];
+    let ResolvedExprKind::Function(source_function) = &source_member.initializer.kind else {
+        panic!("expected recursive function")
+    };
+    let ResolvedExprKind::Apply(source_call) = &source_function.body.result.kind else {
+        panic!("expected recursive call")
+    };
+
+    let core = validated(&source, &program);
+    let root = core.node(core.root()).expect("recursive root");
+    let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &root.kind else {
+        panic!("expected recursive Core group")
+    };
+    assert_eq!(
+        root.origin.generated_reason(),
+        Some(GeneratedReason::RecursiveBindingLowering)
+    );
+    assert_eq!(root.origin.primary_span(), source_group.span);
+    for expected in [
+        source_member.span,
+        source_member.annotation.span,
+        source_member.initializer.span,
+    ] {
+        assert!(root.origin.related_spans().contains(&expected));
+    }
+    assert_eq!(
+        group.members()[0].binder().origin().primary_span(),
+        source_member.binder.origin.primary_span()
+    );
+
+    let function = core
+        .node(group.members()[0].initializer())
+        .expect("function initializer");
+    assert_eq!(
+        function.origin.primary_span(),
+        source_member.initializer.span
+    );
+    let PureExprKind::Value(PureValue::Function(function_node)) = &function.kind else {
+        panic!("expected function Core")
+    };
+    assert_eq!(
+        function_node.parameter().origin().primary_span(),
+        source_function.parameter.origin.primary_span()
+    );
+    let body = core.node(function_node.body()).expect("recursive body");
+    assert_eq!(body.origin.primary_span(), source_function.body.result.span);
+    let PureExprKind::Computation(PureComputation::Apply(call)) = &body.kind else {
+        panic!("expected recursive application Core")
+    };
+    let occurrence = core.node(call.function()).expect("recursive occurrence");
+    assert_eq!(occurrence.origin.primary_span(), source_call.function.span);
+}
+
+#[test]
 fn successful_definition_checks_retain_the_body_and_declared_result_origins() {
     for (path, text) in [
         (
@@ -55,11 +124,11 @@ fn successful_definition_checks_retain_the_body_and_declared_result_origins() {
         let program = resolved(&source);
         let core = validated(&source, &program);
         let root = core.node(core.root()).expect("global binding");
-        let PureExprKind::Computation(PureComputation::Bind(global)) = &root.kind else {
-            panic!("expected global binding")
+        let PureExprKind::Computation(PureComputation::RecursiveBind(global)) = &root.kind else {
+            panic!("expected global recursive group")
         };
         let function = core
-            .node(global.initializer())
+            .node(global.members()[0].initializer())
             .expect("function initializer");
         let PureExprKind::Value(PureValue::Function(function_node)) = &function.kind else {
             panic!("expected function value")
@@ -101,17 +170,17 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
         let core = validated(&source, &program);
         let definition = &program.definitions[0];
         let root = core.node(core.root()).expect("global binding");
-        let PureExprKind::Computation(PureComputation::Bind(global)) = &root.kind else {
-            panic!("expected global binding")
+        let PureExprKind::Computation(PureComputation::RecursiveBind(global)) = &root.kind else {
+            panic!("expected global recursive group")
         };
         assert_eq!(
             root.origin.generated_reason(),
-            Some(GeneratedReason::BindingLowering)
+            Some(GeneratedReason::RecursiveBindingLowering)
         );
-        assert_eq!(root.origin.primary_span(), definition.span);
+        assert_eq!(root.origin.primary_span(), program.span);
 
         let function = core
-            .node(global.initializer())
+            .node(global.members()[0].initializer())
             .expect("function initializer");
         let PureExprKind::Value(PureValue::Function(function_node)) = &function.kind else {
             panic!("expected function value")
@@ -127,9 +196,12 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
 
         match &definition.kind {
             ResolvedDefinitionKind::Equational(equational) => {
-                assert_eq!(global.binder().id(), equational.interface.name.id);
                 assert_eq!(
-                    global.binder().origin().primary_span(),
+                    global.members()[0].binder().id(),
+                    equational.interface.name.id
+                );
+                assert_eq!(
+                    global.members()[0].binder().origin().primary_span(),
                     equational.interface.name.origin.primary_span()
                 );
                 assert_eq!(function.origin.primary_span(), equational.equation.span);
@@ -147,9 +219,12 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
                 );
             }
             ResolvedDefinitionKind::InlineOperational(operational) => {
-                assert_eq!(global.binder().id(), operational.header.name.id);
                 assert_eq!(
-                    global.binder().origin().primary_span(),
+                    global.members()[0].binder().id(),
+                    operational.header.name.id
+                );
+                assert_eq!(
+                    global.members()[0].binder().origin().primary_span(),
                     operational.header.name.origin.primary_span()
                 );
                 assert_eq!(function.origin.primary_span(), definition.span);

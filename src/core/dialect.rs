@@ -15,6 +15,7 @@ use super::{
     function::{ApplicationNode, FunctionNode},
     literal::{BooleanNode, IntegerNode, UnitNode},
     primitive::{Primitive, PrimitiveNode},
+    recursion::{RecursiveBindingMember, RecursiveBindingNode},
     variable::{TypedBinder, VariableNode},
 };
 use crate::{
@@ -124,22 +125,49 @@ pub enum PureExprKind {
 }
 
 impl PureExprKind {
-    pub(super) fn children(&self) -> [Option<NodeId>; 2] {
+    pub(super) fn child_count(&self) -> usize {
         match self {
             Self::Value(value) => match value {
-                PureValue::Integer(node) => node.children(),
-                PureValue::Boolean(node) => node.children(),
-                PureValue::Unit(node) => node.children(),
-                PureValue::Function(node) => node.children(),
+                PureValue::Integer(node) => fixed_child_count(node.children()),
+                PureValue::Boolean(node) => fixed_child_count(node.children()),
+                PureValue::Unit(node) => fixed_child_count(node.children()),
+                PureValue::Function(node) => fixed_child_count(node.children()),
             },
-            Self::Variable(node) => node.children(),
+            Self::Variable(node) => fixed_child_count(node.children()),
             Self::Computation(computation) => match computation {
-                PureComputation::Bind(node) => node.children(),
-                PureComputation::Apply(node) => node.children(),
-                PureComputation::Primitive(node) => node.children(),
+                PureComputation::Bind(node) => fixed_child_count(node.children()),
+                PureComputation::RecursiveBind(node) => node.child_count(),
+                PureComputation::Apply(node) => fixed_child_count(node.children()),
+                PureComputation::Primitive(node) => fixed_child_count(node.children()),
             },
         }
     }
+
+    pub(super) fn child_at(&self, index: usize) -> Option<NodeId> {
+        match self {
+            Self::Value(value) => match value {
+                PureValue::Integer(node) => fixed_child_at(node.children(), index),
+                PureValue::Boolean(node) => fixed_child_at(node.children(), index),
+                PureValue::Unit(node) => fixed_child_at(node.children(), index),
+                PureValue::Function(node) => fixed_child_at(node.children(), index),
+            },
+            Self::Variable(node) => fixed_child_at(node.children(), index),
+            Self::Computation(computation) => match computation {
+                PureComputation::Bind(node) => fixed_child_at(node.children(), index),
+                PureComputation::RecursiveBind(node) => node.child_at(index),
+                PureComputation::Apply(node) => fixed_child_at(node.children(), index),
+                PureComputation::Primitive(node) => fixed_child_at(node.children(), index),
+            },
+        }
+    }
+}
+
+fn fixed_child_count<const N: usize>(children: [Option<NodeId>; N]) -> usize {
+    children.into_iter().flatten().count()
+}
+
+fn fixed_child_at<const N: usize>(children: [Option<NodeId>; N], index: usize) -> Option<NodeId> {
+    children.into_iter().flatten().nth(index)
 }
 
 /// The closed value families in the pure Mini-Ash dialect.
@@ -160,6 +188,8 @@ pub enum PureValue {
 pub enum PureComputation {
     /// A sequential nonrecursive binding.
     Bind(BindingNode),
+    /// A simultaneous recursive function binding group.
+    RecursiveBind(RecursiveBindingNode),
     /// A strict unary application.
     Apply(ApplicationNode),
     /// A primitive operation.
@@ -527,6 +557,44 @@ impl CoreBuilder {
                 binder,
                 initializer,
                 body,
+            ))),
+        )
+    }
+
+    /// Adds a simultaneous recursive function group with unchecked invariants.
+    ///
+    /// Payload admission precedes binder-capability checks. The independent
+    /// validator owns nonemptiness, function-initializer, type, scope, and
+    /// provenance invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::ForeignBinder`] when any member binder was
+    /// produced by another Core builder, after reporting any payload resource
+    /// failure.
+    pub fn recursive_binding(
+        &mut self,
+        members: Vec<(TypedBinder, NodeId)>,
+        body: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        let (ty, origin) = admit_payloads(ty, origin)?;
+        if members
+            .iter()
+            .any(|(binder, _)| self.arena != Some(binder.arena()))
+        {
+            return Err(BuildError::ForeignBinder);
+        }
+        let members = members
+            .into_iter()
+            .map(|(binder, initializer)| RecursiveBindingMember::new(binder, initializer))
+            .collect();
+        self.push_admitted(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::RecursiveBind(RecursiveBindingNode::new(
+                members, body,
             ))),
         )
     }
