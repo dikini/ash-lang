@@ -5,6 +5,7 @@ pub mod dialect;
 pub mod function;
 pub mod literal;
 pub mod primitive;
+pub mod transform;
 pub mod validate;
 pub mod variable;
 

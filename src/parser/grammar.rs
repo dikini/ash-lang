@@ -40,16 +40,26 @@ pub(super) enum OperatorToken {
     EqualEqual,
     Plus,
     Star,
+    #[cfg(test)]
+    MockSemicolon,
 }
 
 impl OperatorToken {
     pub(super) fn matches(self, kind: &TokenKind) -> bool {
-        matches!(
+        let selected = matches!(
             (self, kind),
             (Self::EqualEqual, TokenKind::EqualEqual)
                 | (Self::Plus, TokenKind::Plus)
                 | (Self::Star, TokenKind::Star)
-        )
+        );
+        #[cfg(test)]
+        {
+            selected || matches!((self, kind), (Self::MockSemicolon, TokenKind::Semicolon))
+        }
+        #[cfg(not(test))]
+        {
+            selected
+        }
     }
 }
 
@@ -530,4 +540,70 @@ fn parenthesized_type(parser: &mut Parser<'_>) {
 
 fn starts_expression(parser: &Parser<'_>) -> bool {
     expression_prefix_form(parser).is_some() || expression::starts_primary(parser)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod mock_nested_feature {
+        #[derive(Clone, Copy)]
+        pub struct MockNested;
+
+        pub const fn parse(_node: MockNested) -> &'static str {
+            "mock nested parser"
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum ShadowPrefixForm {
+        Existing(ExpressionPrefixForm),
+        Mock(mock_nested_feature::MockNested),
+    }
+
+    const SHADOW_PREFIX_ASSEMBLY: &[ShadowPrefixForm] = &[
+        ShadowPrefixForm::Existing(ExpressionPrefixForm::Block),
+        ShadowPrefixForm::Existing(ExpressionPrefixForm::Function),
+        ShadowPrefixForm::Mock(mock_nested_feature::MockNested),
+    ];
+
+    const fn dispatch_shadow_prefix(form: ShadowPrefixForm) -> &'static str {
+        match form {
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::Block) => "block parser",
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::Function) => "function parser",
+            ShadowPrefixForm::Mock(node) => mock_nested_feature::parse(node),
+        }
+    }
+
+    #[test]
+    fn a_mock_nested_form_changes_its_parser_and_closed_prefix_assembly_not_infix() {
+        assert_eq!(SHADOW_PREFIX_ASSEMBLY.len(), 3);
+        assert_eq!(
+            dispatch_shadow_prefix(SHADOW_PREFIX_ASSEMBLY[2]),
+            "mock nested parser"
+        );
+        assert_eq!(
+            selected_dialect().expression.infix,
+            &[
+                InfixDescriptor {
+                    token: OperatorToken::EqualEqual,
+                    precedence: 10,
+                    associativity: Associativity::NonAssociative,
+                    result: NodeKind::EqualityExpression,
+                },
+                InfixDescriptor {
+                    token: OperatorToken::Plus,
+                    precedence: 20,
+                    associativity: Associativity::Left,
+                    result: NodeKind::AdditiveExpression,
+                },
+                InfixDescriptor {
+                    token: OperatorToken::Star,
+                    precedence: 30,
+                    associativity: Associativity::Left,
+                    result: NodeKind::MultiplicativeExpression,
+                },
+            ]
+        );
+    }
 }

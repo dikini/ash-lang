@@ -25,6 +25,10 @@ impl FunctionNode {
     pub const fn body(&self) -> NodeId {
         self.body
     }
+
+    pub(super) const fn children(&self) -> [Option<NodeId>; 2] {
+        [Some(self.body), None]
+    }
 }
 
 /// A strict unary application payload.
@@ -49,5 +53,9 @@ impl ApplicationNode {
     #[must_use]
     pub const fn argument(self) -> NodeId {
         self.argument
+    }
+
+    pub(super) const fn children(self) -> [Option<NodeId>; 2] {
+        [Some(self.function), Some(self.argument)]
     }
 }

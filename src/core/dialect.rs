@@ -123,6 +123,25 @@ pub enum PureExprKind {
     Computation(PureComputation),
 }
 
+impl PureExprKind {
+    pub(super) fn children(&self) -> [Option<NodeId>; 2] {
+        match self {
+            Self::Value(value) => match value {
+                PureValue::Integer(node) => node.children(),
+                PureValue::Boolean(node) => node.children(),
+                PureValue::Unit(node) => node.children(),
+                PureValue::Function(node) => node.children(),
+            },
+            Self::Variable(node) => node.children(),
+            Self::Computation(computation) => match computation {
+                PureComputation::Bind(node) => node.children(),
+                PureComputation::Apply(node) => node.children(),
+                PureComputation::Primitive(node) => node.children(),
+            },
+        }
+    }
+}
+
 /// The closed value families in the pure Mini-Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PureValue {
@@ -545,6 +564,44 @@ impl CoreBuilder {
                 primitive, left, right,
             ))),
         )
+    }
+
+    /// Records that an existing node successfully checked against an expected
+    /// type whose source cause is optional.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidNodeId`] unless `node` belongs to this
+    /// builder, or an origin resource error if the causal wrapper is too deep.
+    pub(crate) fn record_type_check(
+        &mut self,
+        node: NodeId,
+        expected_cause: Option<Span>,
+    ) -> Result<(), BuildError> {
+        let Some(arena) = self.arena else {
+            return Err(BuildError::InvalidNodeId);
+        };
+        if node.arena() != arena {
+            return Err(BuildError::InvalidNodeId);
+        }
+        let index = node.index()?;
+        let stored = self.nodes.get(index).ok_or(BuildError::InvalidNodeId)?;
+        let Some(current) = stored.origin.as_ref() else {
+            return Err(BuildError::InvalidPayload);
+        };
+        let cause = match expected_cause {
+            Some(span) => Origin::Related {
+                primary: Box::new(current.clone()),
+                related: vec![span],
+            },
+            None => current.clone(),
+        };
+        let origin = admit_origin(Origin::Generated {
+            cause: Box::new(cause),
+            reason: GeneratedReason::TypeChecking,
+        })?;
+        self.nodes[index].origin = Some(origin);
+        Ok(())
     }
 
     /// Finishes unchecked construction at `root`.

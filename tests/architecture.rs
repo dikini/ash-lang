@@ -255,6 +255,36 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> [Option<NodeId>; 2] {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum ShadowTransformPlan {
+    Preserve([Option<NodeId>; 2]),
+    ReplaceWithMockUnit,
+}
+
+fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
+    match &expression.kind {
+        ShadowExprKind::Value(value) => match value {
+            ShadowValue::Function(node) => ShadowTransformPlan::Preserve([Some(node.body()), None]),
+            ShadowValue::Integer(_) | ShadowValue::Boolean(_) | ShadowValue::Unit(_) => {
+                ShadowTransformPlan::Preserve([None, None])
+            }
+        },
+        ShadowExprKind::Variable(_) => ShadowTransformPlan::Preserve([None, None]),
+        ShadowExprKind::Computation(computation) => match computation {
+            ShadowPureComputation::Bind(node) => {
+                ShadowTransformPlan::Preserve([Some(node.initializer()), Some(node.body())])
+            }
+            ShadowPureComputation::Apply(node) => {
+                ShadowTransformPlan::Preserve([Some(node.function()), Some(node.argument())])
+            }
+            ShadowPureComputation::Primitive(node) => {
+                ShadowTransformPlan::Preserve([Some(node.left()), Some(node.right())])
+            }
+        },
+        ShadowExprKind::Mock(_) => ShadowTransformPlan::ReplaceWithMockUnit,
+    }
+}
+
 fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
     match &expression.kind {
         ShadowExprKind::Value(value) => match value {
@@ -495,21 +525,19 @@ fn one_mock_pure_feature_changes_only_the_recorded_closed_sites() {
         let shadow = assemble_shadow(representative.program.node(id).expect("validated node"));
         assert!(validate_shadow(&shadow, &facts));
         assert_eq!(traverse_shadow(&shadow), children);
+        assert_eq!(
+            transform_shadow(&shadow),
+            ShadowTransformPlan::Preserve(children)
+        );
         assert_eq!(consume_shadow(&shadow), label);
     }
 
     let mock = mock_shadow();
     assert!(validate_shadow(&mock, &facts));
     assert_eq!(traverse_shadow(&mock), [None, None]);
+    assert_eq!(
+        transform_shadow(&mock),
+        ShadowTransformPlan::ReplaceWithMockUnit
+    );
     assert_eq!(consume_shadow(&mock), "mock");
-
-    const CHANGED_SITES: [&str; 6] = [
-        "feature module: tests::architecture::mock_feature",
-        "closed assembly: ShadowExprKind::Mock",
-        "construction: mock_shadow",
-        "validator dispatch: validate_shadow",
-        "traversal dispatch: traverse_shadow",
-        "consumer dispatch: consume_shadow",
-    ];
-    assert_eq!(CHANGED_SITES.len(), 6);
 }

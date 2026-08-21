@@ -57,4 +57,8 @@ impl PrimitiveNode {
     pub const fn right(self) -> NodeId {
         self.right
     }
+
+    pub(super) const fn children(self) -> [Option<NodeId>; 2] {
+        [Some(self.left), Some(self.right)]
+    }
 }

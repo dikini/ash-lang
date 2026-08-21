@@ -229,7 +229,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     colors[index] = Color::Gray;
                     work.push(GraphTask::Exit(id));
                     let node = self.node(id)?;
-                    for child in children(&node.kind).into_iter().flatten().rev() {
+                    for child in node.kind.children().into_iter().flatten().rev() {
                         if self.node(child).is_err() {
                             return Err(ValidationError::new(
                                 ValidationReason::NodeBounds,
@@ -403,7 +403,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     }
                     scheduled[index] = true;
                     work.push(ScopeAnalysisTask::Finish(id));
-                    for child in children(&self.node(id)?.kind).into_iter().flatten().rev() {
+                    for child in self.node(id)?.kind.children().into_iter().flatten().rev() {
                         work.push(ScopeAnalysisTask::Enter(child));
                     }
                 }
@@ -519,23 +519,6 @@ fn union_requirements(
         left.entry(binder).or_insert(occurrence);
     }
     left
-}
-
-fn children(kind: &PureExprKind) -> [Option<NodeId>; 2] {
-    match kind {
-        PureExprKind::Value(PureValue::Function(function)) => [Some(function.body()), None],
-        PureExprKind::Computation(PureComputation::Bind(binding)) => {
-            [Some(binding.initializer()), Some(binding.body())]
-        }
-        PureExprKind::Computation(PureComputation::Apply(application)) => {
-            [Some(application.function()), Some(application.argument())]
-        }
-        PureExprKind::Computation(PureComputation::Primitive(primitive)) => {
-            [Some(primitive.left()), Some(primitive.right())]
-        }
-        PureExprKind::Value(PureValue::Integer(_) | PureValue::Boolean(_) | PureValue::Unit(_))
-        | PureExprKind::Variable(_) => [None, None],
-    }
 }
 
 fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, ValidationError> {

@@ -145,6 +145,8 @@ pub struct Evaluation {
     pub value: Value,
     /// Node-entry events in deterministic evaluation order.
     pub trace: Vec<TraceEvent>,
+    /// Greatest number of explicit frames retained by the machine.
+    pub max_frame_depth: usize,
 }
 
 /// A structured evaluator invariant or runtime resource failure.
@@ -208,12 +210,34 @@ enum Frame {
     },
 }
 
+struct Transition {
+    control: Control,
+    frame: Option<Frame>,
+}
+
+impl Transition {
+    const fn direct(control: Control) -> Self {
+        Self {
+            control,
+            frame: None,
+        }
+    }
+
+    const fn suspend(control: Control, frame: Frame) -> Self {
+        Self {
+            control,
+            frame: Some(frame),
+        }
+    }
+}
+
 /// The retained explicit evaluator machine.
 #[derive(Debug)]
 pub struct Machine {
     program: Arc<PureProgram>,
-    control: Control,
+    control: Option<Control>,
     frames: Vec<Frame>,
+    max_frame_depth: usize,
     trace: Vec<TraceEvent>,
 }
 
@@ -221,121 +245,234 @@ impl Machine {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
             program: program.shared(),
-            control: Control::Evaluate(program.root(), Environment::new()),
+            control: Some(Control::Evaluate(program.root(), Environment::new())),
             frames: Vec::new(),
+            max_frame_depth: 0,
             trace: Vec::new(),
         }
     }
 
     fn run(mut self) -> Result<Evaluation, RuntimeFailure> {
         loop {
-            match self.control {
+            let control = self
+                .control
+                .take()
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            match control {
                 Control::Evaluate(node, environment) => {
                     self.trace.push(TraceEvent::Enter(node));
-                    let expression = self.program.node(node).ok_or(RuntimeFailure::MissingNode)?;
-                    match &expression.kind {
-                        PureExprKind::Value(PureValue::Integer(integer)) => {
-                            self.control = Control::Return(Value::Integer(integer.value().clone()));
-                        }
-                        PureExprKind::Value(PureValue::Boolean(boolean)) => {
-                            self.control = Control::Return(Value::Boolean(boolean.value()));
-                        }
-                        PureExprKind::Value(PureValue::Unit(_)) => {
-                            self.control = Control::Return(Value::Unit);
-                        }
-                        PureExprKind::Value(PureValue::Function(function)) => {
-                            self.control = Control::Return(Value::Function(Closure {
-                                parameter: function.parameter().id(),
-                                body: function.body(),
-                                program: Arc::clone(&self.program),
-                                environment,
-                                origin: expression.origin.clone(),
-                            }));
-                        }
-                        PureExprKind::Variable(variable) => {
-                            let value = environment
-                                .lookup(variable.binder())
-                                .cloned()
-                                .ok_or(RuntimeFailure::MissingBinding)?;
-                            self.control = Control::Return(value);
-                        }
-                        PureExprKind::Computation(PureComputation::Bind(binding)) => {
-                            self.frames.push(Frame::Bind {
-                                binder: binding.binder().id(),
-                                body: binding.body(),
-                                environment: environment.clone(),
-                            });
-                            self.control = Control::Evaluate(binding.initializer(), environment);
-                        }
-                        PureExprKind::Computation(PureComputation::Primitive(operation)) => {
-                            self.frames.push(Frame::PrimitiveLeft {
-                                primitive: operation.primitive(),
-                                right: operation.right(),
-                                environment: environment.clone(),
-                            });
-                            self.control = Control::Evaluate(operation.left(), environment);
-                        }
-                        PureExprKind::Computation(PureComputation::Apply(application)) => {
-                            self.frames.push(Frame::ApplyFunction {
-                                argument: application.argument(),
-                                caller_environment: environment.clone(),
-                            });
-                            self.control = Control::Evaluate(application.function(), environment);
-                        }
-                    }
+                    let transition = dispatch_entry(&self.program, node, environment)?;
+                    self.apply(transition);
                 }
                 Control::Return(value) => {
                     let Some(frame) = self.frames.pop() else {
                         return Ok(Evaluation {
                             value,
                             trace: self.trace,
+                            max_frame_depth: self.max_frame_depth,
                         });
                     };
-                    match frame {
-                        Frame::Bind {
-                            binder,
-                            body,
-                            environment,
-                        } => {
-                            self.control =
-                                Control::Evaluate(body, environment.extend(binder, value)?);
-                        }
-                        Frame::PrimitiveLeft {
-                            primitive,
-                            right,
-                            environment,
-                        } => {
-                            self.frames.push(Frame::PrimitiveRight {
-                                primitive,
-                                left: value,
-                            });
-                            self.control = Control::Evaluate(right, environment);
-                        }
-                        Frame::PrimitiveRight { primitive, left } => {
-                            self.control =
-                                Control::Return(apply_primitive(primitive, left, value)?);
-                        }
-                        Frame::ApplyFunction {
-                            argument,
-                            caller_environment,
-                        } => {
-                            let Value::Function(closure) = value else {
-                                return Err(RuntimeFailure::UnexpectedFunctionValue);
-                            };
-                            self.frames.push(Frame::ApplyArgument { closure });
-                            self.control = Control::Evaluate(argument, caller_environment);
-                        }
-                        Frame::ApplyArgument { closure } => {
-                            self.control = Control::Evaluate(
-                                closure.body,
-                                closure.environment.extend(closure.parameter, value)?,
-                            );
-                        }
-                    }
+                    let transition = dispatch_return(frame, value)?;
+                    self.apply(transition);
                 }
             }
         }
     }
+
+    fn apply(&mut self, transition: Transition) {
+        if let Some(frame) = transition.frame {
+            self.frames.push(frame);
+            self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+        }
+        self.control = Some(transition.control);
+    }
+}
+
+fn dispatch_entry(
+    program: &Arc<PureProgram>,
+    node: NodeId,
+    environment: Environment,
+) -> Result<Transition, RuntimeFailure> {
+    let expression = program.node(node).ok_or(RuntimeFailure::MissingNode)?;
+    Ok(match &expression.kind {
+        PureExprKind::Value(PureValue::Integer(integer)) => enter_integer(integer),
+        PureExprKind::Value(PureValue::Boolean(boolean)) => enter_boolean(*boolean),
+        PureExprKind::Value(PureValue::Unit(unit)) => enter_unit(*unit),
+        PureExprKind::Value(PureValue::Function(function)) => enter_function(
+            function,
+            Arc::clone(program),
+            environment,
+            expression.origin.clone(),
+        ),
+        PureExprKind::Variable(variable) => enter_variable(*variable, environment)?,
+        PureExprKind::Computation(PureComputation::Bind(binding)) => {
+            enter_binding(binding, environment)
+        }
+        PureExprKind::Computation(PureComputation::Primitive(operation)) => {
+            enter_primitive(*operation, environment)
+        }
+        PureExprKind::Computation(PureComputation::Apply(application)) => {
+            enter_application(*application, environment)
+        }
+    })
+}
+
+fn enter_integer(integer: &crate::core::literal::IntegerNode) -> Transition {
+    Transition::direct(Control::Return(Value::Integer(integer.value().clone())))
+}
+
+fn enter_boolean(boolean: crate::core::literal::BooleanNode) -> Transition {
+    Transition::direct(Control::Return(Value::Boolean(boolean.value())))
+}
+
+fn enter_unit(_unit: crate::core::literal::UnitNode) -> Transition {
+    Transition::direct(Control::Return(Value::Unit))
+}
+
+fn enter_function(
+    function: &crate::core::function::FunctionNode,
+    program: Arc<PureProgram>,
+    environment: Environment,
+    origin: crate::source::Origin,
+) -> Transition {
+    Transition::direct(Control::Return(Value::Function(Closure {
+        parameter: function.parameter().id(),
+        body: function.body(),
+        program,
+        environment,
+        origin,
+    })))
+}
+
+fn enter_variable(
+    variable: crate::core::variable::VariableNode,
+    environment: Environment,
+) -> Result<Transition, RuntimeFailure> {
+    let value = environment
+        .lookup(variable.binder())
+        .cloned()
+        .ok_or(RuntimeFailure::MissingBinding)?;
+    Ok(Transition::direct(Control::Return(value)))
+}
+
+fn enter_binding(
+    binding: &crate::core::binding::BindingNode,
+    environment: Environment,
+) -> Transition {
+    Transition::suspend(
+        Control::Evaluate(binding.initializer(), environment.clone()),
+        Frame::Bind {
+            binder: binding.binder().id(),
+            body: binding.body(),
+            environment,
+        },
+    )
+}
+
+fn enter_primitive(
+    operation: crate::core::primitive::PrimitiveNode,
+    environment: Environment,
+) -> Transition {
+    Transition::suspend(
+        Control::Evaluate(operation.left(), environment.clone()),
+        Frame::PrimitiveLeft {
+            primitive: operation.primitive(),
+            right: operation.right(),
+            environment,
+        },
+    )
+}
+
+fn enter_application(
+    application: crate::core::function::ApplicationNode,
+    environment: Environment,
+) -> Transition {
+    Transition::suspend(
+        Control::Evaluate(application.function(), environment.clone()),
+        Frame::ApplyFunction {
+            argument: application.argument(),
+            caller_environment: environment,
+        },
+    )
+}
+
+fn dispatch_return(frame: Frame, value: Value) -> Result<Transition, RuntimeFailure> {
+    match frame {
+        Frame::Bind {
+            binder,
+            body,
+            environment,
+        } => return_binding(binder, body, environment, value),
+        Frame::PrimitiveLeft {
+            primitive,
+            right,
+            environment,
+        } => Ok(return_primitive_left(primitive, right, environment, value)),
+        Frame::PrimitiveRight { primitive, left } => return_primitive_right(primitive, left, value),
+        Frame::ApplyFunction {
+            argument,
+            caller_environment,
+        } => return_application_function(argument, caller_environment, value),
+        Frame::ApplyArgument { closure } => return_application_argument(closure, value),
+    }
+}
+
+fn return_binding(
+    binder: BinderId,
+    body: NodeId,
+    environment: Environment,
+    value: Value,
+) -> Result<Transition, RuntimeFailure> {
+    Ok(Transition::direct(Control::Evaluate(
+        body,
+        environment.extend(binder, value)?,
+    )))
+}
+
+fn return_primitive_left(
+    primitive: Primitive,
+    right: NodeId,
+    environment: Environment,
+    left: Value,
+) -> Transition {
+    Transition::suspend(
+        Control::Evaluate(right, environment),
+        Frame::PrimitiveRight { primitive, left },
+    )
+}
+
+fn return_primitive_right(
+    primitive: Primitive,
+    left: Value,
+    right: Value,
+) -> Result<Transition, RuntimeFailure> {
+    Ok(Transition::direct(Control::Return(apply_primitive(
+        primitive, left, right,
+    )?)))
+}
+
+fn return_application_function(
+    argument: NodeId,
+    caller_environment: Environment,
+    function: Value,
+) -> Result<Transition, RuntimeFailure> {
+    let Value::Function(closure) = function else {
+        return Err(RuntimeFailure::UnexpectedFunctionValue);
+    };
+    Ok(Transition::suspend(
+        Control::Evaluate(argument, caller_environment),
+        Frame::ApplyArgument { closure },
+    ))
+}
+
+fn return_application_argument(
+    closure: Closure,
+    argument: Value,
+) -> Result<Transition, RuntimeFailure> {
+    Ok(Transition::direct(Control::Evaluate(
+        closure.body,
+        closure.environment.extend(closure.parameter, argument)?,
+    )))
 }
 
 /// Evaluates one independently validated pure Core program.
@@ -369,11 +506,175 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::{CoreBuilder, validate},
+        core::{
+            CoreBuilder, binding::BindingNode, function::ApplicationNode, function::FunctionNode,
+            literal::BooleanNode, literal::IntegerNode, literal::UnitNode,
+            primitive::PrimitiveNode, validate, variable::VariableNode,
+        },
         integer::Integer,
         source::{ByteRange, Origin, SourceFile},
         types::Type,
     };
+
+    struct TransitionOwner {
+        feature: &'static str,
+        entry: &'static str,
+        frames: &'static [&'static str],
+        returns: &'static [&'static str],
+    }
+
+    const TRANSITION_OWNERSHIP: &[TransitionOwner] = &[
+        TransitionOwner {
+            feature: "integer",
+            entry: "enter_integer",
+            frames: &[],
+            returns: &[],
+        },
+        TransitionOwner {
+            feature: "boolean",
+            entry: "enter_boolean",
+            frames: &[],
+            returns: &[],
+        },
+        TransitionOwner {
+            feature: "unit",
+            entry: "enter_unit",
+            frames: &[],
+            returns: &[],
+        },
+        TransitionOwner {
+            feature: "function",
+            entry: "enter_function",
+            frames: &[],
+            returns: &[],
+        },
+        TransitionOwner {
+            feature: "variable",
+            entry: "enter_variable",
+            frames: &[],
+            returns: &[],
+        },
+        TransitionOwner {
+            feature: "binding",
+            entry: "enter_binding",
+            frames: &["Frame::Bind"],
+            returns: &["return_binding"],
+        },
+        TransitionOwner {
+            feature: "application",
+            entry: "enter_application",
+            frames: &["Frame::ApplyFunction", "Frame::ApplyArgument"],
+            returns: &["return_application_function", "return_application_argument"],
+        },
+        TransitionOwner {
+            feature: "primitive",
+            entry: "enter_primitive",
+            frames: &["Frame::PrimitiveLeft", "Frame::PrimitiveRight"],
+            returns: &["return_primitive_left", "return_primitive_right"],
+        },
+    ];
+
+    mod mock_pure_feature {
+        use super::{Control, Transition, Value};
+
+        pub struct MockNode;
+
+        pub fn enter(_node: &MockNode) -> Transition {
+            Transition::direct(Control::Return(Value::Unit))
+        }
+    }
+
+    enum ShadowEntry<'a> {
+        Existing(&'a PureExprKind),
+        Mock(&'a mock_pure_feature::MockNode),
+    }
+
+    fn dispatch_shadow_entry(entry: ShadowEntry<'_>) -> &'static str {
+        match entry {
+            ShadowEntry::Existing(kind) => match kind {
+                PureExprKind::Value(_) => "existing value helper",
+                PureExprKind::Variable(_) => "existing variable helper",
+                PureExprKind::Computation(_) => "existing computation helper",
+            },
+            ShadowEntry::Mock(node) => {
+                let _ = mock_pure_feature::enter(node);
+                "mock feature helper"
+            }
+        }
+    }
+
+    #[test]
+    fn every_core_feature_has_one_named_entry_owner_and_explicit_return_owners() {
+        let _: fn(&IntegerNode) -> Transition = enter_integer;
+        let _: fn(BooleanNode) -> Transition = enter_boolean;
+        let _: fn(UnitNode) -> Transition = enter_unit;
+        let _: fn(
+            &FunctionNode,
+            Arc<PureProgram>,
+            Environment,
+            crate::source::Origin,
+        ) -> Transition = enter_function;
+        let _: fn(VariableNode, Environment) -> Result<Transition, RuntimeFailure> = enter_variable;
+        let _: fn(&BindingNode, Environment) -> Transition = enter_binding;
+        let _: fn(ApplicationNode, Environment) -> Transition = enter_application;
+        let _: fn(PrimitiveNode, Environment) -> Transition = enter_primitive;
+        let _: fn(BinderId, NodeId, Environment, Value) -> Result<Transition, RuntimeFailure> =
+            return_binding;
+        let _: fn(Primitive, NodeId, Environment, Value) -> Transition = return_primitive_left;
+        let _: fn(Primitive, Value, Value) -> Result<Transition, RuntimeFailure> =
+            return_primitive_right;
+        let _: fn(NodeId, Environment, Value) -> Result<Transition, RuntimeFailure> =
+            return_application_function;
+        let _: fn(Closure, Value) -> Result<Transition, RuntimeFailure> =
+            return_application_argument;
+
+        assert_eq!(TRANSITION_OWNERSHIP.len(), 8);
+        assert_eq!(
+            TRANSITION_OWNERSHIP
+                .iter()
+                .map(|owner| owner.feature)
+                .collect::<Vec<_>>(),
+            [
+                "integer",
+                "boolean",
+                "unit",
+                "function",
+                "variable",
+                "binding",
+                "application",
+                "primitive",
+            ]
+        );
+        assert!(
+            TRANSITION_OWNERSHIP
+                .iter()
+                .all(|owner| !owner.entry.is_empty())
+        );
+        assert!(
+            TRANSITION_OWNERSHIP[..5]
+                .iter()
+                .all(|owner| owner.frames.is_empty() && owner.returns.is_empty())
+        );
+        assert!(
+            TRANSITION_OWNERSHIP[5..]
+                .iter()
+                .all(|owner| !owner.frames.is_empty() && !owner.returns.is_empty())
+        );
+    }
+
+    #[test]
+    fn a_mock_pure_feature_changes_only_its_transition_helper_and_closed_dispatch() {
+        let mock = mock_pure_feature::MockNode;
+        assert_eq!(
+            dispatch_shadow_entry(ShadowEntry::Mock(&mock)),
+            "mock feature helper"
+        );
+        let existing = PureExprKind::Value(PureValue::Unit(UnitNode));
+        assert_eq!(
+            dispatch_shadow_entry(ShadowEntry::Existing(&existing)),
+            "existing value helper"
+        );
+    }
 
     #[test]
     fn environment_clone_and_extension_share_the_existing_chain() {

@@ -207,19 +207,20 @@ payloads. Generic injection would add traits and type parameters without
 removing the dialect's required closed dispatch, so the implementation retains
 the handwritten assembly.
 
-The production exhaustive-match sites are binder collection, node-type
-validation, value validation, computation validation, scope traversal, and
-child traversal in `core::validate`. The pure-feature probe added a test-only
-`mock_feature` module to a shadow dialect that explicitly mirrors the value,
-variable, and computation layers. The addition changed exactly six sites: the
+The pure-feature probe adds a test-only `mock_feature` module to a shadow
+dialect that explicitly mirrors the value, variable, and computation layers.
+With transformation included, the addition changes exactly seven sites: the
 feature module, the `ShadowExprKind` closed assembly, the `mock_shadow`
-construction site, and the top-level validation, traversal, and consumer
-dispatches. Existing feature assembly, validation helpers, and payload modules
-did not change. The probe checks feature-owned structural types and exact child
-handles: functions expose one child; bindings, applications, and primitives
-expose two; literals, variables, and the mock expose none. Temporarily omitting
-the mock arm from `consume_shadow` produced Rust error `E0004` for the uncovered
-`ShadowExprKind::Mock` case; restoring the arm made the architecture test pass.
+construction site, and the top-level validation, child-traversal,
+transformation, and consumer dispatches. Existing feature payload modules and
+their helpers do not change. The probe checks feature-owned structural types
+and exact child handles: functions expose one child; bindings, applications,
+and primitives expose two; literals, variables, and the mock expose none.
+Temporarily omitting the mock arm from `consume_shadow` produced Rust error
+`E0004` for the uncovered `ShadowExprKind::Mock` case; restoring the arm made
+the architecture test pass. The contrary evidence is explicit: a feature
+addition remains local, but every closed consumer still needs one exhaustive
+dispatch arm.
 
 The separate operation-family probe defines an uninhabited test-only pure
 operation type and a mock future operation family. A test-only typed
@@ -279,6 +280,71 @@ confirms that payload resource failures take precedence and dismantle their
 inputs before the foreign-capability error. Independent validation also rejects
 a privately corrupted binder capability under its existing scope-invariant
 reason, while same-arena cloned definition reuse remains independently rejected.
+
+The retained Core transform uses explicit postorder work data. Feature payload
+modules own their child lists, while `PureExprKind` is the one closed child
+dispatch. Identity traversal preserves every type, binder identity, and origin
+in V-008, and a separate shared-DAG case preserves graph sharing. Literal `Add`
+and `Multiply` nodes fold only when both immediate operands are literal nodes.
+A fold produces an `Int` literal with `ConstantFolding` provenance caused by
+the replaced operation, then returns to unchecked Core and independent
+validation. It does not fold integer equality or add a general optimizer
+framework. Pre- and post-transform values agree; identity traces agree through
+the old-to-new node mapping, while folding traces omit the replaced operation
+and operands.
+
+Successful checking now records a `TypeChecking` origin on the checked Core
+root. The original expression remains the primary cause and an explicit
+annotation supplies the related expected-type span. Function provenance also
+retains the equation body or operational body as an explicit relation in
+addition to the equation, interface, definition, and operational header. The
+T-001 and T-004 tests confirm that their diagnostic causes still point to the
+equation body and declared result or argument type after both presentations
+converge to shared Core.
+
+The parser-locality probes measured four changed test sites for a mock
+operator: its feature descriptor, test-only operator token, token matcher, and
+closed operator table. The isolated descriptor parses an actual semicolon-token
+expression through the production precedence engine without adding it to the
+selected Mini-Ash dialect. This is contrary evidence against treating the
+current token enum and matcher as one physical feature site. The mock nested
+form also measured four changed sites: its feature parser,
+closed prefix variant, closed prefix assembly entry, and closed prefix dispatch.
+The production infix table remained unchanged. These are parser-layer
+measurements. A real new spelling or concrete node would also require its owning
+lexer, concrete syntax, and projection changes; the probes do not claim
+otherwise. A changed Boolean type-equality outcome affected exactly one test-
+only rule helper and left the caller and unrelated `Int` outcome unchanged. The
+foreign-dialect probe remains an unchecked storage-envelope mutation rejected
+by independent dialect validation, not a new `PureExprKind` variant.
+
+The evaluator now separates its closed entry and return dispatches from
+feature-owned transition helpers. Its transition-ownership matrix is:
+
+| Core feature | Entry helper | Explicit frames | Return helpers |
+| --- | --- | --- | --- |
+| Integer | `enter_integer` | None | None |
+| Boolean | `enter_boolean` | None | None |
+| Unit | `enter_unit` | None | None |
+| Function | `enter_function` | None | None |
+| Variable | `enter_variable` | None | None |
+| Binding | `enter_binding` | `Bind` | `return_binding` |
+| Application | `enter_application` | `ApplyFunction`, `ApplyArgument` | `return_application_function`, `return_application_argument` |
+| Primitive | `enter_primitive` | `PrimitiveLeft`, `PrimitiveRight` | `return_primitive_left`, `return_primitive_right` |
+
+A test-only mock pure evaluator feature changes exactly two evaluator sites:
+its entry helper and the mock arm in the closed entry dispatch. Existing entry
+and return helpers do not change. A suspending future feature could still need
+a new frame variant and return-dispatch arm; the probe demonstrates transition
+ownership, not open evaluator dispatch.
+
+A validated Core chain of 10,000 left-nested additions evaluates and drops on a
+256 KiB host thread stack. Identity traversal and revalidation complete on the
+same thread. Evaluation records exactly 10,000 simultaneously retained
+explicit frames and 20,001 entry events, so source depth grows machine storage
+without proportional Rust call depth. Separate end-to-end and machine tests
+cover literal, sum, product, equality, rendered output, and traced integer
+nodes beyond both signed and unsigned 64-bit ranges.
 
 ## Deviations
 

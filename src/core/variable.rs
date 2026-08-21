@@ -1,6 +1,6 @@
 //! Binder definitions and variable occurrences in typed Core.
 
-use super::dialect::ArenaId;
+use super::dialect::{ArenaId, NodeId};
 use crate::{resolved::BinderId, source::Origin, types::Type};
 
 /// A typed Core binder definition and opaque capability for its owning arena.
@@ -64,5 +64,9 @@ impl VariableNode {
     #[must_use]
     pub const fn binder(self) -> BinderId {
         self.binder
+    }
+
+    pub(super) const fn children(self) -> [Option<NodeId>; 2] {
+        [None, None]
     }
 }

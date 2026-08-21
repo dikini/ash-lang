@@ -1,5 +1,6 @@
 //! Literal payloads in typed Core.
 
+use super::dialect::NodeId;
 use crate::{integer::Integer, types::Type};
 
 /// An integer literal payload.
@@ -21,6 +22,10 @@ impl IntegerNode {
 
     pub(super) const fn expected_type(&self) -> Type {
         Type::Int
+    }
+
+    pub(super) const fn children(&self) -> [Option<NodeId>; 2] {
+        [None, None]
     }
 }
 
@@ -44,6 +49,10 @@ impl BooleanNode {
     pub(super) const fn expected_type(self) -> Type {
         Type::Bool
     }
+
+    pub(super) const fn children(self) -> [Option<NodeId>; 2] {
+        [None, None]
+    }
 }
 
 /// The unit literal payload.
@@ -53,5 +62,9 @@ pub struct UnitNode;
 impl UnitNode {
     pub(super) const fn expected_type(self) -> Type {
         Type::Unit
+    }
+
+    pub(super) const fn children(self) -> [Option<NodeId>; 2] {
+        [None, None]
     }
 }

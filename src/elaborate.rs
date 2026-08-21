@@ -810,6 +810,8 @@ impl Elaborator {
                             expected.provenance.span(),
                         ));
                     }
+                    self.builder
+                        .record_type_check(synthesized.node, expected.provenance.span())?;
                     values.push(synthesized);
                 }
                 ElaborationTask::CheckFunction {
@@ -1536,6 +1538,7 @@ fn equational_origin(
             definition_span,
             equational.interface.span,
             equational.interface.annotation.span,
+            equational.equation.body.span,
         ],
     }
 }
@@ -1550,6 +1553,7 @@ fn operational_origin(
             operational.header.span,
             operational.header.parameter.annotation.span,
             operational.header.result_type.span,
+            operational.body.span,
         ],
     }
 }
@@ -1650,6 +1654,41 @@ mod tests {
         resolve::resolve,
         source::SourceFile,
     };
+
+    fn static_rule_outcome(
+        left: &Type,
+        right: &Type,
+        equality_rule: fn(&Type, &Type) -> bool,
+    ) -> bool {
+        equality_rule(left, right)
+    }
+
+    fn mock_bool_distinct_rule(left: &Type, right: &Type) -> bool {
+        if matches!((left, right), (Type::Bool, Type::Bool)) {
+            false
+        } else {
+            structurally_equal(left, right)
+        }
+    }
+
+    #[test]
+    fn a_changed_static_outcome_remains_inside_its_owning_rule_helper() {
+        assert!(static_rule_outcome(
+            &Type::Bool,
+            &Type::Bool,
+            structurally_equal
+        ));
+        assert!(!static_rule_outcome(
+            &Type::Bool,
+            &Type::Bool,
+            mock_bool_distinct_rule
+        ));
+        assert!(static_rule_outcome(
+            &Type::Int,
+            &Type::Int,
+            mock_bool_distinct_rule
+        ));
+    }
 
     #[test]
     fn provenance_rejects_a_shape_mismatch() {

@@ -261,6 +261,17 @@ mod tests {
         result: NodeKind::ApplicationExpression,
     };
 
+    mod mock_operator_feature {
+        use super::*;
+
+        pub const DESCRIPTOR: InfixDescriptor = InfixDescriptor {
+            token: OperatorToken::MockSemicolon,
+            precedence: 25,
+            associativity: Associativity::Left,
+            result: NodeKind::EqualityExpression,
+        };
+    }
+
     fn parse_probe(
         source_text: &str,
         infix: &'static [InfixDescriptor],
@@ -340,5 +351,18 @@ mod tests {
         );
         assert!(left_reasons.is_empty());
         assert_eq!(non_associative_reasons, vec![ParseReason::RepeatedEquality]);
+    }
+
+    #[test]
+    fn a_mock_operator_changes_only_its_feature_and_closed_operator_table() {
+        const MOCK_OPERATOR_TABLE: &[InfixDescriptor] = &[mock_operator_feature::DESCRIPTOR];
+        let (starts, reasons) = parse_probe("1 ; 2", MOCK_OPERATOR_TABLE);
+        assert!(reasons.is_empty());
+        assert_eq!(starts[0], NodeKind::EqualityExpression);
+
+        let (production_starts, production_reasons) =
+            parse_probe("1 + 2", grammar::selected_dialect().expression.infix);
+        assert!(production_reasons.is_empty());
+        assert_eq!(production_starts[0], NodeKind::AdditiveExpression);
     }
 }

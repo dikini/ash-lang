@@ -36,4 +36,8 @@ impl BindingNode {
     pub const fn body(&self) -> NodeId {
         self.body
     }
+
+    pub(super) const fn children(&self) -> [Option<NodeId>; 2] {
+        [Some(self.initializer), Some(self.body)]
+    }
 }

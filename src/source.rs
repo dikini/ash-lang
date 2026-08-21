@@ -149,6 +149,19 @@ pub enum GeneratedReason {
     BindingLowering,
     /// A node records checking against a source-supplied type.
     TypeChecking,
+    /// A generated literal replaces a literal primitive operation.
+    ConstantFolding,
+}
+
+impl fmt::Display for GeneratedReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::FunctionLowering => "function lowering",
+            Self::BindingLowering => "binding lowering",
+            Self::TypeChecking => "type checking",
+            Self::ConstantFolding => "constant folding",
+        })
+    }
 }
 
 /// Source provenance retained by parsed and generated compiler nodes.
