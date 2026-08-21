@@ -91,6 +91,24 @@ dispatch outside feature ownership, conditional compilation, compiler feedback,
 one-search discovery, unrelated test changes, build cost, and representation
 cost against the retained Float evidence.
 
+### Recursive-definition transfer
+
+The retained recursive-function implementation provides the first
+structurally different comparison. Its
+[evidence report](mini-ash/recursive-definitions/evidence.md) finds that the
+new Core group payload and runtime template contract are mechanically
+discoverable, while simultaneous scope necessarily crosses syntax, resolution,
+typing, Core, and evaluation boundaries. Reusing ordinary function nodes and
+one recursive group avoided thunks, recursive types, and continuation
+machinery. The result strengthens the rule that later work should simplify and
+lower first, then preserve explicit exhaustive joins where they enforce a
+semantic invariant.
+
+The recursion evidence also identifies transferable preparation for the data
+and ADT cluster: ordered declaration forms, allocate-all-then-check scope, and
+variable-arity Core traversal. It does not claim that function templates solve
+cyclic constructor allocation or pattern typing.
+
 ## Open questions
 
 - Can generated closed stage assemblies remove most representation joins while

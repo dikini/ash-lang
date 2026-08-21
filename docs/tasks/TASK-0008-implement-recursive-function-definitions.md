@@ -58,7 +58,16 @@ Execute the linked plan to:
 - The isolated worktree starts from signed merge `079b8eb`. Fresh `cargo build`
   and `cargo test` passed before implementation; the test command ran 272
   tests.
-- Product implementation has not started.
+- Ordered Surface and resolved declarations, recursive Core groups, validation,
+  transforms, parser recovery, simultaneous resolution and typing, lowering,
+  and template-based evaluation are implemented on the feature branch.
+- The retained corpus and executable specification cover file-wide global
+  scope, explicit local groups, initialization safety, and exact `42 : Int`
+  observations. The normative specification has been updated on the same
+  branch.
+- Implementation and documentation checkpoints through `f72db57` are unsigned
+  as required. The branch remains unmerged pending complete verification,
+  review, and explicit confirmation.
 
 ## Verification
 
@@ -85,9 +94,25 @@ cannot own closures back to themselves, and audit all closed Core consumers.
 
 ## Discoveries
 
-None yet. Record implementation evidence here while the task is active and
-distill transferable findings into DN-0019 before removing this task at
-completion.
+- The recursive payload localized in `core/recursion.rs`, while simultaneous
+  declaration scope necessarily changed closed representations and stage
+  owners across 16 production files. The detailed
+  [integration report](../design/mini-ash/recursive-definitions/evidence.md)
+  distinguishes semantic propagation from mechanical joins.
+- API mutation probes found production consumers through Rust errors and
+  complete test consumers through one exact search. The variable-arity group
+  child contract has one central join in `PureExprKind`; downstream traversal
+  and validation use the normalized interface.
+- Reusing ordinary function nodes and a single recursive binding form avoided
+  thunks, recursive type equations, continuation machinery, and presentation-
+  specific runtime forms.
+- The deep-group test exposed superlinear source-location lookup in provenance
+  validation. Bounds and UTF-8 validation through `SourceFile::span` reduced
+  the 10,000-member case from about 124 seconds to about 1.34 seconds without
+  changing source-language behavior.
+- Ordered declarations, two-pass scope allocation, acyclic binder references,
+  and variable-arity Core traversal transfer to the data and ADT cluster.
+  Recursive function templates do not settle cyclic constructor allocation.
 
 ## Deviations
 
