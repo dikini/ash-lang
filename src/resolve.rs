@@ -138,6 +138,10 @@ impl Resolver {
                         ));
                         diagnostic.expected = Some(equational.interface.name.text.clone());
                         diagnostic.found = Some(equational.equation.name.text.clone());
+                        diagnostic.help = Some(format!(
+                            "rename the equation head to `{}`",
+                            equational.interface.name.text
+                        ));
                         return Err(diagnostic.into());
                     }
                     (

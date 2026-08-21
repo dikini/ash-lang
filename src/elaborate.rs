@@ -25,6 +25,8 @@ pub enum TypeReason {
     NotApplicable,
     /// An application argument did not match the function domain.
     Argument,
+    /// An annotated binding initializer did not match its annotation.
+    BindingInitializer,
     /// A global function body did not match its declared result type.
     DefinitionResult,
     /// An equational interface did not expose one function domain.
@@ -38,6 +40,7 @@ impl fmt::Display for TypeReason {
             Self::FunctionNeedsContext => formatter.write_str("type.function-needs-context"),
             Self::NotApplicable => formatter.write_str("type.not-applicable"),
             Self::Argument => formatter.write_str("type.argument"),
+            Self::BindingInitializer => formatter.write_str("type.binding-initializer"),
             Self::DefinitionResult => formatter.write_str("type.definition-result"),
             Self::EquationInterfaceNotFunction => {
                 formatter.write_str("type.equation-interface-not-function")
@@ -456,7 +459,10 @@ impl Elaborator {
         }
         let mut context = context.clone();
         let result = self.elaborate_expression_with_context(
-            ElaborationTask::Synthesize(expression),
+            ElaborationTask::Synthesize {
+                expression,
+                cause: None,
+            },
             &mut context,
         );
         if result.is_err() {
@@ -627,7 +633,10 @@ impl Elaborator {
         }
 
         let mut result = self.elaborate_expression_with_context(
-            ElaborationTask::Synthesize(&program.result),
+            ElaborationTask::Synthesize {
+                expression: &program.result,
+                cause: Some(SynthesisCause::ProgramResult(program.result.span)),
+            },
             &mut context,
         )?;
         for global in globals.into_iter().rev() {
@@ -657,7 +666,10 @@ impl Elaborator {
         let mut bindings = Vec::new();
         while let Some(task) = tasks.pop() {
             match task {
-                ElaborationTask::Synthesize(current) => match &current.kind {
+                ElaborationTask::Synthesize {
+                    expression: current,
+                    cause,
+                } => match &current.kind {
                     ResolvedExprKind::Integer(value) => {
                         let ty = Type::Int;
                         let node = self.builder.integer(
@@ -725,13 +737,16 @@ impl Elaborator {
                             function_span: application.function.span,
                             argument: &application.argument,
                         });
-                        tasks.push(ElaborationTask::Synthesize(&application.function));
+                        tasks.push(ElaborationTask::Synthesize {
+                            expression: &application.function,
+                            cause: Some(SynthesisCause::Application(current.span)),
+                        });
                     }
                     ResolvedExprKind::Block(block) => {
-                        schedule_block(block, None, &mut tasks, bindings.len())?;
+                        schedule_block(block, None, cause, &mut tasks, bindings.len())?;
                     }
                     ResolvedExprKind::Function(_) => {
-                        return Err(function_needs_context(current.span));
+                        return Err(function_needs_context(current.span, cause));
                     }
                 },
                 ElaborationTask::Check {
@@ -741,7 +756,7 @@ impl Elaborator {
                 } => match &expression.kind {
                     ResolvedExprKind::Function(function) => {
                         if !matches!(expected.ty, Type::Function(_, _)) {
-                            return Err(function_needs_context(expression.span));
+                            return Err(function_needs_context(expression.span, None));
                         }
                         let (domain, codomain) = expected.function_parts()?;
                         tasks.push(ElaborationTask::CheckFunction {
@@ -755,7 +770,13 @@ impl Elaborator {
                         });
                     }
                     ResolvedExprKind::Block(block) => {
-                        schedule_block(block, Some((expected, kind)), &mut tasks, bindings.len())?;
+                        schedule_block(
+                            block,
+                            Some((expected, kind)),
+                            None,
+                            &mut tasks,
+                            bindings.len(),
+                        )?;
                     }
                     _ => {
                         tasks.push(ElaborationTask::FinishCheck {
@@ -763,7 +784,10 @@ impl Elaborator {
                             expected,
                             kind,
                         });
-                        tasks.push(ElaborationTask::Synthesize(expression));
+                        tasks.push(ElaborationTask::Synthesize {
+                            expression,
+                            cause: None,
+                        });
                     }
                 },
                 ElaborationTask::FinishCheck {
@@ -908,7 +932,10 @@ impl Elaborator {
                         left,
                         right_span: right.span,
                     });
-                    tasks.push(ElaborationTask::Synthesize(right));
+                    tasks.push(ElaborationTask::Synthesize {
+                        expression: right,
+                        cause: Some(SynthesisCause::Operator(operator_span)),
+                    });
                 }
                 ElaborationTask::AfterRight {
                     primitive,
@@ -1017,7 +1044,10 @@ impl Default for Elaborator {
 }
 
 enum ElaborationTask<'a> {
-    Synthesize(&'a ResolvedExpr),
+    Synthesize {
+        expression: &'a ResolvedExpr,
+        cause: Option<SynthesisCause>,
+    },
     Check {
         expression: &'a ResolvedExpr,
         expected: ProvenancedType,
@@ -1096,6 +1126,18 @@ enum CheckKind {
     Definition {
         result_cause: Span,
     },
+    BindingInitializer {
+        initializer_span: Span,
+        annotation_span: Span,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum SynthesisCause {
+    Binding(Span),
+    ProgramResult(Span),
+    Application(Span),
+    Operator(Span),
 }
 
 struct FunctionCheck<'a> {
@@ -1117,6 +1159,7 @@ struct ElaboratedBinding {
 fn schedule_block<'a>(
     block: &'a ResolvedBlock,
     expected: Option<(ProvenancedType, CheckKind)>,
+    synthesis_cause: Option<SynthesisCause>,
     tasks: &mut Vec<ElaborationTask<'a>>,
     binding_start: usize,
 ) -> Result<(), TypeError> {
@@ -1131,7 +1174,10 @@ fn schedule_block<'a>(
             kind,
         });
     } else {
-        tasks.push(ElaborationTask::Synthesize(&block.result));
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &block.result,
+            cause: synthesis_cause,
+        });
     }
     for binding in block.bindings.iter().rev() {
         let expected = binding
@@ -1143,14 +1189,20 @@ fn schedule_block<'a>(
             binding,
             expected: expected.clone(),
         });
-        if let Some(expected) = expected {
-            tasks.push(ElaborationTask::Check {
+        match (expected, binding.annotation.as_ref()) {
+            (Some(expected), Some(annotation)) => tasks.push(ElaborationTask::Check {
                 expression: &binding.initializer,
                 expected,
-                kind: CheckKind::General,
-            });
-        } else {
-            tasks.push(ElaborationTask::Synthesize(&binding.initializer));
+                kind: CheckKind::BindingInitializer {
+                    initializer_span: binding.initializer.span,
+                    annotation_span: annotation.span,
+                },
+            }),
+            (None, None) => tasks.push(ElaborationTask::Synthesize {
+                expression: &binding.initializer,
+                cause: Some(SynthesisCause::Binding(binding.span)),
+            }),
+            _ => return Err(invalid_state()),
         }
     }
     Ok(())
@@ -1210,9 +1262,13 @@ fn schedule_function_check<'a>(
             expected: codomain,
             kind: body_check,
         }),
-        FunctionBody::Block(block) => {
-            schedule_block(block, Some((codomain, body_check)), tasks, binding_start)?
-        }
+        FunctionBody::Block(block) => schedule_block(
+            block,
+            Some((codomain, body_check)),
+            None,
+            tasks,
+            binding_start,
+        )?,
     }
     Ok(())
 }
@@ -1265,17 +1321,63 @@ fn check_mismatch(
             diagnostic.found = Some(found.to_string());
             TypeError::Source(Box::new(diagnostic))
         }
+        CheckKind::BindingInitializer {
+            initializer_span,
+            annotation_span,
+        } => {
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::BindingInitializer,
+                SourceLabel::new(
+                    initializer_span,
+                    format!("this initializer has type {found}"),
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                annotation_span,
+                format!("this binding annotation requires {expected}"),
+            ));
+            diagnostic.expected = Some(expected.to_string());
+            diagnostic.found = Some(found.to_string());
+            TypeError::Source(Box::new(diagnostic))
+        }
     }
 }
 
-fn function_needs_context(span: Span) -> TypeError {
-    TypeError::Source(Box::new(Diagnostic::new(
+fn function_needs_context(span: Span, cause: Option<SynthesisCause>) -> TypeError {
+    let mut diagnostic = Diagnostic::new(
         TypeReason::FunctionNeedsContext,
         SourceLabel::new(
             span,
             "this anonymous function needs an expected function type",
         ),
-    )))
+    );
+    if let Some(cause) = cause {
+        let (span, message, help) = match cause {
+            SynthesisCause::Binding(span) => (
+                span,
+                "this unannotated binding requires its initializer to synthesize a type",
+                Some("add a function type annotation to this binding"),
+            ),
+            SynthesisCause::ProgramResult(span) => (
+                span,
+                "the program result requires this expression to synthesize a type",
+                None,
+            ),
+            SynthesisCause::Application(span) => (
+                span,
+                "this application requires its function position to synthesize a type",
+                None,
+            ),
+            SynthesisCause::Operator(span) => (
+                span,
+                "this operator requires its operand to synthesize a type",
+                None,
+            ),
+        };
+        diagnostic.related.push(SourceLabel::new(span, message));
+        diagnostic.help = help.map(str::to_owned);
+    }
+    TypeError::Source(Box::new(diagnostic))
 }
 
 fn not_applicable(function_span: Span, whole_span: Span, found: &Type) -> TypeError {
@@ -1328,7 +1430,10 @@ fn schedule_left<'a>(
         right: &binary.right,
         left_span: binary.left.span,
     });
-    tasks.push(ElaborationTask::Synthesize(&binary.left));
+    tasks.push(ElaborationTask::Synthesize {
+        expression: &binary.left,
+        cause: Some(SynthesisCause::Operator(binary.operator_span)),
+    });
 }
 
 fn require_integer(

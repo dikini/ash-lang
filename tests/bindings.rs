@@ -1,7 +1,7 @@
 use ash::{
     core::{CoreBuilder, PureComputation, PureExprKind, validate},
     driver::{PipelineFailure, run_source},
-    elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError},
+    elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason},
     eval::{TraceEvent, Value, evaluate},
     integer::Integer,
     lexer::lex,
@@ -93,11 +93,12 @@ fn annotated_initializer_mismatch_is_a_source_type_rejection() {
     .expect("test source should fit");
 
     let error = run_source(source).expect_err("the initializer should not check");
-    let PipelineFailure::Typing(TypeError::Mismatch(mismatch)) = &error else {
-        panic!("expected a structural type mismatch");
+    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = &error else {
+        panic!("expected a categorized binding-initializer diagnostic");
     };
-    assert_eq!(mismatch.expected(), &Type::Bool);
-    assert_eq!(mismatch.found(), &Type::Int);
+    assert_eq!(diagnostic.reason, TypeReason::BindingInitializer);
+    assert_eq!(diagnostic.expected.as_deref(), Some("Bool"));
+    assert_eq!(diagnostic.found.as_deref(), Some("Int"));
     assert!(error.is_source_rejection());
 }
 

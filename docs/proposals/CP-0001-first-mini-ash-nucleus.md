@@ -504,6 +504,7 @@ The semantic cases require these structured reasons and causal relationships:
 | `T-003` | `type.not-applicable` | Non-function in function position | Whole application when useful |
 | `T-004` | `type.argument` | Argument type | Function domain and its causal annotation |
 | Non-function equational interface | `type.equation-interface-not-function` | Type in the external interface | Equation head that requires one function domain |
+| Annotated binding initializer | `type.binding-initializer` | Initializer expression | Binding annotation that supplies the expected type |
 | Anonymous function without context | `type.function-needs-context` | Anonymous function | Nearest position that required synthesis |
 
 Internal validator tests use distinct scope, node-type, application-type, and

@@ -89,3 +89,73 @@ fn rejected_ash_source_uses_status_one_without_success_output() {
     assert!(stderr.contains("expected Int"));
     assert!(stderr.contains("found Bool"));
 }
+
+fn assert_source_failure(path: &Path, category: &str, labels: &[&str]) {
+    let output = ash(&[path]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
+    assert!(stderr.contains(category), "missing category in {stderr:?}");
+    for label in labels {
+        assert!(
+            stderr.contains(label),
+            "missing label {label:?} in {stderr:?}"
+        );
+    }
+}
+
+#[test]
+fn parse_failure_reports_the_primary_and_recovery_labels() {
+    assert_source_failure(
+        Path::new("tests/fixtures/first-stratum/parse/p003-independent-recovery.ash"),
+        "parse.expected-operand",
+        &[
+            "the operator requires a right operand",
+            "parsing resumes at this block closing brace",
+            "parse.unclosed-group",
+            "the opening parenthesis is not closed",
+        ],
+    );
+}
+
+#[test]
+fn resolution_failure_reports_both_duplicate_definitions() {
+    assert_source_failure(
+        Path::new("tests/fixtures/first-stratum/resolve/r002-duplicate-global.ash"),
+        "resolve.duplicate-global",
+        &[
+            "this global name is already defined",
+            "the first global name is here",
+            "the first complete definition is here",
+        ],
+    );
+}
+
+#[test]
+fn type_failure_reports_the_argument_and_declared_domain() {
+    assert_source_failure(
+        Path::new("tests/fixtures/first-stratum/type/t004-argument.ash"),
+        "type.argument",
+        &[
+            "this argument does not match the function domain",
+            "the function domain is required here",
+            "expected Int",
+            "found Bool",
+        ],
+    );
+}
+
+#[test]
+fn annotated_binding_failure_reports_the_initializer_and_annotation() {
+    assert_source_failure(
+        Path::new("tests/fixtures/first-stratum/type/binding-initializer.ash"),
+        "type.binding-initializer",
+        &[
+            "this initializer has type Int",
+            "this binding annotation requires Bool",
+            "expected Bool",
+            "found Int",
+        ],
+    );
+}
