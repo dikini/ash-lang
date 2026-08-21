@@ -3,10 +3,14 @@
 use std::{collections::HashMap, error::Error, fmt};
 
 use crate::{
-    core::{BuildError, CoreBuilder, NodeId, Primitive, UnvalidatedProgram},
+    core::{BuildError, CoreBuilder, NodeId, Primitive, TypedBinder, UnvalidatedProgram},
     diagnostic::{Diagnostic, SourceLabel},
-    resolved::{BinderId, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind, ResolvedProgram},
-    source::{Origin, Span},
+    resolved::{
+        BinderId, ResolvedBinding, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
+        ResolvedProgram,
+    },
+    source::{GeneratedReason, Origin, Span},
+    surface::{SurfaceType, SurfaceTypeKind},
     types::Type,
 };
 
@@ -56,14 +60,12 @@ impl TypeMismatch {
 /// An accepted expression family not yet implemented by this retained increment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PendingFeature {
-    /// Resolved variable occurrences.
-    Variable,
     /// Unary applications.
     Application,
-    /// Sequential blocks and their bindings.
-    Block,
     /// Anonymous functions.
     Function,
+    /// Anonymous functions reached through an expected-type checking request.
+    FunctionChecking,
     /// File-level definitions.
     Definition,
 }
@@ -71,10 +73,9 @@ pub enum PendingFeature {
 impl fmt::Display for PendingFeature {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Variable => "variable elaboration",
             Self::Application => "application elaboration",
-            Self::Block => "block elaboration",
             Self::Function => "function elaboration",
+            Self::FunctionChecking => "function checking",
             Self::Definition => "definition elaboration",
         })
     }
@@ -227,12 +228,12 @@ impl Elaborator {
     pub fn synthesize(
         &mut self,
         expression: &ResolvedExpr,
-        _context: &TypeContext,
+        context: &TypeContext,
     ) -> Result<TypedNode, TypeError> {
         if self.state == ElaboratorState::Poisoned {
             return Err(invalid_state());
         }
-        let result = self.synthesize_primitive(expression);
+        let result = self.elaborate_expression(ElaborationTask::Synthesize(expression), context);
         if result.is_err() {
             self.state = ElaboratorState::Poisoned;
         }
@@ -252,17 +253,20 @@ impl Elaborator {
         expected: &Type,
         context: &TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        let synthesized = self.synthesize(expression, context)?;
-        if structurally_equal(&synthesized.ty, expected) {
-            Ok(synthesized)
-        } else {
-            self.state = ElaboratorState::Poisoned;
-            Err(TypeError::Mismatch(TypeMismatch {
-                span: expression.span,
-                expected: expected.clone(),
-                found: synthesized.ty,
-            }))
+        if self.state == ElaboratorState::Poisoned {
+            return Err(invalid_state());
         }
+        let result = self.elaborate_expression(
+            ElaborationTask::Check {
+                expression,
+                expected: expected.clone(),
+            },
+            context,
+        );
+        if result.is_err() {
+            self.state = ElaboratorState::Poisoned;
+        }
+        result
     }
 
     /// Consumes the elaborator and selects the program root for validation.
@@ -280,12 +284,18 @@ impl Elaborator {
         self.builder.finish(root).map_err(Into::into)
     }
 
-    fn synthesize_primitive(&mut self, expression: &ResolvedExpr) -> Result<TypedNode, TypeError> {
-        let mut tasks = vec![SynthesisTask::Visit(expression)];
+    fn elaborate_expression<'a>(
+        &mut self,
+        initial: ElaborationTask<'a>,
+        context: &TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let mut tasks = vec![initial];
         let mut values = Vec::new();
+        let mut bindings = Vec::new();
+        let mut context = context.clone();
         while let Some(task) = tasks.pop() {
             match task {
-                SynthesisTask::Visit(current) => match &current.kind {
+                ElaborationTask::Synthesize(current) => match &current.kind {
                     ResolvedExprKind::Integer(value) => {
                         let ty = Type::Int;
                         let node = self.builder.integer(
@@ -320,12 +330,73 @@ impl Elaborator {
                     ResolvedExprKind::Equal(binary) => {
                         schedule_left(Primitive::Equal, current.span, binary, &mut tasks)
                     }
-                    ResolvedExprKind::Occurrence(_) => return pending(PendingFeature::Variable),
+                    ResolvedExprKind::Occurrence(occurrence) => {
+                        let ty = context
+                            .lookup(occurrence.binder)
+                            .cloned()
+                            .ok_or_else(invalid_state)?;
+                        let node = self.builder.variable(
+                            occurrence.binder,
+                            ty.clone(),
+                            occurrence.origin.clone(),
+                        )?;
+                        values.push(TypedNode { node, ty });
+                    }
                     ResolvedExprKind::Apply(_) => return pending(PendingFeature::Application),
-                    ResolvedExprKind::Block(_) => return pending(PendingFeature::Block),
+                    ResolvedExprKind::Block(block) => {
+                        let binding_start = bindings.len();
+                        tasks.push(ElaborationTask::FinishBlock {
+                            bindings: &block.bindings,
+                            binding_start,
+                        });
+                        tasks.push(ElaborationTask::Synthesize(&block.result));
+                        for binding in block.bindings.iter().rev() {
+                            let expected = binding
+                                .annotation
+                                .as_ref()
+                                .map(lower_surface_type)
+                                .transpose()?;
+                            tasks.push(ElaborationTask::FinishBinding {
+                                binding,
+                                expected: expected.clone(),
+                            });
+                            if let Some(expected) = expected {
+                                tasks.push(ElaborationTask::Check {
+                                    expression: &binding.initializer,
+                                    expected,
+                                });
+                            } else {
+                                tasks.push(ElaborationTask::Synthesize(&binding.initializer));
+                            }
+                        }
+                    }
                     ResolvedExprKind::Function(_) => return pending(PendingFeature::Function),
                 },
-                SynthesisTask::AfterLeft {
+                ElaborationTask::Check {
+                    expression,
+                    expected,
+                } => {
+                    if matches!(expression.kind, ResolvedExprKind::Function(_)) {
+                        return pending(PendingFeature::FunctionChecking);
+                    }
+                    tasks.push(ElaborationTask::FinishCheck {
+                        span: expression.span,
+                        expected,
+                    });
+                    tasks.push(ElaborationTask::Synthesize(expression));
+                }
+                ElaborationTask::FinishCheck { span, expected } => {
+                    let synthesized = values.pop().ok_or_else(invalid_state)?;
+                    if !structurally_equal(&synthesized.ty, &expected) {
+                        return Err(TypeError::Mismatch(TypeMismatch {
+                            span,
+                            expected,
+                            found: synthesized.ty,
+                        }));
+                    }
+                    values.push(synthesized);
+                }
+                ElaborationTask::AfterLeft {
                     primitive,
                     whole_span,
                     operator_span,
@@ -334,16 +405,16 @@ impl Elaborator {
                 } => {
                     let left = values.pop().ok_or_else(invalid_state)?;
                     require_integer(&left, left_span, operator_span)?;
-                    tasks.push(SynthesisTask::AfterRight {
+                    tasks.push(ElaborationTask::AfterRight {
                         primitive,
                         whole_span,
                         operator_span,
                         left,
                         right_span: right.span,
                     });
-                    tasks.push(SynthesisTask::Visit(right));
+                    tasks.push(ElaborationTask::Synthesize(right));
                 }
-                SynthesisTask::AfterRight {
+                ElaborationTask::AfterRight {
                     primitive,
                     whole_span,
                     operator_span,
@@ -369,6 +440,54 @@ impl Elaborator {
                     )?;
                     values.push(TypedNode { node, ty });
                 }
+                ElaborationTask::FinishBinding { binding, expected } => {
+                    let initializer = values.pop().ok_or_else(invalid_state)?;
+                    let ty = expected.unwrap_or_else(|| initializer.ty.clone());
+                    let binder_origin = Origin::Generated {
+                        cause: Box::new(binding.binder.origin.clone()),
+                        reason: GeneratedReason::BindingLowering,
+                    };
+                    let binder = self.builder.resolved_binder(
+                        binding.binder.id,
+                        ty.clone(),
+                        binder_origin,
+                    )?;
+                    if context.insert(binding.binder.id, ty).is_some() {
+                        return Err(invalid_state());
+                    }
+                    bindings.push(ElaboratedBinding {
+                        binder,
+                        initializer: initializer.node,
+                        origin: binding_origin(binding),
+                    });
+                }
+                ElaborationTask::FinishBlock {
+                    bindings: source_bindings,
+                    binding_start,
+                } => {
+                    let mut body = values.pop().ok_or_else(invalid_state)?;
+                    if binding_start > bindings.len()
+                        || bindings.len() - binding_start != source_bindings.len()
+                    {
+                        return Err(invalid_state());
+                    }
+                    for binding in bindings.drain(binding_start..).rev() {
+                        let node = self.builder.binding(
+                            binding.binder,
+                            binding.initializer,
+                            body.node,
+                            body.ty.clone(),
+                            binding.origin,
+                        )?;
+                        body = TypedNode { node, ty: body.ty };
+                    }
+                    for binding in source_bindings {
+                        if context.binders.remove(&binding.binder.id).is_none() {
+                            return Err(invalid_state());
+                        }
+                    }
+                    values.push(body);
+                }
             }
         }
         let result = values.pop().ok_or_else(invalid_state)?;
@@ -386,8 +505,16 @@ impl Default for Elaborator {
     }
 }
 
-enum SynthesisTask<'a> {
-    Visit(&'a ResolvedExpr),
+enum ElaborationTask<'a> {
+    Synthesize(&'a ResolvedExpr),
+    Check {
+        expression: &'a ResolvedExpr,
+        expected: Type,
+    },
+    FinishCheck {
+        span: Span,
+        expected: Type,
+    },
     AfterLeft {
         primitive: Primitive,
         whole_span: Span,
@@ -402,22 +529,36 @@ enum SynthesisTask<'a> {
         left: TypedNode,
         right_span: Span,
     },
+    FinishBinding {
+        binding: &'a ResolvedBinding,
+        expected: Option<Type>,
+    },
+    FinishBlock {
+        bindings: &'a [ResolvedBinding],
+        binding_start: usize,
+    },
+}
+
+struct ElaboratedBinding {
+    binder: TypedBinder,
+    initializer: NodeId,
+    origin: Origin,
 }
 
 fn schedule_left<'a>(
     primitive: Primitive,
     whole_span: Span,
     binary: &'a crate::resolved::ResolvedBinaryExpr,
-    tasks: &mut Vec<SynthesisTask<'a>>,
+    tasks: &mut Vec<ElaborationTask<'a>>,
 ) {
-    tasks.push(SynthesisTask::AfterLeft {
+    tasks.push(ElaborationTask::AfterLeft {
         primitive,
         whole_span,
         operator_span: binary.operator_span,
         right: &binary.right,
         left_span: binary.left.span,
     });
-    tasks.push(SynthesisTask::Visit(&binary.left));
+    tasks.push(ElaborationTask::Synthesize(&binary.left));
 }
 
 fn require_integer(
@@ -447,6 +588,55 @@ fn invalid_state() -> TypeError {
 
 fn pending(feature: PendingFeature) -> Result<TypedNode, TypeError> {
     Err(TypeError::Internal(ElaborationFailure::Pending(feature)))
+}
+
+fn lower_surface_type(surface: &SurfaceType) -> Result<Type, TypeError> {
+    enum Task<'a> {
+        Visit(&'a SurfaceType),
+        Function,
+    }
+
+    let mut tasks = vec![Task::Visit(surface)];
+    let mut types = Vec::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Visit(current) => match &current.kind {
+                SurfaceTypeKind::Int => types.push(Type::Int),
+                SurfaceTypeKind::Bool => types.push(Type::Bool),
+                SurfaceTypeKind::Unit => types.push(Type::Unit),
+                SurfaceTypeKind::Function(function) => {
+                    tasks.push(Task::Function);
+                    tasks.push(Task::Visit(&function.codomain));
+                    tasks.push(Task::Visit(&function.domain));
+                }
+            },
+            Task::Function => {
+                let codomain = types.pop().ok_or_else(invalid_state)?;
+                let domain = types.pop().ok_or_else(invalid_state)?;
+                types.push(Type::Function(Box::new(domain), Box::new(codomain)));
+            }
+        }
+    }
+    let ty = types.pop().ok_or_else(invalid_state)?;
+    if types.is_empty() {
+        Ok(ty)
+    } else {
+        Err(invalid_state())
+    }
+}
+
+fn binding_origin(binding: &ResolvedBinding) -> Origin {
+    let mut related = vec![binding.initializer.span];
+    if let Some(annotation) = &binding.annotation {
+        related.push(annotation.span);
+    }
+    Origin::Generated {
+        cause: Box::new(Origin::Related {
+            primary: Box::new(Origin::Source(binding.span)),
+            related,
+        }),
+        reason: GeneratedReason::BindingLowering,
+    }
 }
 
 /// Applies the structural type-equality rule without inference or coercion.
