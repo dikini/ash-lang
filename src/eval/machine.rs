@@ -677,6 +677,56 @@ mod tests {
     }
 
     #[test]
+    fn defensive_transition_failures_remain_structured() {
+        let source = SourceFile::new("runtime-failures.ash", "1").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 1).expect("ordered range"))
+                .expect("source span"),
+        );
+        let mut builder = CoreBuilder::new();
+        let binder = builder
+            .binder(Type::Int, origin.clone())
+            .expect("binder should fit");
+        let variable = builder
+            .variable(binder.id(), Type::Int, origin.clone())
+            .expect("variable should fit");
+        let function = builder
+            .function(
+                binder,
+                variable,
+                Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                origin,
+            )
+            .expect("function should fit");
+        let validated = validate(
+            builder
+                .finish(function)
+                .expect("function root should finish"),
+            &[&source],
+        )
+        .expect("function Core should validate");
+        let program = validated.shared();
+
+        assert!(matches!(
+            dispatch_entry(&program, variable, Environment::new()),
+            Err(RuntimeFailure::MissingBinding)
+        ));
+        assert!(matches!(
+            return_application_function(variable, Environment::new(), Value::Unit),
+            Err(RuntimeFailure::UnexpectedFunctionValue)
+        ));
+        assert!(matches!(
+            apply_primitive(
+                Primitive::Add,
+                Value::Boolean(false),
+                Value::Integer(Integer::parse_decimal("1").expect("valid integer")),
+            ),
+            Err(RuntimeFailure::UnexpectedPrimitiveValue)
+        ));
+    }
+
+    #[test]
     fn environment_clone_and_extension_share_the_existing_chain() {
         let first = Environment::new()
             .extend(

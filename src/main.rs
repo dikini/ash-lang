@@ -84,6 +84,7 @@ mod tests {
     use ash::{
         core::{CoreBuilder, validate},
         driver::{FileFailure, PipelineFailure},
+        eval::RuntimeFailure,
         integer::Integer,
         source::{ByteRange, Origin, SourceFile},
         types::Type,
@@ -261,6 +262,30 @@ mod tests {
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
         assert_eq!(stderr, b"core.validation.node-type at Core node 0\n");
+    }
+
+    #[test]
+    fn injected_runtime_failure_uses_internal_cli_observations() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = execute_with_runner(
+            [OsString::from("injected.ash")],
+            &mut stdout,
+            &mut stderr,
+            |_| {
+                Err(FileFailure::Pipeline(PipelineFailure::Runtime(
+                    RuntimeFailure::MissingBinding,
+                )))
+            },
+        );
+
+        assert_eq!(status, 2);
+        assert!(stdout.is_empty());
+        assert_eq!(
+            stderr,
+            b"internal.runtime\nruntime lexical binding is absent\n"
+        );
     }
 
     fn injected_validation_failure() -> FileFailure {

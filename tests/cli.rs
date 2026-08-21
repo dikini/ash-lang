@@ -5,6 +5,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use ash::{driver::run_source, eval::Value, source::SourceFile, types::Type};
+
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 struct TempDirectory(PathBuf);
@@ -70,6 +72,22 @@ fn v001_fixture_prints_exactly_one_value_and_type_line() {
 
     assert!(output.status.success());
     assert_eq!(output.stdout, b"7 : Int\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn false_literal_has_exact_library_and_cli_observations() {
+    let observation = run_source(
+        SourceFile::new("false-literal.ash", "false\n").expect("test source should fit"),
+    )
+    .expect("false should run end to end");
+    assert!(matches!(observation.value, Value::Boolean(false)));
+    assert_eq!(observation.ty, Type::Bool);
+
+    let source = TempFile::write(b"false\n");
+    let output = ash(&[source.path()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"false : Bool\n");
     assert!(output.stderr.is_empty());
 }
 
