@@ -4,9 +4,13 @@
 
 pub mod core;
 pub mod diagnostic;
+pub mod driver;
+pub mod elaborate;
+pub mod eval;
 pub mod integer;
 pub mod lexer;
 pub mod parser;
+pub mod render;
 pub mod resolve;
 pub mod resolved;
 pub mod source;
