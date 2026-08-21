@@ -268,6 +268,148 @@ fn recursive_group_rejects_foreign_children_and_binder_capabilities() {
 }
 
 #[test]
+fn recursive_group_rejects_foreign_group_and_binder_provenance() {
+    let admitted = source("admitted recursive core");
+    let foreign = source("foreign recursive core");
+    let admitted_origin = whole_origin(&admitted);
+    let foreign_origin = whole_origin(&foreign);
+    let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+
+    let mut foreign_group_builder = CoreBuilder::new();
+    let member = foreign_group_builder
+        .binder(function_type.clone(), admitted_origin.clone())
+        .expect("member binder");
+    let parameter = foreign_group_builder
+        .binder(Type::Unit, admitted_origin.clone())
+        .expect("parameter binder");
+    let body = foreign_group_builder
+        .integer(integer("1"), Type::Int, admitted_origin.clone())
+        .expect("function body");
+    let function = foreign_group_builder
+        .function(
+            parameter,
+            body,
+            function_type.clone(),
+            admitted_origin.clone(),
+        )
+        .expect("function initializer");
+    let root = foreign_group_builder
+        .recursive_binding(
+            vec![(member, function)],
+            body,
+            Type::Int,
+            foreign_origin.clone(),
+        )
+        .expect("unchecked group");
+    let error = validate(
+        foreign_group_builder.finish(root).expect("group root"),
+        &[&admitted],
+    )
+    .expect_err("a recursive group origin must be admitted");
+    assert_eq!(error.reason(), ValidationReason::Provenance);
+    assert_eq!(error.node(), Some(root));
+
+    let mut foreign_binder_builder = CoreBuilder::new();
+    let member = foreign_binder_builder
+        .binder(function_type.clone(), foreign_origin)
+        .expect("unchecked foreign-origin binder");
+    let parameter = foreign_binder_builder
+        .binder(Type::Unit, admitted_origin.clone())
+        .expect("parameter binder");
+    let body = foreign_binder_builder
+        .integer(integer("1"), Type::Int, admitted_origin.clone())
+        .expect("function body");
+    let function = foreign_binder_builder
+        .function(parameter, body, function_type, admitted_origin.clone())
+        .expect("function initializer");
+    let root = foreign_binder_builder
+        .recursive_binding(vec![(member, function)], body, Type::Int, admitted_origin)
+        .expect("unchecked group");
+    let error = validate(
+        foreign_binder_builder.finish(root).expect("group root"),
+        &[&admitted],
+    )
+    .expect_err("a recursive member binder origin must be admitted");
+    assert_eq!(error.reason(), ValidationReason::Provenance);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn recursive_group_rejects_a_free_occurrence_and_an_unreachable_child() {
+    let scope_file = source("recursive free occurrence");
+    let scope_origin = whole_origin(&scope_file);
+    let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+    let mut scope_builder = CoreBuilder::new();
+    let member = scope_builder
+        .binder(function_type.clone(), scope_origin.clone())
+        .expect("member binder");
+    let parameter = scope_builder
+        .binder(Type::Unit, scope_origin.clone())
+        .expect("parameter binder");
+    let unbound = scope_builder
+        .binder(Type::Int, scope_origin.clone())
+        .expect("unbound binder capability");
+    let free_occurrence = scope_builder
+        .variable(unbound.id(), Type::Int, scope_origin.clone())
+        .expect("free occurrence");
+    let function = scope_builder
+        .function(
+            parameter,
+            free_occurrence,
+            function_type.clone(),
+            scope_origin.clone(),
+        )
+        .expect("function initializer");
+    let result = scope_builder
+        .integer(integer("1"), Type::Int, scope_origin.clone())
+        .expect("group result");
+    let root = scope_builder
+        .recursive_binding(vec![(member, function)], result, Type::Int, scope_origin)
+        .expect("unchecked group");
+    let error = validate(
+        scope_builder.finish(root).expect("group root"),
+        &[&scope_file],
+    )
+    .expect_err("a recursive function cannot acquire an unbound occurrence");
+    assert_eq!(error.reason(), ValidationReason::Scope);
+    assert_eq!(error.node(), Some(free_occurrence));
+
+    let unreachable_file = source("recursive unreachable child");
+    let unreachable_origin = whole_origin(&unreachable_file);
+    let mut unreachable_builder = CoreBuilder::new();
+    let orphan = unreachable_builder
+        .integer(integer("0"), Type::Int, unreachable_origin.clone())
+        .expect("orphan node");
+    let member = unreachable_builder
+        .binder(function_type.clone(), unreachable_origin.clone())
+        .expect("member binder");
+    let parameter = unreachable_builder
+        .binder(Type::Unit, unreachable_origin.clone())
+        .expect("parameter binder");
+    let body = unreachable_builder
+        .integer(integer("1"), Type::Int, unreachable_origin.clone())
+        .expect("function body");
+    let function = unreachable_builder
+        .function(parameter, body, function_type, unreachable_origin.clone())
+        .expect("function initializer");
+    let root = unreachable_builder
+        .recursive_binding(
+            vec![(member, function)],
+            body,
+            Type::Int,
+            unreachable_origin,
+        )
+        .expect("unchecked group");
+    let error = validate(
+        unreachable_builder.finish(root).expect("group root"),
+        &[&unreachable_file],
+    )
+    .expect_err("all recursive arena nodes must be reachable from the group");
+    assert_eq!(error.reason(), ValidationReason::Unreachable);
+    assert_eq!(error.node(), Some(orphan));
+}
+
+#[test]
 fn rejects_cross_builder_binders_without_consuming_receiver_state() {
     let file = source("()");
     let origin = whole_origin(&file);

@@ -101,6 +101,20 @@ fn projects_recursive_group() {
 }
 
 #[test]
+fn projects_one_member_recursive_group() {
+    let (_, program) =
+        parse_valid("{\nlet rec answer : Unit -> Int = fn(ignored) {\n42\n}\nanswer ()\n}\n");
+    let SurfaceExprKind::Block(block) = &program.result.kind else {
+        panic!("expected block");
+    };
+    let [SurfaceLocalDeclaration::Recursive(group)] = block.declarations.as_slice() else {
+        panic!("expected one recursive declaration");
+    };
+    assert_eq!(group.members.len(), 1);
+    assert_eq!(group.members[0].binder.name.text, "answer");
+}
+
+#[test]
 fn recursive_group_recovery() {
     let cases = [
         (

@@ -1057,13 +1057,36 @@ mod tests {
                 let frame = environment.head.as_ref().expect("recursive frame").clone();
 
                 assert_eq!(Arc::strong_count(&frame), 2);
-                let closure = environment
+                let first_value = environment
                     .lookup(BinderId::new(MEMBERS / 2), &program)
                     .expect("member should materialize");
                 assert_eq!(Arc::strong_count(&frame), 3);
+                let second_value = environment
+                    .lookup(BinderId::new(MEMBERS / 2 + 1), &program)
+                    .expect("another member should materialize");
+                assert_eq!(Arc::strong_count(&frame), 4);
+                let (Value::Function(first_closure), Value::Function(second_closure)) =
+                    (first_value, second_value)
+                else {
+                    panic!("recursive members should materialize as functions")
+                };
+                assert!(Arc::ptr_eq(
+                    first_closure
+                        .environment
+                        .head
+                        .as_ref()
+                        .expect("first recursive root"),
+                    second_closure
+                        .environment
+                        .head
+                        .as_ref()
+                        .expect("second recursive root")
+                ));
                 drop(environment);
+                assert_eq!(Arc::strong_count(&frame), 3);
+                drop(first_closure);
                 assert_eq!(Arc::strong_count(&frame), 2);
-                drop(closure);
+                drop(second_closure);
                 assert_eq!(Arc::strong_count(&frame), 1);
                 drop(frame);
             })

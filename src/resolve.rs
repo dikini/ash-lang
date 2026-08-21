@@ -758,19 +758,26 @@ mod tests {
     }
 
     #[test]
-    fn failed_nested_resolution_restores_the_scope_stack() {
-        let source = SourceFile::new("scope-error.ash", "fn(value) {\n{\nmissing\n}\n}\n")
-            .expect("the scope fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let program = project(&source, &tree).expect("the fixture should project");
-        let mut resolver = Resolver::new();
-        let initial_scope_count = resolver.scopes.len();
+    fn failed_nested_and_recursive_resolution_restore_the_scope_stack() {
+        for (name, text) in [
+            ("scope-error.ash", "fn(value) {\n{\nmissing\n}\n}\n"),
+            (
+                "recursive-scope-error.ash",
+                "{\nlet rec repeat : Unit -> Int = fn(ignored) {\nmissing\n}\nrepeat ()\n}\n",
+            ),
+        ] {
+            let source = SourceFile::new(name, text).expect("the scope fixture should fit");
+            let tree = parse(lex(&source).expect("the fixture should lex"));
+            let program = project(&source, &tree).expect("the fixture should project");
+            let mut resolver = Resolver::new();
+            let initial_scope_count = resolver.scopes.len();
 
-        let error = resolver
-            .resolve_expr(&program.result)
-            .expect_err("the nested unknown name should fail");
+            let error = resolver
+                .resolve_expr(&program.result)
+                .expect_err("the nested unknown name should fail");
 
-        assert_eq!(error.reason, ResolveReason::UnknownName);
-        assert_eq!(resolver.scopes.len(), initial_scope_count);
+            assert_eq!(error.reason, ResolveReason::UnknownName);
+            assert_eq!(resolver.scopes.len(), initial_scope_count);
+        }
     }
 }

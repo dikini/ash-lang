@@ -226,6 +226,20 @@ fn recursive_machine_evaluates_mutual_function_templates() {
 }
 
 #[test]
+fn recursive_machine_evaluates_a_self_reference() {
+    let source = SourceFile::new(
+        "recursive-self.ash",
+        "{\nlet rec self : Unit -> Int = fn(ignored) {\nlet retain : Unit -> Int = self\n42\n}\nself ()\n}\n",
+    )
+    .expect("test source should fit");
+    let program = elaborated(&source);
+
+    let evaluation = evaluate(&program).expect("recursive self lookup should evaluate");
+
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
 fn identity_traversal_preserves_recursive_groups() {
     let (source, before) = recursive_machine_core();
 

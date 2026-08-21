@@ -45,6 +45,16 @@ fn local_recursive_group_evaluates_through_the_same_core_form() {
 }
 
 #[test]
+fn recursive_closure_uses_its_definition_environment_not_its_caller() {
+    let observation = run(
+        "{\nlet captured = 42\nlet rec read : Unit -> Int = fn(ignored) {\ncaptured\n}\nlet caller : Unit -> Int = fn(ignored) {\nlet captured = 0\nread ()\n}\ncaller ()\n}\n",
+    );
+
+    assert_eq!(observation.value.to_string(), "42");
+    assert_eq!(observation.ty, Type::Int);
+}
+
+#[test]
 fn recursive_initialization_requires_a_direct_anonymous_function() {
     for text in [
         "{\nlet rec value : Int = 1\nvalue\n}\n",

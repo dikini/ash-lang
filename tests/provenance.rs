@@ -80,6 +80,10 @@ fn recursive_group_retains_group_member_function_and_occurrence_causes() {
     ] {
         assert!(root.origin.related_spans().contains(&expected));
     }
+    assert_eq!(
+        group.members()[0].binder().origin().primary_span(),
+        source_member.binder.origin.primary_span()
+    );
 
     let function = core
         .node(group.members()[0].initializer())

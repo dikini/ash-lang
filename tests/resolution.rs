@@ -275,6 +275,50 @@ fn recursive_local_members_share_scope_and_remain_visible_after_the_group() {
 }
 
 #[test]
+fn recursive_group_captures_outer_scope_and_may_shadow_it() {
+    let captured = resolve_valid(
+        "{\nlet captured = 42\nlet rec read : Unit -> Int = fn(ignored) {\ncaptured\n}\nread ()\n}\n",
+    );
+    let ResolvedExprKind::Block(block) = &captured.result.kind else {
+        panic!("expected captured block")
+    };
+    let outer = binding(block, 0);
+    let ResolvedLocalDeclaration::Recursive(group) = &block.declarations[1] else {
+        panic!("expected recursive group")
+    };
+    let ResolvedExprKind::Function(function) = &group.members[0].initializer.kind else {
+        panic!("expected recursive function")
+    };
+    let ResolvedExprKind::Occurrence(captured_use) = &function.body.result.kind else {
+        panic!("expected captured occurrence")
+    };
+    assert_eq!(captured_use.binder, outer.binder.id);
+
+    let shadowed = resolve_valid(
+        "{\nlet repeat : Unit -> Int = fn(ignored) {\n1\n}\nlet rec repeat : Unit -> Int = fn(ignored) {\nrepeat ()\n}\nrepeat ()\n}\n",
+    );
+    let ResolvedExprKind::Block(block) = &shadowed.result.kind else {
+        panic!("expected shadowing block")
+    };
+    let outer = binding(block, 0);
+    let ResolvedLocalDeclaration::Recursive(group) = &block.declarations[1] else {
+        panic!("expected shadowing recursive group")
+    };
+    let member = &group.members[0];
+    let ResolvedExprKind::Function(function) = &member.initializer.kind else {
+        panic!("expected recursive function")
+    };
+    let ResolvedExprKind::Apply(call) = &function.body.result.kind else {
+        panic!("expected self call")
+    };
+    let ResolvedExprKind::Occurrence(self_use) = &call.function.kind else {
+        panic!("expected self occurrence")
+    };
+    assert_ne!(member.binder.id, outer.binder.id);
+    assert_eq!(self_use.binder, member.binder.id);
+}
+
+#[test]
 fn duplicate_recursive_member_relates_the_first_definition() {
     let error = resolve_error(
         "{\nlet rec same : Unit -> Int = fn(value) {\n1\n}\nand same : Unit -> Int = fn(value) {\n2\n}\nsame ()\n}\n",
