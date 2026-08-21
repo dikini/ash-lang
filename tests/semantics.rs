@@ -247,6 +247,35 @@ fn identity_traversal_preserves_recursive_groups() {
 }
 
 #[test]
+fn recursive_group_survives_literal_folding_and_independent_validation() {
+    let source = SourceFile::new(
+        "recursive-fold.ash",
+        "{\nlet rec answer : Unit -> Int = fn(ignored) {\n20 + 22\n}\nanswer ()\n}\n",
+    )
+    .expect("test source should fit");
+    let before = elaborated(&source);
+    let after = validate(
+        fold_literal_primitives(&before).expect("recursive Core should transform"),
+        &[&source],
+    )
+    .expect("transformed recursive Core should validate independently");
+
+    let root = after.node(after.root()).expect("recursive root");
+    assert!(matches!(
+        root.kind,
+        PureExprKind::Computation(PureComputation::RecursiveBind(_))
+    ));
+    assert!(after.node_count() < before.node_count());
+    assert_eq!(
+        evaluate(&after)
+            .expect("folded recursive Core should evaluate")
+            .value
+            .to_string(),
+        "42"
+    );
+}
+
+#[test]
 fn arbitrary_precision_observations_and_traces_exceed_unsigned_machine_width() {
     const BIG: &str = "340282366920938463463374607431768211456";
     const DOUBLE: &str = "680564733841876926926749214863536422912";

@@ -212,6 +212,62 @@ fn rejects_recursive_member_type_disagreement_and_duplicate_binders() {
 }
 
 #[test]
+fn recursive_group_rejects_foreign_children_and_binder_capabilities() {
+    let file = source("foreign recursive core");
+    let origin = whole_origin(&file);
+    let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+
+    let mut foreign_builder = CoreBuilder::new();
+    let foreign_parameter = foreign_builder
+        .binder(Type::Unit, origin.clone())
+        .expect("foreign parameter");
+    let foreign_body = foreign_builder
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("foreign body");
+    let foreign_function = foreign_builder
+        .function(
+            foreign_parameter,
+            foreign_body,
+            function_type.clone(),
+            origin.clone(),
+        )
+        .expect("foreign function");
+    let foreign_binder = foreign_builder
+        .binder(function_type.clone(), origin.clone())
+        .expect("foreign recursive binder");
+
+    let mut receiver = CoreBuilder::new();
+    let local_binder = receiver
+        .binder(function_type, origin.clone())
+        .expect("local recursive binder");
+    let body = receiver
+        .integer(integer("2"), Type::Int, origin.clone())
+        .expect("local body");
+    assert_eq!(
+        receiver.recursive_binding(
+            vec![(foreign_binder, foreign_function)],
+            body,
+            Type::Int,
+            origin.clone(),
+        ),
+        Err(BuildError::ForeignBinder)
+    );
+
+    let root = receiver
+        .recursive_binding(
+            vec![(local_binder, foreign_function)],
+            body,
+            Type::Int,
+            origin,
+        )
+        .expect("unchecked construction accepts child handles");
+    let error = validate(receiver.finish(root).expect("local root"), &[&file])
+        .expect_err("recursive initializer must belong to the group arena");
+    assert_eq!(error.reason(), ValidationReason::NodeBounds);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
 fn rejects_cross_builder_binders_without_consuming_receiver_state() {
     let file = source("()");
     let origin = whole_origin(&file);

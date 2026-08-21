@@ -5,7 +5,9 @@ use ash::{
     lexer::lex,
     parser::{parse, project},
     resolve::resolve,
-    resolved::{ResolvedDefinitionKind, ResolvedProgram},
+    resolved::{
+        ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram,
+    },
     source::{GeneratedReason, Origin, SourceFile, Span},
 };
 
@@ -37,6 +39,69 @@ fn assert_check_origin(origin: &Origin, expression: Span, expected: Span) {
     assert_eq!(reason, &GeneratedReason::TypeChecking);
     assert_eq!(cause.primary_span(), expression);
     assert!(cause.related_spans().contains(&expected));
+}
+
+#[test]
+fn recursive_group_retains_group_member_function_and_occurrence_causes() {
+    let source = SourceFile::new(
+        "recursive-origins.ash",
+        "{\nlet rec repeat : Unit -> Int = fn(ignored) {\nrepeat ()\n}\nrepeat ()\n}\n",
+    )
+    .expect("test source should fit");
+    let program = resolved(&source);
+    let ResolvedExprKind::Block(block) = &program.result.kind else {
+        panic!("expected block")
+    };
+    let ResolvedLocalDeclaration::Recursive(source_group) = &block.declarations[0] else {
+        panic!("expected recursive group")
+    };
+    let source_member = &source_group.members[0];
+    let ResolvedExprKind::Function(source_function) = &source_member.initializer.kind else {
+        panic!("expected recursive function")
+    };
+    let ResolvedExprKind::Apply(source_call) = &source_function.body.result.kind else {
+        panic!("expected recursive call")
+    };
+
+    let core = validated(&source, &program);
+    let root = core.node(core.root()).expect("recursive root");
+    let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &root.kind else {
+        panic!("expected recursive Core group")
+    };
+    assert_eq!(
+        root.origin.generated_reason(),
+        Some(GeneratedReason::RecursiveBindingLowering)
+    );
+    assert_eq!(root.origin.primary_span(), source_group.span);
+    for expected in [
+        source_member.span,
+        source_member.annotation.span,
+        source_member.initializer.span,
+    ] {
+        assert!(root.origin.related_spans().contains(&expected));
+    }
+
+    let function = core
+        .node(group.members()[0].initializer())
+        .expect("function initializer");
+    assert_eq!(
+        function.origin.primary_span(),
+        source_member.initializer.span
+    );
+    let PureExprKind::Value(PureValue::Function(function_node)) = &function.kind else {
+        panic!("expected function Core")
+    };
+    assert_eq!(
+        function_node.parameter().origin().primary_span(),
+        source_function.parameter.origin.primary_span()
+    );
+    let body = core.node(function_node.body()).expect("recursive body");
+    assert_eq!(body.origin.primary_span(), source_function.body.result.span);
+    let PureExprKind::Computation(PureComputation::Apply(call)) = &body.kind else {
+        panic!("expected recursive application Core")
+    };
+    let occurrence = core.node(call.function()).expect("recursive occurrence");
+    assert_eq!(occurrence.origin.primary_span(), source_call.function.span);
 }
 
 #[test]

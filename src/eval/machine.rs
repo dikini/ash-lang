@@ -1004,4 +1004,73 @@ mod tests {
 
         worker.join().expect("closure environment should drop");
     }
+
+    #[test]
+    fn recursive_template_frame_has_no_owning_edge_back_from_its_members() {
+        const MEMBERS: u32 = 50_000;
+        let worker = std::thread::Builder::new()
+            .name("recursive-template-drop".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("recursive-drop.ash", "1").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 1).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let mut builder = CoreBuilder::new();
+                let parameter = builder
+                    .binder(Type::Unit, origin.clone())
+                    .expect("parameter should fit");
+                let body = builder
+                    .integer(
+                        Integer::parse_decimal("1").expect("valid integer"),
+                        Type::Int,
+                        origin.clone(),
+                    )
+                    .expect("body should fit");
+                let function = builder
+                    .function(
+                        parameter.clone(),
+                        body,
+                        Type::Function(Box::new(Type::Unit), Box::new(Type::Int)),
+                        origin.clone(),
+                    )
+                    .expect("function should fit");
+                let validated = validate(
+                    builder.finish(function).expect("root should finish"),
+                    &[&source],
+                )
+                .expect("function Core should validate");
+                let program = validated.shared();
+                let members = (0..MEMBERS)
+                    .map(|binder| RecursiveFunctionTemplate {
+                        binder: BinderId::new(binder),
+                        parameter: parameter.id(),
+                        body,
+                        origin: origin.clone(),
+                    })
+                    .collect();
+                let environment = Environment::new()
+                    .extend_recursive(members)
+                    .expect("recursive frame should fit");
+                let frame = environment.head.as_ref().expect("recursive frame").clone();
+
+                assert_eq!(Arc::strong_count(&frame), 2);
+                let closure = environment
+                    .lookup(BinderId::new(MEMBERS / 2), &program)
+                    .expect("member should materialize");
+                assert_eq!(Arc::strong_count(&frame), 3);
+                drop(environment);
+                assert_eq!(Arc::strong_count(&frame), 2);
+                drop(closure);
+                assert_eq!(Arc::strong_count(&frame), 1);
+                drop(frame);
+            })
+            .expect("test thread should start");
+
+        worker
+            .join()
+            .expect("recursive template environment should drop iteratively");
+    }
 }

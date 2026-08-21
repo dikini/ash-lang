@@ -145,6 +145,38 @@ fn rejected_ash_source_uses_status_one_without_success_output() {
     assert!(stderr.contains("found Bool"));
 }
 
+#[test]
+fn recursive_source_rejections_use_stable_cli_categories() {
+    for (text, category) in [
+        (
+            b"{\nlet rec value : Int = 1\nand\nvalue\n}\n".as_slice(),
+            "parse.expected-recursive-member",
+        ),
+        (
+            b"{\nand stray : Int = 1\n42\n}\n".as_slice(),
+            "parse.unexpected-and",
+        ),
+        (
+            b"{\nlet rec same : Unit -> Int = fn(value) {\n1\n}\nand same : Unit -> Int = fn(value) {\n2\n}\nsame ()\n}\n".as_slice(),
+            "resolve.duplicate-recursive-member",
+        ),
+        (
+            b"{\nlet rec value : Int = 1\nvalue\n}\n".as_slice(),
+            "recursion.unsafe-initializer",
+        ),
+    ] {
+        let source = TempFile::write(text);
+        let output = ash(&[source.path()]);
+        assert_eq!(output.status.code(), Some(1), "category: {category}");
+        assert!(output.stdout.is_empty(), "category: {category}");
+        let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
+        assert!(
+            stderr.starts_with(&format!("{category}\n")),
+            "unexpected stderr for {category}: {stderr:?}"
+        );
+    }
+}
+
 fn assert_source_failure(path: &Path, category: &str, labels: &[&str]) {
     let output = ash(&[path]);
 

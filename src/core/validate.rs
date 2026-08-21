@@ -206,7 +206,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             ));
         };
         source
-            .location(span)
+            .span(span.range())
             .map_err(|_| ValidationError::new(ValidationReason::Provenance, Some(node)))?;
         Ok(())
     }
@@ -727,6 +727,58 @@ mod tests {
         };
         let error = validate(program, &[&file]).expect_err("cycle");
         assert_eq!(error.reason(), ValidationReason::Cycle);
+    }
+
+    #[test]
+    fn rejects_an_ownership_cycle_through_a_recursive_group_body() {
+        let file = source();
+        let arena = super::super::dialect::ArenaId::new(104);
+        let node_origin = origin(&file);
+        let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        let recursive = TypedBinder::new(
+            arena,
+            BinderId::new(0),
+            function_type.clone(),
+            node_origin.clone(),
+        );
+        let parameter = TypedBinder::new(arena, BinderId::new(1), Type::Unit, node_origin.clone());
+        let group = StoredNode {
+            dialect: DialectId::PURE,
+            ty: Type::Unit,
+            origin: Some(node_origin.clone()),
+            kind: PureExprKind::Computation(PureComputation::RecursiveBind(
+                super::super::recursion::RecursiveBindingNode::new(
+                    vec![super::super::recursion::RecursiveBindingMember::new(
+                        recursive,
+                        NodeId::new(arena, 1),
+                    )],
+                    NodeId::new(arena, 0),
+                ),
+            )),
+        };
+        let function = StoredNode {
+            dialect: DialectId::PURE,
+            ty: function_type,
+            origin: Some(node_origin.clone()),
+            kind: PureExprKind::Value(PureValue::Function(
+                super::super::function::FunctionNode::new(parameter, NodeId::new(arena, 2)),
+            )),
+        };
+        let unit = StoredNode {
+            dialect: DialectId::PURE,
+            ty: Type::Unit,
+            origin: Some(node_origin),
+            kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+        };
+        let program = UnvalidatedProgram {
+            arena,
+            nodes: vec![group, function, unit],
+            root: NodeId::new(arena, 0),
+        };
+
+        let error = validate(program, &[&file]).expect_err("recursive ownership cycle");
+        assert_eq!(error.reason(), ValidationReason::Cycle);
+        assert_eq!(error.node(), Some(NodeId::new(arena, 0)));
     }
 
     #[test]

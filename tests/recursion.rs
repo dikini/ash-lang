@@ -1,6 +1,11 @@
 use ash::{
+    core::validate,
     driver::{PipelineFailure, run_source},
-    elaborate::{TypeError, TypeReason},
+    elaborate::{Elaborator, TypeError, TypeReason},
+    eval::evaluate,
+    lexer::lex,
+    parser::{parse, project},
+    resolve::resolve,
     source::SourceFile,
     types::Type,
 };
@@ -79,4 +84,55 @@ fn recursive_members_are_checked_against_their_declared_monotypes() {
     assert_eq!(argument_error.reason, TypeReason::Argument);
     assert_eq!(argument_error.expected.as_deref(), Some("Unit"));
     assert_eq!(argument_error.found.as_deref(), Some("Int"));
+}
+
+#[test]
+fn deep_recursive_group_and_call_chain_use_explicit_work_stacks() {
+    const MEMBERS: usize = 10_000;
+    let worker = std::thread::Builder::new()
+        .name("deep-recursive-group".into())
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            use std::fmt::Write as _;
+
+            let mut text = String::from("{\n");
+            for index in 0..MEMBERS {
+                let introducer = if index == 0 { "let rec" } else { "and" };
+                if index + 1 == MEMBERS {
+                    writeln!(text, "{introducer} f{index} : Unit -> Int = fn(ignored) {{")
+                        .expect("String writing cannot fail");
+                    text.push_str("let retain : Unit -> Int = fn(value) {\nf0 value\n}\n1\n}\n");
+                } else {
+                    writeln!(
+                        text,
+                        "{introducer} f{index} : Unit -> Int = fn(ignored) {{\n1 + f{} ()\n}}",
+                        index + 1
+                    )
+                    .expect("String writing cannot fail");
+                }
+            }
+            text.push_str("f0 ()\n}\n");
+
+            let source = SourceFile::new("deep-recursion.ash", text).expect("fixture should fit");
+            let tree = parse(lex(&source).expect("fixture should lex"));
+            assert!(tree.parse_diagnostics().is_empty());
+            let surface = project(&source, &tree).expect("fixture should project");
+            let resolved = resolve(&surface).expect("fixture should resolve");
+            let mut elaborator =
+                Elaborator::for_program(&resolved).expect("binder namespace should fit");
+            let typed = elaborator
+                .synthesize_program(&resolved)
+                .expect("fixture should elaborate");
+            let unchecked = elaborator.finish(typed.node).expect("root should finish");
+            let validated = validate(unchecked, &[&source]).expect("Core should validate");
+            let evaluation = evaluate(&validated).expect("recursive chain should evaluate");
+
+            assert_eq!(evaluation.value.to_string(), MEMBERS.to_string());
+            assert!(evaluation.trace.len() > MEMBERS * 5);
+        })
+        .expect("depth-test thread should start");
+
+    worker
+        .join()
+        .expect("recursive pipeline and destruction should stay within the host stack budget");
 }

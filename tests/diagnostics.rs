@@ -46,6 +46,79 @@ fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
 }
 
 #[test]
+fn recursive_diagnostics_retain_exact_stage_facts() {
+    let missing_member_text = "{\nlet rec value : Int = 1\nand\nvalue\n}\n";
+    let missing_member_source = source("missing-member.ash", missing_member_text);
+    let missing_member = parse(lex(&missing_member_source).expect("fixture should lex"));
+    let diagnostic = missing_member
+        .parse_diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.reason == ParseReason::ExpectedRecursiveMember)
+        .expect("missing recursive member should be diagnosed");
+    let boundary = missing_member_text.find("and\n").expect("and delimiter") + 3;
+    assert_eq!(diagnostic.primary.span().range().start(), offset(boundary));
+    assert_eq!(
+        diagnostic.primary.span().range().end(),
+        offset(boundary + 1)
+    );
+    assert_eq!(diagnostic.expected.as_deref(), Some("an identifier"));
+    assert_eq!(diagnostic.found.as_deref(), Some("line end"));
+    assert!(matches!(
+        diagnostic.context.as_slice(),
+        [ParseContext::Synchronization {
+            boundary: SynchronizationBoundary::LogicalLineEnd,
+            ..
+        }]
+    ));
+
+    let missing_annotation_text = "{\nlet rec value = fn(item) {\nitem\n}\nvalue\n}\n";
+    let missing_annotation_source = source("missing-annotation.ash", missing_annotation_text);
+    let missing_annotation = parse(lex(&missing_annotation_source).expect("fixture should lex"));
+    let diagnostic = missing_annotation
+        .parse_diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.reason == ParseReason::ExpectedForm
+                && diagnostic.expected.as_deref() == Some(":")
+        })
+        .expect("missing annotation delimiter should be diagnosed");
+    let equal = missing_annotation_text
+        .find('=')
+        .expect("initializer delimiter");
+    assert_eq!(diagnostic.primary.span().range().start(), offset(equal));
+    assert_eq!(diagnostic.found.as_deref(), Some("="));
+
+    let stray_text = "{\nand stray : Int = 1\n42\n}\n";
+    let stray_source = source("stray-and.ash", stray_text);
+    let stray = parse(lex(&stray_source).expect("fixture should lex"));
+    let diagnostic = stray
+        .parse_diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.reason == ParseReason::UnexpectedAnd)
+        .expect("stray and should be diagnosed");
+    assert_eq!(diagnostic.primary.span().range().start(), offset(2));
+    assert_eq!(diagnostic.primary.span().range().end(), offset(5));
+
+    let unsafe_text = "{\nlet rec value : Int = 1\nvalue\n}\n";
+    let error = run_source(source("unsafe-recursion.ash", unsafe_text))
+        .expect_err("unsafe initialization should fail");
+    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+        panic!("expected source typing failure")
+    };
+    assert_eq!(diagnostic.reason, TypeReason::UnsafeRecursiveInitializer);
+    let initializer = unsafe_text.find("1\n").expect("initializer");
+    assert_eq!(
+        diagnostic.primary.span().range().start(),
+        offset(initializer)
+    );
+    assert_eq!(diagnostic.related.len(), 2);
+    assert_eq!(
+        diagnostic.expected.as_deref(),
+        Some("a direct `fn` initializer")
+    );
+}
+
+#[test]
 fn p001_preserves_the_complete_global_before_the_missing_result() {
     let source = source("p001.ash", P001);
     let tree = parse(lex(&source).expect("P-001 should lex"));
