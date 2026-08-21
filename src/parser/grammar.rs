@@ -169,13 +169,16 @@ pub(super) fn program(parser: &mut Parser<'_>) {
         let global_start = parser.current_span();
         let diagnostics_before = parser.diagnostic_count();
         global_definition(parser);
-        if parser.diagnostic_count() == diagnostics_before
-            && let (Some(start), Some(end)) = (global_start, parser.previous_span())
-        {
-            preceding_global_end = Some((start, end));
-        }
+        let completed_global = if parser.diagnostic_count() == diagnostics_before {
+            global_start.zip(parser.previous_span())
+        } else {
+            None
+        };
         if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
             break;
+        }
+        if let (Some((start, end)), Some(line_end)) = (completed_global, parser.previous_span()) {
+            preceding_global_end = Some((start, end, line_end));
         }
     }
 

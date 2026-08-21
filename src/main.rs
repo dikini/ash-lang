@@ -6,7 +6,10 @@ use std::{
     process::ExitCode,
 };
 
-use ash::{driver::run_path, render};
+use ash::{
+    driver::{FileFailure, Observation, run_path},
+    render,
+};
 
 fn main() -> ExitCode {
     let mut stdout = io::stdout().lock();
@@ -20,12 +23,22 @@ where
     O: Write,
     E: Write,
 {
+    execute_with_runner(arguments, stdout, stderr, run_path)
+}
+
+fn execute_with_runner<I, O, E, R>(arguments: I, stdout: &mut O, stderr: &mut E, runner: R) -> u8
+where
+    I: IntoIterator<Item = OsString>,
+    O: Write,
+    E: Write,
+    R: FnOnce(PathBuf) -> Result<Observation, FileFailure>,
+{
     let Some(path) = exactly_one(arguments.into_iter()) else {
         let _ = write_output(stderr, b"usage: ash <source-file>\n");
         return 2;
     };
 
-    match run_path(PathBuf::from(path)) {
+    match runner(PathBuf::from(path)) {
         Ok(observation) => {
             if write_output(stdout, render::observation(&observation).as_bytes()).is_ok() {
                 0
@@ -61,13 +74,20 @@ fn exactly_one(mut arguments: impl Iterator<Item = OsString>) -> Option<OsString
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
+        fs::{self, OpenOptions},
         io::{self, Write},
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
     };
 
     use super::*;
+    use ash::{
+        core::{CoreBuilder, validate},
+        driver::{FileFailure, PipelineFailure},
+        integer::Integer,
+        source::{ByteRange, Origin, SourceFile},
+        types::Type,
+    };
 
     static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -112,13 +132,22 @@ mod tests {
 
     impl TempSource {
         fn rejected() -> Self {
-            let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "ash-main-write-failure-{}-{id}.ash",
-                std::process::id()
-            ));
-            fs::write(&path, b"true + 1\n").expect("test source should be writable");
-            Self(path)
+            loop {
+                let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "ash-main-write-failure-{}-{id}.ash",
+                    std::process::id()
+                ));
+                match OpenOptions::new().write(true).create_new(true).open(&path) {
+                    Ok(mut file) => {
+                        file.write_all(b"true + 1\n")
+                            .expect("test source should be writable");
+                        return Self(path);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("test source should be creatable: {error}"),
+                }
+            }
         }
     }
 
@@ -215,5 +244,45 @@ mod tests {
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
         assert!(stderr.bytes.starts_with(b"type.operator-operand\n"));
+    }
+
+    #[test]
+    fn injected_validator_failure_uses_internal_cli_observations() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = execute_with_runner(
+            [OsString::from("injected.ash")],
+            &mut stdout,
+            &mut stderr,
+            |_| Err(injected_validation_failure()),
+        );
+
+        assert_eq!(status, 2);
+        assert!(stdout.is_empty());
+        assert_eq!(stderr, b"core.validation.node-type at Core node 0\n");
+    }
+
+    fn injected_validation_failure() -> FileFailure {
+        let source = SourceFile::new("injected.ash", "1").expect("the test source should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("ordered fixture range"))
+            .expect("fixture range should belong to the source");
+        let mut builder = CoreBuilder::new();
+        let root = builder
+            .integer(
+                Integer::parse_decimal("1").expect("valid fixture integer"),
+                Type::Bool,
+                Origin::Source(span),
+            )
+            .expect("unchecked construction should retain the malformed type");
+        let error = validate(
+            builder
+                .finish(root)
+                .expect("root should belong to its arena"),
+            &[&source],
+        )
+        .expect_err("independent validation should reject the malformed type");
+        FileFailure::Pipeline(PipelineFailure::Validation(error))
     }
 }

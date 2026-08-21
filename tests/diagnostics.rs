@@ -58,6 +58,7 @@ fn p001_preserves_the_complete_global_before_the_missing_result() {
     let ParseContext::PrecedingGlobalComplete {
         starting_at,
         ending_at,
+        line_end,
     } = diagnostic.context[0]
     else {
         panic!("P-001 should retain the preceding global context");
@@ -67,6 +68,7 @@ fn p001_preserves_the_complete_global_before_the_missing_result() {
         ending_at.range().start(),
         offset(P001.rfind('}').expect("closing brace"))
     );
+    assert_eq!(line_end.range().end(), offset(P001.len()));
     assert_eq!(
         project(&source, &tree),
         Err(ProjectionError::RecoveryNodesPresent)

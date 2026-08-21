@@ -3,12 +3,15 @@
 use std::{error::Error, fmt, fs, io, path::PathBuf};
 
 use crate::{
-    core::{ValidationError, validate},
+    core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate},
     diagnostic::Diagnostic,
     elaborate::{Elaborator, TypeError},
-    eval::{RuntimeFailure, Value, evaluate},
+    eval::{Evaluation, RuntimeFailure, Value, evaluate},
     lexer::{LexReason, lex},
-    parser::{ParseDiagnostic, ProjectionError, ResourceFailure, parse, project},
+    parser::{
+        ParseContext, ParseDiagnostic, ParseReason, ProjectionError, ResourceFailure, parse,
+        project,
+    },
     resolve::{ResolveError, ResolveReason, resolve},
     source::{SourceError, SourceFile},
     types::Type,
@@ -146,15 +149,28 @@ impl Error for FileFailure {}
 /// Returns a stage-specific failure without allowing recovery-bearing syntax,
 /// unchecked Core, or a pending feature to bypass its owning stage.
 pub fn run_source(source: SourceFile) -> Result<Observation, PipelineFailure> {
+    run_source_with_consumers(source, validate, evaluate)
+}
+
+fn run_source_with_consumers<V, E>(
+    source: SourceFile,
+    validator: V,
+    evaluator: E,
+) -> Result<Observation, PipelineFailure>
+where
+    V: FnOnce(UnvalidatedProgram, &[&SourceFile]) -> Result<ValidatedProgram, ValidationError>,
+    E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
+{
     let lexed = lex(&source).map_err(PipelineFailure::SourceModel)?;
     let tree = parse(lexed);
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
         || !tree.parse_diagnostics().is_empty()
     {
+        let lexical = tree.lexical_diagnostics().to_vec();
         return Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
-            lexical: tree.lexical_diagnostics().to_vec(),
-            parser: tree.parse_diagnostics().to_vec(),
+            parser: retained_parser_diagnostics(&lexical, tree.parse_diagnostics()),
+            lexical,
             resource: tree.resource_failure(),
         })));
     }
@@ -169,12 +185,69 @@ pub fn run_source(source: SourceFile) -> Result<Observation, PipelineFailure> {
     let unchecked = elaborator
         .finish(typed.node)
         .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
-    let validated = validate(unchecked, &[&source]).map_err(PipelineFailure::Validation)?;
-    let evaluation = evaluate(&validated).map_err(PipelineFailure::Runtime)?;
+    let validated = validator(unchecked, &[&source]).map_err(PipelineFailure::Validation)?;
+    let evaluation = evaluator(&validated).map_err(PipelineFailure::Runtime)?;
     Ok(Observation {
         value: evaluation.value,
         ty,
     })
+}
+
+fn retained_parser_diagnostics(
+    lexical: &[Diagnostic<LexReason>],
+    parser: &[ParseDiagnostic],
+) -> Vec<ParseDiagnostic> {
+    if lexical.is_empty() {
+        return parser.to_vec();
+    }
+
+    parser
+        .iter()
+        .filter(|diagnostic| !is_lexical_missing_result_cascade(lexical, diagnostic))
+        .cloned()
+        .collect()
+}
+
+fn is_lexical_missing_result_cascade(
+    lexical: &[Diagnostic<LexReason>],
+    diagnostic: &ParseDiagnostic,
+) -> bool {
+    if diagnostic.reason != ParseReason::ExpectedResult {
+        return false;
+    }
+
+    let result_region_start = diagnostic
+        .context
+        .iter()
+        .filter_map(|context| match context {
+            ParseContext::PrecedingGlobalComplete { line_end, .. } => Some(line_end.range().end()),
+            ParseContext::Synchronization { .. } => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let missing_result_start = diagnostic.primary.span().range().start();
+
+    // Only a rejected lexeme shaped like an expression can occupy the missing
+    // result position. Trivia and punctuation failures cannot cause P-001.
+    lexical.iter().any(|failure| {
+        let start = failure.primary.span().range().start();
+        is_expression_shaped_lexical_failure(failure.reason)
+            && start >= result_region_start
+            && start <= missing_result_start
+    })
+}
+
+const fn is_expression_shaped_lexical_failure(reason: LexReason) -> bool {
+    match reason {
+        LexReason::UnicodeIdentifier
+        | LexReason::NegativeLiteral
+        | LexReason::InvalidIntegerLiteral
+        | LexReason::InvalidIdentifier => true,
+        LexReason::BareCarriageReturn
+        | LexReason::ByteOrderMark
+        | LexReason::Comment
+        | LexReason::UnknownCharacter => false,
+    }
 }
 
 /// Reads one path as UTF-8 and runs the complete retained pipeline.
@@ -192,4 +265,34 @@ pub fn run_path(path: PathBuf) -> Result<Observation, FileFailure> {
         String::from_utf8(bytes).map_err(|_| FileFailure::InvalidUtf8 { path: path.clone() })?;
     let source = SourceFile::new(path.to_string_lossy(), text).map_err(FileFailure::Source)?;
     run_source(source).map_err(FileFailure::Pipeline)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    #[test]
+    fn injected_validation_failure_stops_before_evaluation() {
+        let source =
+            SourceFile::new("validation-injection.ash", "1\n").expect("the test source should fit");
+        let evaluation_called = Cell::new(false);
+
+        let failure = run_source_with_consumers(
+            source,
+            |unchecked, _| validate(unchecked, &[]),
+            |_| {
+                evaluation_called.set(true);
+                panic!("evaluation must not run after validation fails")
+            },
+        )
+        .expect_err("omitting the admitted source must fail provenance validation");
+
+        let PipelineFailure::Validation(error) = failure else {
+            panic!("the injected validator failure should retain its stage");
+        };
+        assert_eq!(error.reason(), crate::core::ValidationReason::Provenance);
+        assert!(!evaluation_called.get());
+    }
 }

@@ -154,6 +154,8 @@ pub enum ParseContext {
         starting_at: Span,
         /// The final source token of the completed global.
         ending_at: Span,
+        /// The logical line boundary consumed after the completed global.
+        line_end: Span,
     },
     /// Recovery synchronized at an owning grammar boundary.
     Synchronization {
@@ -379,10 +381,10 @@ impl Parser<'_> {
             .map(|token| token.span)
     }
 
-    fn report_expected_result(&mut self, preceding_global: Option<(Span, Span)>) {
+    fn report_expected_result(&mut self, preceding_global: Option<(Span, Span, Span)>) {
         let before = self.diagnostics.len();
         self.report(ParseReason::ExpectedResult, ExpectedForm::Expression);
-        if let (Some((starting_at, ending_at)), Some(diagnostic)) =
+        if let (Some((starting_at, ending_at, line_end)), Some(diagnostic)) =
             (preceding_global, self.diagnostics.get_mut(before))
         {
             diagnostic
@@ -390,6 +392,7 @@ impl Parser<'_> {
                 .push(ParseContext::PrecedingGlobalComplete {
                     starting_at,
                     ending_at,
+                    line_end,
                 });
         }
     }

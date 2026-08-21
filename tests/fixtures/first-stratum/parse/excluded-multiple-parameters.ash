@@ -1,0 +1,5 @@
+fn add(left : Int, right : Int) -> Int {
+    left
+}
+
+add

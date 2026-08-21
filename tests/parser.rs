@@ -483,6 +483,7 @@ fn accepted_parser_cases_have_focused_reasons_and_primary_spans() {
         ParseContext::PrecedingGlobalComplete {
             starting_at,
             ending_at,
+            line_end,
         },
     ] = diagnostic.context.as_slice()
     else {
@@ -492,6 +493,8 @@ fn accepted_parser_cases_have_focused_reasons_and_primary_spans() {
     assert_eq!(starting_at.range().end(), 2);
     assert_eq!(ending_at.range().start(), 49);
     assert_eq!(ending_at.range().end(), 50);
+    assert_eq!(line_end.range().start(), 50);
+    assert_eq!(line_end.range().end(), 51);
 
     let (_source, unclosed) =
         parse_tree("increment : Int -> Int\nincrement value = value + 1\n\nincrement (41");

@@ -7,24 +7,52 @@ use std::{
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
-struct TempFile(PathBuf);
+struct TempDirectory(PathBuf);
+
+impl TempDirectory {
+    fn create() -> Self {
+        loop {
+            let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!("ash-cli-{}-{id}", std::process::id()));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("test directory should be creatable: {error}"),
+            }
+        }
+    }
+}
+
+impl Drop for TempDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
+struct TempFile {
+    _directory: TempDirectory,
+    path: PathBuf,
+}
 
 impl TempFile {
     fn write(bytes: &[u8]) -> Self {
-        let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("ash-cli-{}-{id}.ash", std::process::id()));
+        let directory = TempDirectory::create();
+        let path = directory.0.join("source.ash");
         fs::write(&path, bytes).expect("test input should be writable");
-        Self(path)
+        Self {
+            _directory: directory,
+            path,
+        }
     }
 
     fn path(&self) -> &Path {
-        &self.0
+        &self.path
     }
 }
 
 impl Drop for TempFile {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -50,31 +78,40 @@ fn invocation_requires_exactly_one_source_path() {
     let none = ash(&[]);
     assert_eq!(none.status.code(), Some(2));
     assert!(none.stdout.is_empty());
-    assert!(!none.stderr.is_empty());
+    assert_eq!(none.stderr, b"usage: ash <source-file>\n");
 
     let first = TempFile::write(b"1\n");
     let second = TempFile::write(b"2\n");
     let many = ash(&[first.path(), second.path()]);
     assert_eq!(many.status.code(), Some(2));
     assert!(many.stdout.is_empty());
-    assert!(!many.stderr.is_empty());
+    assert_eq!(many.stderr, b"usage: ash <source-file>\n");
 }
 
 #[test]
 fn missing_and_invalid_utf8_inputs_are_invocation_failures() {
-    let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
-    let missing =
-        std::env::temp_dir().join(format!("ash-cli-missing-{}-{id}.ash", std::process::id()));
+    let missing_directory = TempDirectory::create();
+    let missing = missing_directory.0.join("missing.ash");
     let missing_output = ash(&[&missing]);
     assert_eq!(missing_output.status.code(), Some(2));
     assert!(missing_output.stdout.is_empty());
-    assert!(!missing_output.stderr.is_empty());
+    assert!(missing_output.stderr.starts_with(b"input.read\n"));
 
     let invalid_utf8 = TempFile::write(&[0xff, 0xfe]);
     let invalid_output = ash(&[invalid_utf8.path()]);
     assert_eq!(invalid_output.status.code(), Some(2));
     assert!(invalid_output.stdout.is_empty());
-    assert!(!invalid_output.stderr.is_empty());
+    assert!(invalid_output.stderr.starts_with(b"input.invalid-utf8\n"));
+}
+
+#[test]
+fn excluded_bare_carriage_return_is_a_source_rejection() {
+    let bare_cr = TempFile::write(b"1\r2");
+    let output = ash(&[bare_cr.path()]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.starts_with(b"lex.bare-carriage-return\n"));
 }
 
 #[test]
