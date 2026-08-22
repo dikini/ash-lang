@@ -52,6 +52,16 @@ retained integration evidence.
 - Checkpoint `ac840eb` adds strict tuple-construction trace evidence and literal
   folding through structured data, makes usefulness iterative and memoized,
   and closes the project lint findings exposed by the retained forms.
+- Review checkpoint `79af325` bounds parser, Core-pattern, usefulness, and
+  registry resources; authenticates registry identities and source order;
+  makes registry rejection and recursive-root validation stack safe; restores
+  complete evaluator transition ownership; and adds full-pipeline depth,
+  wide-constructor, match-trace, and structured-diagnostic evidence.
+- Checkpoint `ca3ae75` records the corresponding warning-free Clippy gate.
+- Fresh post-review `cargo test --all-targets` and `cargo xtask verify` runs
+  pass, including the 10,000-member small-stack cycle and all new depth and
+  resource regressions. Changed Markdown passes with only the project-approved
+  line-length and repeated-heading rules disabled.
 - The final remediation gate passes `cargo fmt --all --check`,
   `cargo check --locked --all-targets`, `cargo test --locked --all-targets`,
   and `cargo xtask verify`, including the 10,000-member small-stack case.
