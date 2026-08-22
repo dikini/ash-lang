@@ -30,6 +30,30 @@ fn recognizes_recursion_reserved_words() {
     );
 }
 
+#[test]
+fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
+    let source = SourceFile::new(
+        "data-pattern-tokens.ash",
+        "type match _ Tree Leaf _tail | =>",
+    )
+    .expect("the token source should fit");
+
+    assert_eq!(
+        token_kinds(&source),
+        vec![
+            TokenKind::Type,
+            TokenKind::Match,
+            TokenKind::Wildcard,
+            TokenKind::UpperIdentifier("Tree".into()),
+            TokenKind::UpperIdentifier("Leaf".into()),
+            TokenKind::Identifier("_tail".into()),
+            TokenKind::Pipe,
+            TokenKind::FatArrow,
+            TokenKind::EndOfFile,
+        ]
+    );
+}
+
 fn assert_range(token: &Token, start: u32, end: u32) {
     assert_eq!(token.span.range().start(), start);
     assert_eq!(token.span.range().end(), end);
@@ -218,7 +242,6 @@ fn reports_each_excluded_lexical_form_with_its_exact_span() {
         ("/* no */", LexReason::Comment, 8),
         ("-123", LexReason::NegativeLiteral, 4),
         ("01", LexReason::InvalidIntegerLiteral, 2),
-        ("UPPER", LexReason::InvalidIdentifier, 5),
         ("@", LexReason::UnknownCharacter, 1),
         ("😀", LexReason::UnknownCharacter, 4),
     ];

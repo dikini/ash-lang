@@ -300,13 +300,6 @@ fn primitive_expression_forms_project_without_semantic_group_nodes() {
 
     let (_, name) = parse_valid("value");
     assert_name(&name.result, "value");
-
-    let (_, match_named_function) = parse_valid("match value");
-    let SurfaceExprKind::Apply(application) = &match_named_function.result.kind else {
-        panic!("match is an unreserved identifier in this increment");
-    };
-    assert_name(&application.function, "match");
-    assert_name(&application.argument, "value");
 }
 
 #[test]

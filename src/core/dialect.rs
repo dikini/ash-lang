@@ -754,12 +754,15 @@ fn admit_payloads(ty: Type, origin: Origin) -> Result<(Type, Origin), BuildError
 enum TypeAdmissionTask {
     Visit(Type, usize),
     FinishFunction,
+    FinishTuple(usize),
 }
 
 enum TypeToken {
     Int,
     Bool,
     Unit,
+    Nominal(crate::types::NominalTypeId),
+    Tuple(usize),
     Function,
 }
 
@@ -772,6 +775,18 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
             TypeAdmissionTask::Visit(Type::Int, _) => tokens.push(TypeToken::Int),
             TypeAdmissionTask::Visit(Type::Bool, _) => tokens.push(TypeToken::Bool),
             TypeAdmissionTask::Visit(Type::Unit, _) => tokens.push(TypeToken::Unit),
+            TypeAdmissionTask::Visit(Type::Nominal(identity), _) => {
+                tokens.push(TypeToken::Nominal(identity));
+            }
+            TypeAdmissionTask::Visit(Type::Tuple(elements), depth) => {
+                let child_depth = depth.saturating_add(1);
+                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                let count = elements.len();
+                work.push(TypeAdmissionTask::FinishTuple(count));
+                for element in elements.into_vec().into_iter().rev() {
+                    work.push(TypeAdmissionTask::Visit(element, child_depth));
+                }
+            }
             TypeAdmissionTask::Visit(Type::Function(domain, codomain), depth) => {
                 let child_depth = depth.saturating_add(1);
                 exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
@@ -780,6 +795,7 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
                 work.push(TypeAdmissionTask::Visit(*domain, child_depth));
             }
             TypeAdmissionTask::FinishFunction => tokens.push(TypeToken::Function),
+            TypeAdmissionTask::FinishTuple(count) => tokens.push(TypeToken::Tuple(count)),
         }
     }
     if exceeded {
@@ -792,6 +808,14 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
             TypeToken::Int => rebuilt.push(Type::Int),
             TypeToken::Bool => rebuilt.push(Type::Bool),
             TypeToken::Unit => rebuilt.push(Type::Unit),
+            TypeToken::Nominal(identity) => rebuilt.push(Type::Nominal(identity)),
+            TypeToken::Tuple(count) => {
+                if rebuilt.len() < count {
+                    return Err(BuildError::InvalidPayload);
+                }
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+            }
             TypeToken::Function => {
                 let Some(codomain) = rebuilt.pop() else {
                     return Err(BuildError::InvalidPayload);

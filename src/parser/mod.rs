@@ -514,6 +514,8 @@ fn same_variant(left: &TokenKind, right: &TokenKind) -> bool {
 fn token_name(kind: &TokenKind) -> &'static str {
     match kind {
         TokenKind::Identifier(_) => "identifier",
+        TokenKind::UpperIdentifier(_) => "uppercase identifier",
+        TokenKind::Wildcard => "_",
         TokenKind::Integer(_) => "integer",
         TokenKind::True => "true",
         TokenKind::False => "false",
@@ -521,6 +523,8 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Let => "let",
         TokenKind::Rec => "rec",
         TokenKind::And => "and",
+        TokenKind::Type => "type",
+        TokenKind::Match => "match",
         TokenKind::IntType => "Int",
         TokenKind::BoolType => "Bool",
         TokenKind::UnitType => "Unit",
@@ -534,6 +538,8 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Plus => "+",
         TokenKind::Star => "*",
         TokenKind::Arrow => "->",
+        TokenKind::FatArrow => "=>",
+        TokenKind::Pipe => "|",
         TokenKind::Comma => ",",
         TokenKind::Semicolon => ";",
         TokenKind::LineEnd => "line end",

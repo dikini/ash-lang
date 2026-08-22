@@ -5,8 +5,33 @@ use ash::{
     },
     integer::Integer,
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
-    types::Type,
+    types::{NominalTypeId, Type, same_type},
 };
+
+#[test]
+fn nominal_identity_and_tuple_structure_share_one_type_equality_rule() {
+    let first_source = source("first nominal source");
+    let second_source = source("second nominal source");
+    let first = NominalTypeId::new(first_source.id(), 0);
+    let same = NominalTypeId::new(first_source.id(), 0);
+    let other_declaration = NominalTypeId::new(first_source.id(), 1);
+    let other_source = NominalTypeId::new(second_source.id(), 0);
+
+    assert!(same_type(&Type::Nominal(first), &Type::Nominal(same)));
+    assert!(!same_type(
+        &Type::Nominal(first),
+        &Type::Nominal(other_declaration)
+    ));
+    assert!(!same_type(
+        &Type::Nominal(first),
+        &Type::Nominal(other_source)
+    ));
+
+    let left = Type::Tuple(vec![Type::Int, Type::Nominal(first)].into_boxed_slice());
+    let right = Type::Tuple(vec![Type::Int, Type::Nominal(same)].into_boxed_slice());
+    assert!(same_type(&left, &right));
+    assert_eq!(left.to_string(), format!("(Int, {})", Type::Nominal(first)));
+}
 
 #[test]
 fn structural_types_render_with_unambiguous_function_association() {

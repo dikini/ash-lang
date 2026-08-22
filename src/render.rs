@@ -10,7 +10,11 @@ use crate::{
 /// Renders one successful observation with its required trailing newline.
 #[must_use]
 pub fn observation(observation: &Observation) -> String {
-    format!("{} : {}\n", observation.value, observation.ty)
+    format!(
+        "{} : {}\n",
+        observation.value_display(),
+        observation.type_display()
+    )
 }
 
 /// Renders one file or pipeline failure with its required trailing newline.
@@ -41,6 +45,7 @@ pub fn pipeline_failure(failure: &PipelineFailure) -> String {
         PipelineFailure::Typing(error) => error.to_string(),
         PipelineFailure::Validation(error) => error.to_string(),
         PipelineFailure::Runtime(error) => format!("internal.runtime\n{error}"),
+        PipelineFailure::Extended(error) => error.to_string(),
     }
 }
 

@@ -311,7 +311,7 @@ fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
 }
 
 fn looks_like_match_expression(parser: &Parser<'_>) -> bool {
-    if !matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "match") {
+    if !parser.at(&TokenKind::Match) {
         return false;
     }
     let mut offset = 1;
@@ -638,7 +638,9 @@ fn parenthesized_type(parser: &mut Parser<'_>) {
 }
 
 fn starts_expression(parser: &Parser<'_>) -> bool {
-    expression_prefix_form(parser).is_some() || expression::starts_primary(parser)
+    looks_like_match_expression(parser)
+        || expression_prefix_form(parser).is_some()
+        || expression::starts_primary(parser)
 }
 
 #[cfg(test)]

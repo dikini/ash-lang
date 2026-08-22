@@ -52,6 +52,8 @@ pub enum Value {
     Unit,
     /// A lexical unary function and its captured Ash environment.
     Function(Closure),
+    /// A heap-backed tuple or nominal value from the data-and-pattern pipeline.
+    Extended(crate::extended::ObservedValue),
 }
 
 impl fmt::Display for Value {
@@ -61,6 +63,7 @@ impl fmt::Display for Value {
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),
             Self::Function(_) => formatter.write_str("<function>"),
+            Self::Extended(value) => value.fmt(formatter),
         }
     }
 }

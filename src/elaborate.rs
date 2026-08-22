@@ -11,7 +11,7 @@ use crate::{
     },
     source::{GeneratedReason, Origin, Span},
     surface::{SurfaceType, SurfaceTypeKind},
-    types::Type,
+    types::{Type, same_type},
 };
 
 /// The source-language typing rule that rejected an expression.
@@ -217,7 +217,7 @@ impl TypeProvenance {
                     });
                     roots.push(nodes.len() - 1);
                 }
-                Type::Int | Type::Bool | Type::Unit => {
+                Type::Int | Type::Bool | Type::Unit | Type::Tuple(_) | Type::Nominal(_) => {
                     nodes.push(TypeProvenanceNode::Fact(None));
                     roots.push(nodes.len() - 1);
                 }
@@ -243,7 +243,10 @@ impl TypeProvenance {
         let mut work = vec![(ty, self.root)];
         while let Some((current, node)) = work.pop() {
             match (current, self.nodes.get(node)) {
-                (Type::Int | Type::Bool | Type::Unit, Some(TypeProvenanceNode::Fact(_))) => {}
+                (
+                    Type::Int | Type::Bool | Type::Unit | Type::Tuple(_) | Type::Nominal(_),
+                    Some(TypeProvenanceNode::Fact(_)),
+                ) => {}
                 (
                     Type::Function(domain, codomain),
                     Some(TypeProvenanceNode::Function {
@@ -1748,21 +1751,7 @@ fn anonymous_function_origin(
 /// Applies the structural type-equality rule without inference or coercion.
 #[must_use]
 pub fn structurally_equal(left: &Type, right: &Type) -> bool {
-    let mut work = vec![(left, right)];
-    while let Some((left, right)) = work.pop() {
-        match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                work.push((left_codomain, right_codomain));
-                work.push((left_domain, right_domain));
-            }
-            _ => return false,
-        }
-    }
-    true
+    same_type(left, right)
 }
 
 fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {

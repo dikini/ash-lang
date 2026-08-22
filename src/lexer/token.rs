@@ -16,6 +16,10 @@ pub struct Token {
 pub enum TokenKind {
     /// An ASCII identifier.
     Identifier(String),
+    /// An ASCII uppercase-starting type or constructor identifier.
+    UpperIdentifier(String),
+    /// The reserved wildcard spelling `_`.
+    Wildcard,
     /// An arbitrary-precision decimal integer literal.
     Integer(Integer),
     /// The `true` reserved word.
@@ -30,6 +34,10 @@ pub enum TokenKind {
     Rec,
     /// The `and` reserved word.
     And,
+    /// The `type` reserved word.
+    Type,
+    /// The `match` reserved word.
+    Match,
     /// The `Int` type name.
     IntType,
     /// The `Bool` type name.
@@ -56,6 +64,10 @@ pub enum TokenKind {
     Star,
     /// `->`.
     Arrow,
+    /// `=>`.
+    FatArrow,
+    /// `|`.
+    Pipe,
     /// `,`, retained so the parser can reject excluded tuple syntax.
     Comma,
     /// `;`, retained so the parser can reject excluded semicolon syntax.

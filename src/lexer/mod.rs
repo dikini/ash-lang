@@ -250,10 +250,15 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
             b'+' => single(&mut offset, TokenKind::Plus),
             b'*' => single(&mut offset, TokenKind::Star),
             b',' => single(&mut offset, TokenKind::Comma),
+            b'|' => single(&mut offset, TokenKind::Pipe),
             b';' => single(&mut offset, TokenKind::Semicolon),
             b'=' if bytes.get(offset + 1) == Some(&b'=') => {
                 offset += 2;
                 TokenKind::EqualEqual
+            }
+            b'=' if bytes.get(offset + 1) == Some(&b'>') => {
+                offset += 2;
+                TokenKind::FatArrow
             }
             b'=' => single(&mut offset, TokenKind::Equal),
             b'-' if bytes.get(offset + 1) == Some(&b'>') => {
@@ -374,16 +379,20 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "let" => Some(TokenKind::Let),
         "rec" => Some(TokenKind::Rec),
         "and" => Some(TokenKind::And),
+        "type" => Some(TokenKind::Type),
+        "match" => Some(TokenKind::Match),
+        "_" => Some(TokenKind::Wildcard),
         "Int" => Some(TokenKind::IntType),
         "Bool" => Some(TokenKind::BoolType),
         "Unit" => Some(TokenKind::UnitType),
         _ => None,
     };
-    reserved.or_else(|| {
-        word.as_bytes()
-            .first()
-            .filter(|first| first.is_ascii_lowercase() || **first == b'_')
-            .map(|_| TokenKind::Identifier(word.into()))
+    reserved.or_else(|| match word.as_bytes().first() {
+        Some(first) if first.is_ascii_lowercase() || *first == b'_' => {
+            Some(TokenKind::Identifier(word.into()))
+        }
+        Some(first) if first.is_ascii_uppercase() => Some(TokenKind::UpperIdentifier(word.into())),
+        _ => None,
     })
 }
 

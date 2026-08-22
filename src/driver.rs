@@ -24,6 +24,31 @@ pub struct Observation {
     pub value: Value,
     /// The structural type assigned to the program result.
     pub ty: Type,
+    type_display: Option<String>,
+}
+
+impl Observation {
+    /// Returns the structural rendering of the observed value.
+    #[must_use]
+    pub fn value_display(&self) -> String {
+        self.value.to_string()
+    }
+
+    /// Returns the source-facing rendering of the observed result type.
+    #[must_use]
+    pub fn type_display(&self) -> String {
+        self.type_display
+            .clone()
+            .unwrap_or_else(|| self.ty.to_string())
+    }
+
+    pub(crate) fn extended(value: Value, ty: Type, type_display: String) -> Self {
+        Self {
+            value,
+            ty,
+            type_display: Some(type_display),
+        }
+    }
 }
 
 /// Lexical, parser, and resource facts retained before surface projection.
@@ -54,6 +79,8 @@ pub enum PipelineFailure {
     Validation(ValidationError),
     /// The explicit evaluator reported a runtime invariant failure.
     Runtime(RuntimeFailure),
+    /// A stage-preserving failure from the monomorphic data-and-pattern pipeline.
+    Extended(crate::extended::ExtendedFailure),
 }
 
 impl PipelineFailure {
@@ -70,6 +97,7 @@ impl PipelineFailure {
                 ResolveReason::BinderIdExhausted | ResolveReason::InternalState
             ),
             Self::Typing(TypeError::Source(_) | TypeError::Mismatch(_)) => true,
+            Self::Extended(failure) => failure.is_source_rejection(),
             Self::SourceModel(_)
             | Self::Projection(_)
             | Self::Typing(TypeError::Internal(_))
@@ -89,6 +117,13 @@ impl fmt::Display for PipelineFailure {
             Self::Typing(_) => "typed-elaboration failure",
             Self::Validation(_) => "Core validation failure",
             Self::Runtime(_) => "runtime failure",
+            Self::Extended(failure) => match failure.stage {
+                crate::extended::ExtendedStage::Syntax => "source syntax failure",
+                crate::extended::ExtendedStage::Resolution => "name-resolution failure",
+                crate::extended::ExtendedStage::Typing => "typed-elaboration failure",
+                crate::extended::ExtendedStage::Validation => "Core validation failure",
+                crate::extended::ExtendedStage::Runtime => "runtime failure",
+            },
         })
     }
 }
@@ -149,6 +184,9 @@ impl Error for FileFailure {}
 /// Returns a stage-specific failure without allowing recovery-bearing syntax,
 /// unchecked Core, or a pending feature to bypass its owning stage.
 pub fn run_source(source: SourceFile) -> Result<Observation, PipelineFailure> {
+    if crate::extended::uses_extended_syntax(source.text()) {
+        return crate::extended::run(&source).map_err(PipelineFailure::Extended);
+    }
     run_source_with_consumers(source, validate, evaluate)
 }
 
@@ -190,6 +228,7 @@ where
     Ok(Observation {
         value: evaluation.value,
         ty,
+        type_display: None,
     })
 }
 

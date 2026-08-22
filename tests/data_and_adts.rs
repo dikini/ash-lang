@@ -28,9 +28,8 @@ fn finite_nominal_tree_patterns_execute() {
 
 #[test]
 fn operational_tuple_domains_are_distinct_from_curried_functions() {
-    let observation = run(
-        "fn add(left : Int, right : Int) -> Int {\nleft + right\n}\n\nadd(20, 22)\n",
-    );
+    let observation =
+        run("fn add(left : Int, right : Int) -> Int {\nleft + right\n}\n\nadd(20, 22)\n");
 
     assert_eq!(observation.value.to_string(), "42");
     assert_eq!(observation.ty.to_string(), "Int");
@@ -71,7 +70,7 @@ fn constructor_guarded_recursive_data_renders_cycles_structurally() {
     );
 
     assert_eq!(observation.value.to_string(), "Next(1, <cycle>)");
-    assert_eq!(observation.ty.to_string(), "Stream");
+    assert_eq!(observation.type_display(), "Stream");
 }
 
 #[test]
@@ -157,4 +156,57 @@ fn excluded_pattern_families_remain_rejected() {
     ] {
         assert!(rejection(text).contains("parse."));
     }
+}
+
+#[test]
+fn nominal_declarations_are_file_wide_recursive_and_distinct() {
+    let forward = run("type Left =\nLeft(Right)\n\ntype Right =\nRight(Int)\n\nLeft(Right(42))\n");
+    assert_eq!(forward.value_display(), "Left(Right(42))");
+    assert_eq!(forward.type_display(), "Left");
+
+    let mismatch = rejection(
+        "type First =\nFirst(Int)\n\ntype Second =\nSecond(Int)\n\nfn take(value : First) -> Int {\nmatch value {\nFirst(payload) => payload\n}\n}\n\ntake Second(1)\n",
+    );
+    assert!(mismatch.contains("type.mismatch"));
+}
+
+#[test]
+fn coverage_handles_bool_unit_tuples_and_recursive_nominals() {
+    let observation = run(
+        "type Nat =\nZero\n| Succ(Nat)\n\nfn classify(value : (Bool, Unit, Nat)) -> Int {\nmatch value {\n(true, (), _) => 1\n(false, (), Zero) => 2\n(false, (), Succ(_)) => 3\n}\n}\n\nclassify(false, (), Succ(Zero))\n",
+    );
+    assert_eq!(observation.value_display(), "3");
+
+    let missing = rejection("match (true, false) {\n(true, _) => 1\n(false, true) => 2\n}\n");
+    assert!(missing.contains("coverage.non-exhaustive"));
+    assert!(missing.contains("(false, false)"));
+}
+
+#[test]
+fn rendering_repeats_shared_values_and_marks_only_active_cycles() {
+    let shared = run(
+        "type Tree =\nLeaf(Int)\n| Pair(Tree, Tree)\n\n{\nlet leaf = Leaf(1)\nPair(leaf, leaf)\n}\n",
+    );
+    assert_eq!(shared.value_display(), "Pair(Leaf(1), Leaf(1))");
+
+    let mutual = run(
+        "type Left =\nLeft(Right)\n\ntype Right =\nRight(Left)\n\n{\nlet rec left : Left = Left(right)\nand right : Right = Right(left)\nleft\n}\n",
+    );
+    assert_eq!(mutual.value_display(), "Left(Right(<cycle>))");
+}
+
+#[test]
+fn mixed_recursive_groups_support_functions_and_guarded_data() {
+    let observation = run(
+        "type Stream =\nNext(Int, Stream)\n\n{\nlet rec ones : Stream = Next(1, ones)\nand head : Stream -> Int = fn(stream) {\nmatch stream {\nNext(value, tail) => value\n}\n}\nhead ones\n}\n",
+    );
+    assert_eq!(observation.value_display(), "1");
+}
+
+#[test]
+fn tuple_domain_anonymous_functions_receive_one_expected_tuple() {
+    let observation = run(
+        "fn apply(operation : (Int, Int) -> Int) -> Int {\noperation(20, 22)\n}\n\napply (fn(left, right) {\nleft + right\n})\n",
+    );
+    assert_eq!(observation.value_display(), "42");
 }

@@ -155,42 +155,6 @@ const INVALID_CASES: &[InvalidCase] = &[
         },
     },
     InvalidCase {
-        id: "excluded-tuple",
-        path: "tests/fixtures/first-stratum/parse/excluded-tuple.ash",
-        stage: Stage::Parser,
-        reason: ExpectedReason::Parser {
-            parser: &[ParseReason::TupleSyntax],
-            lexical: &[],
-        },
-    },
-    InvalidCase {
-        id: "excluded-match",
-        path: "tests/fixtures/first-stratum/parse/excluded-match.ash",
-        stage: Stage::Parser,
-        reason: ExpectedReason::Parser {
-            parser: &[ParseReason::MatchSyntax],
-            lexical: &[],
-        },
-    },
-    InvalidCase {
-        id: "excluded-multiple-parameters",
-        path: "tests/fixtures/first-stratum/parse/excluded-multiple-parameters.ash",
-        stage: Stage::Parser,
-        reason: ExpectedReason::Parser {
-            parser: &[ParseReason::MultipleParameters],
-            lexical: &[],
-        },
-    },
-    InvalidCase {
-        id: "excluded-multiple-binders",
-        path: "tests/fixtures/first-stratum/parse/excluded-multiple-binders.ash",
-        stage: Stage::Parser,
-        reason: ExpectedReason::Parser {
-            parser: &[ParseReason::MultipleBinders],
-            lexical: &[],
-        },
-    },
-    InvalidCase {
         id: "excluded-polymorphism",
         path: "tests/fixtures/first-stratum/parse/excluded-polymorphism.ash",
         stage: Stage::Parser,
@@ -543,7 +507,6 @@ fn an_excluded_result_after_a_complete_global_has_only_its_lexical_reason() {
         ("-1\n", LexReason::NegativeLiteral),
         ("café\n", LexReason::UnicodeIdentifier),
         ("01\n", LexReason::InvalidIntegerLiteral),
-        ("UPPER\n", LexReason::InvalidIdentifier),
     ] {
         let text = format!("identity : Int -> Int\nidentity value = value\n\n{result}");
         let source = SourceFile::new("excluded-result.ash", text)
@@ -607,7 +570,6 @@ fn an_expression_shaped_failure_on_the_definition_line_does_not_hide_a_missing_r
         ("-1", LexReason::NegativeLiteral),
         ("café", LexReason::UnicodeIdentifier),
         ("01", LexReason::InvalidIntegerLiteral),
-        ("UPPER", LexReason::InvalidIdentifier),
     ] {
         let text = format!("identity : Int -> Int\nidentity value = value {tail}\n");
         let source = SourceFile::new("missing-result-after-definition.ash", text)
