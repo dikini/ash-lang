@@ -13,7 +13,7 @@ use ash::{
     lexer::lex,
     parser::{parse, project},
     resolve::resolve,
-    resolved::{ResolvedDefinitionKind, ResolvedExprKind, ResolvedProgram},
+    resolved::{ResolvedDefinitionKind, ResolvedExprKind, ResolvedPatternKind, ResolvedProgram},
     source::{GeneratedReason, SourceFile},
     types::Type,
 };
@@ -91,7 +91,10 @@ fn anonymous_function_checks_only_with_a_structural_function_context() {
     let ResolvedExprKind::Function(surface_function) = &program.result.kind else {
         panic!("expected resolved anonymous function");
     };
-    assert_eq!(function.parameter().id(), surface_function.parameter.id);
+    let ResolvedPatternKind::Binder(surface_parameter) = &surface_function.pattern.kind else {
+        panic!("expected binder parameter");
+    };
+    assert_eq!(function.parameter().id(), surface_parameter.id);
     assert_eq!(function.parameter().ty(), &Type::Int);
     assert_eq!(
         root.origin.generated_reason(),
@@ -259,7 +262,7 @@ fn operational_returned_function_argument_uses_the_inner_domain_provenance() {
         !diagnostic
             .related
             .iter()
-            .any(|label| { label.span() == definition.header.parameter.annotation.span })
+            .any(|label| { label.span() == definition.header.parameters[0].annotation.span })
     );
 }
 
@@ -370,7 +373,7 @@ fn definition_result_mismatch_relates_the_body_to_the_declared_codomain() {
         panic!("expected a source type diagnostic");
     };
     assert_eq!(diagnostic.reason, TypeReason::DefinitionResult);
-    assert_eq!(diagnostic.primary.span(), definition.equation.body.span);
+    assert_eq!(diagnostic.primary.span(), definition.equations[0].body.span);
     assert!(
         diagnostic
             .related
@@ -403,7 +406,7 @@ fn equational_interface_must_expose_one_function_domain() {
         diagnostic
             .related
             .iter()
-            .any(|label| { label.span() == definition.equation.name.origin.primary_span() })
+            .any(|label| { label.span() == definition.equations[0].name.origin.primary_span() })
     );
     assert_eq!(diagnostic.expected.as_deref(), Some("function"));
     assert_eq!(diagnostic.found.as_deref(), Some("Int"));

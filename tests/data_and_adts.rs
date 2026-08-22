@@ -217,7 +217,7 @@ fn equation_groups_reject_inconsistent_pattern_arity() {
 }
 
 #[test]
-fn pattern_equations_route_to_the_extended_pipeline_without_data_markers() {
+fn pattern_equations_use_the_retained_pipeline_without_data_markers() {
     let curried = run(
         "choose : Bool -> Int -> Int\nchoose true left = left\nchoose false right = right + 1\n\nchoose false 41\n",
     );
@@ -265,9 +265,9 @@ fn excluded_pattern_families_remain_rejected() {
 }
 
 #[test]
-fn extended_syntax_failures_keep_the_exact_current_token_span() {
+fn retained_data_syntax_failures_keep_the_exact_current_token_span() {
     let text = "match true {\ntrue 0\nfalse => 1\n}\n";
-    let source = SourceFile::new("extended-span.ash", text).expect("fixture should fit");
+    let source = SourceFile::new("data-span.ash", text).expect("fixture should fit");
     let failure = run_source(source).expect_err("the missing arrow must be rejected");
     let PipelineFailure::Syntax(failure) = failure else {
         panic!("the retained grammar should own this rejection")
@@ -373,5 +373,5 @@ fn ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack() {
         })
         .expect("the deep-data thread should start")
         .join()
-        .expect("the data pipeline should fit the small host stack");
+        .expect("the retained pipeline should fit the small host stack");
 }

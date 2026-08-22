@@ -1051,6 +1051,7 @@ mod tests {
             &Arc<PureProgram>,
             &crate::core::recursion::RecursiveBindingNode,
             Environment,
+            &mut Vec<HeapCell>,
         ) -> Result<Transition, RuntimeFailure> = enter_recursive_binding;
         let _: fn(ApplicationNode, Environment) -> Transition = enter_application;
         let _: fn(PrimitiveNode, Environment) -> Transition = enter_primitive;
@@ -1061,7 +1062,7 @@ mod tests {
             return_primitive_right;
         let _: fn(NodeId, Environment, Value) -> Result<Transition, RuntimeFailure> =
             return_application_function;
-        let _: fn(Closure, Value) -> Result<Transition, RuntimeFailure> =
+        let _: fn(Value, Value, &mut Vec<HeapCell>) -> Result<Transition, RuntimeFailure> =
             return_application_argument;
 
         assert_eq!(TRANSITION_OWNERSHIP.len(), 9);
@@ -1153,7 +1154,7 @@ mod tests {
         let program = validated.shared();
 
         assert!(matches!(
-            dispatch_entry(&program, variable, Environment::new()),
+            dispatch_entry(&program, variable, Environment::new(), &mut Vec::new()),
             Err(RuntimeFailure::MissingBinding)
         ));
         assert!(matches!(
@@ -1351,11 +1352,13 @@ mod tests {
                 .expect("function Core should validate");
                 let program = validated.shared();
                 let members = (0..MEMBERS)
-                    .map(|binder| RecursiveFunctionTemplate {
+                    .map(|binder| RecursiveMemberTemplate {
                         binder: BinderId::new(binder),
-                        parameter: parameter.id(),
-                        body,
-                        origin: origin.clone(),
+                        kind: RecursiveMemberKind::Function {
+                            parameter: parameter.id(),
+                            body,
+                            origin: origin.clone(),
+                        },
                     })
                     .collect();
                 let environment = Environment::new()

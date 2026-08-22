@@ -105,17 +105,14 @@ fn recursive_diagnostics_retain_exact_stage_facts() {
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("expected source typing failure")
     };
-    assert_eq!(diagnostic.reason, TypeReason::UnsafeRecursiveInitializer);
+    assert_eq!(diagnostic.reason, TypeReason::UnsafeRecursiveRoot);
     let initializer = unsafe_text.find("1\n").expect("initializer");
     assert_eq!(
         diagnostic.primary.span().range().start(),
         offset(initializer)
     );
     assert_eq!(diagnostic.related.len(), 2);
-    assert_eq!(
-        diagnostic.expected.as_deref(),
-        Some("a direct `fn` initializer")
-    );
+    assert_eq!(diagnostic.expected.as_deref(), None);
 }
 
 #[test]

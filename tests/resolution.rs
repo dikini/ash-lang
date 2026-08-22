@@ -3,8 +3,8 @@ use ash::{
     parser::{STRUCTURAL_DEPTH_LIMIT, parse, project},
     resolve::{ResolveReason, resolve},
     resolved::{
-        ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExprKind,
-        ResolvedLocalDeclaration,
+        Binder, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExprKind,
+        ResolvedLocalDeclaration, ResolvedPattern, ResolvedPatternKind,
     },
     source::SourceFile,
     types::Type,
@@ -101,6 +101,17 @@ fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
     binding
 }
 
+fn pattern_binder(pattern: &ResolvedPattern) -> &Binder {
+    let ResolvedPatternKind::Binder(binder) = &pattern.kind else {
+        panic!("expected binder pattern")
+    };
+    binder
+}
+
+fn binding_binder(binding: &ResolvedBinding) -> &Binder {
+    pattern_binder(&binding.pattern)
+}
+
 #[test]
 fn completed_global_is_visible_to_the_program_result() {
     let program = resolve_valid("identity : Int -> Int\nidentity value = value\n\nidentity 1\n");
@@ -117,7 +128,7 @@ fn completed_global_is_visible_to_the_program_result() {
 
     assert_eq!(global_use.binder, definition.interface.name.id);
     assert_eq!(
-        definition.equation.name.binder,
+        definition.equations[0].name.binder,
         definition.interface.name.id
     );
     assert_eq!(global_use.spelling, "identity");
@@ -170,7 +181,10 @@ fn inline_operational_global_resolves_parameter_and_later_global_use() {
         panic!("expected a resolved global occurrence");
     };
 
-    assert_eq!(body_use.binder, definition.header.parameter.binder.id);
+    assert_eq!(
+        body_use.binder,
+        pattern_binder(&definition.header.parameters[0].pattern).id
+    );
     assert_eq!(global_use.binder, definition.header.name.id);
     assert_ne!(body_use.binder, global_use.binder);
 }
@@ -181,8 +195,8 @@ fn local_initializer_uses_incoming_scope_before_shadowing_binder_is_introduced()
     let ResolvedExprKind::Block(block) = &program.result.kind else {
         panic!("expected a resolved block");
     };
-    let first = &binding(block, 0).binder;
-    let second = &binding(block, 1).binder;
+    let first = binding_binder(binding(block, 0));
+    let second = binding_binder(binding(block, 1));
     let ResolvedExprKind::Add(addition) = &binding(block, 1).initializer.kind else {
         panic!("expected an addition initializer");
     };
@@ -210,7 +224,7 @@ fn anonymous_parameter_shadows_outer_binder_only_inside_its_body() {
     let ResolvedExprKind::Block(block) = &program.result.kind else {
         panic!("expected a resolved block");
     };
-    let outer = &binding(block, 0).binder;
+    let outer = binding_binder(binding(block, 0));
     let ResolvedExprKind::Function(function) = &binding(block, 1).initializer.kind else {
         panic!("expected a resolved anonymous function");
     };
@@ -221,8 +235,9 @@ fn anonymous_parameter_shadows_outer_binder_only_inside_its_body() {
         panic!("expected a resolved outer occurrence");
     };
 
-    assert_ne!(outer.id, function.parameter.id);
-    assert_eq!(body_use.binder, function.parameter.id);
+    let parameter = pattern_binder(&function.pattern);
+    assert_ne!(outer.id, parameter.id);
+    assert_eq!(body_use.binder, parameter.id);
     assert_eq!(block_use.binder, outer.id);
 }
 
@@ -270,7 +285,7 @@ fn recursive_global_bodies_see_the_complete_file_scope() {
     let ResolvedDefinitionKind::Equational(self_definition) = &recursive.definitions[0].kind else {
         panic!("expected self equation")
     };
-    let ResolvedExprKind::Apply(self_application) = &self_definition.equation.body.kind else {
+    let ResolvedExprKind::Apply(self_application) = &self_definition.equations[0].body.kind else {
         panic!("expected recursive application")
     };
     let ResolvedExprKind::Occurrence(self_use) = &self_application.function.kind else {
@@ -287,7 +302,7 @@ fn recursive_global_bodies_see_the_complete_file_scope() {
     let ResolvedDefinitionKind::Equational(second) = &forward.definitions[1].kind else {
         panic!("expected second equation")
     };
-    let ResolvedExprKind::Apply(application) = &first.equation.body.kind else {
+    let ResolvedExprKind::Apply(application) = &first.equations[0].body.kind else {
         panic!("expected forward application")
     };
     let ResolvedExprKind::Occurrence(second_use) = &application.function.kind else {
@@ -358,7 +373,7 @@ fn recursive_group_captures_outer_scope_and_may_shadow_it() {
     let ResolvedExprKind::Occurrence(captured_use) = &function.body.result.kind else {
         panic!("expected captured occurrence")
     };
-    assert_eq!(captured_use.binder, outer.binder.id);
+    assert_eq!(captured_use.binder, binding_binder(outer).id);
 
     let shadowed = resolve_valid(
         "{\nlet repeat : Unit -> Int = fn(ignored) {\n1\n}\nlet rec repeat : Unit -> Int = fn(ignored) {\nrepeat ()\n}\nrepeat ()\n}\n",
@@ -380,7 +395,7 @@ fn recursive_group_captures_outer_scope_and_may_shadow_it() {
     let ResolvedExprKind::Occurrence(self_use) = &call.function.kind else {
         panic!("expected self occurrence")
     };
-    assert_ne!(member.binder.id, outer.binder.id);
+    assert_ne!(member.binder.id, binding_binder(outer).id);
     assert_eq!(self_use.binder, member.binder.id);
 }
 
@@ -406,7 +421,7 @@ fn later_global_body_resolves_an_earlier_global_identity() {
     let ResolvedDefinitionKind::Equational(second) = &program.definitions[1].kind else {
         panic!("expected second equation");
     };
-    let ResolvedExprKind::Apply(application) = &second.equation.body.kind else {
+    let ResolvedExprKind::Apply(application) = &second.equations[0].body.kind else {
         panic!("expected the second body application");
     };
     let ResolvedExprKind::Occurrence(first_use) = &application.function.kind else {
@@ -545,9 +560,9 @@ fn resolved_presentations_retain_annotations_component_spans_and_full_spans() {
         definition.header.name.origin.primary_span().range().start(),
         3
     );
-    assert_eq!(definition.header.parameter.span.range().start(), 13);
-    assert_eq!(definition.header.parameter.span.range().end(), 24);
-    assert_eq!(definition.header.parameter.annotation.ty, Type::Int);
+    assert_eq!(definition.header.parameters[0].span.range().start(), 13);
+    assert_eq!(definition.header.parameters[0].span.range().end(), 24);
+    assert_eq!(definition.header.parameters[0].annotation.ty, Type::Int);
     assert_eq!(definition.header.result_type.span.range().start(), 29);
     assert_eq!(definition.header.result_type.span.range().end(), 32);
     assert_eq!(binding(&definition.body, 0).span.range().start(), 39);
@@ -595,8 +610,11 @@ fn local_binding_may_shadow_a_global_without_changing_the_global_identity() {
         panic!("expected a local occurrence");
     };
 
-    assert_ne!(binding(block, 0).binder.id, global.interface.name.id);
-    assert_eq!(local_use.binder, binding(block, 0).binder.id);
+    assert_ne!(
+        binding_binder(binding(block, 0)).id,
+        global.interface.name.id
+    );
+    assert_eq!(local_use.binder, binding_binder(binding(block, 0)).id);
 }
 
 #[test]
@@ -607,7 +625,7 @@ fn anonymous_function_captures_outer_binder_and_keeps_parameter_identity_separat
     let ResolvedExprKind::Block(block) = &program.result.kind else {
         panic!("expected a block");
     };
-    let offset = &binding(block, 0).binder;
+    let offset = binding_binder(binding(block, 0));
     let ResolvedExprKind::Function(function) = &binding(block, 1).initializer.kind else {
         panic!("expected an anonymous function");
     };
@@ -621,7 +639,7 @@ fn anonymous_function_captures_outer_binder_and_keeps_parameter_identity_separat
         panic!("expected a captured occurrence");
     };
 
-    assert_eq!(parameter_use.binder, function.parameter.id);
+    assert_eq!(parameter_use.binder, pattern_binder(&function.pattern).id);
     assert_eq!(capture_use.binder, offset.id);
     assert_ne!(parameter_use.binder, capture_use.binder);
 }

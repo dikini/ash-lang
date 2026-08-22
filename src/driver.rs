@@ -41,14 +41,6 @@ impl Observation {
             .clone()
             .unwrap_or_else(|| self.ty.to_string())
     }
-
-    pub(crate) fn extended(value: Value, ty: Type, type_display: String) -> Self {
-        Self {
-            value,
-            ty,
-            type_display: Some(type_display),
-        }
-    }
 }
 
 /// Lexical, parser, and resource facts retained before surface projection.
@@ -79,8 +71,6 @@ pub enum PipelineFailure {
     Validation(ValidationError),
     /// The explicit evaluator reported a runtime invariant failure.
     Runtime(RuntimeFailure),
-    /// A stage-preserving failure from the monomorphic data-and-pattern pipeline.
-    Extended(crate::extended::ExtendedFailure),
 }
 
 impl PipelineFailure {
@@ -107,7 +97,6 @@ impl PipelineFailure {
             Self::Typing(TypeError::Internal(_)) => "type.internal".into(),
             Self::Validation(error) => error.reason().to_string(),
             Self::Runtime(error) => format!("runtime.{error:?}"),
-            Self::Extended(failure) => failure.reason.to_owned(),
         }
     }
 
@@ -124,7 +113,6 @@ impl PipelineFailure {
                 ResolveReason::BinderIdExhausted | ResolveReason::InternalState
             ),
             Self::Typing(TypeError::Source(_) | TypeError::Mismatch(_)) => true,
-            Self::Extended(failure) => failure.is_source_rejection(),
             Self::SourceModel(_)
             | Self::Projection(_)
             | Self::Typing(TypeError::Internal(_))
@@ -144,13 +132,6 @@ impl fmt::Display for PipelineFailure {
             Self::Typing(_) => "typed-elaboration failure",
             Self::Validation(_) => "Core validation failure",
             Self::Runtime(_) => "runtime failure",
-            Self::Extended(failure) => match failure.stage {
-                crate::extended::ExtendedStage::Syntax => "source syntax failure",
-                crate::extended::ExtendedStage::Resolution => "name-resolution failure",
-                crate::extended::ExtendedStage::Typing => "typed-elaboration failure",
-                crate::extended::ExtendedStage::Validation => "Core validation failure",
-                crate::extended::ExtendedStage::Runtime => "runtime failure",
-            },
         })
     }
 }

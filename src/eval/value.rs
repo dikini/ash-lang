@@ -74,7 +74,6 @@ impl ObservedValue {
                     }
                     Value::Location(location) => tasks.push(Task::Location(location)),
                     Value::Data(value) => output.push_str(&value.render()),
-                    Value::Extended(value) => output.push_str(&value.to_string()),
                 },
                 Task::Location(requested) => {
                     let mut location = requested;
@@ -217,8 +216,6 @@ pub enum Value {
     Location(Location),
     /// A completed heap-backed structural observation.
     Data(ObservedValue),
-    /// A heap-backed tuple or nominal value from the data-and-pattern pipeline.
-    Extended(crate::extended::ObservedValue),
 }
 
 impl fmt::Display for Value {
@@ -231,7 +228,6 @@ impl fmt::Display for Value {
             Self::ConstructorFunction(_) => formatter.write_str("<function>"),
             Self::Location(_) => formatter.write_str("<location>"),
             Self::Data(value) => value.fmt(formatter),
-            Self::Extended(value) => value.fmt(formatter),
         }
     }
 }

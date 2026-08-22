@@ -13,7 +13,7 @@ use crate::{
         ResolvedMatchArm, ResolvedMatchExpr, ResolvedNominalType, ResolvedOccurrence,
         ResolvedPattern, ResolvedPatternKind, ResolvedProgram, ResolvedRecursiveGroup,
         ResolvedRecursiveMember, ResolvedRegistry, ResolvedType, ResolvedTypeProvenance,
-        ResolvedTypeProvenanceNode, ResolvedTypedBinder, ResolvedTypedPattern,
+        ResolvedTypeProvenanceNode, ResolvedTypedPattern,
     },
     source::Origin,
     surface::{
@@ -236,7 +236,6 @@ impl Resolver {
                         let scope_checkpoint = self.scopes.len();
                         let (patterns, binders) =
                             self.resolve_pattern_vector(&equation.patterns)?;
-                        let binder = self.legacy_pattern_binder(&patterns, equation.span)?;
                         self.push_binder_scope_many(&binders);
                         let resolved_body = self.resolve_expr(&equation.body);
                         self.scopes.truncate(scope_checkpoint);
@@ -247,18 +246,17 @@ impl Resolver {
                                 origin: Origin::Source(equation.name.span),
                             },
                             patterns,
-                            binder,
                             body: resolved_body?,
                             span: equation.span,
                         });
                     }
-                    let equation = equations.first().cloned().ok_or_else(|| {
-                        error(
+                    if equations.is_empty() {
+                        return Err(error(
                             ResolveReason::InternalState,
                             definition.span,
                             "the resolver produced no equation",
-                        )
-                    })?;
+                        ));
+                    }
                     ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
                         interface: ResolvedExternalInterface {
                             name: global.clone(),
@@ -266,7 +264,6 @@ impl Resolver {
                             span: equational.interface.span,
                         },
                         equations,
-                        equation,
                     })
                 }
                 SurfaceDefinitionKind::InlineOperational(operational) => {
@@ -293,26 +290,17 @@ impl Resolver {
                             })
                         })
                         .collect::<Result<Vec<_>, ResolveError>>()?;
-                    let first = parameters.first().ok_or_else(|| {
-                        error(
+                    if parameters.is_empty() {
+                        return Err(error(
                             ResolveReason::InternalState,
                             operational.header.span,
                             "the resolver produced no operational parameter",
-                        )
-                    })?;
-                    let parameter = ResolvedTypedBinder {
-                        binder: self.legacy_pattern_binder(
-                            std::slice::from_ref(&first.pattern),
-                            first.span,
-                        )?,
-                        annotation: first.annotation.clone(),
-                        span: first.span,
-                    };
+                        ));
+                    }
                     ResolvedDefinitionKind::InlineOperational(ResolvedInlineOperationalGlobal {
                         header: ResolvedInlineOperationalHeader {
                             name: global.clone(),
                             parameters,
-                            parameter,
                             result_type: self.resolve_type(&operational.header.result_type)?,
                             span: operational.header.span,
                         },
@@ -580,29 +568,6 @@ impl Resolver {
         })
     }
 
-    fn legacy_pattern_binder(
-        &mut self,
-        patterns: &[ResolvedPattern],
-        span: crate::source::Span,
-    ) -> Result<Binder, ResolveError> {
-        let mut pending = patterns.iter().rev().collect::<Vec<_>>();
-        while let Some(pattern) = pending.pop() {
-            match &pattern.kind {
-                ResolvedPatternKind::Binder(binder) => return Ok(binder.clone()),
-                ResolvedPatternKind::Tuple(elements) => pending.extend(elements.iter().rev()),
-                ResolvedPatternKind::Constructor { payload, .. } => {
-                    if let Some(payload) = payload.as_deref() {
-                        pending.push(payload);
-                    }
-                }
-                ResolvedPatternKind::Wildcard
-                | ResolvedPatternKind::Boolean(_)
-                | ResolvedPatternKind::Unit => {}
-            }
-        }
-        self.allocate_binder("_pattern_domain", span)
-    }
-
     fn resolve_pattern_vector(
         &mut self,
         patterns: &[SurfacePattern],
@@ -852,8 +817,6 @@ impl Resolver {
                             "the resolver produced no binding pattern",
                         )
                     })?;
-                    let binder =
-                        self.legacy_pattern_binder(std::slice::from_ref(&pattern), binding.span)?;
                     let annotation = binding
                         .annotation
                         .as_ref()
@@ -872,7 +835,6 @@ impl Resolver {
                     declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
                         ResolvedBinding {
                             pattern,
-                            binder,
                             annotation,
                             initializer,
                             span: binding.span,
@@ -963,14 +925,8 @@ impl Resolver {
                         ));
                     };
                     self.scopes.truncate(scope_checkpoint);
-                    let parameter =
-                        self.legacy_pattern_binder(std::slice::from_ref(&pattern), span)?;
                     expressions.push(ResolvedExpr {
-                        kind: ResolvedExprKind::Function(ResolvedFunctionExpr {
-                            parameter,
-                            pattern,
-                            body,
-                        }),
+                        kind: ResolvedExprKind::Function(ResolvedFunctionExpr { pattern, body }),
                         span,
                     });
                 }

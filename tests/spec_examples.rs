@@ -140,7 +140,7 @@ fn static_semantics_rejects_unsafe_recursive_initialization() {
     let PipelineFailure::Typing(TypeError::Source(actual)) = failure else {
         panic!("unsafe recursive initialization should fail during typing")
     };
-    assert_eq!(actual.reason, TypeReason::UnsafeRecursiveInitializer);
+    assert_eq!(actual.reason, TypeReason::UnsafeRecursiveRoot);
     assert_documented("spec/static-semantics.md", UNSAFE_RECURSIVE_INITIALIZER);
 }
 

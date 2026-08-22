@@ -284,7 +284,7 @@ const INVALID_CASES: &[InvalidCase] = &[
         id: "recursion-unsafe-initializer",
         path: "tests/fixtures/recursion/type/unsafe-initializer.ash",
         stage: Stage::Typing,
-        reason: ExpectedReason::Typing(TypeReason::UnsafeRecursiveInitializer),
+        reason: ExpectedReason::Typing(TypeReason::UnsafeRecursiveRoot),
     },
 ];
 

@@ -45,7 +45,6 @@ pub fn pipeline_failure(failure: &PipelineFailure) -> String {
         PipelineFailure::Typing(error) => error.to_string(),
         PipelineFailure::Validation(error) => error.to_string(),
         PipelineFailure::Runtime(error) => format!("internal.runtime\n{error}"),
-        PipelineFailure::Extended(error) => error.to_string(),
     }
 }
 

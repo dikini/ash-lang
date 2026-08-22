@@ -251,8 +251,6 @@ pub struct ResolvedEquationalGlobal {
     pub interface: ResolvedExternalInterface,
     /// Nonempty contiguous clause group.
     pub equations: Vec<ResolvedEquation>,
-    /// First clause retained while existing elaboration consumers migrate.
-    pub equation: ResolvedEquation,
 }
 
 /// A resolved external interface.
@@ -273,8 +271,6 @@ pub struct ResolvedEquation {
     pub name: ResolvedOccurrence,
     /// Patterns consuming successive arrow domains.
     pub patterns: Vec<ResolvedPattern>,
-    /// First domain binder retained while function Core migrates to patterns.
-    pub binder: Binder,
     /// Resolved equation body.
     pub body: ResolvedExpr,
     /// Complete equation span.
@@ -297,22 +293,9 @@ pub struct ResolvedInlineOperationalHeader {
     pub name: Binder,
     /// Nonempty typed operational parameter vector.
     pub parameters: Vec<ResolvedTypedPattern>,
-    /// First parameter retained while existing elaboration consumers migrate.
-    pub parameter: ResolvedTypedBinder,
     /// Declared result type.
     pub result_type: ResolvedType,
     /// Complete header span, excluding the body.
-    pub span: Span,
-}
-
-/// A resolved binder with a source type annotation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedTypedBinder {
-    /// Resolved definition site.
-    pub binder: Binder,
-    /// Required source type.
-    pub annotation: ResolvedType,
-    /// Complete typed-binder span.
     pub span: Span,
 }
 
@@ -409,8 +392,6 @@ pub struct ResolvedRecursiveMember {
 pub struct ResolvedBinding {
     /// Introduced irrefutable pattern.
     pub pattern: ResolvedPattern,
-    /// First binder retained while binding Core migrates to patterns.
-    pub binder: Binder,
     /// Optional source type annotation.
     pub annotation: Option<ResolvedType>,
     /// Initializer resolved in the incoming scope.
@@ -513,8 +494,6 @@ pub struct ResolvedBinaryExpr {
 /// A resolved anonymous function expression.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedFunctionExpr {
-    /// First binder retained while function Core migrates to patterns.
-    pub parameter: Binder,
     /// Unary domain pattern.
     pub pattern: ResolvedPattern,
     /// Resolved braced body.

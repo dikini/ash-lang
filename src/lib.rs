@@ -15,7 +15,6 @@ pub mod diagnostic;
 pub mod driver;
 pub mod elaborate;
 pub mod eval;
-pub mod extended;
 pub mod integer;
 pub mod lexer;
 pub mod parser;

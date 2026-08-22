@@ -8,7 +8,8 @@ use ash::{
     parser::{parse, project},
     resolve::resolve,
     resolved::{
-        ResolvedBinding, ResolvedBlock, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram,
+        Binder, ResolvedBinding, ResolvedBlock, ResolvedExprKind, ResolvedLocalDeclaration,
+        ResolvedPatternKind, ResolvedProgram,
     },
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
     types::Type,
@@ -21,6 +22,13 @@ fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
         panic!("expected ordinary binding")
     };
     binding
+}
+
+fn binding_binder(binding: &ResolvedBinding) -> &Binder {
+    let ResolvedPatternKind::Binder(binder) = &binding.pattern.kind else {
+        panic!("expected binder pattern")
+    };
+    binder
 }
 
 fn binding_mut(block: &mut ResolvedBlock, index: usize) -> &mut ResolvedBinding {
@@ -60,8 +68,8 @@ fn v003_resolves_shadowing_to_distinct_binders_and_runs_to_two() {
     let ResolvedExprKind::Block(block) = &program.result.kind else {
         panic!("expected the V-003 block");
     };
-    let first = binding(block, 0).binder.id;
-    let second = binding(block, 1).binder.id;
+    let first = binding_binder(binding(block, 0)).id;
+    let second = binding_binder(binding(block, 1)).id;
     let ResolvedExprKind::Add(initializer) = &binding(block, 1).initializer.kind else {
         panic!("expected the shadowing initializer");
     };
@@ -132,7 +140,10 @@ fn block_elaboration_folds_bindings_right_to_left_with_causal_origins() {
     let PureExprKind::Computation(PureComputation::Bind(first_core)) = &outer.kind else {
         panic!("expected the first binding outside the second");
     };
-    assert_eq!(first_core.binder().id(), binding(block, 0).binder.id);
+    assert_eq!(
+        first_core.binder().id(),
+        binding_binder(binding(block, 0)).id
+    );
     assert_eq!(first_core.binder().ty(), &Type::Int);
     assert_eq!(outer.ty, Type::Int);
     assert_eq!(
@@ -150,14 +161,17 @@ fn block_elaboration_folds_bindings_right_to_left_with_causal_origins() {
     );
     assert_eq!(
         first_core.binder().origin().primary_span(),
-        binding(block, 0).binder.origin.primary_span()
+        binding_binder(binding(block, 0)).origin.primary_span()
     );
 
     let inner = validated.node(first_core.body()).expect("inner binding");
     let PureExprKind::Computation(PureComputation::Bind(second_core)) = &inner.kind else {
         panic!("expected the second binding inside the first");
     };
-    assert_eq!(second_core.binder().id(), binding(block, 1).binder.id);
+    assert_eq!(
+        second_core.binder().id(),
+        binding_binder(binding(block, 1)).id
+    );
     assert_eq!(inner.origin.primary_span(), binding(block, 1).span);
     assert_eq!(
         inner.origin.related_spans(),
@@ -214,7 +228,7 @@ fn failed_initializer_scope_check_poisons_the_elaborator() {
         panic!("expected a block");
     };
     let prior_expression = binding(block, 0).initializer.clone();
-    let second_binder = binding(block, 1).binder.id;
+    let second_binder = binding_binder(binding(block, 1)).id;
     let ResolvedExprKind::Add(initializer) = &mut binding_mut(block, 1).initializer.kind else {
         panic!("expected an addition initializer");
     };
@@ -279,7 +293,7 @@ fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() 
     let ResolvedExprKind::Occurrence(outer_use) = &inner_initializer.left.kind else {
         panic!("expected outer use inside nested block");
     };
-    assert_eq!(outer_use.binder, binding(outer_block, 0).binder.id);
+    assert_eq!(outer_use.binder, binding_binder(binding(outer_block, 0)).id);
 
     let (validated, ty) = elaborate(&source, &program);
     let outer_core = validated.node(validated.root()).expect("outer binding");
@@ -298,7 +312,7 @@ fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() 
     };
     assert_eq!(
         nested_binding.binder().id(),
-        binding(inner_block, 0).binder.id
+        binding_binder(binding(inner_block, 0)).id
     );
 
     let evaluation = evaluate(&validated).expect("nested bindings should evaluate");
@@ -323,7 +337,7 @@ fn nested_block_binder_is_removed_before_the_enclosing_result() {
     let ResolvedExprKind::Block(inner) = &binding(outer, 0).initializer.kind else {
         panic!("expected nested block");
     };
-    let hidden = binding(inner, 0).binder.id;
+    let hidden = binding_binder(binding(inner, 0)).id;
     let ResolvedExprKind::Occurrence(result_use) = &mut outer.result.kind else {
         panic!("expected outer result occurrence");
     };

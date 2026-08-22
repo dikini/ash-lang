@@ -635,7 +635,7 @@ impl Elaborator {
                     if !matches!(function_type.ty, Type::Function(_, _)) {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
-                            &equational.equation.name,
+                            &equational.equations.first().ok_or_else(invalid_state)?.name,
                         ));
                     }
                     (&equational.interface.name, function_type)
@@ -677,7 +677,7 @@ impl Elaborator {
                     if !matches!(function_type.ty, Type::Function(_, _)) {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
-                            &equational.equation.name,
+                            &equational.equations.first().ok_or_else(invalid_state)?.name,
                         ));
                     }
                     (
@@ -2596,14 +2596,19 @@ fn equational_origin(
     definition_span: Span,
     equational: &crate::resolved::ResolvedEquationalGlobal,
 ) -> Origin {
+    let first = equational.equations.first();
     Origin::Related {
-        primary: Box::new(Origin::Source(equational.equation.span)),
-        related: vec![
+        primary: Box::new(Origin::Source(
+            first.map_or(definition_span, |equation| equation.span),
+        )),
+        related: [
             definition_span,
             equational.interface.span,
             equational.interface.annotation.span,
-            equational.equation.body.span,
-        ],
+        ]
+        .into_iter()
+        .chain(first.map(|equation| equation.body.span))
+        .collect(),
     }
 }
 
@@ -2615,7 +2620,13 @@ fn operational_origin(
         primary: Box::new(Origin::Source(definition_span)),
         related: vec![
             operational.header.span,
-            operational.header.parameter.annotation.span,
+            operational
+                .header
+                .parameters
+                .first()
+                .map_or(operational.header.span, |parameter| {
+                    parameter.annotation.span
+                }),
             operational.header.result_type.span,
             operational.body.span,
         ],
@@ -2628,7 +2639,7 @@ fn anonymous_function_origin(
 ) -> Origin {
     Origin::Related {
         primary: Box::new(Origin::Source(expression_span)),
-        related: vec![function.parameter.origin.primary_span(), function.body.span],
+        related: vec![function.pattern.span, function.body.span],
     }
 }
 
@@ -2815,9 +2826,12 @@ mod tests {
         let ResolvedExprKind::Function(function) = &program.result.kind else {
             panic!("expected an anonymous function");
         };
+        let ResolvedPatternKind::Binder(parameter) = &function.pattern.kind else {
+            panic!("expected a binder parameter");
+        };
         let mut context = TypeContext::new();
         context.binders.insert(
-            function.parameter.id,
+            parameter.id,
             TypeFact {
                 ty: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
                 provenance: TypeProvenance::atom(None),

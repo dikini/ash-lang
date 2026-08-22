@@ -1746,17 +1746,17 @@ mod tests {
         let root = tree.root.as_mut().expect("the parser produced one root");
         let function = find_node_mut(root, NodeKind::FunctionExpression)
             .expect("the fixture contains a function expression");
-        let binder = function
+        let pattern = function
             .children
             .iter()
             .find_map(|child| match child {
-                ConcreteElement::Node(child) if child.kind == NodeKind::Binder => {
+                ConcreteElement::Node(child) if child.kind == NodeKind::Pattern => {
                     Some(child.clone())
                 }
                 _ => None,
             })
-            .expect("the function has a binder");
-        function.children.push(ConcreteElement::Node(binder));
+            .expect("the function has a pattern");
+        function.children.push(ConcreteElement::Node(pattern));
 
         assert_eq!(
             project(&source, &tree),
