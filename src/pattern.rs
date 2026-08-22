@@ -1,6 +1,9 @@
 //! Shared typed-pattern usefulness and witness construction.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use crate::{
     core::{CorePattern, CorePatternKind},
@@ -79,7 +82,7 @@ impl UsefulnessBudget {
 
 #[derive(Clone)]
 struct Choice {
-    child: State,
+    child: Rc<State>,
     rebuild: Rebuild,
 }
 
@@ -90,9 +93,9 @@ enum Rebuild {
 }
 
 enum Frame {
-    Call(State),
+    Call(Rc<State>),
     TryChoices {
-        state: State,
+        state: Rc<State>,
         choices: Vec<Choice>,
         next: usize,
     },
@@ -234,8 +237,9 @@ fn usefulness_shapes(
     state_limit: usize,
     budget: &mut UsefulnessBudget,
 ) -> Result<Option<Vec<WitnessPattern>>, UsefulnessError> {
-    let root = (matrix.to_vec(), candidate.to_vec(), types.to_vec());
-    let mut memo = HashMap::<State, Option<Vec<WitnessPattern>>>::new();
+    charge_state_materialization(matrix, candidate, types, budget)?;
+    let root = Rc::new((matrix.to_vec(), candidate.to_vec(), types.to_vec()));
+    let mut memo = HashMap::<Rc<State>, Option<Vec<WitnessPattern>>>::new();
     let mut active = HashSet::new();
     let mut frames = vec![Frame::Call(root)];
     let mut returned = None::<Option<Vec<WitnessPattern>>>;
@@ -245,6 +249,7 @@ fn usefulness_shapes(
         match frame {
             Frame::Call(state) => {
                 if let Some(cached) = memo.get(&state) {
+                    charge_optional_witness(cached, budget)?;
                     returned = Some(cached.clone());
                     continue;
                 }
@@ -257,14 +262,15 @@ fn usefulness_shapes(
                 if explored > state_limit {
                     return Err(UsefulnessError::StateLimit);
                 }
-                match immediate_result(&state) {
+                match immediate_result(&state, budget)? {
                     Some(result) => {
+                        charge_optional_witness(&result, budget)?;
                         memo.insert(state, result.clone());
                         returned = Some(result);
                     }
                     None => {
                         let choices = choices(&state, registry, state_limit, budget)?;
-                        active.insert(state.clone());
+                        active.insert(Rc::clone(&state));
                         frames.push(Frame::TryChoices {
                             state,
                             choices,
@@ -281,8 +287,9 @@ fn usefulness_shapes(
                 if let Some(child_result) = returned.take() {
                     if let Some(choice) = choices.get(next.saturating_sub(1)) {
                         if let Some(witness) = child_result {
-                            let result = Some(rebuild_witness(witness, choice.rebuild));
+                            let result = Some(rebuild_witness(witness, choice.rebuild, budget)?);
                             active.remove(&state);
+                            charge_optional_witness(&result, budget)?;
                             memo.insert(state, result.clone());
                             returned = Some(result);
                             continue;
@@ -314,21 +321,25 @@ fn usefulness_shapes(
     Ok(returned.flatten())
 }
 
-fn immediate_result(state: &State) -> Option<Option<Vec<WitnessPattern>>> {
+fn immediate_result(
+    state: &State,
+    budget: &mut UsefulnessBudget,
+) -> Result<Option<Option<Vec<WitnessPattern>>>, UsefulnessError> {
     let (matrix, candidate, types) = state;
     if candidate.is_empty() {
-        return Some(matrix.is_empty().then(Vec::new));
+        return Ok(Some(matrix.is_empty().then(Vec::new)));
     }
     if matrix.is_empty() {
-        return Some(Some(candidate.clone()));
+        charge_witnesses(candidate, budget)?;
+        return Ok(Some(Some(candidate.clone())));
     }
     if types.len() != candidate.len() || matrix.iter().any(|row| row.len() != candidate.len()) {
-        return Some(None);
+        return Ok(Some(None));
     }
-    matrix
+    Ok(matrix
         .iter()
         .any(|row| row.iter().all(WitnessPattern::is_wildcard))
-        .then_some(None)
+        .then_some(None))
 }
 
 fn choices(
@@ -345,33 +356,23 @@ fn choices(
                 return Err(UsefulnessError::StateLimit);
             }
             budget.charge(heads.len().saturating_mul(matrix.len().max(1)))?;
-            return Ok(heads
-                .into_iter()
-                .map(|head| {
-                    let argument_types = head_types(head, first_type, registry);
-                    let argument_count = argument_types.len();
-                    let specialized_matrix = specialize_matrix(matrix, head, argument_count);
-                    let mut specialized_candidate = vec![WitnessPattern::Wildcard; argument_count];
-                    specialized_candidate.extend_from_slice(&candidate[1..]);
-                    let mut specialized_types = argument_types;
-                    specialized_types.extend_from_slice(&types[1..]);
-                    Choice {
-                        child: (specialized_matrix, specialized_candidate, specialized_types),
-                        rebuild: Rebuild::Head {
-                            head,
-                            argument_count,
-                        },
-                    }
-                })
-                .collect());
+            let mut result = Vec::with_capacity(heads.len());
+            for index in 0..heads.len() {
+                result.push(specialized_choice(
+                    state,
+                    heads.at(index),
+                    true,
+                    registry,
+                    budget,
+                )?);
+            }
+            return Ok(result);
         }
-        let default = matrix
-            .iter()
-            .filter(|row| row[0].is_wildcard())
-            .map(|row| row[1..].to_vec())
-            .collect::<Vec<_>>();
+        let default = default_matrix(matrix, budget)?;
+        let specialized_candidate = clone_witnesses(&candidate[1..], budget)?;
+        let specialized_types = clone_types(&types[1..], budget)?;
         return Ok(vec![Choice {
-            child: (default, candidate[1..].to_vec(), types[1..].to_vec()),
+            child: Rc::new((default, specialized_candidate, specialized_types)),
             rebuild: Rebuild::Wildcard,
         }]);
     }
@@ -380,24 +381,188 @@ fn choices(
         return Ok(Vec::new());
     };
     budget.charge(matrix.len().max(1))?;
-    let argument_types = head_types(head, first_type, registry);
+    Ok(vec![specialized_choice(
+        state, head, false, registry, budget,
+    )?])
+}
+
+fn specialized_choice(
+    state: &State,
+    head: Head,
+    wildcard_candidate: bool,
+    registry: &ResolvedRegistry,
+    budget: &mut UsefulnessBudget,
+) -> Result<Choice, UsefulnessError> {
+    let (matrix, candidate, types) = state;
+    let argument_types = head_types(head, &types[0], registry, budget)?;
     let argument_count = argument_types.len();
-    let specialized_matrix = specialize_matrix(matrix, head, argument_count);
-    let mut specialized_candidate = pattern_arguments(&candidate[0]);
-    specialized_candidate.extend_from_slice(&candidate[1..]);
+    let specialized_matrix = specialize_matrix(matrix, head, argument_count, budget)?;
+    let mut specialized_candidate = if wildcard_candidate {
+        budget.charge(argument_count)?;
+        vec![WitnessPattern::Wildcard; argument_count]
+    } else {
+        pattern_arguments(&candidate[0], budget)?
+    };
+    append_witnesses(&mut specialized_candidate, &candidate[1..], budget)?;
     let mut specialized_types = argument_types;
-    specialized_types.extend_from_slice(&types[1..]);
-    Ok(vec![Choice {
-        child: (specialized_matrix, specialized_candidate, specialized_types),
+    append_types(&mut specialized_types, &types[1..], budget)?;
+    Ok(Choice {
+        child: Rc::new((specialized_matrix, specialized_candidate, specialized_types)),
         rebuild: Rebuild::Head {
             head,
             argument_count,
         },
-    }])
+    })
 }
 
-fn rebuild_witness(mut witness: Vec<WitnessPattern>, rebuild: Rebuild) -> Vec<WitnessPattern> {
-    match rebuild {
+fn default_matrix(
+    matrix: &[Vec<WitnessPattern>],
+    budget: &mut UsefulnessBudget,
+) -> Result<Vec<Vec<WitnessPattern>>, UsefulnessError> {
+    let mut default = Vec::with_capacity(matrix.len());
+    for row in matrix.iter().filter(|row| row[0].is_wildcard()) {
+        default.push(clone_witnesses(&row[1..], budget)?);
+    }
+    Ok(default)
+}
+
+fn charge_state_materialization(
+    matrix: &[Vec<WitnessPattern>],
+    candidate: &[WitnessPattern],
+    types: &[Type],
+    budget: &mut UsefulnessBudget,
+) -> Result<(), UsefulnessError> {
+    for row in matrix {
+        charge_witnesses(row, budget)?;
+    }
+    charge_witnesses(candidate, budget)?;
+    charge_types(types, budget)
+}
+
+fn charge_optional_witness(
+    witness: &Option<Vec<WitnessPattern>>,
+    budget: &mut UsefulnessBudget,
+) -> Result<(), UsefulnessError> {
+    if let Some(witness) = witness {
+        charge_witnesses(witness, budget)?;
+    }
+    Ok(())
+}
+
+fn clone_witnesses(
+    patterns: &[WitnessPattern],
+    budget: &mut UsefulnessBudget,
+) -> Result<Vec<WitnessPattern>, UsefulnessError> {
+    charge_witnesses(patterns, budget)?;
+    Ok(patterns.to_vec())
+}
+
+fn append_witnesses(
+    target: &mut Vec<WitnessPattern>,
+    patterns: &[WitnessPattern],
+    budget: &mut UsefulnessBudget,
+) -> Result<(), UsefulnessError> {
+    charge_witnesses(patterns, budget)?;
+    target.reserve(patterns.len());
+    target.extend_from_slice(patterns);
+    Ok(())
+}
+
+fn charge_witnesses(
+    patterns: &[WitnessPattern],
+    budget: &mut UsefulnessBudget,
+) -> Result<(), UsefulnessError> {
+    enum Task<'a> {
+        Pattern(&'a WitnessPattern),
+        Slice(std::slice::Iter<'a, WitnessPattern>),
+    }
+
+    let mut work = vec![Task::Slice(patterns.iter())];
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Slice(mut remaining) => {
+                if let Some(pattern) = remaining.next() {
+                    work.push(Task::Slice(remaining));
+                    work.push(Task::Pattern(pattern));
+                }
+            }
+            Task::Pattern(pattern) => {
+                budget.charge(1)?;
+                match pattern {
+                    WitnessPattern::Tuple(elements) => {
+                        work.push(Task::Slice(elements.iter()));
+                    }
+                    WitnessPattern::Constructor(_, Some(payload)) => {
+                        work.push(Task::Pattern(payload));
+                    }
+                    WitnessPattern::Wildcard
+                    | WitnessPattern::Boolean(_)
+                    | WitnessPattern::Unit
+                    | WitnessPattern::Constructor(_, None) => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn clone_types(
+    types: &[Type],
+    budget: &mut UsefulnessBudget,
+) -> Result<Vec<Type>, UsefulnessError> {
+    charge_types(types, budget)?;
+    Ok(types.to_vec())
+}
+
+fn append_types(
+    target: &mut Vec<Type>,
+    types: &[Type],
+    budget: &mut UsefulnessBudget,
+) -> Result<(), UsefulnessError> {
+    charge_types(types, budget)?;
+    target.reserve(types.len());
+    target.extend_from_slice(types);
+    Ok(())
+}
+
+fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), UsefulnessError> {
+    enum Task<'a> {
+        Type(&'a Type),
+        Slice(std::slice::Iter<'a, Type>),
+    }
+
+    let mut work = vec![Task::Slice(types.iter())];
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Slice(mut remaining) => {
+                if let Some(ty) = remaining.next() {
+                    work.push(Task::Slice(remaining));
+                    work.push(Task::Type(ty));
+                }
+            }
+            Task::Type(ty) => {
+                budget.charge(1)?;
+                match ty {
+                    Type::Tuple(elements) => work.push(Task::Slice(elements.iter())),
+                    Type::Function(domain, codomain) => {
+                        work.push(Task::Type(codomain));
+                        work.push(Task::Type(domain));
+                    }
+                    Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rebuild_witness(
+    mut witness: Vec<WitnessPattern>,
+    rebuild: Rebuild,
+    budget: &mut UsefulnessBudget,
+) -> Result<Vec<WitnessPattern>, UsefulnessError> {
+    budget.charge(witness.len().saturating_add(1))?;
+    Ok(match rebuild {
         Rebuild::Head {
             head,
             argument_count,
@@ -412,39 +577,66 @@ fn rebuild_witness(mut witness: Vec<WitnessPattern>, rebuild: Rebuild) -> Vec<Wi
             rebuilt.append(&mut witness);
             rebuilt
         }
+    })
+}
+
+enum Heads<'a> {
+    Boolean,
+    Unit,
+    Tuple(usize),
+    Constructors(&'a [ConstructorId]),
+}
+
+impl Heads<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Boolean => 2,
+            Self::Unit | Self::Tuple(_) => 1,
+            Self::Constructors(constructors) => constructors.len(),
+        }
+    }
+
+    fn at(&self, index: usize) -> Head {
+        match self {
+            Self::Boolean => Head::Boolean(index == 0),
+            Self::Unit => Head::Unit,
+            Self::Tuple(count) => Head::Tuple(*count),
+            Self::Constructors(constructors) => Head::Constructor(constructors[index]),
+        }
     }
 }
 
-fn heads_for_type(ty: &Type, registry: &ResolvedRegistry) -> Option<Vec<Head>> {
+fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads<'a>> {
     match ty {
-        Type::Bool => Some(vec![Head::Boolean(true), Head::Boolean(false)]),
-        Type::Unit => Some(vec![Head::Unit]),
-        Type::Tuple(elements) => Some(vec![Head::Tuple(elements.len())]),
-        Type::Nominal(id) => Some(
-            registry
-                .nominal(*id)?
-                .constructors
-                .iter()
-                .copied()
-                .map(Head::Constructor)
-                .collect(),
-        ),
+        Type::Bool => Some(Heads::Boolean),
+        Type::Unit => Some(Heads::Unit),
+        Type::Tuple(elements) => Some(Heads::Tuple(elements.len())),
+        Type::Nominal(id) => Some(Heads::Constructors(&registry.nominal(*id)?.constructors)),
         Type::Int | Type::Function(_, _) => None,
     }
 }
 
-fn head_types(head: Head, ty: &Type, registry: &ResolvedRegistry) -> Vec<Type> {
+fn head_types(
+    head: Head,
+    ty: &Type,
+    registry: &ResolvedRegistry,
+    budget: &mut UsefulnessBudget,
+) -> Result<Vec<Type>, UsefulnessError> {
     match head {
-        Head::Boolean(_) | Head::Unit => Vec::new(),
+        Head::Boolean(_) | Head::Unit => Ok(Vec::new()),
         Head::Tuple(count) => match ty {
-            Type::Tuple(elements) if elements.len() == count => elements.to_vec(),
-            _ => Vec::new(),
+            Type::Tuple(elements) if elements.len() == count => clone_types(elements, budget),
+            _ => Ok(Vec::new()),
         },
-        Head::Constructor(id) => registry
-            .constructor(id)
-            .and_then(|constructor| constructor.payload.clone())
-            .into_iter()
-            .collect(),
+        Head::Constructor(id) => registry.constructor(id).map_or_else(
+            || Ok(Vec::new()),
+            |constructor| {
+                constructor.payload.as_ref().map_or_else(
+                    || Ok(Vec::new()),
+                    |payload| clone_types(std::slice::from_ref(payload), budget),
+                )
+            },
+        ),
     }
 }
 
@@ -458,11 +650,16 @@ fn pattern_head(pattern: &WitnessPattern) -> Option<Head> {
     }
 }
 
-fn pattern_arguments(pattern: &WitnessPattern) -> Vec<WitnessPattern> {
+fn pattern_arguments(
+    pattern: &WitnessPattern,
+    budget: &mut UsefulnessBudget,
+) -> Result<Vec<WitnessPattern>, UsefulnessError> {
     match pattern {
-        WitnessPattern::Tuple(elements) => elements.to_vec(),
-        WitnessPattern::Constructor(_, Some(payload)) => vec![payload.as_ref().clone()],
-        _ => Vec::new(),
+        WitnessPattern::Tuple(elements) => clone_witnesses(elements, budget),
+        WitnessPattern::Constructor(_, Some(payload)) => {
+            clone_witnesses(std::slice::from_ref(payload.as_ref()), budget)
+        }
+        _ => Ok(Vec::new()),
     }
 }
 
@@ -470,23 +667,22 @@ fn specialize_matrix(
     matrix: &[Vec<WitnessPattern>],
     head: Head,
     argument_count: usize,
-) -> Vec<Vec<WitnessPattern>> {
-    matrix
-        .iter()
-        .filter_map(|row| {
-            if row[0].is_wildcard() {
-                let mut result = vec![WitnessPattern::Wildcard; argument_count];
-                result.extend_from_slice(&row[1..]);
-                Some(result)
-            } else if pattern_head(&row[0]) == Some(head) {
-                let mut result = pattern_arguments(&row[0]);
-                result.extend_from_slice(&row[1..]);
-                Some(result)
-            } else {
-                None
-            }
-        })
-        .collect()
+    budget: &mut UsefulnessBudget,
+) -> Result<Vec<Vec<WitnessPattern>>, UsefulnessError> {
+    let mut specialized = Vec::with_capacity(matrix.len());
+    for row in matrix {
+        let mut result = if row[0].is_wildcard() {
+            budget.charge(argument_count)?;
+            vec![WitnessPattern::Wildcard; argument_count]
+        } else if pattern_head(&row[0]) == Some(head) {
+            pattern_arguments(&row[0], budget)?
+        } else {
+            continue;
+        };
+        append_witnesses(&mut result, &row[1..], budget)?;
+        specialized.push(result);
+    }
+    Ok(specialized)
 }
 
 fn pattern_from_head(head: Head, mut arguments: Vec<WitnessPattern>) -> WitnessPattern {
@@ -606,6 +802,25 @@ mod tests {
 
         assert_eq!(
             usefulness_with_budget(&[], &[tuple], &[tuple_type], &registry, &mut budget),
+            Err(UsefulnessError::WorkLimit)
+        );
+    }
+
+    #[test]
+    fn usefulness_charges_tuple_type_cells_before_materializing_the_root_state() {
+        let tuple_type = Type::Tuple(vec![Type::Int; 8].into_boxed_slice());
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        let mut budget = UsefulnessBudget { remaining: 8 };
+
+        assert_eq!(
+            usefulness_shapes(
+                &[],
+                &[WitnessPattern::Wildcard],
+                &[tuple_type],
+                &registry,
+                USEFULNESS_STATE_LIMIT,
+                &mut budget,
+            ),
             Err(UsefulnessError::WorkLimit)
         );
     }

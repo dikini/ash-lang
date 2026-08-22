@@ -490,6 +490,35 @@ fn an_over_budget_case_group_reports_an_internal_resource_failure() {
 }
 
 #[test]
+fn a_wide_tuple_case_group_charges_type_and_specialization_cells() {
+    const WIDTH: usize = 100_000;
+    let mut text = String::with_capacity(WIDTH * 5 + 32);
+    text.push_str("match (");
+    for index in 0..WIDTH {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push('0');
+    }
+    text.push_str(") {\n(");
+    for index in 0..WIDTH {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push('_');
+    }
+    text.push_str(") => 0\n}\n");
+
+    let source = SourceFile::new("wide-tuple-coverage.ash", text)
+        .expect("wide tuple resource fixture should fit");
+    let error = run_source(source).expect_err("tuple coverage materialization must be bounded");
+    let PipelineFailure::Typing(TypeError::Internal(failure)) = error else {
+        panic!("coverage exhaustion must remain an internal resource failure")
+    };
+    assert_eq!(failure, ElaborationFailure::CoverageResourceExhausted);
+}
+
+#[test]
 fn match_trace_enters_the_scrutinee_once_and_only_the_selected_body() {
     use ash::{
         core::{CoreBuilder, CoreMatchArm, CorePattern, CorePatternKind},
