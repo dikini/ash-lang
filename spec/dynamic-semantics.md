@@ -50,8 +50,8 @@ lexical function from its template and the recursive environment.
 ```sequent
 family recursive-binding-steps:
   E-Let-Rec-Allocate :=
-    allocate_uninitialized(heap, data_members) = heap_1, pending
-    environment_1 = extend_recursive(environment, function_templates, data_locations(pending))
+    allocate_uninitialized(heap, data_members) = heap_1, data_bindings, pending
+    environment_1 = extend_recursive(environment, function_templates, data_bindings)
     ===>
     CONFIG(heap, environment, let rec members; body, continuation) -> CONFIG(heap_1, environment_1, initialize(pending, body), continuation)
 
@@ -70,9 +70,11 @@ family recursive-binding-steps:
 ```
 
 Function templates and data locations enter scope before data initialization.
-`pending` pairs each guarded data initializer with its preallocated location in
-source order. `E-Let-Rec-Initialize` enters only the first initializer and saves
-the remaining pairs, group body, and recursive environment in a continuation.
+`data_bindings` maps every data member's binder identity to its preallocated
+location. `pending` separately pairs each guarded data initializer with that
+member's location in source order. `E-Let-Rec-Initialize` enters only the first
+initializer and saves the remaining pairs, group body, and recursive
+environment in a continuation.
 When that initializer returns its constructed location, `E-Let-Rec-Store`
 stores the alias and resumes the remaining initialization control. Repeating
 these two one-step rules makes every intermediate heap and control state, and
