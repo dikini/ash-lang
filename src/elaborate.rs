@@ -113,8 +113,8 @@ impl fmt::Display for TypeReason {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypeMismatch {
     span: Span,
-    expected: Type,
-    found: Type,
+    expected: Box<Type>,
+    found: Box<Type>,
     expected_display: String,
     found_display: String,
 }
@@ -1461,10 +1461,16 @@ impl Elaborator {
                         codomain.ty.clone(),
                         origin,
                     )?;
+                    let ty = self.zonk(&codomain.ty)?;
+                    let provenance = if codomain.provenance.aligns(&ty) {
+                        codomain.provenance
+                    } else {
+                        TypeProvenance::unknown(&ty)
+                    };
                     values.push(TypedNode {
                         node,
-                        ty: self.zonk(&codomain.ty)?,
-                        provenance: TypeProvenance::unknown(&self.zonk(&codomain.ty)?),
+                        ty,
+                        provenance,
                     });
                 }
                 ElaborationTask::AfterLeft {
@@ -2558,6 +2564,7 @@ enum CheckKind {
 #[derive(Clone, Copy)]
 enum SynthesisCause {
     Binding(Span),
+    NestedBinding(Span),
     ProgramResult(Span),
     Application(Span),
     Operator(Span),
@@ -2640,9 +2647,13 @@ fn schedule_block<'a>(
             kind,
         });
     } else {
+        let result_cause = match synthesis_cause {
+            Some(SynthesisCause::Binding(span)) => Some(SynthesisCause::NestedBinding(span)),
+            cause => cause,
+        };
         tasks.push(ElaborationTask::Synthesize {
             expression: &block.result,
-            cause: synthesis_cause,
+            cause: result_cause,
         });
     }
     for declaration in block.declarations.iter().rev() {
@@ -2693,8 +2704,8 @@ fn check_mismatch(
             span,
             expected_display: registry.display_type(&expected),
             found_display: registry.display_type(&found),
-            expected,
-            found,
+            expected: Box::new(expected),
+            found: Box::new(found),
         }),
         CheckKind::Argument {
             function_span,
@@ -2786,7 +2797,7 @@ fn function_needs_context(span: Span, cause: Option<SynthesisCause>) -> TypeErro
     );
     if let Some(cause) = cause {
         let (span, message, help) = match cause {
-            SynthesisCause::Binding(span) => (
+            SynthesisCause::Binding(span) | SynthesisCause::NestedBinding(span) => (
                 span,
                 "this unannotated binding requires its initializer to synthesize a type",
                 Some("add a function type annotation to this binding"),

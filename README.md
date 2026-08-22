@@ -5,8 +5,8 @@ lessons from historical Ash while rebuilding the language from a small,
 coherent base. Historical Ash is evidence for design work, not authority for
 this project.
 
-The first retained increment, Mini-Ash, is an executable single-file,
-monomorphic, pure-functional language. The
+The first retained milestone, Mini-Ash, is an executable single-file, rank-1,
+pure-functional language. The
 [canonical specification](spec/README.md) defines its current syntax and
 semantics. The [`ash` tool guide](docs/tools/ash.md) explains how to run a
 source file.

@@ -173,6 +173,10 @@ impl Resolver {
         for definition in &program.definitions {
             global_type_parameters.push(self.allocate_global_type_parameters(definition)?);
         }
+        let registry = Arc::new(
+            registry
+                .with_additional_type_variables(global_type_parameters.iter().flatten().cloned()),
+        );
         let mut global_binders = Vec::with_capacity(program.definitions.len());
         for definition in &program.definitions {
             let (global_name, global_name_span) = match &definition.kind {
@@ -365,7 +369,7 @@ impl Resolver {
     fn resolve_registry(
         &mut self,
         program: &SurfaceProgram,
-    ) -> Result<Arc<ResolvedRegistry>, ResolveError> {
+    ) -> Result<ResolvedRegistry, ResolveError> {
         let mut first_types = HashMap::new();
         let mut nominal_ids = Vec::with_capacity(program.type_declarations.len());
         for (index, declaration) in program.type_declarations.iter().enumerate() {
@@ -504,9 +508,7 @@ impl Resolver {
             }
             let _ = self.type_scopes.pop();
         }
-        Ok(Arc::new(
-            ResolvedRegistry::new(nominals, constructors).with_type_parameters(nominal_parameters),
-        ))
+        Ok(ResolvedRegistry::new(nominals, constructors).with_type_parameters(nominal_parameters))
     }
 
     fn push_binder_scope_many(&mut self, binders: &[Binder]) {

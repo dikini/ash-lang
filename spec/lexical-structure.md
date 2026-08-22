@@ -19,11 +19,12 @@ more decimal digits. Its value is the corresponding mathematical non-negative
 integer. There is no fixed-width overflow. A leading zero in a multi-digit
 integer is invalid. A leading `-` is not part of an integer literal.
 
-The remaining punctuation admitted by Mini-Ash is `(`, `)`, `{`, `}`, `:`,
-`=`, `==`, `+`, `*`, `->`, `=>`, `|`, and comma. The longest token wins where
-one spelling prefixes another. Semicolon is recognized only to provide its
-specified source rejection; no grammar production admits it as source
-punctuation.
+The remaining punctuation admitted by Mini-Ash is `(`, `)`, `{`, `}`, `<`,
+`>`, `:`, `=`, `==`, `+`, `*`, `->`, `=>`, `|`, and comma. Angle brackets
+occur only in parameterized type declarations and saturated nominal type
+applications. The longest token wins where one spelling prefixes another.
+Semicolon is recognized only to provide its specified source rejection; no
+grammar production admits it as source punctuation.
 
 Mini-Ash has no comments, string or character literals, escapes, Unicode
 identifiers, or negative literals.

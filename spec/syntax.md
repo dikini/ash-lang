@@ -16,8 +16,10 @@ program ::=
   expression [ line_end ] ;
 
 type_declaration ::=
-  "type" upper_identifier "=" [ line_end ] constructor_declaration
+  "type" upper_identifier [ type_parameters ] "=" [ line_end ] constructor_declaration
   { line_end "|" constructor_declaration } ;
+type_parameters ::=
+  "<" upper_identifier { "," upper_identifier } ">" ;
 constructor_declaration ::=
   upper_identifier [ "(" type { "," type } ")" ] ;
 
@@ -74,7 +76,13 @@ juxtaposed_constructor_pattern ::=
   upper_identifier ( pattern | juxtaposed_constructor_pattern ) ;
 typed_pattern ::= pattern ":" type ;
 type ::= atomic_type [ "->" type ] ;
-atomic_type ::= "Int" | "Bool" | "Unit" | upper_identifier | parenthesized_type ;
+atomic_type ::=
+  "Int"
+  | "Bool"
+  | "Unit"
+  | upper_identifier [ type_arguments ]
+  | parenthesized_type ;
+type_arguments ::= "<" type { "," type } ">" ;
 parenthesized_type ::= "(" type [ "," type { "," type } ] ")" ;
 
 identifier ::= /[a-z_][a-zA-Z0-9_]*/ ;
@@ -96,6 +104,14 @@ block uses a trailing semicolon.
 Every recursive member has a required type annotation. The grammar accepts an
 arbitrary initializer expression so static semantics can distinguish safe
 function or constructor-rooted initialization from malformed syntax.
+
+A nominal declaration binds its ordered type parameters only in its
+constructor payload types. Every source nominal occurrence is saturated:
+`Option<Int>` is a type, while `Option` is rejected when `Option` declares one
+parameter. Type parameters and nominal arguments use the same uppercase lexical
+class as nominal names. Resolution distinguishes them by scope. Source
+expressions have no explicit type abstraction or type-application form;
+`value<Type>` is not an expression.
 
 The executable test `syntax_local_recursive_group_example_is_executable`
 checks a two-member recursive group. The second function retains a reference

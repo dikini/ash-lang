@@ -335,6 +335,13 @@ Compare rule organizations on:
 
 Retain a prototype only if it supplies current design evidence that cannot be captured more cheaply in examples, measurements, and counterexamples. No prototype should become production architecture without a later decision and task.
 
+The retained [rank-1 integration report](mini-ash/rank-1-polymorphism/evidence.md)
+records the implemented Mini-Ash result. Explicit type abstraction and
+application made scheme scope, substitution, transformation, malformed-Core
+rejection, and runtime erasure independently observable. Structured patterns
+remain in the retained Core; decision Core and pattern compilation remain
+excluded.
+
 ## Open questions
 
 - Which exact type annotations belong on Core nodes, binders, patterns, and branches?

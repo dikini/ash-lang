@@ -219,7 +219,9 @@ fn equational_returned_function_argument_uses_the_inner_domain_provenance() {
         diagnostic
             .related
             .iter()
-            .any(|label| Some(label.span()) == returned_domain.span())
+            .any(|label| Some(label.span()) == returned_domain.span()),
+        "expected returned domain {:?} in {diagnostic:?}",
+        returned_domain.span()
     );
     assert!(
         !diagnostic
@@ -256,7 +258,9 @@ fn operational_returned_function_argument_uses_the_inner_domain_provenance() {
         diagnostic
             .related
             .iter()
-            .any(|label| Some(label.span()) == returned_domain.span())
+            .any(|label| Some(label.span()) == returned_domain.span()),
+        "expected returned domain {:?} in {diagnostic:?}",
+        returned_domain.span()
     );
     assert!(
         !diagnostic

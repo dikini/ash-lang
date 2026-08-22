@@ -1,15 +1,26 @@
 # Static Semantics
 
-Mini-Ash has `Int`, `Bool`, `Unit`, structural tuples, nominal algebraic data
-types, and unary functions. A tuple contains at least two element types.
-Surface `domain -> codomain` denotes a function type.
+Mini-Ash has `Int`, `Bool`, `Unit`, rigid type variables, structural tuples,
+parameterized nominal algebraic data types, and unary functions. A tuple
+contains at least two element types. Surface `domain -> codomain` denotes a
+function type.
+
+Kinds are internal. `Type` is the kind of every source-admitted value type. A
+nominal declaration with `n` parameters has an internal constructor kind with
+`n` `Type` inputs and one `Type` result. Source type applications must be
+saturated, so no constructor-kinded type survives resolution.
 
 Type equality is one shared rule. `Int`, `Bool`, and `Unit` equal themselves;
-tuples and functions compare structurally; nominal types compare by stable
-declaration identity. Equal spelling or constructor shape does not make two
-nominal declarations equal.
+tuples, functions, and nominal arguments compare structurally; type variables
+compare by binder identity; nominal constructors compare by stable declaration
+identity. Equal spelling or constructor shape does not make two nominal
+declarations equal.
 
-The typing environment `GAMMA` maps resolved binder identities to monotypes.
+The typing environment `GAMMA` maps resolved binder identities to rank-1
+schemes. A scheme `forall parameters. type` quantifies only its outermost
+monotype. Looking up a scheme replaces each quantified parameter with a fresh
+inference variable. Rigid variables from annotations never unify with a
+different type.
 The judgment `GAMMA |- expression ⇒ type` synthesizes a type, while
 `GAMMA |- expression ⇐ type` checks an expression against an expected type.
 
@@ -33,7 +44,8 @@ family primitive-typing:
     GAMMA |- () ⇒ Unit
 
   T-Variable :=
-    x : type in GAMMA
+    x : scheme in GAMMA
+    instantiate(scheme) = type
     ===>
     GAMMA |- x ⇒ type
 
@@ -45,15 +57,18 @@ family primitive-typing:
 ```
 
 Here `n` ranges over integer literals, `b` over Boolean literals, and `x` over
-resolved occurrences. The equality premise in `T-Check-Inferred` uses the
-single type-equality rule above.
+resolved occurrences. `instantiate` replaces all outer quantified variables
+at once. The equality premise in `T-Check-Inferred` uses the single
+type-equality rule above after inference solutions are applied.
 
 ## Tuples and constructors
 
-Tuple elements synthesize from left to right. A nullary constructor occurrence
-synthesizes its owner's nominal type. A payload constructor is an ordinary
-unary function from its one semantic payload to that owner. Multiple declared
-fields form one tuple payload.
+Tuple elements synthesize from left to right. A constructor declaration under
+`Owner<A_1, ..., A_n>` contributes a scheme quantified over those declaration
+parameters. Instantiating a nullary constructor produces the applied owner
+type. Instantiating a payload constructor produces an ordinary unary function
+from its substituted semantic payload to that owner. Multiple declared fields
+form one tuple payload.
 
 ```sequent
 family data-typing:
@@ -64,14 +79,16 @@ family data-typing:
     GAMMA |- (element_1, ..., element_n) ⇒ Tuple(type_1, ..., type_n)
 
   T-Nullary-Constructor :=
-    constructor : Constructor(owner, none)
+    constructor : forall parameters. Constructor(owner<parameters>, none)
+    instantiate(parameters, owner<parameters>) = owner<arguments>
     ===>
-    GAMMA |- constructor ⇒ owner
+    GAMMA |- constructor ⇒ owner<arguments>
 
   T-Payload-Constructor :=
-    constructor : Constructor(owner, payload)
+    constructor : forall parameters. Constructor(owner<parameters>, payload)
+    instantiate(parameters, Function(payload, owner<parameters>)) = constructor_type
     ===>
-    GAMMA |- constructor ⇒ Function(payload, owner)
+    GAMMA |- constructor ⇒ constructor_type
 ```
 
 The constructor premises consult the immutable registry produced by name
@@ -100,10 +117,14 @@ family function-typing:
     GAMMA |- function argument ⇒ codomain
 ```
 
-An anonymous function in a position that must synthesize has no applicable
-rule and is rejected with `type.function-needs-context`. Mini-Ash does not infer
-a parameter type for that case. The parameter position is a pattern. Two or
-more syntactic parameters form one tuple pattern and consume one tuple domain.
+An anonymous function normally checks from an expected function type. The one
+additional synthesis site is an unannotated local binding whose initializer is
+syntactically an anonymous function. That site allocates fresh inference
+variables for the domain and codomain, checks the function, and applies the
+local-generalization rule below. An anonymous function in any other synthesis
+position is rejected with `type.function-needs-context`. The parameter position
+is a pattern. Two or more syntactic parameters form one tuple pattern and
+consume one tuple domain.
 Because an anonymous or operational function has no alternate clauses,
 `exhaustive([pattern], domain)` requires its singleton domain pattern to be
 irrefutable under the same usefulness analysis as a local binding. The
@@ -207,7 +228,8 @@ family block-typing:
     GAMMA |- initializer ⇒ binding_type
     pattern ⇐ binding_type => bindings
     exhaustive([pattern], binding_type)
-    GAMMA, bindings |- { remainder } ⇒ result_type
+    generalize_local(GAMMA, pattern, initializer, binding_type, bindings) = remainder_bindings
+    GAMMA, remainder_bindings |- { remainder } ⇒ result_type
     ===>
     GAMMA |- { let pattern = initializer; remainder } ⇒ result_type
 
@@ -228,7 +250,8 @@ family block-typing:
     GAMMA |- initializer ⇒ binding_type
     pattern ⇐ binding_type => bindings
     exhaustive([pattern], binding_type)
-    GAMMA, bindings |- { remainder } ⇐ expected_type
+    generalize_local(GAMMA, pattern, initializer, binding_type, bindings) = remainder_bindings
+    GAMMA, remainder_bindings |- { remainder } ⇐ expected_type
     ===>
     GAMMA |- { let pattern = initializer; remainder } ⇐ expected_type
 
@@ -240,6 +263,13 @@ family block-typing:
     ===>
     GAMMA |- { let pattern : binding_type = initializer; remainder } ⇐ expected_type
 ```
+
+`generalize_local` quantifies unsolved inference variables only when `pattern`
+is one binder and `initializer` is syntactically an anonymous function. It
+excludes inference variables free in `GAMMA`. Every other unannotated binding
+keeps the inferred monotype, including an application that returns a function.
+An annotation checks a monotype and introduces no type parameters. A use of a
+generalized local binder instantiates its scheme as in `T-Variable`.
 
 The first three rules synthesize a block type. The last three rules check a
 block, carrying the expected type through its bindings to the result. Every
@@ -278,6 +308,45 @@ fn add(left : Int) -> Int -> Int {
 }
 
 add 20 22
+```
+
+## Inference and rank-1 restrictions
+
+Inference variables are compiler facts, not source types. Unification compares
+primitive and nominal identities, descends structurally through applications,
+tuples, and functions, and solves inference variables only with types of kind
+`Type`. The occurs check rejects a solution containing the variable being
+solved with `type.infinite`. If the program result still contains an unsolved
+inference variable, typing rejects it with `type.ambiguous`.
+
+Global type parameters and generalized local parameters are rigid within their
+definitions. A recursive self-use receives the same rigid arguments rather
+than a fresh instantiation. A recursive call that would require a distinct
+instantiation is rejected with `type.polymorphic-recursion`. Local recursive
+annotations introduce no type parameters and remain monomorphic.
+
+There are no nested schemes or polymorphic function domains. Generalization
+occurs only at global interfaces and eligible local function bindings. Source
+expressions cannot provide explicit type arguments.
+
+The executable test `static_semantics_rank_one_polymorphism_is_executable`
+checks parameterized data, one implicitly quantified global, and one eligible
+local generalization:
+
+```ash
+type Option<A> =
+    None
+    | Some(A)
+
+id : A -> A
+id value = value
+
+{
+    let local = fn(value) {
+        value
+    }
+    (id(Some(42)), local(false))
+}
 ```
 
 ### Recursive block groups
@@ -370,9 +439,10 @@ An equational interface must expose at least as many arrow layers as each
 clause has patterns. The patterns receive those domains in order, and the body
 checks against the remaining codomain. An inline operational header supplies
 its domain and result directly. One typed parameter gives that domain; multiple
-typed parameters combine into one tuple domain. Either form contributes one
-explicit global function type. All global function types form `GAMMA_G` before
-any body is checked.
+typed parameters combine into one tuple domain. Free uppercase names in either
+interface become ordered implicit type parameters. Each form contributes one
+rank-1 function scheme. All global schemes form `GAMMA_G` before any body is
+checked.
 
 ```sequent
 family global-and-program-typing:
@@ -391,8 +461,9 @@ family global-and-program-typing:
     GAMMA |-definition fn name(header_pattern : domain) -> codomain { body } ⇒ name : Function(domain, codomain)
 
   T-Recursive-Program :=
-    GAMMA_G = { name_i : definition_type_i | 1 <= i <= n }
-    for each i, GAMMA_G |-definition definition_i ⇒ name_i : definition_type_i
+    scheme_i = forall free_parameters_i. definition_type_i
+    GAMMA_G = { name_i : scheme_i | 1 <= i <= n }
+    for each i, GAMMA_G |-definition definition_i ⇒ name_i : scheme_i
     GAMMA_G |- result ⇒ result_type
     ===>
     |-program definitions; result ⇒ result_type
@@ -401,7 +472,9 @@ family global-and-program-typing:
 The complete equational group must also be exhaustive under the shared
 coverage relation. The definition judgments check parameters and bodies but do
 not determine global visibility. `T-Recursive-Program` establishes all global
-monotypes and synthesizes the file type from its required result expression.
+schemes and synthesizes the file type from its required result expression.
+Each body checks with its own parameters rigid, and recursive uses obey the
+monomorphic-recursion rule above.
 Semicolons in these judgments separate semantic fields and are not source
 punctuation. Resolution has already ensured global-name freshness and
 equational name agreement. For `T-Operational-Global`, one typed source
@@ -421,7 +494,8 @@ fn add((left, right) : (Int, Int)) -> Int {
 add(20, 22)
 ```
 
-There are no inference variables, generalization, polymorphism, overloading,
+Mini-Ash has no higher-rank or higher-kinded polymorphism, explicit source type
+application, broad application-shaped local generalization, overloading,
 subtyping, implicit conversions, explicit structural recursive-type operators,
-or polymorphic recursion in Mini-Ash. Nominal declarations may refer to
-themselves and to other nominal declarations in the same file.
+or polymorphic recursion. Nominal declarations may refer to themselves and to
+other nominal declarations in the same file.

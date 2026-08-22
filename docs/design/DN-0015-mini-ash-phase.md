@@ -8,6 +8,12 @@
 > Mini-Ash semantics, or accept a parser, Core, typing, or evaluation
 > architecture.
 
+Mini-Ash has completed the corpus sequence described here. The retained
+[closure report](mini-ash/closure.md) records the resulting inventory and
+simplification audit; the [rank-1 integration report](mini-ash/rank-1-polymorphism/evidence.md)
+records the final increment's transferable evidence. The specification remains
+the language authority.
+
 ## Question
 
 How should Ash continue using a growing pure-functional corpus to evaluate

@@ -14,6 +14,12 @@ constructor occurrences, typed patterns, and matches remain structured semantic
 terms. Their nominal and constructor references use registry identities rather
 than source spellings.
 
+Resolution has already replaced source type spellings with stable nominal and
+type-parameter identities. Elaboration may introduce inference variables while
+checking, but it solves and removes every inference variable before constructing
+the final Core program. Only resolved monotypes and outer rank-1 schemes cross
+the Core boundary.
+
 An ordinary local binding becomes a nonrecursive Core binding around the
 remainder of its block. Its initializer remains outside its new binder's
 scope.
@@ -30,6 +36,29 @@ the arm irrefutable. An equational clause group becomes one structured match
 over its curried arguments. An operational multi-parameter header and a
 multi-parameter anonymous function each receive one tuple-domain value and
 match it with the source pattern in the function body.
+
+## Explicit rank-1 operations
+
+Source type abstraction and application are implicit. Elaboration records both
+operations explicitly in Core. A generalized definition becomes
+`TypeAbstraction(parameters, body)` with type
+`forall parameters. body_type`. Each polymorphic occurrence becomes
+`TypeApplication(function, arguments)` with the monotype obtained by
+simultaneously substituting those arguments for the quantified parameters.
+Parameterized constructors use the same application form as polymorphic value
+names.
+
+Global interface variables are abstracted in their first-occurrence order. An
+eligible unannotated local anonymous-function binding abstracts only inference
+variables that are not free in the incoming environment. Other local bindings
+remain monomorphic. A recursive global body checks its self-occurrences against
+the same rigid parameters; elaboration does not instantiate recursion at a
+different type.
+
+Core transformations preserve type abstractions, type applications, their
+ordered identities and arguments, types, and origins. The dynamic semantics
+erase the operations. They produce no runtime type value and change neither
+evaluation order nor heap contents.
 
 ## Function presentations
 
@@ -128,8 +157,12 @@ source origin. The resolved and checked programs carry immutable nominal and
 constructor registries. Before evaluation, validation independently checks
 registry closure and identities, binder scope, node and branch types,
 constructor ownership and payloads, pattern bindings, coverage, recursive
-groups, origins, child handles, and reachability. Failure of this boundary is
-an internal compiler failure, not a source-language typing result.
+groups, type-variable scope, rank-1 scheme shape, type-operation substitution,
+origins, child handles, reachability, and cumulative resource limits. A type
+application must supply exactly one kind-`Type` monotype per quantified
+parameter, and its annotated result must equal simultaneous substitution into
+the scheme body. Failure of this boundary is an internal compiler failure, not
+a source-language typing result.
 
 This requirement does not prescribe a Rust representation, storage strategy,
 or evaluator mechanism.

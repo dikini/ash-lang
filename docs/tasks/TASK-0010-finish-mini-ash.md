@@ -31,7 +31,13 @@ the final Mini-Ash simplification audit.
 - CP-0004 records the accepted transition and evidence requirements.
 - The worktree starts from `main` at `9e7a5e0`. `cargo build` and
   `cargo test --all-targets` passed before changes.
-- Product implementation has not started.
+- Checkpoints `279da15`, `423baa3`, `959533b`, and `8195e6f` implement syntax,
+  resolution and inference, explicit Core operations and erasure, and cumulative
+  type-work accounting.
+- The normative specification, executable tool example,
+  [rank-1 integration evidence](../design/mini-ash/rank-1-polymorphism/evidence.md),
+  and [Mini-Ash closure report](../design/mini-ash/closure.md) are prepared for
+  the final verification and review checkpoint.
 
 ## Verification
 
@@ -49,10 +55,34 @@ consumers, type-work accounting, ownership and release boundaries, and the
 absence of excluded higher-rank, higher-kinded, module, effect, or runtime-type
 semantics.
 
+At the review checkpoint, `cargo xtask verify` passes all format, metadata,
+build, Clippy, test, and rustdoc checks. Markdown lint passes for every changed
+document with the repository's existing long-line exceptions. New and changed
+relative links resolve, and the new `sequent` rules have matching prose.
+
 ## Discoveries
 
-None yet. Record implementation findings here and distill transferable results
-into retained evidence.
+- New type payloads increased elaboration frame size enough to expose a
+  pre-existing host-stack dependency in deep structured matches. An explicit
+  match task stack restored the 256 KiB boundary.
+- Local generalization must exclude inference variables free in the incoming
+  environment; checking only the initializer's syntax is insufficient.
+- Recursive global self-occurrences need the definition's rigid arguments,
+  while ordinary occurrences need fresh instantiation.
+- Parameterized coverage reuses the existing usefulness relation after
+  substituting owner arguments into constructor payloads.
+- The retained 10,000-member cyclic group requires more than 262,144 cumulative
+  type-work units. A 327,680-unit limit admits it while oversized direct Core
+  tests still prove structured resource failure.
+- Full verification found and corrected two compatibility regressions: nested
+  blocks no longer receive the direct-anonymous-function generalization
+  privilege, and zonking preserves precise application-result provenance when
+  its type shape is unchanged.
+- Boxing the two structural types inside rare mismatch errors keeps the public
+  diagnostic API intact while restoring the denied `result_large_err` lint.
+
+The retained integration and closure reports contain the transferable results
+and boundary audit.
 
 ## Deviations
 

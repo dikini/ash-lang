@@ -110,6 +110,18 @@ impl ResolvedRegistry {
         self
     }
 
+    /// Attaches non-nominal type parameters before the registry is published.
+    #[must_use]
+    pub(crate) fn with_additional_type_variables(
+        mut self,
+        parameters: impl IntoIterator<Item = ResolvedTypeVariable>,
+    ) -> Self {
+        for parameter in parameters {
+            self.type_variables.insert(parameter.id, parameter);
+        }
+        self
+    }
+
     /// Returns nominal declarations in source order.
     #[must_use]
     pub fn nominals(&self) -> &[ResolvedNominalType] {

@@ -38,6 +38,7 @@ const CONTEXTUAL_MATCH: &str = "fn choose(flag : Bool) -> Int -> Int {\n    matc
 const TREE_PRESENTATIONS: &str = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn size_match(tree : Tree) -> Int {\n    match tree {\n        Tip(value) => 1\n        Fork(left, right) => size_match left + size_match right\n    }\n}\n\nsize (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))\n";
 const HIGHER_ORDER_CONSTRUCTOR: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmatch build Wrap {\n    Wrap(value) => value\n}\n";
 const CYCLIC_STREAM: &str = "type Stream =\n    Next(Int, Stream)\n\n{\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
+const RANK_ONE_POLYMORPHISM: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\n{\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -257,6 +258,17 @@ fn static_semantics_contextual_match_checks_function_arms() {
 }
 
 #[test]
+fn static_semantics_rank_one_polymorphism_is_executable() {
+    assert_observation(
+        "spec-rank-one-polymorphism.ash",
+        RANK_ONE_POLYMORPHISM,
+        "(Some(42), false)",
+        "(Option<Int>, Bool)",
+    );
+    assert_documented("spec/static-semantics.md", RANK_ONE_POLYMORPHISM);
+}
+
+#[test]
 fn elaboration_tree_presentations_are_equivalent() {
     assert_observation(
         "spec-tree-presentations.ash",
@@ -384,6 +396,20 @@ fn tool_cyclic_data_uses_structural_rendering() {
     assert_eq!(output.stdout, b"Next(1, <cycle>) : Stream\n");
     assert!(output.stderr.is_empty());
     assert_documented("docs/tools/ash.md", CYCLIC_STREAM);
+}
+
+#[test]
+fn tool_rank_one_example_has_exact_cli_observation() {
+    let source = TempFile::write(RANK_ONE_POLYMORPHISM);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented executable should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"(Some(42), false) : (Option<Int>, Bool)\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", RANK_ONE_POLYMORPHISM);
 }
 
 #[test]

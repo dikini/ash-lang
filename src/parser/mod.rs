@@ -631,7 +631,9 @@ const fn primary_message(reason: ParseReason) -> &'static str {
         ParseReason::ExpectedOperand => "the operator requires a right operand",
         ParseReason::UnclosedGroup => "the opening parenthesis is not closed",
         ParseReason::RepeatedEquality => "equality is non-associative",
-        ParseReason::PolymorphicHeader => "polymorphic headers are not available in Mini-Ash",
+        ParseReason::PolymorphicHeader => {
+            "explicit value type parameters are not available in Mini-Ash"
+        }
         ParseReason::ExpectedRecursiveMember => {
             "the recursive delimiter requires another binding member"
         }
