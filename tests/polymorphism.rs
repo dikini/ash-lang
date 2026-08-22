@@ -31,7 +31,7 @@ fn parameterized_constructors_are_ordinary_polymorphic_values() {
 
 #[test]
 fn anonymous_function_local_bindings_generalize() {
-    let observation = run("{\nlet id = fn(value) { value }\n(id(42), id(false))\n}\n");
+    let observation = run("{\nlet id = fn(value) {\nvalue\n}\n(id(42), id(false))\n}\n");
 
     assert_eq!(observation.value_display(), "(42, false)");
     assert_eq!(observation.type_display(), "(Int, Bool)");
@@ -50,7 +50,7 @@ fn constructor_patterns_instantiate_the_expected_nominal_arguments() {
 #[test]
 fn parameterized_guarded_recursive_data_keeps_runtime_types_erased() {
     let observation = run(
-        "type Stream<A> =\nCons(A, Stream<A>)\n\n{\nlet rec\nones : Stream<Int> = Cons(1, ones)\nin\nones\n}\n",
+        "type Stream<A> =\nCons(A, Stream<A>)\n\n{\nlet rec ones : Stream<Int> = Cons(1, ones)\nones\n}\n",
     );
 
     assert_eq!(observation.value_display(), "Cons(1, <cycle>)");
@@ -93,18 +93,16 @@ fn type_parameters_of_kind_type_cannot_be_applied() {
 fn application_shaped_local_bindings_remain_monomorphic() {
     assert_eq!(
         reason(
-            "make : Unit -> (A -> A)\nmake _ = fn(value) { value }\n\n{\nlet id = make(())\n(id(42), id(false))\n}\n"
+            "make : Unit -> (A -> A)\nmake _ = fn(value) {\nvalue\n}\n\n{\nlet id = make(())\n(id(42), id(false))\n}\n"
         ),
-        "type.mismatch"
+        "type.argument"
     );
 }
 
 #[test]
 fn inferred_polymorphic_recursion_is_rejected() {
     assert_eq!(
-        reason(
-            "{\nlet rec\nloop : A -> Unit = fn(value) { loop((value, value)) }\nin\nloop(1)\n}\n"
-        ),
+        reason("loop : A -> Unit\nloop value = loop((value, value))\n\nloop(1)\n"),
         "type.polymorphic-recursion"
     );
 }
@@ -112,7 +110,7 @@ fn inferred_polymorphic_recursion_is_rejected() {
 #[test]
 fn infinite_inferred_types_are_rejected_by_the_occurs_check() {
     assert_eq!(
-        reason("{\nlet omega = fn(value) { value(value) }\nomega\n}\n"),
+        reason("{\nlet omega = fn(value) {\nvalue(value)\n}\nomega\n}\n"),
         "type.infinite"
     );
 }

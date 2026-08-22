@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     integer::Integer,
     source::{Origin, Span},
-    types::{ConstructorId, NominalTypeId, Type},
+    types::{ConstructorId, NominalTypeId, Type, TypeVariableId},
 };
 
 /// Identifies one binding within a resolved program.
@@ -66,6 +66,8 @@ pub struct ResolvedRegistry {
     constructors: Box<[ResolvedConstructor]>,
     nominal_positions: HashMap<NominalTypeId, usize>,
     constructor_positions: HashMap<ConstructorId, usize>,
+    nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
+    type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
 }
 
 impl ResolvedRegistry {
@@ -87,7 +89,25 @@ impl ResolvedRegistry {
             constructors: constructors.into_boxed_slice(),
             nominal_positions,
             constructor_positions,
+            nominal_parameters: HashMap::new(),
+            type_variables: HashMap::new(),
         }
+    }
+
+    /// Attaches ordered declaration parameters after nominal identity allocation.
+    #[must_use]
+    pub fn with_type_parameters(
+        mut self,
+        parameters: Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>,
+    ) -> Self {
+        for (owner, parameters) in parameters {
+            for parameter in &parameters {
+                self.type_variables.insert(parameter.id, parameter.clone());
+            }
+            self.nominal_parameters
+                .insert(owner, parameters.into_boxed_slice());
+        }
+        self
     }
 
     /// Returns nominal declarations in source order.
@@ -120,6 +140,19 @@ impl ResolvedRegistry {
             .filter(|constructor| constructor.id == id)
     }
 
+    /// Looks up a declaration type parameter by stable identity.
+    #[must_use]
+    pub fn type_variable(&self, id: TypeVariableId) -> Option<&ResolvedTypeVariable> {
+        self.type_variables.get(&id)
+    }
+
+    /// Returns a nominal declaration's ordered parameters.
+    #[must_use]
+    pub fn nominal_parameters(&self, id: NominalTypeId) -> Option<&[ResolvedTypeVariable]> {
+        self.nominal(id)?;
+        Some(self.nominal_parameters.get(&id).map_or(&[], Box::as_ref))
+    }
+
     /// Renders a type with source declaration spellings for nominal identities.
     #[must_use]
     pub fn display_type(&self, ty: &Type) -> String {
@@ -141,6 +174,31 @@ impl ResolvedRegistry {
                         output.push_str(&nominal.spelling);
                     } else {
                         output.push_str(&Type::Nominal(*id).to_string());
+                    }
+                }
+                Task::Type(Type::Variable(id)) => {
+                    if let Some(variable) = self.type_variable(*id) {
+                        output.push_str(&variable.spelling);
+                    } else {
+                        output.push_str(&Type::Variable(*id).to_string());
+                    }
+                }
+                Task::Type(Type::Inference(id)) => {
+                    output.push_str(&Type::Inference(*id).to_string());
+                }
+                Task::Type(Type::AppliedNominal(id, arguments)) => {
+                    if let Some(nominal) = self.nominal(*id) {
+                        output.push_str(&nominal.spelling);
+                    } else {
+                        output.push_str(&Type::Nominal(*id).to_string());
+                    }
+                    output.push('<');
+                    work.push(Task::Text(">"));
+                    for (index, argument) in arguments.iter().enumerate().rev() {
+                        work.push(Task::Type(argument));
+                        if index > 0 {
+                            work.push(Task::Text(", "));
+                        }
                     }
                 }
                 Task::Type(Type::Tuple(elements)) => {
@@ -176,9 +234,13 @@ impl ResolvedRegistry {
             constructors,
             nominal_positions,
             constructor_positions,
+            nominal_parameters,
+            type_variables,
         } = self;
         drop(nominal_positions);
         drop(constructor_positions);
+        drop(nominal_parameters);
+        drop(type_variables);
         for nominal in nominals.into_vec() {
             discard_origin(nominal.origin);
         }
@@ -200,7 +262,13 @@ fn discard_type(root: Type) {
                 work.push(*domain);
                 work.push(*codomain);
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::AppliedNominal(_, arguments) => work.extend(arguments.into_vec()),
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
         }
     }
 }
@@ -226,6 +294,17 @@ pub struct ResolvedNominalType {
     /// Constructor identities in declaration order.
     pub constructors: Box<[ConstructorId]>,
     /// Declaration provenance.
+    pub origin: Origin,
+}
+
+/// One resolved source type binder.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedTypeVariable {
+    /// Stable program-local identity.
+    pub id: TypeVariableId,
+    /// Exact source spelling.
+    pub spelling: String,
+    /// Definition provenance.
     pub origin: Origin,
 }
 
@@ -277,6 +356,8 @@ pub enum ResolvedTypeProvenanceNode {
         domain: usize,
         codomain: usize,
     },
+    /// A saturated nominal type application and its argument roots.
+    Application { span: Span, arguments: Box<[usize]> },
 }
 
 impl ResolvedTypeProvenance {
@@ -295,7 +376,8 @@ impl ResolvedTypeProvenance {
         self.nodes.get(self.root).map(|node| match node {
             ResolvedTypeProvenanceNode::Fact(span)
             | ResolvedTypeProvenanceNode::Tuple { span, .. }
-            | ResolvedTypeProvenanceNode::Function { span, .. } => *span,
+            | ResolvedTypeProvenanceNode::Function { span, .. }
+            | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
         })
     }
 
@@ -371,6 +453,8 @@ pub struct ResolvedExternalInterface {
     pub name: Binder,
     /// Declared resolved type.
     pub annotation: ResolvedType,
+    /// Implicit outer type binders in first-occurrence order.
+    pub type_parameters: Box<[ResolvedTypeVariable]>,
     /// Complete interface span.
     pub span: Span,
 }
@@ -406,6 +490,8 @@ pub struct ResolvedInlineOperationalHeader {
     pub parameters: Vec<ResolvedTypedPattern>,
     /// Declared result type.
     pub result_type: ResolvedType,
+    /// Implicit outer type binders in first-occurrence order.
+    pub type_parameters: Box<[ResolvedTypeVariable]>,
     /// Complete header span, excluding the body.
     pub span: Span,
 }

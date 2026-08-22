@@ -50,7 +50,19 @@ pub(super) fn type_depth_within_limit(root: &Type) -> bool {
     let mut work = vec![(root, 0_usize)];
     while let Some((ty, depth)) = work.pop() {
         match ty {
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
+            Type::AppliedNominal(_, arguments) => {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return false;
+                }
+                work.extend(arguments.iter().map(|argument| (argument, child_depth)));
+            }
             Type::Tuple(elements) => {
                 let child_depth = depth.saturating_add(1);
                 if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
@@ -810,6 +822,47 @@ impl CoreBuilder {
         Ok(())
     }
 
+    /// Rewrites every stored type before unchecked Core leaves elaboration.
+    pub(crate) fn rewrite_types<F>(&mut self, mut rewrite: F) -> Result<(), BuildError>
+    where
+        F: FnMut(&Type) -> Result<Type, BuildError>,
+    {
+        for node in &mut self.nodes {
+            node.ty = rewrite(&node.ty)?;
+            match &mut node.kind {
+                PureExprKind::Value(PureValue::Function(function)) => {
+                    function.parameter_mut().rewrite_type(&mut rewrite)?;
+                }
+                PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                    binding.binder_mut().rewrite_type(&mut rewrite)?;
+                }
+                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                    for member in group.members_mut() {
+                        member.binder_mut().rewrite_type(&mut rewrite)?;
+                    }
+                }
+                PureExprKind::Computation(PureComputation::Match(match_expression)) => {
+                    for arm in match_expression.arms_mut() {
+                        arm.pattern_mut().rewrite_types(&mut rewrite)?;
+                    }
+                }
+                PureExprKind::Value(
+                    PureValue::Integer(_)
+                    | PureValue::Boolean(_)
+                    | PureValue::Unit(_)
+                    | PureValue::Constructor(_),
+                )
+                | PureExprKind::Variable(_)
+                | PureExprKind::Computation(
+                    PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_),
+                ) => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Finishes unchecked construction at `root`.
     ///
     /// # Errors
@@ -1108,6 +1161,7 @@ enum TypeAdmissionTask {
     Visit(Type, usize),
     FinishFunction,
     FinishTuple(usize),
+    FinishAppliedNominal(crate::types::NominalTypeId, usize),
 }
 
 enum TypeToken {
@@ -1115,6 +1169,9 @@ enum TypeToken {
     Bool,
     Unit,
     Nominal(crate::types::NominalTypeId),
+    Variable(crate::types::TypeVariableId),
+    Inference(crate::types::InferenceVariableId),
+    AppliedNominal(crate::types::NominalTypeId, usize),
     Tuple(usize),
     Function,
 }
@@ -1130,6 +1187,21 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
             TypeAdmissionTask::Visit(Type::Unit, _) => tokens.push(TypeToken::Unit),
             TypeAdmissionTask::Visit(Type::Nominal(identity), _) => {
                 tokens.push(TypeToken::Nominal(identity));
+            }
+            TypeAdmissionTask::Visit(Type::Variable(identity), _) => {
+                tokens.push(TypeToken::Variable(identity));
+            }
+            TypeAdmissionTask::Visit(Type::Inference(identity), _) => {
+                tokens.push(TypeToken::Inference(identity));
+            }
+            TypeAdmissionTask::Visit(Type::AppliedNominal(identity, arguments), depth) => {
+                let child_depth = depth.saturating_add(1);
+                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                let count = arguments.len();
+                work.push(TypeAdmissionTask::FinishAppliedNominal(identity, count));
+                for argument in arguments.into_vec().into_iter().rev() {
+                    work.push(TypeAdmissionTask::Visit(argument, child_depth));
+                }
             }
             TypeAdmissionTask::Visit(Type::Tuple(elements), depth) => {
                 let child_depth = depth.saturating_add(1);
@@ -1149,6 +1221,9 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
             }
             TypeAdmissionTask::FinishFunction => tokens.push(TypeToken::Function),
             TypeAdmissionTask::FinishTuple(count) => tokens.push(TypeToken::Tuple(count)),
+            TypeAdmissionTask::FinishAppliedNominal(identity, count) => {
+                tokens.push(TypeToken::AppliedNominal(identity, count));
+            }
         }
     }
     if exceeded {
@@ -1162,6 +1237,15 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
             TypeToken::Bool => rebuilt.push(Type::Bool),
             TypeToken::Unit => rebuilt.push(Type::Unit),
             TypeToken::Nominal(identity) => rebuilt.push(Type::Nominal(identity)),
+            TypeToken::Variable(identity) => rebuilt.push(Type::Variable(identity)),
+            TypeToken::Inference(identity) => rebuilt.push(Type::Inference(identity)),
+            TypeToken::AppliedNominal(identity, count) => {
+                if rebuilt.len() < count {
+                    return Err(BuildError::InvalidPayload);
+                }
+                let arguments = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::AppliedNominal(identity, arguments.into_boxed_slice()));
+            }
             TypeToken::Tuple(count) => {
                 if rebuilt.len() < count {
                     return Err(BuildError::InvalidPayload);

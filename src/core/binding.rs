@@ -40,4 +40,8 @@ impl BindingNode {
     pub(super) const fn children(&self) -> [Option<NodeId>; 2] {
         [Some(self.initializer), Some(self.body)]
     }
+
+    pub(super) fn binder_mut(&mut self) -> &mut TypedBinder {
+        &mut self.binder
+    }
 }

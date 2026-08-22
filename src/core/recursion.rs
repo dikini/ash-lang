@@ -28,6 +28,10 @@ impl RecursiveBindingMember {
     pub const fn initializer(&self) -> NodeId {
         self.initializer
     }
+
+    pub(super) fn binder_mut(&mut self) -> &mut TypedBinder {
+        &mut self.binder
+    }
 }
 
 /// A simultaneous recursive binding group followed by its lexical body.
@@ -49,6 +53,10 @@ impl RecursiveBindingNode {
     #[must_use]
     pub const fn members(&self) -> &[RecursiveBindingMember] {
         &self.members
+    }
+
+    pub(super) fn members_mut(&mut self) -> &mut [RecursiveBindingMember] {
+        &mut self.members
     }
 
     /// Returns the body evaluated with every member in scope.

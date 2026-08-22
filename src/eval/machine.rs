@@ -602,7 +602,11 @@ fn enter_recursive_binding(
                 body: function.body(),
                 origin: initializer.origin.clone(),
             },
-            _ if matches!(member.binder().ty(), crate::types::Type::Nominal(_)) => {
+            _ if matches!(
+                member.binder().ty(),
+                crate::types::Type::Nominal(_) | crate::types::Type::AppliedNominal(_, _)
+            ) =>
+            {
                 let location = allocate_heap(heap, HeapCell::Uninitialized)?;
                 pending.push((location, member.initializer()));
                 RecursiveMemberKind::Data { location }

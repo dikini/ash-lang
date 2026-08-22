@@ -548,7 +548,15 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
                         work.push(Task::Type(codomain));
                         work.push(Task::Type(domain));
                     }
-                    Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+                    Type::AppliedNominal(_, arguments) => {
+                        work.push(Task::Slice(arguments.iter()));
+                    }
+                    Type::Int
+                    | Type::Bool
+                    | Type::Unit
+                    | Type::Nominal(_)
+                    | Type::Variable(_)
+                    | Type::Inference(_) => {}
                 }
             }
         }
@@ -612,7 +620,10 @@ fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads
         Type::Unit => Some(Heads::Unit),
         Type::Tuple(elements) => Some(Heads::Tuple(elements.len())),
         Type::Nominal(id) => Some(Heads::Constructors(&registry.nominal(*id)?.constructors)),
-        Type::Int | Type::Function(_, _) => None,
+        Type::AppliedNominal(id, _) => {
+            Some(Heads::Constructors(&registry.nominal(*id)?.constructors))
+        }
+        Type::Int | Type::Function(_, _) | Type::Variable(_) | Type::Inference(_) => None,
     }
 }
 

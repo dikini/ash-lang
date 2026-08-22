@@ -1,6 +1,6 @@
 //! Structural types shared by elaboration and Core.
 
-use std::{fmt, hash::Hash};
+use std::{collections::HashMap, fmt, hash::Hash};
 
 use crate::source::SourceId;
 
@@ -20,6 +20,42 @@ pub struct NominalTypeId {
 pub struct ConstructorId {
     owner: NominalTypeId,
     constructor: u32,
+}
+
+/// Stable identity of one source or generated type binder.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TypeVariableId(u32);
+
+impl TypeVariableId {
+    /// Creates one program-local type-variable identity.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the program-local numeric identity.
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// Elaborator-private identity of one first-order inference variable.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct InferenceVariableId(u32);
+
+impl InferenceVariableId {
+    /// Creates one inference identity inside an elaboration.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the elaboration-local numeric identity.
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        self.0
+    }
 }
 
 impl ConstructorId {
@@ -78,6 +114,12 @@ pub enum Type {
     Tuple(Box<[Type]>),
     /// A nominal algebraic data type identified by its declaration.
     Nominal(NominalTypeId),
+    /// A rigid or bound type variable identified by its binder.
+    Variable(TypeVariableId),
+    /// A temporary first-order inference variable, forbidden in validated Core.
+    Inference(InferenceVariableId),
+    /// A nominal type constructor saturated with its ordered arguments.
+    AppliedNominal(NominalTypeId, Box<[Type]>),
     /// A unary function from a domain to a codomain.
     Function(Box<Type>, Box<Type>),
 }
@@ -104,6 +146,23 @@ impl fmt::Display for Type {
                 identity.source.value(),
                 identity.declaration
             ),
+            Self::Variable(identity) => write!(formatter, "<type-variable:{}>", identity.value()),
+            Self::Inference(identity) => write!(formatter, "?{}", identity.value()),
+            Self::AppliedNominal(identity, arguments) => {
+                write!(
+                    formatter,
+                    "<type:{}:{}><",
+                    identity.source.value(),
+                    identity.declaration
+                )?;
+                for (index, argument) in arguments.iter().enumerate() {
+                    if index > 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    argument.fmt(formatter)?;
+                }
+                formatter.write_str(">")
+            }
             Self::Function(domain, codomain) => {
                 if matches!(domain.as_ref(), Self::Function(_, _)) {
                     write!(formatter, "({domain})")?;
@@ -128,6 +187,13 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
         match (left, right) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::Variable(left), Type::Variable(right)) if left == right => {}
+            (Type::Inference(left), Type::Inference(right)) if left == right => {}
+            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                pending.extend(left.iter().zip(right.iter()));
+            }
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
                 pending.extend(left.iter().zip(right.iter()));
             }
@@ -142,4 +208,38 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
         }
     }
     true
+}
+
+/// Replaces rigid type variables according to one capture-free substitution.
+#[must_use]
+pub(crate) fn substitute_type_variables(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, Type>,
+) -> Type {
+    match ty {
+        Type::Variable(identity) => replacements
+            .get(identity)
+            .cloned()
+            .unwrap_or_else(|| ty.clone()),
+        Type::Tuple(elements) => Type::Tuple(
+            elements
+                .iter()
+                .map(|element| substitute_type_variables(element, replacements))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        Type::AppliedNominal(owner, arguments) => Type::AppliedNominal(
+            *owner,
+            arguments
+                .iter()
+                .map(|argument| substitute_type_variables(argument, replacements))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        Type::Function(domain, codomain) => Type::Function(
+            Box::new(substitute_type_variables(domain, replacements)),
+            Box::new(substitute_type_variables(codomain, replacements)),
+        ),
+        Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => ty.clone(),
+    }
 }

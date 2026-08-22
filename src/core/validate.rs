@@ -20,7 +20,7 @@ use crate::{
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::{BinderId, ResolvedNominalType},
     source::{Origin, SourceFile, SourceId, Span},
-    types::{ConstructorId, Type, same_type},
+    types::{ConstructorId, Type, same_type, substitute_type_variables},
 };
 
 /// The independently checked invariant that malformed Core violated.
@@ -324,6 +324,22 @@ impl<'program, 'source> Validator<'program, 'source> {
                 Type::Int | Type::Bool | Type::Unit => {}
                 Type::Nominal(id) if self.program.registry.nominal(*id).is_some() => {}
                 Type::Nominal(_) => return false,
+                Type::Variable(_) => {}
+                Type::Inference(_) => return false,
+                Type::AppliedNominal(id, arguments) => {
+                    let Some(nominal) = self.program.registry.nominal(*id) else {
+                        return false;
+                    };
+                    if self
+                        .program
+                        .registry
+                        .nominal_parameters(nominal.id)
+                        .is_none_or(|parameters| parameters.len() != arguments.len())
+                    {
+                        return false;
+                    }
+                    work.extend(arguments);
+                }
                 Type::Tuple(elements) if elements.len() >= 2 => work.extend(elements),
                 Type::Tuple(_) => return false,
                 Type::Function(domain, codomain) => {
@@ -510,7 +526,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let Some(binder) = self.binders.get(&variable.binder()) else {
                         return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
                     };
-                    if !same_type(&node.ty, binder.ty()) {
+                    if !type_is_instance(&node.ty, binder.ty()) {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                 }
@@ -544,10 +560,30 @@ impl<'program, 'source> Validator<'program, 'source> {
                 else {
                     return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                 };
-                let result = Type::Nominal(info.owner);
-                info.payload.as_ref().map_or(result.clone(), |payload| {
+                let parameters = self
+                    .program
+                    .registry
+                    .nominal_parameters(info.owner)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+                let result = if parameters.is_empty() {
+                    Type::Nominal(info.owner)
+                } else {
+                    Type::AppliedNominal(
+                        info.owner,
+                        parameters
+                            .iter()
+                            .map(|parameter| Type::Variable(parameter.id))
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    )
+                };
+                let expected = info.payload.as_ref().map_or(result.clone(), |payload| {
                     Type::Function(Box::new(payload.clone()), Box::new(result))
-                })
+                });
+                if !type_is_instance(&node.ty, &expected) {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                return Ok(());
             }
         };
         if !same_type(&node.ty, &expected) {
@@ -594,7 +630,15 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Type::Nominal(owner) => {
                             self.guarded_data_root(member.initializer(), *owner, &recursive)?
                         }
-                        Type::Int | Type::Bool | Type::Unit | Type::Tuple(_) => false,
+                        Type::AppliedNominal(owner, _) => {
+                            self.guarded_data_root(member.initializer(), *owner, &recursive)?
+                        }
+                        Type::Int
+                        | Type::Bool
+                        | Type::Unit
+                        | Type::Tuple(_)
+                        | Type::Variable(_)
+                        | Type::Inference(_) => false,
                     };
                     if !safe {
                         return Err(ValidationError::new(
@@ -821,17 +865,17 @@ impl<'program, 'source> Validator<'program, 'source> {
         expected: &Type,
         node: NodeId,
     ) -> Result<(), ValidationError> {
-        let mut work = vec![(pattern, expected)];
+        let mut work = vec![(pattern, expected.clone())];
         let mut binders = HashSet::new();
         while let Some((pattern, expected)) = work.pop() {
             self.validate_origin(&pattern.origin, node)?;
-            if !same_type(&pattern.ty, expected) || !self.valid_type(Some(&pattern.ty)) {
+            if !same_type(&pattern.ty, &expected) || !self.valid_type(Some(&pattern.ty)) {
                 return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
             }
-            match (&pattern.kind, expected) {
+            match (&pattern.kind, &expected) {
                 (CorePatternKind::Binder(binder), _) => {
                     if binder.arena() != self.program.arena
-                        || !same_type(binder.ty(), expected)
+                        || !same_type(binder.ty(), &expected)
                         || !binders.insert(binder.id())
                     {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
@@ -844,25 +888,56 @@ impl<'program, 'source> Validator<'program, 'source> {
                 (CorePatternKind::Tuple(patterns), Type::Tuple(types))
                     if patterns.len() == types.len() =>
                 {
-                    work.extend(patterns.iter().zip(types).rev());
+                    work.extend(
+                        patterns
+                            .iter()
+                            .zip(types)
+                            .rev()
+                            .map(|(pattern, ty)| (pattern, ty.clone())),
+                    );
                 }
                 (
                     CorePatternKind::Constructor {
                         constructor,
                         payload,
                     },
-                    Type::Nominal(owner),
+                    expected_type,
                 ) => {
+                    let (owner, arguments): (_, &[Type]) = match expected_type {
+                        Type::Nominal(owner) => (*owner, &[]),
+                        Type::AppliedNominal(owner, arguments) => (*owner, arguments),
+                        _ => {
+                            return Err(ValidationError::new(
+                                ValidationReason::Pattern,
+                                Some(node),
+                            ));
+                        }
+                    };
                     let Some(info) = self.program.registry.constructor(*constructor) else {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     };
-                    if &info.owner != owner {
+                    if info.owner != owner {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     }
-                    match (&info.payload, payload.as_deref()) {
+                    let Some(parameters) = self.program.registry.nominal_parameters(owner) else {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    };
+                    if parameters.len() != arguments.len() {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    }
+                    let replacements = parameters
+                        .iter()
+                        .zip(arguments)
+                        .map(|(parameter, argument)| (parameter.id, argument.clone()))
+                        .collect();
+                    let payload_type = info
+                        .payload
+                        .as_ref()
+                        .map(|payload| substitute_type_variables(payload, &replacements));
+                    match (&payload_type, payload.as_deref()) {
                         (None, None) => {}
                         (Some(payload_type), Some(payload_pattern)) => {
-                            work.push((payload_pattern, payload_type))
+                            work.push((payload_pattern, payload_type.clone()))
                         }
                         _ => {
                             return Err(ValidationError::new(
@@ -1077,6 +1152,43 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
     u32::try_from(index)
         .map(|index| NodeId::new(arena, index))
         .map_err(|_| ValidationError::new(ValidationReason::NodeBounds, None))
+}
+
+fn type_is_instance(instance: &Type, scheme: &Type) -> bool {
+    let mut substitutions = HashMap::new();
+    let mut work = vec![(instance, scheme)];
+    while let Some((instance, scheme)) = work.pop() {
+        match (instance, scheme) {
+            (_, Type::Variable(variable)) => {
+                if let Some(previous) = substitutions.get(variable) {
+                    if !same_type(previous, instance) {
+                        return false;
+                    }
+                } else {
+                    substitutions.insert(*variable, instance.clone());
+                }
+            }
+            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                work.extend(left.iter().zip(right.iter()));
+            }
+            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
+                work.extend(left.iter().zip(right.iter()));
+            }
+            (
+                Type::Function(left_domain, left_codomain),
+                Type::Function(right_domain, right_codomain),
+            ) => {
+                work.push((left_codomain, right_codomain));
+                work.push((left_domain, right_domain));
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 #[cfg(test)]

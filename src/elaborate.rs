@@ -24,7 +24,7 @@ use crate::{
         ResolvedTypeProvenanceNode,
     },
     source::{GeneratedReason, Origin, Span},
-    types::{Type, same_type},
+    types::{InferenceVariableId, Type, TypeVariableId, same_type, substitute_type_variables},
 };
 
 /// The source-language typing rule that rejected an expression.
@@ -66,6 +66,12 @@ pub enum TypeReason {
     NonExhaustive,
     /// A case can never be selected after preceding cases.
     RedundantCase,
+    /// First-order inference would construct an infinite type.
+    InfiniteType,
+    /// Inference left a result type undetermined.
+    AmbiguousType,
+    /// A recursive use requires distinct instantiations.
+    PolymorphicRecursion,
 }
 
 impl fmt::Display for TypeReason {
@@ -93,6 +99,9 @@ impl fmt::Display for TypeReason {
             }
             Self::NonExhaustive => formatter.write_str("coverage.non-exhaustive"),
             Self::RedundantCase => formatter.write_str("coverage.redundant-case"),
+            Self::InfiniteType => formatter.write_str("type.infinite"),
+            Self::AmbiguousType => formatter.write_str("type.ambiguous"),
+            Self::PolymorphicRecursion => formatter.write_str("type.polymorphic-recursion"),
         }
     }
 }
@@ -222,6 +231,7 @@ impl Clone for TypeContext {
 struct TypeFact {
     ty: Type,
     provenance: TypeProvenance,
+    quantified: Box<[TypeVariableId]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -275,7 +285,14 @@ impl TypeProvenance {
                     });
                     roots.push(nodes.len() - 1);
                 }
-                Type::Int | Type::Bool | Type::Unit | Type::Tuple(_) | Type::Nominal(_) => {
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Tuple(_)
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_)
+                | Type::AppliedNominal(_, _) => {
                     nodes.push(TypeProvenanceNode::Fact(None));
                     roots.push(nodes.len() - 1);
                 }
@@ -302,7 +319,14 @@ impl TypeProvenance {
         while let Some((current, node)) = work.pop() {
             match (current, self.nodes.get(node)) {
                 (
-                    Type::Int | Type::Bool | Type::Unit | Type::Tuple(_) | Type::Nominal(_),
+                    Type::Int
+                    | Type::Bool
+                    | Type::Unit
+                    | Type::Tuple(_)
+                    | Type::Nominal(_)
+                    | Type::Variable(_)
+                    | Type::Inference(_)
+                    | Type::AppliedNominal(_, _),
                     Some(TypeProvenanceNode::Fact(_)),
                 ) => {}
                 (
@@ -359,7 +383,8 @@ impl ProvenancedType {
             .iter()
             .map(|node| match node {
                 ResolvedTypeProvenanceNode::Fact(span)
-                | ResolvedTypeProvenanceNode::Tuple { span, .. } => {
+                | ResolvedTypeProvenanceNode::Tuple { span, .. }
+                | ResolvedTypeProvenanceNode::Application { span, .. } => {
                     TypeProvenanceNode::Fact(Some(*span))
                 }
                 ResolvedTypeProvenanceNode::Function {
@@ -456,7 +481,14 @@ impl TypeContext {
     pub fn insert(&mut self, binder: BinderId, ty: Type) -> Option<Type> {
         let provenance = TypeProvenance::unknown(&ty);
         self.binders
-            .insert(binder, TypeFact { ty, provenance })
+            .insert(
+                binder,
+                TypeFact {
+                    ty,
+                    provenance,
+                    quantified: Box::new([]),
+                },
+            )
             .map(|fact| fact.ty)
     }
 
@@ -475,11 +507,28 @@ impl TypeContext {
         if !provenance.aligns(&ty) {
             return Err(invalid_state());
         }
-        Ok(self.binders.insert(binder, TypeFact { ty, provenance }))
+        Ok(self.binders.insert(
+            binder,
+            TypeFact {
+                ty,
+                provenance,
+                quantified: Box::new([]),
+            },
+        ))
     }
 
     fn fact(&self, binder: BinderId) -> Option<&TypeFact> {
         self.binders.get(&binder)
+    }
+
+    fn set_quantified(
+        &mut self,
+        binder: BinderId,
+        quantified: Box<[TypeVariableId]>,
+    ) -> Result<(), TypeError> {
+        let fact = self.binders.get_mut(&binder).ok_or_else(invalid_state)?;
+        fact.quantified = quantified;
+        Ok(())
     }
 }
 
@@ -500,6 +549,10 @@ pub struct Elaborator {
     builder: CoreBuilder,
     registry: Arc<ResolvedRegistry>,
     state: ElaboratorState,
+    next_inference: u32,
+    next_generated_type_variable: u32,
+    inference_solutions: HashMap<InferenceVariableId, Type>,
+    monomorphic_recursive: HashSet<BinderId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -516,6 +569,10 @@ impl Elaborator {
             builder: CoreBuilder::with_registry(Arc::clone(&registry)),
             registry,
             state: ElaboratorState::Ready,
+            next_inference: 0,
+            next_generated_type_variable: u32::MAX,
+            inference_solutions: HashMap::new(),
+            monomorphic_recursive: HashSet::new(),
         }
     }
 
@@ -533,6 +590,10 @@ impl Elaborator {
             builder,
             registry,
             state: ElaboratorState::Ready,
+            next_inference: 0,
+            next_generated_type_variable: u32::MAX,
+            inference_solutions: HashMap::new(),
+            monomorphic_recursive: HashSet::new(),
         })
     }
 
@@ -631,20 +692,100 @@ impl Elaborator {
     /// elaborator and names one of its allocated nodes. Returns
     /// [`ElaborationFailure::InvalidState`] if an earlier public synthesis or
     /// checking call failed.
-    pub fn finish(self, root: NodeId) -> Result<UnvalidatedProgram, ElaborationFailure> {
+    pub fn finish(mut self, root: NodeId) -> Result<UnvalidatedProgram, ElaborationFailure> {
         if self.state == ElaboratorState::Poisoned {
             return Err(ElaborationFailure::InvalidState);
         }
+        let solutions = &self.inference_solutions;
+        self.builder.rewrite_types(|ty| {
+            let zonked = zonk_type(ty, solutions);
+            if contains_unsolved_inference(&zonked) {
+                Err(BuildError::InvalidPayload)
+            } else {
+                Ok(zonked)
+            }
+        })?;
         self.builder.finish(root).map_err(Into::into)
+    }
+
+    fn fresh_inference(&mut self) -> Result<Type, TypeError> {
+        let identity = InferenceVariableId::new(self.next_inference);
+        self.next_inference = self
+            .next_inference
+            .checked_add(1)
+            .ok_or_else(invalid_state)?;
+        Ok(Type::Inference(identity))
+    }
+
+    fn fresh_type_variable(&mut self) -> Result<TypeVariableId, TypeError> {
+        let identity = TypeVariableId::new(self.next_generated_type_variable);
+        self.next_generated_type_variable = self
+            .next_generated_type_variable
+            .checked_sub(1)
+            .ok_or_else(invalid_state)?;
+        Ok(identity)
+    }
+
+    fn instantiate(&mut self, fact: &TypeFact) -> Result<Type, TypeError> {
+        if fact.quantified.is_empty() {
+            return Ok(fact.ty.clone());
+        }
+        let mut replacements = HashMap::with_capacity(fact.quantified.len());
+        for binder in &fact.quantified {
+            replacements.insert(*binder, self.fresh_inference()?);
+        }
+        Ok(substitute_type_variables(&fact.ty, &replacements))
+    }
+
+    fn zonk(&self, ty: &Type) -> Type {
+        zonk_type(ty, &self.inference_solutions)
+    }
+
+    fn unify(&mut self, left: &Type, right: &Type) -> Result<(), UnificationFailure> {
+        let mut work = vec![(left.clone(), right.clone())];
+        while let Some((left, right)) = work.pop() {
+            let left = self.zonk(&left);
+            let right = self.zonk(&right);
+            match (left, right) {
+                (Type::Inference(left), Type::Inference(right)) if left == right => {}
+                (Type::Inference(variable), ty) | (ty, Type::Inference(variable)) => {
+                    if type_contains_inference(&ty, variable, &self.inference_solutions) {
+                        return Err(UnificationFailure::Infinite);
+                    }
+                    self.inference_solutions.insert(variable, ty);
+                }
+                (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+                (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+                (Type::Variable(left), Type::Variable(right)) if left == right => {}
+                (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
+                    if left_id == right_id && left.len() == right.len() =>
+                {
+                    work.extend(left.into_vec().into_iter().zip(right.into_vec()));
+                }
+                (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
+                    work.extend(left.into_vec().into_iter().zip(right.into_vec()));
+                }
+                (
+                    Type::Function(left_domain, left_codomain),
+                    Type::Function(right_domain, right_codomain),
+                ) => {
+                    work.push((*left_codomain, *right_codomain));
+                    work.push((*left_domain, *right_domain));
+                }
+                _ => return Err(UnificationFailure::Mismatch),
+            }
+        }
+        Ok(())
     }
 
     fn elaborate_program(&mut self, program: &ResolvedProgram) -> Result<TypedNode, TypeError> {
         let mut context = TypeContext::new();
         let mut globals = Vec::with_capacity(program.definitions.len());
         let mut global_binders = HashMap::with_capacity(program.definitions.len());
+        let mut global_quantifiers = Vec::with_capacity(program.definitions.len());
 
         for definition in &program.definitions {
-            let (name, function_type) = match &definition.kind {
+            let (name, function_type, type_parameters) = match &definition.kind {
                 ResolvedDefinitionKind::Equational(equational) => {
                     let function_type =
                         ProvenancedType::from_resolved(&equational.interface.annotation);
@@ -655,7 +796,11 @@ impl Elaborator {
                             &self.registry,
                         ));
                     }
-                    (&equational.interface.name, function_type)
+                    (
+                        &equational.interface.name,
+                        function_type,
+                        equational.interface.type_parameters.as_ref(),
+                    )
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
                     let domain = operational_domain(
@@ -666,6 +811,7 @@ impl Elaborator {
                     (
                         &operational.header.name,
                         ProvenancedType::function(domain, codomain, Some(operational.header.span))?,
+                        operational.header.type_parameters.as_ref(),
                     )
                 }
             };
@@ -684,6 +830,13 @@ impl Elaborator {
             {
                 return Err(invalid_state());
             }
+            let quantified = type_parameters
+                .iter()
+                .map(|parameter| parameter.id)
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            global_quantifiers.push((name.id, quantified));
+            self.monomorphic_recursive.insert(name.id);
         }
 
         for definition in &program.definitions {
@@ -737,6 +890,11 @@ impl Elaborator {
                 initializer: function.node,
             });
         }
+
+        for (binder, quantified) in global_quantifiers {
+            context.set_quantified(binder, quantified)?;
+        }
+        self.monomorphic_recursive.clear();
 
         let mut result = self.elaborate_expression_with_context(
             ElaborationTask::Synthesize {
@@ -829,8 +987,11 @@ impl Elaborator {
                         schedule_left(Primitive::Equal, current.span, binary, &mut tasks)
                     }
                     ResolvedExprKind::Occurrence(occurrence) => {
-                        let fact = context.fact(occurrence.binder).ok_or_else(invalid_state)?;
-                        let ty = fact.ty.clone();
+                        let fact = context
+                            .fact(occurrence.binder)
+                            .cloned()
+                            .ok_or_else(invalid_state)?;
+                        let ty = self.instantiate(&fact)?;
                         let provenance = fact.provenance.clone();
                         let node = self.builder.variable(
                             occurrence.binder,
@@ -848,13 +1009,38 @@ impl Elaborator {
                             .registry
                             .constructor(occurrence.constructor)
                             .ok_or_else(invalid_state)?;
-                        let result = Type::Nominal(constructor.owner);
-                        let ty = constructor
+                        let parameters = self
+                            .registry
+                            .nominal_parameters(constructor.owner)
+                            .ok_or_else(invalid_state)?;
+                        let result = if parameters.is_empty() {
+                            Type::Nominal(constructor.owner)
+                        } else {
+                            Type::AppliedNominal(
+                                constructor.owner,
+                                parameters
+                                    .iter()
+                                    .map(|parameter| Type::Variable(parameter.id))
+                                    .collect::<Vec<_>>()
+                                    .into_boxed_slice(),
+                            )
+                        };
+                        let scheme = constructor
                             .payload
                             .as_ref()
                             .map_or(result.clone(), |payload| {
                                 Type::Function(Box::new(payload.clone()), Box::new(result))
                             });
+                        let fact = TypeFact {
+                            ty: scheme,
+                            provenance: TypeProvenance::atom(None),
+                            quantified: parameters
+                                .iter()
+                                .map(|parameter| parameter.id)
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        };
+                        let ty = self.instantiate(&fact)?;
                         let node = self.builder.constructor(
                             occurrence.constructor,
                             ty.clone(),
@@ -871,15 +1057,27 @@ impl Elaborator {
                         values.push(tuple);
                     }
                     ResolvedExprKind::Match(match_expression) => {
-                        let matched =
-                            self.elaborate_match(match_expression, current.span, context, None)?;
-                        values.push(matched);
+                        tasks.push(ElaborationTask::AfterMatchScrutinee {
+                            expression: match_expression,
+                            span: current.span,
+                            expected: None,
+                        });
+                        tasks.push(ElaborationTask::Synthesize {
+                            expression: &match_expression.scrutinee,
+                            cause: None,
+                        });
                     }
                     ResolvedExprKind::Apply(application) => {
+                        let recursive_call = matches!(
+                            &application.function.kind,
+                            ResolvedExprKind::Occurrence(occurrence)
+                                if self.monomorphic_recursive.contains(&occurrence.binder)
+                        );
                         tasks.push(ElaborationTask::AfterApplicationFunction {
                             whole_span: current.span,
                             function_span: application.function.span,
                             argument: &application.argument,
+                            recursive_call,
                         });
                         tasks.push(ElaborationTask::Synthesize {
                             expression: &application.function,
@@ -890,7 +1088,20 @@ impl Elaborator {
                         schedule_block(block, None, cause, &mut tasks, declarations.len())?;
                     }
                     ResolvedExprKind::Function(_) => {
-                        return Err(function_needs_context(current.span, cause));
+                        if !matches!(cause, Some(SynthesisCause::Binding(_))) {
+                            return Err(function_needs_context(current.span, cause));
+                        }
+                        let domain = self.fresh_inference()?;
+                        let codomain = self.fresh_inference()?;
+                        let expected = ProvenancedType::unknown(Type::Function(
+                            Box::new(domain),
+                            Box::new(codomain),
+                        ));
+                        tasks.push(ElaborationTask::Check {
+                            expression: current,
+                            expected,
+                            kind: CheckKind::General,
+                        });
                     }
                 },
                 ElaborationTask::Check {
@@ -923,13 +1134,15 @@ impl Elaborator {
                         )?;
                     }
                     ResolvedExprKind::Match(match_expression) => {
-                        let matched = self.elaborate_match(
-                            match_expression,
-                            expression.span,
-                            context,
-                            Some((expected, kind)),
-                        )?;
-                        values.push(matched);
+                        tasks.push(ElaborationTask::AfterMatchScrutinee {
+                            expression: match_expression,
+                            span: expression.span,
+                            expected: Some((expected, kind)),
+                        });
+                        tasks.push(ElaborationTask::Synthesize {
+                            expression: &match_expression.scrutinee,
+                            cause: None,
+                        });
                     }
                     _ => {
                         tasks.push(ElaborationTask::FinishCheck {
@@ -954,19 +1167,34 @@ impl Elaborator {
                     {
                         return Err(invalid_state());
                     }
-                    if !structurally_equal(&synthesized.ty, &expected.ty) {
-                        return Err(check_mismatch(
-                            kind,
-                            span,
-                            expected.ty,
-                            synthesized.ty,
-                            expected.provenance.span(),
-                            &self.registry,
-                        ));
+                    let expected_ty = expected.ty.clone();
+                    let found_ty = synthesized.ty.clone();
+                    match self.unify(&found_ty, &expected_ty) {
+                        Ok(()) => {}
+                        Err(UnificationFailure::Infinite) => {
+                            return Err(inference_failure(
+                                TypeReason::InfiniteType,
+                                span,
+                                "this expression would require an infinite type",
+                            ));
+                        }
+                        Err(UnificationFailure::Mismatch) => {
+                            return Err(check_mismatch(
+                                kind,
+                                span,
+                                self.zonk(&expected_ty),
+                                self.zonk(&found_ty),
+                                expected.provenance.span(),
+                                &self.registry,
+                            ));
+                        }
                     }
                     self.builder
                         .record_type_check(synthesized.node, expected.provenance.span())?;
-                    values.push(synthesized);
+                    values.push(TypedNode {
+                        ty: self.zonk(&synthesized.ty),
+                        ..synthesized
+                    });
                 }
                 ElaborationTask::CheckFunction {
                     parameter,
@@ -1045,18 +1273,46 @@ impl Elaborator {
                     whole_span,
                     function_span,
                     argument,
+                    recursive_call,
                 } => {
-                    let function = values.pop().ok_or_else(invalid_state)?;
-                    let Type::Function(domain, codomain) = &function.ty else {
+                    let mut function = values.pop().ok_or_else(invalid_state)?;
+                    let mut function_ty = self.zonk(&function.ty);
+                    if matches!(function_ty, Type::Inference(_)) {
+                        let domain = self.fresh_inference()?;
+                        let codomain = self.fresh_inference()?;
+                        let exposed = Type::Function(Box::new(domain), Box::new(codomain));
+                        self.unify(&function_ty, &exposed)
+                            .map_err(|failure| match failure {
+                                UnificationFailure::Infinite => inference_failure(
+                                    TypeReason::InfiniteType,
+                                    function_span,
+                                    "this application would require an infinite type",
+                                ),
+                                UnificationFailure::Mismatch => not_applicable(
+                                    function_span,
+                                    whole_span,
+                                    &function_ty,
+                                    &self.registry,
+                                ),
+                            })?;
+                        function_ty = self.zonk(&exposed);
+                    }
+                    let Type::Function(domain, codomain) = function_ty.clone() else {
                         return Err(not_applicable(
                             function_span,
                             whole_span,
-                            &function.ty,
+                            &function_ty,
                             &self.registry,
                         ));
                     };
+                    let provenance = if function.provenance.aligns(&function_ty) {
+                        function.provenance.clone()
+                    } else {
+                        TypeProvenance::unknown(&function_ty)
+                    };
                     let (domain_provenance, codomain_provenance) =
-                        function.provenance.function_parts(&function.ty)?;
+                        provenance.function_parts(&function_ty)?;
+                    function.ty = function_ty;
                     let domain = ProvenancedType {
                         ty: domain.as_ref().clone(),
                         provenance: domain_provenance,
@@ -1078,6 +1334,7 @@ impl Elaborator {
                         kind: CheckKind::Argument {
                             function_span,
                             whole_span,
+                            recursive_call,
                         },
                     });
                 }
@@ -1101,8 +1358,8 @@ impl Elaborator {
                     )?;
                     values.push(TypedNode {
                         node,
-                        ty: codomain.ty,
-                        provenance: codomain.provenance,
+                        ty: self.zonk(&codomain.ty),
+                        provenance: TypeProvenance::unknown(&self.zonk(&codomain.ty)),
                     });
                 }
                 ElaborationTask::AfterLeft {
@@ -1157,7 +1414,22 @@ impl Elaborator {
                     });
                 }
                 ElaborationTask::FinishBinding { binding, expected } => {
-                    let initializer = values.pop().ok_or_else(invalid_state)?;
+                    let mut initializer = values.pop().ok_or_else(invalid_state)?;
+                    let mut generalized = Vec::new();
+                    if expected.is_none()
+                        && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
+                    {
+                        let inferred = self.zonk(&initializer.ty);
+                        let mut variables = Vec::new();
+                        collect_unsolved_inference(&inferred, &mut variables);
+                        for variable in variables {
+                            let binder = self.fresh_type_variable()?;
+                            self.inference_solutions
+                                .insert(variable, Type::Variable(binder));
+                            generalized.push(binder);
+                        }
+                        initializer.ty = self.zonk(&initializer.ty);
+                    }
                     let binding_type = expected.unwrap_or_else(|| ProvenancedType {
                         ty: initializer.ty.clone(),
                         provenance: initializer.provenance.clone(),
@@ -1187,6 +1459,7 @@ impl Elaborator {
                     let origin = binding_origin(binding);
                     match &pattern.kind {
                         CorePatternKind::Binder(binder) => {
+                            context.set_quantified(binder.id(), generalized.into_boxed_slice())?;
                             declarations.push(ElaboratedDeclaration::Binding {
                                 binder: binder.clone(),
                                 initializer: initializer.node,
@@ -1257,6 +1530,70 @@ impl Elaborator {
                     declarations.push(ElaboratedDeclaration::Recursive {
                         members,
                         origin: recursive_group_origin(group),
+                    });
+                }
+                ElaborationTask::AfterMatchScrutinee {
+                    expression,
+                    span,
+                    expected,
+                } => {
+                    let scrutinee = values.pop().ok_or_else(invalid_state)?;
+                    if expression.arms.is_empty() {
+                        return Err(case_error(
+                            TypeReason::NonExhaustive,
+                            span,
+                            "a match requires at least one arm",
+                            None,
+                        ));
+                    }
+                    let progress = Box::new(MatchProgress {
+                        expression,
+                        span,
+                        scrutinee,
+                        next_arm: 0,
+                        matrix: Vec::new(),
+                        coverage_budget: UsefulnessBudget::default(),
+                        arms: Vec::with_capacity(expression.arms.len()),
+                        result_type: expected
+                            .map(|(expected, kind)| (expected.ty, expected.provenance, kind)),
+                    });
+                    self.schedule_match_arm(progress, context, &mut tasks)?;
+                }
+                ElaborationTask::FinishMatchArm {
+                    mut progress,
+                    binders,
+                    pattern,
+                    row,
+                    arm_span,
+                } => {
+                    let body_result = values.pop().ok_or_else(invalid_state);
+                    self.remove_pattern_binders(context, &binders)?;
+                    let body = body_result?;
+                    progress.result_type.get_or_insert_with(|| {
+                        (body.ty.clone(), body.provenance.clone(), CheckKind::General)
+                    });
+                    progress.matrix.push(row);
+                    progress.arms.push(CoreMatchArm::new(
+                        pattern,
+                        body.node,
+                        Origin::Source(arm_span),
+                    ));
+                    self.schedule_match_arm(progress, context, &mut tasks)?;
+                }
+                ElaborationTask::FinishMatch(progress) => {
+                    let Some((ty, provenance, _)) = progress.result_type else {
+                        return Err(invalid_state());
+                    };
+                    let node = self.builder.match_expression(
+                        progress.scrutinee.node,
+                        progress.arms,
+                        ty.clone(),
+                        Origin::Source(progress.span),
+                    )?;
+                    values.push(TypedNode {
+                        node,
+                        ty,
+                        provenance,
                     });
                 }
                 ElaborationTask::FinishBlock {
@@ -1368,120 +1705,81 @@ impl Elaborator {
         })
     }
 
-    fn elaborate_match(
+    fn schedule_match_arm<'a>(
         &mut self,
-        expression: &crate::resolved::ResolvedMatchExpr,
-        span: Span,
+        mut progress: Box<MatchProgress<'a>>,
         context: &mut TypeContext,
-        expected: Option<(ProvenancedType, CheckKind)>,
-    ) -> Result<TypedNode, TypeError> {
-        let scrutinee = self.elaborate_expression_with_context(
-            ElaborationTask::Synthesize {
-                expression: &expression.scrutinee,
-                cause: None,
-            },
+        tasks: &mut Vec<ElaborationTask<'a>>,
+    ) -> Result<(), TypeError> {
+        let Some(arm) = progress.expression.arms.get(progress.next_arm) else {
+            if let Some(witness) = missing_witness_for_types_with_budget(
+                &progress.matrix,
+                std::slice::from_ref(&progress.scrutinee.ty),
+                &self.registry,
+                &mut progress.coverage_budget,
+            )? {
+                return Err(case_error(
+                    TypeReason::NonExhaustive,
+                    progress.span,
+                    "this match does not cover every value",
+                    Some(display_witness(&witness, &self.registry)),
+                ));
+            }
+            tasks.push(ElaborationTask::FinishMatch(progress));
+            return Ok(());
+        };
+
+        let mut binders = Vec::new();
+        let pattern = self.check_core_pattern(
+            &arm.pattern,
+            &progress.scrutinee.ty,
             context,
+            &mut binders,
+            GeneratedReason::BindingLowering,
         )?;
-        if expression.arms.is_empty() {
+        let row = vec![pattern.clone()];
+        if usefulness_with_budget(
+            &progress.matrix,
+            &row,
+            std::slice::from_ref(&progress.scrutinee.ty),
+            &self.registry,
+            &mut progress.coverage_budget,
+        )?
+        .is_none()
+        {
+            self.remove_pattern_binders(context, &binders)?;
             return Err(case_error(
-                TypeReason::NonExhaustive,
-                span,
-                "a match requires at least one arm",
+                TypeReason::RedundantCase,
+                arm.span,
+                "this match arm can never be selected",
                 None,
             ));
         }
-        let mut matrix = Vec::new();
-        let mut coverage_budget = UsefulnessBudget::default();
-        let mut arms = Vec::with_capacity(expression.arms.len());
-        let mut result_type =
-            expected.map(|(expected, kind)| (expected.ty, expected.provenance, kind));
-        for arm in &expression.arms {
-            let mut binders = Vec::new();
-            let pattern = self.check_core_pattern(
-                &arm.pattern,
-                &scrutinee.ty,
-                context,
-                &mut binders,
-                GeneratedReason::BindingLowering,
-            )?;
-            let row = vec![pattern.clone()];
-            if usefulness_with_budget(
-                &matrix,
-                &row,
-                std::slice::from_ref(&scrutinee.ty),
-                &self.registry,
-                &mut coverage_budget,
-            )?
-            .is_none()
-            {
-                self.remove_pattern_binders(context, &binders)?;
-                return Err(case_error(
-                    TypeReason::RedundantCase,
-                    arm.span,
-                    "this match arm can never be selected",
-                    None,
-                ));
+        progress.next_arm += 1;
+        let body_task = if let Some((ty, provenance, kind)) = &progress.result_type {
+            ElaborationTask::Check {
+                expression: &arm.body,
+                expected: ProvenancedType {
+                    ty: ty.clone(),
+                    provenance: provenance.clone(),
+                },
+                kind: *kind,
             }
-            let body_result = if let Some((ty, provenance, kind)) = &result_type {
-                self.elaborate_expression_with_context(
-                    ElaborationTask::Check {
-                        expression: &arm.body,
-                        expected: ProvenancedType {
-                            ty: ty.clone(),
-                            provenance: provenance.clone(),
-                        },
-                        kind: *kind,
-                    },
-                    context,
-                )
-            } else {
-                self.elaborate_expression_with_context(
-                    ElaborationTask::Synthesize {
-                        expression: &arm.body,
-                        cause: None,
-                    },
-                    context,
-                )
-            };
-            self.remove_pattern_binders(context, &binders)?;
-            let body = body_result?;
-            result_type.get_or_insert_with(|| {
-                (body.ty.clone(), body.provenance.clone(), CheckKind::General)
-            });
-            matrix.push(row);
-            arms.push(CoreMatchArm::new(
-                pattern,
-                body.node,
-                Origin::Source(arm.span),
-            ));
-        }
-        let Some((ty, provenance, _)) = result_type else {
-            return Err(invalid_state());
+        } else {
+            ElaborationTask::Synthesize {
+                expression: &arm.body,
+                cause: None,
+            }
         };
-        if let Some(witness) = missing_witness_for_types_with_budget(
-            &matrix,
-            std::slice::from_ref(&scrutinee.ty),
-            &self.registry,
-            &mut coverage_budget,
-        )? {
-            return Err(case_error(
-                TypeReason::NonExhaustive,
-                span,
-                "this match does not cover every value",
-                Some(display_witness(&witness, &self.registry)),
-            ));
-        }
-        let node = self.builder.match_expression(
-            scrutinee.node,
-            arms,
-            ty.clone(),
-            Origin::Source(span),
-        )?;
-        Ok(TypedNode {
-            node,
-            ty,
-            provenance,
-        })
+        tasks.push(ElaborationTask::FinishMatchArm {
+            progress,
+            binders,
+            pattern,
+            row,
+            arm_span: arm.span,
+        });
+        tasks.push(body_task);
+        Ok(())
     }
 
     fn check_core_pattern(
@@ -1544,15 +1842,32 @@ impl Elaborator {
                 payload,
                 ..
             } => {
-                let Type::Nominal(owner) = expected else {
-                    return Err(pattern_mismatch(pattern.span, expected, &self.registry));
+                let (owner, arguments): (_, &[Type]) = match expected {
+                    Type::Nominal(owner) => (*owner, &[]),
+                    Type::AppliedNominal(owner, arguments) => (*owner, arguments),
+                    _ => return Err(pattern_mismatch(pattern.span, expected, &self.registry)),
                 };
                 let Some(info) = self.registry.constructor(*constructor) else {
                     return Err(invalid_state());
                 };
                 let info_owner = info.owner;
-                let payload_type = info.payload.clone();
-                if &info_owner != owner {
+                let parameters = self
+                    .registry
+                    .nominal_parameters(owner)
+                    .ok_or_else(invalid_state)?;
+                if parameters.len() != arguments.len() {
+                    return Err(invalid_state());
+                }
+                let replacements = parameters
+                    .iter()
+                    .zip(arguments)
+                    .map(|(parameter, argument)| (parameter.id, argument.clone()))
+                    .collect::<HashMap<_, _>>();
+                let payload_type = info
+                    .payload
+                    .as_ref()
+                    .map(|payload| substitute_type_variables(payload, &replacements));
+                if info_owner != owner {
                     return Err(case_error(
                         TypeReason::ConstructorOwner,
                         pattern.span,
@@ -2017,6 +2332,7 @@ enum ElaborationTask<'a> {
         whole_span: Span,
         function_span: Span,
         argument: &'a ResolvedExpr,
+        recursive_call: bool,
     },
     FinishApplication {
         whole_span: Span,
@@ -2025,6 +2341,19 @@ enum ElaborationTask<'a> {
         function: TypedNode,
         codomain: ProvenancedType,
     },
+    AfterMatchScrutinee {
+        expression: &'a crate::resolved::ResolvedMatchExpr,
+        span: Span,
+        expected: Option<(ProvenancedType, CheckKind)>,
+    },
+    FinishMatchArm {
+        progress: Box<MatchProgress<'a>>,
+        binders: Vec<BinderId>,
+        pattern: CorePattern,
+        row: Vec<CorePattern>,
+        arm_span: Span,
+    },
+    FinishMatch(Box<MatchProgress<'a>>),
     AfterLeft {
         primitive: Primitive,
         whole_span: Span,
@@ -2054,6 +2383,17 @@ enum ElaborationTask<'a> {
     },
 }
 
+struct MatchProgress<'a> {
+    expression: &'a crate::resolved::ResolvedMatchExpr,
+    span: Span,
+    scrutinee: TypedNode,
+    next_arm: usize,
+    matrix: Vec<Vec<CorePattern>>,
+    coverage_budget: UsefulnessBudget,
+    arms: Vec<CoreMatchArm>,
+    result_type: Option<(Type, TypeProvenance, CheckKind)>,
+}
+
 #[derive(Clone, Copy)]
 enum FunctionBody<'a> {
     Block(&'a ResolvedBlock),
@@ -2065,6 +2405,7 @@ enum CheckKind {
     Argument {
         function_span: Span,
         whole_span: Span,
+        recursive_call: bool,
     },
     Definition {
         result_cause: Span,
@@ -2219,7 +2560,24 @@ fn check_mismatch(
         CheckKind::Argument {
             function_span,
             whole_span,
+            recursive_call,
         } => {
+            if recursive_call {
+                let mut diagnostic = Diagnostic::new(
+                    TypeReason::PolymorphicRecursion,
+                    SourceLabel::new(
+                        span,
+                        "this recursive call requires a different type instantiation",
+                    ),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    function_span,
+                    "this recursive function is checked monomorphically",
+                ));
+                diagnostic.expected = Some(registry.display_type(&expected));
+                diagnostic.found = Some(registry.display_type(&found));
+                return TypeError::Source(Box::new(diagnostic));
+            }
             let expected = registry.display_type(&expected);
             let found = registry.display_type(&found);
             let mut diagnostic = Diagnostic::new(
@@ -2470,7 +2828,7 @@ fn validate_recursive_member(
             Ok(())
         }
         Type::Function(_, _) => Err(unsafe_recursive_initializer(group, member)),
-        Type::Nominal(owner) => {
+        Type::Nominal(owner) | Type::AppliedNominal(owner, _) => {
             let payload = match &member.initializer.kind {
                 ResolvedExprKind::Constructor(occurrence) => {
                     let Some(constructor) = registry.constructor(occurrence.constructor) else {
@@ -2506,9 +2864,12 @@ fn validate_recursive_member(
             }
             Ok(())
         }
-        Type::Int | Type::Bool | Type::Unit | Type::Tuple(_) => {
-            Err(unsafe_recursive_root(group, member))
-        }
+        Type::Int
+        | Type::Bool
+        | Type::Unit
+        | Type::Tuple(_)
+        | Type::Variable(_)
+        | Type::Inference(_) => Err(unsafe_recursive_root(group, member)),
     }
 }
 
@@ -2717,6 +3078,108 @@ pub fn structurally_equal(left: &Type, right: &Type) -> bool {
     same_type(left, right)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnificationFailure {
+    Mismatch,
+    Infinite,
+}
+
+fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type {
+    match ty {
+        Type::Inference(identity) => solutions
+            .get(identity)
+            .map_or_else(|| ty.clone(), |solution| zonk_type(solution, solutions)),
+        Type::Tuple(elements) => Type::Tuple(
+            elements
+                .iter()
+                .map(|element| zonk_type(element, solutions))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        Type::AppliedNominal(owner, arguments) => Type::AppliedNominal(
+            *owner,
+            arguments
+                .iter()
+                .map(|argument| zonk_type(argument, solutions))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        Type::Function(domain, codomain) => Type::Function(
+            Box::new(zonk_type(domain, solutions)),
+            Box::new(zonk_type(codomain, solutions)),
+        ),
+        Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => ty.clone(),
+    }
+}
+
+fn type_contains_inference(
+    ty: &Type,
+    needle: InferenceVariableId,
+    solutions: &HashMap<InferenceVariableId, Type>,
+) -> bool {
+    let mut work = vec![ty];
+    let mut visited = HashSet::new();
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Inference(identity) if *identity == needle => return true,
+            Type::Inference(identity) if visited.insert(*identity) => {
+                if let Some(solution) = solutions.get(identity) {
+                    work.push(solution);
+                }
+            }
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                work.extend(elements.iter());
+            }
+            Type::Function(domain, codomain) => {
+                work.push(codomain);
+                work.push(domain);
+            }
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
+        }
+    }
+    false
+}
+
+fn collect_unsolved_inference(ty: &Type, output: &mut Vec<InferenceVariableId>) {
+    let mut work = vec![ty];
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Inference(identity) if !output.contains(identity) => output.push(*identity),
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                work.extend(elements.iter().rev());
+            }
+            Type::Function(domain, codomain) => {
+                work.push(codomain);
+                work.push(domain);
+            }
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
+        }
+    }
+}
+
+fn contains_unsolved_inference(ty: &Type) -> bool {
+    let mut variables = Vec::new();
+    collect_unsolved_inference(ty, &mut variables);
+    !variables.is_empty()
+}
+
+fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError {
+    TypeError::Source(Box::new(Diagnostic::new(
+        reason,
+        SourceLabel::new(span, message),
+    )))
+}
+
 fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
     let mut binders = Vec::new();
     let mut expressions = vec![&program.result];
@@ -2903,6 +3366,7 @@ mod tests {
             TypeFact {
                 ty: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
                 provenance: TypeProvenance::atom(None),
+                quantified: Box::new([]),
             },
         );
         let mut elaborator =

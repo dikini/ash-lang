@@ -47,6 +47,14 @@ impl TypedBinder {
     pub const fn origin(&self) -> &Origin {
         &self.origin
     }
+
+    pub(super) fn rewrite_type<F>(&mut self, rewrite: &mut F) -> Result<(), super::BuildError>
+    where
+        F: FnMut(&Type) -> Result<Type, super::BuildError>,
+    {
+        self.ty = rewrite(&self.ty)?;
+        Ok(())
+    }
 }
 
 /// A resolved variable occurrence payload.

@@ -79,6 +79,28 @@ impl CorePattern {
             }
         }
     }
+
+    pub(super) fn rewrite_types<F>(&mut self, rewrite: &mut F) -> Result<(), super::BuildError>
+    where
+        F: FnMut(&Type) -> Result<Type, super::BuildError>,
+    {
+        let mut work = vec![self];
+        while let Some(pattern) = work.pop() {
+            pattern.ty = rewrite(&pattern.ty)?;
+            match &mut pattern.kind {
+                CorePatternKind::Binder(binder) => binder.rewrite_type(rewrite)?,
+                CorePatternKind::Tuple(elements) => work.extend(elements.iter_mut()),
+                CorePatternKind::Constructor { payload, .. } => {
+                    if let Some(payload) = payload.as_deref_mut() {
+                        work.push(payload);
+                    }
+                }
+                CorePatternKind::Wildcard | CorePatternKind::Boolean(_) | CorePatternKind::Unit => {
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The closed typed-pattern family.
@@ -143,6 +165,10 @@ impl CoreMatchArm {
     pub(super) fn into_parts(self) -> (CorePattern, NodeId, Origin) {
         (self.pattern, self.body, self.origin)
     }
+
+    pub(super) fn pattern_mut(&mut self) -> &mut CorePattern {
+        &mut self.pattern
+    }
 }
 
 /// A structured match whose scrutinee is evaluated once.
@@ -170,5 +196,9 @@ impl MatchNode {
     #[must_use]
     pub fn arms(&self) -> &[CoreMatchArm] {
         &self.arms
+    }
+
+    pub(super) fn arms_mut(&mut self) -> &mut [CoreMatchArm] {
+        &mut self.arms
     }
 }
