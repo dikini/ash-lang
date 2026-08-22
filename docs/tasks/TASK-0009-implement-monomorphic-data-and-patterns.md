@@ -2,7 +2,7 @@
 
 - ID: `TASK-0009`
 - Status: active
-- Related: [CP-0003: Monomorphic Data and Patterns](../proposals/CP-0003-monomorphic-data-and-patterns.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), [DN-0007: Data and Pattern Typing](../design/DN-0007-data-and-pattern-typing.md), [DN-0019: Primitive Feature Composition](../design/DN-0019-primitive-feature-composition.md), [execution plan](../plans/2026-08-22-monomorphic-data-and-patterns.md), [shared-pipeline remediation design](../plans/2026-08-22-data-and-patterns-shared-pipeline-design.md), [match-context correction design](../plans/2026-08-22-match-context-and-semantics-review-design.md), [match-context correction plan](../plans/2026-08-22-match-context-and-semantics-review.md)
+- Related: [CP-0003: Monomorphic Data and Patterns](../proposals/CP-0003-monomorphic-data-and-patterns.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), [DN-0007: Data and Pattern Typing](../design/DN-0007-data-and-pattern-typing.md), [DN-0019: Primitive Feature Composition](../design/DN-0019-primitive-feature-composition.md), [execution plan](../plans/2026-08-22-monomorphic-data-and-patterns.md), [shared-pipeline remediation design](../plans/2026-08-22-data-and-patterns-shared-pipeline-design.md), [match-context correction design](../plans/2026-08-22-match-context-and-semantics-review-design.md), [match-context correction plan](../plans/2026-08-22-match-context-and-semantics-review.md), [syntax-resource remediation design](../plans/2026-08-22-syntax-resource-memory-design.md), [syntax-resource remediation plan](../plans/2026-08-22-syntax-resource-memory.md)
 
 > This task organizes work. It does not define Ash semantics.
 
@@ -93,6 +93,19 @@ retained integration evidence.
   pattern, type, state, and witness cells before allocation. Shared immutable
   usefulness states replace complete state clones, and a 100,000-field
   full-source tuple regression reaches structured coverage resource exhaustion.
+- Review checkpoint `a679267` directly passes an oversized unchecked Core
+  match to validation and fixes coverage exhaustion as a Core resource error,
+  independently of source parsing and elaboration.
+- Syntax-resource design and plan checkpoints `e4e52b8` and `a45cc72` record
+  the measured wide-source allocation attribution and the selected correction.
+  Checkpoint `dacaee0` charges retained lexer tokens, lexical diagnostics, and
+  parser events against one 1,500,000-unit budget before allocation. It returns
+  a non-projectable structured syntax resource result on exhaustion and drops
+  obsolete concrete and Surface representations at successful stage boundaries.
+- After `dacaee0`, the admitted 100,000-field coverage regression peaks at
+  153,576 KiB and still reaches coverage exhaustion. A 1,000,001-field source
+  peaks at 159,280 KiB and stops during syntax construction; before the
+  correction, the same widths peaked near 214 MiB and 1.9 GiB respectively.
 - Fresh post-review `cargo test --all-targets` and `cargo xtask verify` runs
   pass, including the 10,000-member small-stack cycle and all new depth and
   resource regressions. Changed Markdown passes with only the project-approved
