@@ -245,7 +245,7 @@ pub enum PureValue {
 pub enum PureComputation {
     /// A sequential nonrecursive binding.
     Bind(BindingNode),
-    /// A simultaneous recursive function binding group.
+    /// A simultaneous recursive binding group.
     RecursiveBind(RecursiveBindingNode),
     /// A strict unary application.
     Apply(ApplicationNode),
@@ -699,11 +699,11 @@ impl CoreBuilder {
         )
     }
 
-    /// Adds a simultaneous recursive function group with unchecked invariants.
+    /// Adds a simultaneous recursive binding group with unchecked invariants.
     ///
     /// Payload admission precedes binder-capability checks. The independent
-    /// validator owns nonemptiness, function-initializer, type, scope, and
-    /// provenance invariants.
+    /// validator owns nonemptiness, function-or-guarded-data initializer,
+    /// type, scope, and provenance invariants.
     ///
     /// # Errors
     ///

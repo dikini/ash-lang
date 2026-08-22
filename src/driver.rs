@@ -1,12 +1,12 @@
 //! Reusable, stage-preserving Mini-Ash pipeline orchestration.
 
-use std::{error::Error, fmt, fs, io, path::PathBuf};
+use std::{error::Error, fmt, fs, io, path::PathBuf, sync::Arc};
 
 use crate::{
     core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate},
     diagnostic::Diagnostic,
     elaborate::{Elaborator, TypeError},
-    eval::{Evaluation, RuntimeFailure, Value, evaluate},
+    eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
     lexer::{LexReason, lex},
     parser::{
         ParseContext, ParseDiagnostic, ParseReason, ProjectionError, ResourceFailure, parse,
@@ -18,6 +18,9 @@ use crate::{
 };
 
 /// The observable result of one successful source-file pipeline.
+///
+/// The observation retains the evaluation heap even when `value` is a closure
+/// whose captured environment contains structural locations.
 #[derive(Clone, Debug)]
 pub struct Observation {
     /// The evaluated Mini-Ash value.
@@ -25,6 +28,7 @@ pub struct Observation {
     /// The structural type assigned to the program result.
     pub ty: Type,
     type_display: Option<String>,
+    _heap: Arc<ObservedHeap>,
 }
 
 impl Observation {
@@ -232,10 +236,12 @@ where
         .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
     let validated = validator(unchecked, &[&source]).map_err(PipelineFailure::Validation)?;
     let evaluation = evaluator(&validated).map_err(PipelineFailure::Runtime)?;
+    let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
-        value: evaluation.value,
+        value,
         ty,
         type_display: Some(type_display),
+        _heap: heap,
     })
 }
 
@@ -340,5 +346,19 @@ mod tests {
         };
         assert_eq!(error.reason(), crate::core::ValidationReason::Provenance);
         assert!(!evaluation_called.get());
+    }
+
+    #[test]
+    fn returned_closure_observation_retains_its_captured_structural_heap() {
+        let source = SourceFile::new(
+            "observed-structural-capture.ash",
+            "{\nlet pair = (20, 22)\nlet keep : Unit -> (Int, Int) = fn(ignored) {\npair\n}\nkeep\n}\n",
+        )
+        .expect("the test source should fit");
+
+        let observation = run_source(source).expect("the closure should evaluate");
+
+        assert!(matches!(observation.value, Value::Function(_)));
+        assert_eq!(observation._heap.cell_count(), 1);
     }
 }

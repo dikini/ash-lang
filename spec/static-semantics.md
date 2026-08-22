@@ -384,9 +384,11 @@ family global-and-program-typing:
     GAMMA |-clause name patterns = body ⇐ Function(domains, codomain)
 
   T-Operational-Global :=
-    GAMMA, parameter : domain |- body ⇐ codomain
+    header_pattern ⇐ domain => bindings
+    exhaustive([header_pattern], domain)
+    GAMMA, bindings |- body ⇐ codomain
     ===>
-    GAMMA |-definition fn name(parameter : domain) -> codomain { body } ⇒ name : Function(domain, codomain)
+    GAMMA |-definition fn name(header_pattern : domain) -> codomain { body } ⇒ name : Function(domain, codomain)
 
   T-Recursive-Program :=
     GAMMA_G = { name_i : definition_type_i | 1 <= i <= n }
@@ -402,8 +404,24 @@ not determine global visibility. `T-Recursive-Program` establishes all global
 monotypes and synthesizes the file type from its required result expression.
 Semicolons in these judgments separate semantic fields and are not source
 punctuation. Resolution has already ensured global-name freshness and
-equational name agreement.
+equational name agreement. For `T-Operational-Global`, one typed source
+parameter is `header_pattern`; two or more typed source parameters normalize to
+one tuple `header_pattern` and one tuple `domain`. Pattern checking returns all
+body bindings, and singleton exhaustiveness requires the operational header to
+be irrefutable.
+
+The executable test `static_semantics_operational_tuple_pattern_is_executable`
+checks a destructuring operational parameter:
+
+```ash
+fn add((left, right) : (Int, Int)) -> Int {
+    left + right
+}
+
+add(20, 22)
+```
 
 There are no inference variables, generalization, polymorphism, overloading,
-subtyping, implicit conversions, recursive types, or polymorphic recursion in
-Mini-Ash.
+subtyping, implicit conversions, explicit structural recursive-type operators,
+or polymorphic recursion in Mini-Ash. Nominal declarations may refer to
+themselves and to other nominal declarations in the same file.

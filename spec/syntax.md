@@ -136,7 +136,8 @@ function as one argument.
 
 ## Global function presentations
 
-An equational global places its type interface before its binder-only equation.
+An equational global places its type interface before one or more contiguous
+pattern clauses.
 The executable test `syntax_equational_global_example_v002_is_executable`
 checks this complete file:
 

@@ -470,7 +470,7 @@ pub struct ResolvedBlock {
 pub enum ResolvedLocalDeclaration {
     /// A sequential nonrecursive binding.
     Binding(Box<ResolvedBinding>),
-    /// A simultaneous recursive function binding group.
+    /// A simultaneous recursive binding group.
     Recursive(ResolvedRecursiveGroup),
 }
 

@@ -28,25 +28,37 @@ pub struct ObservedValue {
     root: Location,
 }
 
-#[derive(Debug)]
-struct ObservedHeap {
+pub(crate) struct ObservedHeap {
     registry: Arc<ResolvedRegistry>,
     cells: Box<[HeapCell]>,
 }
 
+impl ObservedHeap {
+    pub(crate) fn new(registry: Arc<ResolvedRegistry>, cells: Vec<HeapCell>) -> Arc<Self> {
+        Arc::new(Self {
+            registry,
+            cells: cells.into_boxed_slice(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+}
+
+impl fmt::Debug for ObservedHeap {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ObservedHeap")
+            .field("cells", &self.cells.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl ObservedValue {
-    pub(crate) fn new(
-        registry: Arc<ResolvedRegistry>,
-        cells: Vec<HeapCell>,
-        root: Location,
-    ) -> Self {
-        Self {
-            heap: Arc::new(ObservedHeap {
-                registry,
-                cells: cells.into_boxed_slice(),
-            }),
-            root,
-        }
+    pub(crate) fn new(heap: Arc<ObservedHeap>, root: Location) -> Self {
+        Self { heap, root }
     }
 
     fn render(&self) -> String {

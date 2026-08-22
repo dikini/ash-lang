@@ -4,7 +4,7 @@ use std::{error::Error, fmt, sync::Arc};
 
 use super::{
     Closure, Value,
-    value::{HeapCell, Location, ObservedValue},
+    value::{HeapCell, Location, ObservedHeap, ObservedValue},
 };
 use crate::{
     core::{
@@ -247,7 +247,10 @@ pub enum TraceEvent {
     Enter(NodeId),
 }
 
-/// A completed value and its observational machine trace.
+/// A completed value, its retained heap, and its observational machine trace.
+///
+/// The heap remains owned when the visible value is a scalar or closure because
+/// a closure environment can contain locations allocated during this run.
 #[derive(Clone, Debug)]
 pub struct Evaluation {
     /// The final runtime value.
@@ -256,6 +259,13 @@ pub struct Evaluation {
     pub trace: Vec<TraceEvent>,
     /// Greatest number of explicit frames retained by the machine.
     pub max_frame_depth: usize,
+    heap: Arc<ObservedHeap>,
+}
+
+impl Evaluation {
+    pub(crate) fn into_observation_parts(self) -> (Value, Arc<ObservedHeap>) {
+        (self.value, self.heap)
+    }
 }
 
 /// A structured evaluator invariant or runtime resource failure.
@@ -269,7 +279,7 @@ pub enum RuntimeFailure {
     UnexpectedFunctionValue,
     /// A validated variable did not have a runtime lexical binding.
     MissingBinding,
-    /// A validated recursive group did not contain function templates.
+    /// A validated recursive group contained an unsupported member initializer.
     UnexpectedRecursiveBinding,
     /// The runtime cannot represent another lexical environment entry.
     EnvironmentCapacity,
@@ -299,7 +309,7 @@ impl fmt::Display for RuntimeFailure {
             }
             Self::MissingBinding => "runtime lexical binding is absent",
             Self::UnexpectedRecursiveBinding => {
-                "runtime recursive binding violates its validated function-group shape"
+                "runtime recursive binding violates its validated member shape"
             }
             Self::EnvironmentCapacity => "runtime lexical environment capacity is exhausted",
             Self::InvalidControlState => "runtime machine control state is inconsistent",
@@ -414,18 +424,19 @@ impl Machine {
                 }
                 Control::Return(value) => {
                     let Some(frame) = self.frames.pop() else {
+                        let heap =
+                            ObservedHeap::new(Arc::clone(self.program.registry()), self.heap);
                         let value = match value {
-                            Value::Location(root) => Value::Data(ObservedValue::new(
-                                Arc::clone(self.program.registry()),
-                                self.heap,
-                                root,
-                            )),
+                            Value::Location(root) => {
+                                Value::Data(ObservedValue::new(Arc::clone(&heap), root))
+                            }
                             value => value,
                         };
                         return Ok(Evaluation {
                             value,
                             trace: self.trace,
                             max_frame_depth: self.max_frame_depth,
+                            heap,
                         });
                     };
                     let transition = dispatch_return(frame, value, &mut self.heap)?;
@@ -1391,6 +1402,48 @@ mod tests {
         ));
         assert!(matches!(heap[0], HeapCell::Alias(2)));
         assert!(matches!(heap[1], HeapCell::Alias(3)));
+    }
+
+    #[test]
+    fn returned_closure_retains_the_heap_for_captured_structural_values() {
+        let source = SourceFile::new(
+            "returned-structural-capture.ash",
+            "{\nlet pair = (20, 22)\nlet keep : Unit -> (Int, Int) = fn(ignored) {\npair\n}\nkeep\n}\n",
+        )
+        .expect("test source");
+        let tree = parse(lex(&source).expect("source should lex"));
+        let surface = project(&source, &tree).expect("source should project");
+        let resolved = resolve(&surface).expect("source should resolve");
+        let mut elaborator = Elaborator::for_program(&resolved).expect("reserve binders");
+        let typed = elaborator
+            .synthesize_program(&resolved)
+            .expect("source should elaborate");
+        let validated = validate(
+            elaborator.finish(typed.node).expect("Core should finish"),
+            &[&source],
+        )
+        .expect("Core should validate");
+
+        let evaluation = evaluate(&validated).expect("closure should evaluate");
+        let Value::Function(closure) = &evaluation.value else {
+            panic!("the program should return its closure")
+        };
+        let captured_location = closure
+            .environment
+            .head
+            .as_ref()
+            .and_then(|entry| match &entry.kind {
+                EnvironmentEntryKind::Binding {
+                    value: Value::Location(location),
+                    ..
+                } => Some(*location),
+                EnvironmentEntryKind::Binding { .. } | EnvironmentEntryKind::Recursive { .. } => {
+                    None
+                }
+            })
+            .expect("the closure should capture the tuple location");
+
+        assert!(captured_location < evaluation.heap.cell_count());
     }
 
     #[test]

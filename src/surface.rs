@@ -204,7 +204,7 @@ pub struct SurfaceBlock {
 pub enum SurfaceLocalDeclaration {
     /// A sequential nonrecursive binding.
     Binding(Box<SurfaceBinding>),
-    /// A simultaneous recursive function binding group.
+    /// A simultaneous recursive binding group.
     Recursive(SurfaceRecursiveGroup),
 }
 
