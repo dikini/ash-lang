@@ -109,6 +109,17 @@ and ADT cluster: ordered declaration forms, allocate-all-then-check scope, and
 variable-arity Core traversal. It does not claim that function templates solve
 cyclic constructor allocation or pattern typing.
 
+### Data-and-pattern transfer
+
+The retained [data-and-pattern integration report](mini-ash/data-and-patterns/evidence.md)
+provides the next structurally different comparison. Ordinary application
+absorbed constructor calls, and one usefulness relation serves matches,
+equations, and local irrefutability. Nominal registries, typed patterns, and
+heap locations could not lower away because they carry identity, coverage, and
+cyclic-observation facts across stages. The report also confirms the recursion
+evidence's warning: cyclic constructor data needs explicit allocation and
+initialization rather than function templates alone.
+
 ## Open questions
 
 - Can generated closed stage assemblies remove most representation joins while

@@ -1,8 +1,8 @@
 # Syntax
 
-A Mini-Ash file contains zero or more global function definitions followed by
-exactly one result expression. The file does not declare a module and cannot
-import another file.
+A Mini-Ash file contains zero or more nominal type declarations, zero or more
+global function definitions, and exactly one result expression. The file does
+not declare a module and cannot import another file.
 
 ## Grammar
 
@@ -10,26 +10,40 @@ The following grammar is the complete Mini-Ash surface grammar. Each `;`
 terminates an EBNF production; it is not Ash source punctuation.
 
 ```ebnf
-program ::= { global_definition line_end } expression [ line_end ] ;
+program ::=
+  { type_declaration line_end }
+  { global_definition line_end }
+  expression [ line_end ] ;
+
+type_declaration ::=
+  "type" upper_identifier "=" [ line_end ] constructor_declaration
+  { line_end "|" constructor_declaration } ;
+constructor_declaration ::=
+  upper_identifier [ "(" type { "," type } ")" ] ;
 
 global_definition ::= equational_global | inline_operational_global ;
-equational_global ::= external_interface line_end equation ;
+equational_global ::= external_interface line_end equation { line_end equation } ;
 external_interface ::= identifier ":" type ;
-equation ::= identifier binder "=" expression ;
+equation ::= identifier pattern { pattern } "=" expression ;
 inline_operational_global ::=
-  "fn" identifier "(" typed_binder ")" "->" type block ;
+  "fn" identifier "(" typed_pattern { "," typed_pattern } ")"
+  "->" type block ;
 
 block ::=
   "{" line_end { local_declaration line_end } expression [ line_end ] "}" ;
 local_declaration ::= local_binding | recursive_binding_group ;
-local_binding ::= "let" identifier [ ":" type ] "=" expression ;
+local_binding ::= "let" pattern [ ":" type ] "=" expression ;
 recursive_binding_group ::=
   "let" "rec" recursive_member
   { line_end "and" recursive_member } ;
 recursive_member ::= identifier ":" type "=" expression ;
-function_expression ::= "fn" "(" binder ")" block ;
+function_expression ::= "fn" "(" pattern { "," pattern } ")" block ;
+match_expression ::=
+  "match" expression "{" line_end
+  match_arm { line_end match_arm } [ line_end ] "}" ;
+match_arm ::= pattern "=>" expression ;
 
-expression ::= block | function_expression | equality_expression ;
+expression ::= block | function_expression | match_expression | equality_expression ;
 equality_expression ::= additive_expression [ "==" additive_expression ] ;
 additive_expression ::= multiplicative_expression { "+" multiplicative_expression } ;
 multiplicative_expression ::=
@@ -40,16 +54,25 @@ primary_expression ::=
   | boolean
   | unit
   | identifier
+  | upper_identifier
   | parenthesized_expression ;
-parenthesized_expression ::= "(" expression ")" ;
+parenthesized_expression ::=
+  "(" expression [ "," expression { "," expression } ] ")" ;
 
-binder ::= identifier ;
-typed_binder ::= identifier ":" type ;
+pattern ::=
+  identifier
+  | "_"
+  | boolean
+  | unit
+  | upper_identifier [ "(" pattern { "," pattern } ")" ]
+  | "(" pattern "," pattern { "," pattern } ")" ;
+typed_pattern ::= pattern ":" type ;
 type ::= atomic_type [ "->" type ] ;
-atomic_type ::= "Int" | "Bool" | "Unit" | parenthesized_type ;
-parenthesized_type ::= "(" type ")" ;
+atomic_type ::= "Int" | "Bool" | "Unit" | upper_identifier | parenthesized_type ;
+parenthesized_type ::= "(" type [ "," type { "," type } ] ")" ;
 
 identifier ::= /[a-z_][a-zA-Z0-9_]*/ ;
+upper_identifier ::= /[A-Z][a-zA-Z0-9_]*/ ;
 integer ::= /0|[1-9][0-9]*/ ;
 boolean ::= "true" | "false" ;
 unit ::= "(" ")" ;
@@ -65,9 +88,8 @@ following `and` member occupies another logical line. Neither the file nor a
 block uses a trailing semicolon.
 
 Every recursive member has a required type annotation. The grammar accepts an
-arbitrary initializer expression so static semantics can distinguish an unsafe
-recursive initializer from malformed syntax. Static semantics restricts the
-initializer to a direct anonymous function.
+arbitrary initializer expression so static semantics can distinguish safe
+function or constructor-rooted initialization from malformed syntax.
 
 The executable test `syntax_local_recursive_group_example_is_executable`
 checks a two-member recursive group. The second function retains a reference
@@ -95,6 +117,12 @@ multiplication, addition, and equality. Application, multiplication, and
 addition associate to the left. Equality is non-associative, so `a == b == c`
 is invalid. Function arrows associate to the right, so `Int -> Int -> Int`
 means `Int -> (Int -> Int)`.
+
+Commas construct a tuple expression or tuple type with at least two elements.
+`(value)` remains grouping and `()` remains unit. A constructor has zero or
+one semantic payload. Two or more declared fields form one tuple payload, so
+`Node(left, right)` applies the unary constructor value `Node` to the tuple
+`(left, right)`.
 
 A block or anonymous function can occur as an application operand only through
 parenthesization. For example, `apply (fn(value) { ... })` passes an anonymous
@@ -126,12 +154,15 @@ fn increment(value : Int) -> Int {
 increment 41
 ```
 
-Both forms define one unary function. The inline operational header uses
-familiar tuple-like punctuation, but its parentheses delimit one typed binder.
-They do not construct a tuple. Mini-Ash has no multi-parameter operational
-header, tuple expression, product type, general pattern, or multi-binder
-equation. Richer pattern matching is a possible later extension rather than
-current syntax.
+An equational clause has a positive pattern count, and every contiguous clause
+for one name has the same count. Each pattern consumes one arrow layer, so
+multi-pattern equations remain curried. An operational header with two or more
+typed patterns has one tuple domain. An anonymous function with two or more
+patterns likewise receives one tuple domain from its expected type.
+
+Patterns are ordinary binders, `_`, Boolean and unit patterns, tuples, and
+nested constructors. Integer, record, guarded, or, and as-patterns are not in
+the grammar. Match arms occupy separate logical lines.
 
 The two presentations have different type-directed elaboration, described in
 [Elaboration](elaboration.md#function-presentations).

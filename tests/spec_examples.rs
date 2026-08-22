@@ -31,6 +31,10 @@ const FUNCTION_RESULT: &str = "identity : Int -> Int\nidentity value = value\n\n
 const COMMENT_REJECTION: &str = "// comments are not in Mini-Ash\n1\n";
 const UNKNOWN_NAME_REJECTION: &str = "missing 1\n";
 const TYPE_REJECTION: &str = "true + 1\n";
+const IRREFUTABLE_TUPLE: &str = "{\n    let (left, right) = (20, 22)\n    left + right\n}\n";
+const TREE_PRESENTATIONS: &str = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn size_match(tree : Tree) -> Int {\n    match tree {\n        Tip(value) => 1\n        Fork(left, right) => size_match left + size_match right\n    }\n}\n\nsize (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))\n";
+const HIGHER_ORDER_CONSTRUCTOR: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmatch build Wrap {\n    Wrap(value) => value\n}\n";
+const CYCLIC_STREAM: &str = "type Stream =\n    Next(Int, Stream)\n\n{\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -92,8 +96,8 @@ fn run(name: &str, text: &str) -> Result<ash::driver::Observation, PipelineFailu
 
 fn assert_observation(name: &str, text: &str, value: &str, ty: &str) {
     let observation = run(name, text).expect("the documented example should be accepted");
-    assert_eq!(observation.value.to_string(), value);
-    assert_eq!(observation.ty.to_string(), ty);
+    assert_eq!(observation.value_display(), value);
+    assert_eq!(observation.type_display(), ty);
 }
 
 fn assert_documented(path: &str, source: &str) {
@@ -227,6 +231,45 @@ fn static_semantics_higher_order_operational_example_is_executable() {
 }
 
 #[test]
+fn static_semantics_irrefutable_tuple_binding_is_executable() {
+    assert_observation("spec-irrefutable-tuple.ash", IRREFUTABLE_TUPLE, "42", "Int");
+    assert_documented("spec/static-semantics.md", IRREFUTABLE_TUPLE);
+}
+
+#[test]
+fn elaboration_tree_presentations_are_equivalent() {
+    assert_observation(
+        "spec-tree-presentations.ash",
+        TREE_PRESENTATIONS,
+        "4",
+        "Int",
+    );
+    assert_documented("spec/elaboration.md", TREE_PRESENTATIONS);
+}
+
+#[test]
+fn elaboration_payload_constructor_is_higher_order() {
+    assert_observation(
+        "spec-higher-order-constructor.ash",
+        HIGHER_ORDER_CONSTRUCTOR,
+        "42",
+        "Int",
+    );
+    assert_documented("spec/elaboration.md", HIGHER_ORDER_CONSTRUCTOR);
+}
+
+#[test]
+fn dynamic_cyclic_data_observation_is_finite() {
+    assert_observation(
+        "spec-cyclic-stream.ash",
+        CYCLIC_STREAM,
+        "Next(1, <cycle>)",
+        "Stream",
+    );
+    assert_documented("spec/dynamic-semantics.md", CYCLIC_STREAM);
+}
+
+#[test]
 fn dynamic_binding_derivation_example_v003_is_executable() {
     assert_observation("spec-v003.ash", V003, "2", "Int");
     assert_documented("spec/dynamic-semantics.md", V003);
@@ -307,6 +350,20 @@ fn tool_function_result_uses_opaque_rendering() {
     assert_eq!(output.stdout, b"<function> : Int -> Int\n");
     assert!(output.stderr.is_empty());
     assert_documented("docs/tools/ash.md", FUNCTION_RESULT);
+}
+
+#[test]
+fn tool_cyclic_data_uses_structural_rendering() {
+    let source = TempFile::write(CYCLIC_STREAM);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented executable should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"Next(1, <cycle>) : Stream\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", CYCLIC_STREAM);
 }
 
 #[test]

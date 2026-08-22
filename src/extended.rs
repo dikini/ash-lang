@@ -16,7 +16,7 @@ use crate::{
     driver::Observation,
     integer::Integer,
     lexer::{Token, TokenKind, lex},
-    source::{SourceFile, SourceId},
+    source::{SourceFile, SourceId, Span},
     types::{ConstructorId, NominalTypeId, Type, same_type},
 };
 
@@ -64,6 +64,8 @@ pub struct ExtendedFailure {
     pub reason: &'static str,
     /// Plain-language primary explanation.
     pub message: String,
+    /// Exact primary source span when the owning stage has one.
+    pub primary: Option<Span>,
 }
 
 impl ExtendedFailure {
@@ -72,7 +74,13 @@ impl ExtendedFailure {
             stage,
             reason,
             message: message.into(),
+            primary: None,
         }
+    }
+
+    fn at(mut self, span: Span) -> Self {
+        self.primary = Some(span);
+        self
     }
 
     /// Reports whether this failure rejects source rather than compiler state.
@@ -793,7 +801,10 @@ impl Parser {
     }
 
     fn syntax(&self, reason: &'static str, message: impl Into<String>) -> ExtendedFailure {
-        ExtendedFailure::source(ExtendedStage::Syntax, reason, message)
+        let failure = ExtendedFailure::source(ExtendedStage::Syntax, reason, message);
+        self.tokens
+            .get(self.position)
+            .map_or(failure.clone(), |token| failure.at(token.span))
     }
 }
 
@@ -1148,11 +1159,30 @@ impl CheckedPattern {
     }
 }
 
+/// Structured typed Core for the monomorphic data-and-pattern dialect.
+///
+/// The registry is immutable and shared by validation, transforms, and
+/// evaluation. The contained syntax is private so consumers cannot bypass the
+/// validated construction boundary.
 #[derive(Clone)]
-struct CheckedProgram {
+pub struct ExtendedCoreProgram {
     syntax: Program,
     registry: Arc<Registry>,
     result_type: Type,
+}
+
+impl ExtendedCoreProgram {
+    /// Returns the immutable nominal and constructor registry.
+    #[must_use]
+    pub fn registry(&self) -> &Arc<Registry> {
+        &self.registry
+    }
+
+    /// Returns the checked program-result type.
+    #[must_use]
+    pub const fn result_type(&self) -> &Type {
+        &self.result_type
+    }
 }
 
 struct Checker {
@@ -1161,7 +1191,10 @@ struct Checker {
 }
 
 impl Checker {
-    fn check(syntax: Program, registry: Arc<Registry>) -> Result<CheckedProgram, ExtendedFailure> {
+    fn check(
+        syntax: Program,
+        registry: Arc<Registry>,
+    ) -> Result<ExtendedCoreProgram, ExtendedFailure> {
         let mut globals = HashMap::new();
         for constructor in registry.constructors.iter() {
             let result = Type::Nominal(constructor.owner);
@@ -1221,7 +1254,7 @@ impl Checker {
             checker.check_global(global)?;
         }
         let result_type = checker.infer_expr(&syntax.result, &globals)?;
-        Ok(CheckedProgram {
+        Ok(ExtendedCoreProgram {
             syntax,
             registry,
             result_type,
@@ -1390,7 +1423,7 @@ impl Checker {
                             let (checked, bindings) = self.check_pattern(pattern, &ty)?;
                             if usefulness(
                                 &[],
-                                &[checked.clone()],
+                                std::slice::from_ref(&checked),
                                 std::slice::from_ref(&ty),
                                 &self.registry,
                             )
@@ -1637,9 +1670,17 @@ impl Checker {
     }
 }
 
-fn validate_checked(program: &CheckedProgram) -> Result<(), ExtendedFailure> {
+fn validate_checked(program: &ExtendedCoreProgram) -> Result<(), ExtendedFailure> {
     program.registry.validate()?;
-    let rechecked = Checker::check(program.syntax.clone(), Arc::clone(&program.registry))?;
+    let rechecked = Checker::check(program.syntax.clone(), Arc::clone(&program.registry)).map_err(
+        |failure| {
+            ExtendedFailure::source(
+                ExtendedStage::Validation,
+                "validation.recheck",
+                format!("independent validation rejected typed Core: {failure}"),
+            )
+        },
+    )?;
     if !same_type(&program.result_type, &rechecked.result_type) {
         return Err(ExtendedFailure::source(
             ExtendedStage::Validation,
@@ -1648,6 +1689,135 @@ fn validate_checked(program: &CheckedProgram) -> Result<(), ExtendedFailure> {
         ));
     }
     Ok(())
+}
+
+fn transform_checked(program: &ExtendedCoreProgram, fold_literals: bool) -> ExtendedCoreProgram {
+    fn expression(node: &Expr, fold_literals: bool) -> Expr {
+        let rebuilt = match node {
+            Expr::Integer(value) => Expr::Integer(value.clone()),
+            Expr::Boolean(value) => Expr::Boolean(*value),
+            Expr::Unit => Expr::Unit,
+            Expr::Name(name) => Expr::Name(name.clone()),
+            Expr::Tuple(elements) => Expr::Tuple(
+                elements
+                    .iter()
+                    .map(|element| expression(element, fold_literals))
+                    .collect(),
+            ),
+            Expr::Apply(function, argument) => Expr::Apply(
+                Box::new(expression(function, fold_literals)),
+                Box::new(expression(argument, fold_literals)),
+            ),
+            Expr::Add(left, right) => Expr::Add(
+                Box::new(expression(left, fold_literals)),
+                Box::new(expression(right, fold_literals)),
+            ),
+            Expr::Multiply(left, right) => Expr::Multiply(
+                Box::new(expression(left, fold_literals)),
+                Box::new(expression(right, fold_literals)),
+            ),
+            Expr::Equal(left, right) => Expr::Equal(
+                Box::new(expression(left, fold_literals)),
+                Box::new(expression(right, fold_literals)),
+            ),
+            Expr::Function(pattern, body) => {
+                Expr::Function(pattern.clone(), Box::new(expression(body, fold_literals)))
+            }
+            Expr::Block(declarations, result) => Expr::Block(
+                declarations
+                    .iter()
+                    .map(|declaration| match declaration {
+                        LocalDeclaration::Binding {
+                            pattern,
+                            annotation,
+                            initializer,
+                        } => LocalDeclaration::Binding {
+                            pattern: pattern.clone(),
+                            annotation: annotation.clone(),
+                            initializer: expression(initializer, fold_literals),
+                        },
+                        LocalDeclaration::Recursive(members) => LocalDeclaration::Recursive(
+                            members
+                                .iter()
+                                .map(|member| RecursiveMember {
+                                    name: member.name.clone(),
+                                    annotation: member.annotation.clone(),
+                                    initializer: expression(&member.initializer, fold_literals),
+                                })
+                                .collect(),
+                        ),
+                    })
+                    .collect(),
+                Box::new(expression(result, fold_literals)),
+            ),
+            Expr::Match(scrutinee, arms) => Expr::Match(
+                Box::new(expression(scrutinee, fold_literals)),
+                arms.iter()
+                    .map(|arm| Arm {
+                        pattern: arm.pattern.clone(),
+                        body: expression(&arm.body, fold_literals),
+                    })
+                    .collect(),
+            ),
+        };
+        if !fold_literals {
+            return rebuilt;
+        }
+        match rebuilt {
+            Expr::Add(left, right) => match (*left, *right) {
+                (Expr::Integer(left), Expr::Integer(right)) => Expr::Integer(&left + &right),
+                (left, right) => Expr::Add(Box::new(left), Box::new(right)),
+            },
+            Expr::Multiply(left, right) => match (*left, *right) {
+                (Expr::Integer(left), Expr::Integer(right)) => Expr::Integer(&left * &right),
+                (left, right) => Expr::Multiply(Box::new(left), Box::new(right)),
+            },
+            other => other,
+        }
+    }
+
+    let syntax = Program {
+        types: program.syntax.types.clone(),
+        globals: program
+            .syntax
+            .globals
+            .iter()
+            .map(|global| match global {
+                Global::Equational {
+                    name,
+                    annotation,
+                    clauses,
+                } => Global::Equational {
+                    name: name.clone(),
+                    annotation: annotation.clone(),
+                    clauses: clauses
+                        .iter()
+                        .map(|clause| Clause {
+                            patterns: clause.patterns.clone(),
+                            body: expression(&clause.body, fold_literals),
+                        })
+                        .collect(),
+                },
+                Global::Operational {
+                    name,
+                    parameters,
+                    result,
+                    body,
+                } => Global::Operational {
+                    name: name.clone(),
+                    parameters: parameters.clone(),
+                    result: result.clone(),
+                    body: expression(body, fold_literals),
+                },
+            })
+            .collect(),
+        result: expression(&program.syntax.result, fold_literals),
+    };
+    ExtendedCoreProgram {
+        syntax,
+        registry: Arc::clone(&program.registry),
+        result_type: program.result_type.clone(),
+    }
 }
 
 fn expose_domains(function: &Type, count: usize) -> Option<(Vec<Type>, Type)> {
@@ -1780,6 +1950,8 @@ enum Head {
     Constructor(ConstructorId),
 }
 
+type UsefulnessState = (Vec<Vec<CheckedPattern>>, Vec<CheckedPattern>, Vec<Type>);
+
 fn usefulness(
     matrix: &[Vec<CheckedPattern>],
     candidate: &[CheckedPattern],
@@ -1796,7 +1968,7 @@ fn usefulness_inner(
     types: &[Type],
     registry: &Registry,
     fuel: usize,
-    active: &mut HashSet<(Vec<Vec<CheckedPattern>>, Vec<CheckedPattern>, Vec<Type>)>,
+    active: &mut HashSet<UsefulnessState>,
 ) -> Option<Vec<CheckedPattern>> {
     if candidate.is_empty() {
         return matrix.is_empty().then(Vec::new);
@@ -2101,7 +2273,10 @@ impl Runtime {
         }
     }
 
-    fn evaluate_program(&mut self, program: &CheckedProgram) -> Result<Location, ExtendedFailure> {
+    fn evaluate_program(
+        &mut self,
+        program: &ExtendedCoreProgram,
+    ) -> Result<Location, ExtendedFailure> {
         let mut environment = RuntimeEnvironment::new();
         let mut global_slots = Vec::with_capacity(program.syntax.globals.len());
         for global in &program.syntax.globals {
@@ -2446,92 +2621,114 @@ impl fmt::Display for ObservedValue {
 
 impl ObservedValue {
     fn render(&self) -> String {
-        fn render_location(
-            observed: &ObservedValue,
-            location: Location,
-            active: &mut HashSet<Location>,
-            output: &mut String,
-        ) {
-            let mut location = location;
+        enum Task {
+            Enter(Location),
+            Exit(Location),
+            Text(&'static str),
+        }
+
+        let resolve_alias = |start: Location| {
+            let mut location = start;
             let mut aliases = HashSet::new();
             loop {
                 if !aliases.insert(location) {
-                    output.push_str("<alias-cycle>");
-                    return;
+                    return Err("<alias-cycle>");
                 }
-                match observed.heap.cells.get(location) {
+                match self.heap.cells.get(location) {
                     Some(HeapCell::Alias(next)) => location = *next,
-                    _ => break,
+                    Some(_) => return Ok(location),
+                    None => return Err("<invalid-location>"),
                 }
             }
-            if !active.insert(location) {
-                output.push_str("<cycle>");
-                return;
-            }
-            match observed.heap.cells.get(location) {
-                Some(HeapCell::Integer(value)) => output.push_str(&value.to_string()),
-                Some(HeapCell::Boolean(value)) => output.push_str(&value.to_string()),
-                Some(HeapCell::Unit) => output.push_str("()"),
-                Some(HeapCell::Tuple(elements)) => {
-                    output.push('(');
-                    for (index, element) in elements.iter().enumerate() {
-                        if index > 0 {
-                            output.push_str(", ");
-                        }
-                        render_location(observed, *element, active, output);
-                    }
-                    output.push(')');
-                }
-                Some(HeapCell::Constructor(id, payload)) => {
-                    let name = observed
-                        .heap
-                        .registry
-                        .constructor(*id)
-                        .map_or("<foreign-constructor>", |constructor| {
-                            constructor.name.as_str()
-                        });
-                    output.push_str(name);
-                    if let Some(payload) = payload {
-                        output.push('(');
-                        let mut payload_location = *payload;
-                        let mut aliases = HashSet::new();
-                        while aliases.insert(payload_location) {
-                            match observed.heap.cells.get(payload_location) {
-                                Some(HeapCell::Alias(next)) => payload_location = *next,
-                                _ => break,
-                            }
-                        }
-                        if let Some(HeapCell::Tuple(elements)) =
-                            observed.heap.cells.get(payload_location)
-                        {
-                            for (index, element) in elements.iter().enumerate() {
-                                if index > 0 {
-                                    output.push_str(", ");
-                                }
-                                render_location(observed, *element, active, output);
-                            }
-                        } else {
-                            render_location(observed, *payload, active, output);
-                        }
-                        output.push(')');
-                    }
-                }
-                Some(HeapCell::Function(_)) => output.push_str("<function>"),
-                Some(HeapCell::Uninitialized) => output.push_str("<uninitialized>"),
-                Some(HeapCell::Alias(_)) => output.push_str("<invalid-alias>"),
-                None => output.push_str("<invalid-location>"),
-            }
-            active.remove(&location);
-        }
-
+        };
         let mut output = String::new();
-        render_location(self, self.root, &mut HashSet::new(), &mut output);
+        let mut active = HashSet::new();
+        let mut tasks = vec![Task::Enter(self.root)];
+        while let Some(task) = tasks.pop() {
+            match task {
+                Task::Text(text) => output.push_str(text),
+                Task::Exit(location) => {
+                    active.remove(&location);
+                }
+                Task::Enter(requested) => {
+                    let location = match resolve_alias(requested) {
+                        Ok(location) => location,
+                        Err(marker) => {
+                            output.push_str(marker);
+                            continue;
+                        }
+                    };
+                    if !active.insert(location) {
+                        output.push_str("<cycle>");
+                        continue;
+                    }
+                    tasks.push(Task::Exit(location));
+                    match self.heap.cells.get(location) {
+                        Some(HeapCell::Integer(value)) => output.push_str(&value.to_string()),
+                        Some(HeapCell::Boolean(value)) => output.push_str(&value.to_string()),
+                        Some(HeapCell::Unit) => output.push_str("()"),
+                        Some(HeapCell::Tuple(elements)) => {
+                            output.push('(');
+                            tasks.push(Task::Text(")"));
+                            for (index, element) in elements.iter().enumerate().rev() {
+                                tasks.push(Task::Enter(*element));
+                                if index > 0 {
+                                    tasks.push(Task::Text(", "));
+                                }
+                            }
+                        }
+                        Some(HeapCell::Constructor(id, payload)) => {
+                            let name = self
+                                .heap
+                                .registry
+                                .constructor(*id)
+                                .map_or("<foreign-constructor>", |constructor| {
+                                    constructor.name.as_str()
+                                });
+                            output.push_str(name);
+                            if let Some(payload) = payload {
+                                output.push('(');
+                                tasks.push(Task::Text(")"));
+                                match resolve_alias(*payload) {
+                                    Ok(payload_location) => {
+                                        if let Some(HeapCell::Tuple(elements)) =
+                                            self.heap.cells.get(payload_location)
+                                        {
+                                            for (index, element) in
+                                                elements.iter().enumerate().rev()
+                                            {
+                                                tasks.push(Task::Enter(*element));
+                                                if index > 0 {
+                                                    tasks.push(Task::Text(", "));
+                                                }
+                                            }
+                                        } else {
+                                            tasks.push(Task::Enter(*payload));
+                                        }
+                                    }
+                                    Err(marker) => output.push_str(marker),
+                                }
+                            }
+                        }
+                        Some(HeapCell::Function(_)) => output.push_str("<function>"),
+                        Some(HeapCell::Uninitialized) => output.push_str("<uninitialized>"),
+                        Some(HeapCell::Alias(_)) => output.push_str("<invalid-alias>"),
+                        None => output.push_str("<invalid-location>"),
+                    }
+                }
+            }
+        }
         output
     }
 }
 
-/// Runs the complete CP-0003 pipeline for one admitted source.
-pub fn run(source: &SourceFile) -> Result<Observation, ExtendedFailure> {
+/// Compiles one source through syntax, resolution, typing, and validation.
+///
+/// # Errors
+///
+/// Returns the structured rejection or internal validation failure owned by
+/// the first stage that cannot produce its complete result.
+pub fn compile(source: &SourceFile) -> Result<ExtendedCoreProgram, ExtendedFailure> {
     let lexed = lex(source).map_err(|error| {
         ExtendedFailure::source(
             ExtendedStage::Runtime,
@@ -2544,7 +2741,8 @@ pub fn run(source: &SourceFile) -> Result<Observation, ExtendedFailure> {
             ExtendedStage::Syntax,
             "lex.extended-source",
             diagnostic.render_plain(),
-        ));
+        )
+        .at(diagnostic.primary.span()));
     }
     let mut parser = Parser::new(lexed.tokens);
     let syntax = parser.parse_program()?;
@@ -2552,8 +2750,41 @@ pub fn run(source: &SourceFile) -> Result<Observation, ExtendedFailure> {
     registry.validate()?;
     let checked = Checker::check(syntax, Arc::clone(&registry))?;
     validate_checked(&checked)?;
+    Ok(checked)
+}
+
+/// Independently validates data-and-pattern Core.
+///
+/// # Errors
+///
+/// Returns an internal validation failure if the registry, patterns, coverage,
+/// scope, or result type is inconsistent.
+pub fn validate_core(program: &ExtendedCoreProgram) -> Result<(), ExtendedFailure> {
+    validate_checked(program)
+}
+
+/// Rebuilds data-and-pattern Core without changing its typed structure.
+#[must_use]
+pub fn identity_traversal(program: &ExtendedCoreProgram) -> ExtendedCoreProgram {
+    transform_checked(program, false)
+}
+
+/// Folds literal integer addition and multiplication in data-and-pattern Core.
+#[must_use]
+pub fn fold_literal_primitives(program: &ExtendedCoreProgram) -> ExtendedCoreProgram {
+    transform_checked(program, true)
+}
+
+/// Evaluates independently validated data-and-pattern Core.
+///
+/// # Errors
+///
+/// Returns a validation or structured internal runtime failure.
+pub fn evaluate_core(program: &ExtendedCoreProgram) -> Result<Observation, ExtendedFailure> {
+    validate_checked(program)?;
+    let registry = Arc::clone(&program.registry);
     let mut runtime = Runtime::new(Arc::clone(&registry));
-    let root = runtime.evaluate_program(&checked)?;
+    let root = runtime.evaluate_program(program)?;
     let observed = ObservedValue {
         heap: Arc::new(ObservedHeap {
             registry: Arc::clone(&registry),
@@ -2561,19 +2792,27 @@ pub fn run(source: &SourceFile) -> Result<Observation, ExtendedFailure> {
         }),
         root,
     };
-    let type_display = registry.type_display(&checked.result_type);
+    let type_display = registry.type_display(&program.result_type);
     Ok(Observation::extended(
         crate::eval::Value::Extended(observed),
-        checked.result_type,
+        program.result_type.clone(),
         type_display,
     ))
+}
+
+/// Runs the complete CP-0003 pipeline for one admitted source.
+pub fn run(source: &SourceFile) -> Result<Observation, ExtendedFailure> {
+    let checked = compile(source)?;
+    let transformed = identity_traversal(&checked);
+    validate_core(&transformed)?;
+    evaluate_core(&transformed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn checked(text: &str) -> CheckedProgram {
+    fn checked(text: &str) -> ExtendedCoreProgram {
         let source = SourceFile::new("extended-validation.ash", text).expect("fixture should fit");
         let lexed = lex(&source).expect("fixture should lex");
         assert!(lexed.diagnostics.is_empty());
@@ -2583,6 +2822,21 @@ mod tests {
         let registry =
             Arc::new(Registry::resolve(&syntax, source.id()).expect("fixture should resolve"));
         Checker::check(syntax, registry).expect("fixture should check")
+    }
+
+    fn evaluate_display(program: &ExtendedCoreProgram) -> String {
+        let mut runtime = Runtime::new(Arc::clone(&program.registry));
+        let root = runtime
+            .evaluate_program(program)
+            .expect("validated fixture should evaluate");
+        ObservedValue {
+            heap: Arc::new(ObservedHeap {
+                registry: Arc::clone(&program.registry),
+                cells: runtime.cells.into_boxed_slice(),
+            }),
+            root,
+        }
+        .render()
     }
 
     #[test]
@@ -2616,5 +2870,33 @@ mod tests {
         let failure = validate_checked(&program).expect_err("the forged type must be invalid");
         assert_eq!(failure.stage, ExtendedStage::Validation);
         assert_eq!(failure.reason, "validation.result-type");
+    }
+
+    #[test]
+    fn transforms_preserve_registries_validate_and_evaluate_equivalently() {
+        let original = checked(
+            "type Pair =\nPair(Int, Int)\n\nmatch Pair(20 + 1, 7 * 3) {\nPair(left, right) => left + right\n}\n",
+        );
+        let identity = transform_checked(&original, false);
+        let folded = transform_checked(&original, true);
+
+        assert!(Arc::ptr_eq(&original.registry, &identity.registry));
+        assert!(Arc::ptr_eq(&original.registry, &folded.registry));
+        validate_checked(&identity).expect("identity output should validate");
+        validate_checked(&folded).expect("folded output should validate");
+        assert_eq!(evaluate_display(&original), "42");
+        assert_eq!(evaluate_display(&identity), "42");
+        assert_eq!(evaluate_display(&folded), "42");
+    }
+
+    #[test]
+    fn identity_transform_preserves_cyclic_data_observation() {
+        let original = checked(
+            "type Stream =\nNext(Int, Stream)\n\n{\nlet rec ones : Stream = Next(1, ones)\nones\n}\n",
+        );
+        let transformed = transform_checked(&original, false);
+        validate_checked(&transformed).expect("identity output should validate");
+        assert_eq!(evaluate_display(&original), "Next(1, <cycle>)");
+        assert_eq!(evaluate_display(&transformed), "Next(1, <cycle>)");
     }
 }

@@ -258,6 +258,7 @@ Allowing `let Some(x) = result` would be concise but introduces implicit failure
 - Possible record rows pressure field equality, partial patterns, extension, and kinding. They do not show that record rows and effect rows share one semantic algebra.
 - Possible opacity, existentials, and generative identities pressure the separation among type identity, representation, construction authority, and deconstruction authority. They do not require those features now.
 - Whether and how later refinement or proposition facts become inputs to irrefutability and coverage remains an open interface question. The initial APIs do not assume such facts or invent a refinement system.
+
 - Pattern coverage affects diagnostics, formatter behavior, generated code, and teaching. A syntactically concise rule that produces opaque missing-case reports may not be the best candidate.
 
 ## Evidence and experiments
@@ -314,3 +315,12 @@ Compare candidates on:
 - Should unreachable or redundant cases be errors, warnings, or tooling feedback?
 - Are wildcard and `else` distinct catchall forms, and do they carry different binding or diagnostic behavior?
 - What static facts, if any, can make a constructor pattern irrefutable without introducing hidden runtime failure?
+
+## Retained implementation evidence
+
+The accepted monomorphic subset now has a retained
+[data-and-pattern integration report](mini-ash/data-and-patterns/evidence.md).
+The report confirms transfer for structural tuples, nominal identity, ordinary
+constructor values, expected-type patterns, semantic irrefutability, and shared
+recursive coverage. It does not transfer this note's polymorphism, records,
+rows, access control, or abstraction candidates into current Ash.

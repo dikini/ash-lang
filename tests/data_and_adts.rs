@@ -1,5 +1,6 @@
 use ash::{
-    driver::{Observation, run_source},
+    driver::{Observation, PipelineFailure, run_source},
+    extended::ExtendedStage,
     source::SourceFile,
 };
 
@@ -159,6 +160,25 @@ fn excluded_pattern_families_remain_rejected() {
 }
 
 #[test]
+fn extended_syntax_failures_keep_the_exact_current_token_span() {
+    let text = "match true {\ntrue 0\nfalse => 1\n}\n";
+    let source = SourceFile::new("extended-span.ash", text).expect("fixture should fit");
+    let failure = run_source(source).expect_err("the missing arrow must be rejected");
+    let PipelineFailure::Extended(failure) = failure else {
+        panic!("the extended grammar should own this rejection")
+    };
+    assert_eq!(failure.stage, ExtendedStage::Syntax);
+    assert_eq!(failure.reason, "parse.expected-form");
+    let span = failure
+        .primary
+        .expect("syntax rejection needs a primary span");
+    let start = u32::try_from(text.find('0').expect("fixture contains zero"))
+        .expect("fixture offset should fit");
+    assert_eq!(span.range().start(), start);
+    assert_eq!(span.range().end(), start + 1);
+}
+
+#[test]
 fn nominal_declarations_are_file_wide_recursive_and_distinct() {
     let forward = run("type Left =\nLeft(Right)\n\ntype Right =\nRight(Int)\n\nLeft(Right(42))\n");
     assert_eq!(forward.value_display(), "Left(Right(42))");
@@ -209,4 +229,33 @@ fn tuple_domain_anonymous_functions_receive_one_expected_tuple() {
         "fn apply(operation : (Int, Int) -> Int) -> Int {\noperation(20, 22)\n}\n\napply (fn(left, right) {\nleft + right\n})\n",
     );
     assert_eq!(observation.value_display(), "42");
+}
+
+#[test]
+fn ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack() {
+    std::thread::Builder::new()
+        .name("deep-data-cycle".into())
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            const MEMBERS: usize = 10_000;
+            let mut source = String::from(
+                "type Chain =\nLink(Chain)\n\n{\nlet rec value0 : Chain = Link(value1)\n",
+            );
+            for index in 1..MEMBERS {
+                let next = if index + 1 == MEMBERS { 0 } else { index + 1 };
+                source.push_str(&format!("and value{index} : Chain = Link(value{next})\n"));
+            }
+            source.push_str("value0\n}\n");
+
+            let observation = run(&source);
+            assert_eq!(observation.type_display(), "Chain");
+            let rendered = observation.value_display();
+            assert!(rendered.starts_with("Link(Link(Link("));
+            assert!(rendered.ends_with(')'));
+            assert_eq!(rendered.matches("Link(").count(), MEMBERS);
+            assert_eq!(rendered.matches("<cycle>").count(), 1);
+        })
+        .expect("the deep-data thread should start")
+        .join()
+        .expect("the data pipeline should fit the small host stack");
 }

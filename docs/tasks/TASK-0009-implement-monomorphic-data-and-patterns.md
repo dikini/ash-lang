@@ -31,7 +31,19 @@ retained integration evidence.
 - CP-0003 records the accepted transition and evidence requirements.
 - The worktree starts from `main` at `4d5ce64`. `cargo build` and `cargo test`
   passed before changes.
-- Product implementation has not started.
+- The positive and rejection corpus covers finite trees, tuple domains,
+  higher-order constructors, nested patterns, shared coverage, guarded cycles,
+  mixed recursive groups, transforms, malformed registries, and exact syntax
+  spans.
+- The implementation carries nominal and constructor registries through a
+  structured data-and-pattern Core boundary, independently rechecks it, and
+  evaluates it with a per-run numeric-location heap.
+- Normative and tool documentation has executable examples. The retained
+  integration report is linked from DN-0007 and DN-0019.
+- A 10,000-member cycle evaluates, renders, and drops on a 256 KiB host stack.
+- Unsigned checkpoints `d2e84c6` and `e5ac562` retain authorization and the
+  first complete implementation slice. Final verification remains before the
+  review stop.
 
 ## Verification
 
@@ -51,9 +63,24 @@ or general laziness.
 
 ## Discoveries
 
-None yet. Record implementation findings here and distill transferable evidence
-into the retained report and linked design notes.
+The usefulness relation needs an explicit empty-matrix base case. Without it,
+cycle detection incorrectly labels a constructor pattern over a recursive
+single-constructor type redundant. The retained corpus now fixes that case.
+
+Active-path rendering must remove a completed location so shared acyclic values
+repeat structurally while true cycles terminate. An explicit rendering stack
+also makes long heap observations independent of the Rust call stack.
+
+The registry accessor, observation heap, and type-family mutation probes were
+compiler-discoverable and were reverted. The retained evidence report records
+the exact results.
 
 ## Deviations
 
-None.
+The data-and-pattern dialect has a feature-owned structured Core and parser
+selected at the driver boundary instead of adding every form to the earlier
+first-stratum Surface and Core arenas. The boundary still retains tokens,
+resolved identities, independent validation, transforms, and the explicit heap
+evaluator. Review should decide whether this isolation is the intended AD-0005
+and AD-0007 composition or whether the forms must join the older arena before
+integration.
