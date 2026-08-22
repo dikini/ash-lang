@@ -2,7 +2,7 @@
 
 - ID: `TASK-0009`
 - Status: active
-- Related: [CP-0003: Monomorphic Data and Patterns](../proposals/CP-0003-monomorphic-data-and-patterns.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), [DN-0007: Data and Pattern Typing](../design/DN-0007-data-and-pattern-typing.md), [DN-0019: Primitive Feature Composition](../design/DN-0019-primitive-feature-composition.md), [execution plan](../plans/2026-08-22-monomorphic-data-and-patterns.md)
+- Related: [CP-0003: Monomorphic Data and Patterns](../proposals/CP-0003-monomorphic-data-and-patterns.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), [DN-0007: Data and Pattern Typing](../design/DN-0007-data-and-pattern-typing.md), [DN-0019: Primitive Feature Composition](../design/DN-0019-primitive-feature-composition.md), [execution plan](../plans/2026-08-22-monomorphic-data-and-patterns.md), [shared-pipeline remediation design](../plans/2026-08-22-data-and-patterns-shared-pipeline-design.md)
 
 > This task organizes work. It does not define Ash semantics.
 
@@ -84,3 +84,8 @@ resolved identities, independent validation, transforms, and the explicit heap
 evaluator. Review should decide whether this isolation is the intended AD-0005
 and AD-0007 composition or whether the forms must join the older arena before
 integration.
+
+Review rejected this deviation for product integration. The approved
+[remediation design](../plans/2026-08-22-data-and-patterns-shared-pipeline-design.md)
+migrates the candidate behavior into the retained CST, resolution, typed Core,
+validation, and evaluator-machine boundaries before another review.
