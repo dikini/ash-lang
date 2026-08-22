@@ -4,6 +4,48 @@ use std::{collections::HashMap, fmt, hash::Hash};
 
 use crate::source::SourceId;
 
+/// Maximum cumulative structural type cells processed by one compiler phase.
+pub const TYPE_WORK_LIMIT: usize = 327_680;
+
+/// Cumulative accounting for compiler-owned structural type work.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TypeWorkBudget {
+    used: usize,
+}
+
+impl TypeWorkBudget {
+    pub(crate) fn charge(&mut self, cells: usize) -> Result<(), ()> {
+        let next = self.used.checked_add(cells).ok_or(())?;
+        if next > TYPE_WORK_LIMIT {
+            return Err(());
+        }
+        self.used = next;
+        Ok(())
+    }
+}
+
+pub(crate) fn charge_type_cells(ty: &Type, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+    let mut work = vec![ty];
+    while let Some(ty) = work.pop() {
+        budget.charge(1)?;
+        match ty {
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => work.extend(elements),
+            Type::Function(domain, codomain) => {
+                work.push(codomain);
+                work.push(domain);
+            }
+            Type::Forall(_, body) => work.push(body),
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
+        }
+    }
+    Ok(())
+}
+
 /// Stable identity of one nominal type declaration.
 ///
 /// The declaration index is assigned in source order. Combining it with the
@@ -233,42 +275,78 @@ pub(crate) fn substitute_type_variables(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
 ) -> Type {
-    match ty {
-        Type::Variable(identity) => replacements
-            .get(identity)
-            .cloned()
-            .unwrap_or_else(|| ty.clone()),
-        Type::Tuple(elements) => Type::Tuple(
-            elements
-                .iter()
-                .map(|element| substitute_type_variables(element, replacements))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        ),
-        Type::AppliedNominal(owner, arguments) => Type::AppliedNominal(
-            *owner,
-            arguments
-                .iter()
-                .map(|argument| substitute_type_variables(argument, replacements))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        ),
-        Type::Function(domain, codomain) => Type::Function(
-            Box::new(substitute_type_variables(domain, replacements)),
-            Box::new(substitute_type_variables(codomain, replacements)),
-        ),
-        Type::Forall(parameters, body) => {
-            let mut scoped = replacements.clone();
-            for parameter in parameters {
-                scoped.remove(parameter);
-            }
-            Type::Forall(
-                parameters.clone(),
-                Box::new(substitute_type_variables(body, &scoped)),
-            )
-        }
-        Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => ty.clone(),
+    enum Task<'a> {
+        Visit(&'a Type, bool),
+        FinishTuple(usize),
+        FinishApplied(NominalTypeId, usize),
+        FinishFunction,
+        FinishForall(Box<[TypeVariableId]>),
     }
+
+    let mut work = vec![Task::Visit(ty, true)];
+    let mut rebuilt = Vec::new();
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Visit(Type::Variable(identity), true) if replacements.contains_key(identity) => {
+                work.push(Task::Visit(&replacements[identity], false));
+            }
+            Task::Visit(Type::Int, _) => rebuilt.push(Type::Int),
+            Task::Visit(Type::Bool, _) => rebuilt.push(Type::Bool),
+            Task::Visit(Type::Unit, _) => rebuilt.push(Type::Unit),
+            Task::Visit(Type::Nominal(owner), _) => rebuilt.push(Type::Nominal(*owner)),
+            Task::Visit(Type::Variable(identity), _) => rebuilt.push(Type::Variable(*identity)),
+            Task::Visit(Type::Inference(identity), _) => rebuilt.push(Type::Inference(*identity)),
+            Task::Visit(Type::Tuple(elements), substitute) => {
+                work.push(Task::FinishTuple(elements.len()));
+                work.extend(
+                    elements
+                        .iter()
+                        .rev()
+                        .map(|element| Task::Visit(element, substitute)),
+                );
+            }
+            Task::Visit(Type::AppliedNominal(owner, arguments), substitute) => {
+                work.push(Task::FinishApplied(*owner, arguments.len()));
+                work.extend(
+                    arguments
+                        .iter()
+                        .rev()
+                        .map(|argument| Task::Visit(argument, substitute)),
+                );
+            }
+            Task::Visit(Type::Function(domain, codomain), substitute) => {
+                work.push(Task::FinishFunction);
+                work.push(Task::Visit(codomain, substitute));
+                work.push(Task::Visit(domain, substitute));
+            }
+            Task::Visit(Type::Forall(parameters, body), substitute) => {
+                work.push(Task::FinishForall(parameters.clone()));
+                let substitute = substitute
+                    && !parameters
+                        .iter()
+                        .any(|parameter| replacements.contains_key(parameter));
+                work.push(Task::Visit(body, substitute));
+            }
+            Task::FinishTuple(count) => {
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+            }
+            Task::FinishApplied(owner, count) => {
+                let arguments = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::AppliedNominal(owner, arguments.into_boxed_slice()));
+            }
+            Task::FinishFunction => {
+                let codomain = rebuilt.pop().expect("type reconstruction codomain");
+                let domain = rebuilt.pop().expect("type reconstruction domain");
+                rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
+            }
+            Task::FinishForall(parameters) => {
+                let body = rebuilt.pop().expect("type reconstruction scheme body");
+                rebuilt.push(Type::Forall(parameters, Box::new(body)));
+            }
+        }
+    }
+    rebuilt.pop().expect("one reconstructed type")
 }
 
 /// The internal kind language used to check type constructors.

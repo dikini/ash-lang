@@ -1,6 +1,7 @@
 //! Independent validation for unchecked pure Core arenas.
 
 use std::{
+    cell::Cell,
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
@@ -20,7 +21,7 @@ use crate::{
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::{BinderId, ResolvedNominalType},
     source::{Origin, SourceFile, SourceId, Span},
-    types::{ConstructorId, Type, same_type, substitute_type_variables},
+    types::{ConstructorId, TYPE_WORK_LIMIT, Type, same_type, substitute_type_variables},
 };
 
 /// The independently checked invariant that malformed Core violated.
@@ -188,6 +189,7 @@ struct Validator<'program, 'source> {
     program: &'program UnvalidatedProgram,
     sources: HashMap<SourceId, &'source SourceFile>,
     binders: HashMap<BinderId, &'program TypedBinder>,
+    type_work: Cell<usize>,
 }
 
 impl<'program, 'source> Validator<'program, 'source> {
@@ -199,6 +201,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 .map(|source| (source.id(), *source))
                 .collect(),
             binders: HashMap::new(),
+            type_work: Cell::new(0),
         }
     }
 
@@ -258,6 +261,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             let owner_range = registry
                 .nominal(constructor.owner)
                 .map(|owner| owner.origin.primary_span().range());
+            let payload_valid = self.valid_type(constructor.payload.as_ref())?;
             if constructor.id.owner() != constructor.owner
                 || !nominal_ids.contains(&constructor.owner)
                 || Some(constructor.origin.primary_span().source()) != registry_source
@@ -265,7 +269,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 || !valid_upper_spelling(&constructor.spelling)
                 || !constructor_ids.insert(constructor.id)
                 || !constructor_names.insert(constructor.spelling.as_str())
-                || !self.valid_type(constructor.payload.as_ref())
+                || !payload_valid
                 || constructor
                     .payload
                     .as_ref()
@@ -321,21 +325,22 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(())
     }
 
-    fn valid_type(&self, root: Option<&Type>) -> bool {
+    fn valid_type(&self, root: Option<&Type>) -> Result<bool, ValidationError> {
         let Some(root) = root else {
-            return true;
+            return Ok(true);
         };
         let mut work = vec![(root, true)];
         while let Some((ty, allow_scheme)) = work.pop() {
+            self.charge_type_work(1)?;
             match ty {
                 Type::Int | Type::Bool | Type::Unit => {}
                 Type::Nominal(id) if self.program.registry.nominal(*id).is_some() => {}
-                Type::Nominal(_) => return false,
+                Type::Nominal(_) => return Ok(false),
                 Type::Variable(_) => {}
-                Type::Inference(_) => return false,
+                Type::Inference(_) => return Ok(false),
                 Type::AppliedNominal(id, arguments) => {
                     let Some(nominal) = self.program.registry.nominal(*id) else {
-                        return false;
+                        return Ok(false);
                     };
                     if self
                         .program
@@ -343,35 +348,91 @@ impl<'program, 'source> Validator<'program, 'source> {
                         .nominal_parameters(nominal.id)
                         .is_none_or(|parameters| parameters.len() != arguments.len())
                     {
-                        return false;
+                        return Ok(false);
                     }
                     work.extend(arguments.iter().map(|argument| (argument, false)));
                 }
                 Type::Forall(parameters, body) if allow_scheme => {
                     let unique = parameters.iter().copied().collect::<HashSet<_>>();
                     if parameters.is_empty() || unique.len() != parameters.len() {
-                        return false;
+                        return Ok(false);
                     }
                     work.push((body, false));
                 }
-                Type::Forall(_, _) => return false,
+                Type::Forall(_, _) => return Ok(false),
                 Type::Tuple(elements) if elements.len() >= 2 => {
                     work.extend(elements.iter().map(|element| (element, false)));
                 }
-                Type::Tuple(_) => return false,
+                Type::Tuple(_) => return Ok(false),
                 Type::Function(domain, codomain) => {
                     work.push((codomain, false));
                     work.push((domain, false));
                 }
             }
         }
-        true
+        Ok(true)
+    }
+
+    fn charge_type_work(&self, cells: usize) -> Result<(), ValidationError> {
+        let next = self
+            .type_work
+            .get()
+            .checked_add(cells)
+            .filter(|next| *next <= TYPE_WORK_LIMIT)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+        self.type_work.set(next);
+        Ok(())
+    }
+
+    fn charge_type_structure(&self, ty: &Type) -> Result<(), ValidationError> {
+        let mut work = vec![ty];
+        while let Some(ty) = work.pop() {
+            self.charge_type_work(1)?;
+            match ty {
+                Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                    work.extend(elements);
+                }
+                Type::Function(domain, codomain) => {
+                    work.push(codomain);
+                    work.push(domain);
+                }
+                Type::Forall(_, body) => work.push(body),
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn charge_pattern_type_structure(&self, pattern: &CorePattern) -> Result<(), ValidationError> {
+        let mut work = vec![pattern];
+        while let Some(pattern) = work.pop() {
+            self.charge_type_structure(&pattern.ty)?;
+            match &pattern.kind {
+                CorePatternKind::Binder(binder) => {
+                    self.charge_type_structure(binder.ty())?;
+                }
+                CorePatternKind::Tuple(elements) => work.extend(elements),
+                CorePatternKind::Constructor { payload, .. } => {
+                    if let Some(payload) = payload.as_deref() {
+                        work.push(payload);
+                    }
+                }
+                CorePatternKind::Wildcard | CorePatternKind::Boolean(_) | CorePatternKind::Unit => {
+                }
+            }
+        }
+        Ok(())
     }
 
     fn validate_envelopes(&self) -> Result<(), ValidationError> {
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
-            if !self.valid_type(Some(&node.ty)) {
+            if !self.valid_type(Some(&node.ty))? {
                 return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
             }
             if node.dialect != DialectId::PURE {
@@ -818,11 +879,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Some(id),
                     ));
                 };
-                if parameters.len() != application.arguments().len()
-                    || application.arguments().iter().any(|argument| {
-                        matches!(argument, Type::Forall(_, _)) || !self.valid_type(Some(argument))
-                    })
-                {
+                let mut invalid_argument = false;
+                for argument in application.arguments() {
+                    invalid_argument |= matches!(argument, Type::Forall(_, _))
+                        || !self.valid_type(Some(argument))?;
+                }
+                if parameters.len() != application.arguments().len() || invalid_argument {
                     return Err(ValidationError::new(
                         ValidationReason::TypeOperation,
                         Some(id),
@@ -833,6 +895,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     .zip(application.arguments())
                     .map(|(parameter, argument)| (*parameter, argument.clone()))
                     .collect();
+                self.charge_type_structure(body)?;
                 let instantiated = substitute_type_variables(body, &replacements);
                 if !same_type(&node.ty, &instantiated) {
                     return Err(ValidationError::new(
@@ -989,7 +1052,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         let mut binders = HashSet::new();
         while let Some((pattern, expected)) = work.pop() {
             self.validate_origin(&pattern.origin, node)?;
-            if !same_type(&pattern.ty, &expected) || !self.valid_type(Some(&pattern.ty)) {
+            if !same_type(&pattern.ty, &expected) || !self.valid_type(Some(&pattern.ty))? {
                 return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
             }
             match (&pattern.kind, &expected) {
@@ -1115,6 +1178,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 ScopeAnalysisTask::Finish(id) => {
                     let node = self.node(id)?;
                     let mut free = HashSet::new();
+                    self.charge_type_structure(&node.ty)?;
                     collect_free_type_variables(&node.ty, &mut free);
                     for child_index in 0..node.kind.child_count() {
                         let child = node.kind.child_at(child_index).ok_or_else(|| {
@@ -1131,23 +1195,28 @@ impl<'program, 'source> Validator<'program, 'source> {
                     }
                     match &node.kind {
                         PureExprKind::Value(PureValue::Function(function)) => {
+                            self.charge_type_structure(function.parameter().ty())?;
                             collect_free_type_variables(function.parameter().ty(), &mut free);
                         }
                         PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                            self.charge_type_structure(binding.binder().ty())?;
                             collect_free_type_variables(binding.binder().ty(), &mut free);
                         }
                         PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
                             for member in group.members() {
+                                self.charge_type_structure(member.binder().ty())?;
                                 collect_free_type_variables(member.binder().ty(), &mut free);
                             }
                         }
                         PureExprKind::Computation(PureComputation::Match(match_node)) => {
                             for arm in match_node.arms() {
+                                self.charge_pattern_type_structure(arm.pattern())?;
                                 collect_pattern_type_variables(arm.pattern(), &mut free);
                             }
                         }
                         PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
                             for argument in operation.arguments() {
+                                self.charge_type_structure(argument)?;
                                 collect_free_type_variables(argument, &mut free);
                             }
                         }
@@ -1442,6 +1511,28 @@ mod tests {
     fn origin(source: &SourceFile) -> Origin {
         let range = ByteRange::new(0, 2).expect("ordered range");
         Origin::Source(source.span(range).expect("source span"))
+    }
+
+    #[test]
+    fn oversized_malformed_type_maps_directly_to_validation_resource() {
+        let file = source();
+        let arena = super::super::dialect::ArenaId::new(99);
+        let oversized =
+            Type::Tuple(vec![Type::Int; crate::types::TYPE_WORK_LIMIT + 1].into_boxed_slice());
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes: vec![StoredNode {
+                dialect: DialectId::PURE,
+                ty: oversized,
+                origin: Some(origin(&file)),
+                kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+            }],
+            root: NodeId::new(arena, 0),
+        };
+
+        let error = validate(program, &[&file]).expect_err("type work must be bounded");
+        assert_eq!(error.reason(), ValidationReason::Resource);
     }
 
     #[test]

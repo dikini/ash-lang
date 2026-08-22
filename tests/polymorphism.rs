@@ -201,11 +201,27 @@ fn application_shaped_local_bindings_remain_monomorphic() {
 }
 
 #[test]
+fn function_generalization_excludes_inference_shared_with_the_environment() {
+    assert_eq!(
+        reason(
+            "make : Unit -> (A -> A)\nmake _ = fn(value) {\nvalue\n}\n\n{\nlet shared = make(())\nlet get = fn(ignored) {\nshared\n}\n(get(())(42), get(())(false))\n}\n"
+        ),
+        "type.argument"
+    );
+}
+
+#[test]
 fn inferred_polymorphic_recursion_is_rejected() {
     assert_eq!(
         reason("loop : A -> Unit\nloop value = loop((value, value))\n\nloop(1)\n"),
         "type.polymorphic-recursion"
     );
+}
+
+#[test]
+fn recursive_global_self_uses_apply_the_same_rigid_parameters() {
+    let observation = run("repeat : A -> A\nrepeat value = repeat value\n\n0\n");
+    assert_eq!(observation.value_display(), "0");
 }
 
 #[test]
@@ -222,4 +238,25 @@ fn unresolved_local_function_inference_is_a_source_ambiguity() {
         reason("{\nlet constant = fn(ignored) {\n42\n}\nconstant\n}\n"),
         "type.ambiguous"
     );
+}
+
+#[test]
+fn deep_parameter_substitution_completes_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let mut argument = "Unit".to_owned();
+                for _ in 0..(ash::parser::STRUCTURAL_DEPTH_LIMIT - 4) {
+                    argument = format!("Unit -> {argument}");
+                }
+                let text = format!(
+                    "type Holder<A> =\nHold(Unit -> A)\n\nread : Holder<{argument}> -> Int\nread (Hold function) = 0\n\n0\n"
+                );
+                assert_eq!(run(&text).value_display(), "0");
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("substitution must not consume the host stack");
+    });
 }

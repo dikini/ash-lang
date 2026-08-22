@@ -24,7 +24,10 @@ use crate::{
         ResolvedTypeProvenanceNode,
     },
     source::{GeneratedReason, Origin, Span},
-    types::{InferenceVariableId, Type, TypeVariableId, same_type, substitute_type_variables},
+    types::{
+        InferenceVariableId, Type, TypeVariableId, TypeWorkBudget, charge_type_cells, same_type,
+        substitute_type_variables,
+    },
 };
 
 /// The source-language typing rule that rejected an expression.
@@ -145,6 +148,8 @@ pub enum ElaborationFailure {
     InvalidState,
     /// Pattern coverage exceeded its deterministic compiler resource budget.
     CoverageResourceExhausted,
+    /// Cumulative inference and type construction exceeded its work budget.
+    TypeResourceExhausted,
 }
 
 impl fmt::Display for ElaborationFailure {
@@ -155,6 +160,7 @@ impl fmt::Display for ElaborationFailure {
             Self::CoverageResourceExhausted => {
                 formatter.write_str("pattern coverage resource limit exceeded")
             }
+            Self::TypeResourceExhausted => formatter.write_str("type work resource limit exceeded"),
         }
     }
 }
@@ -163,7 +169,11 @@ impl Error for ElaborationFailure {}
 
 impl From<BuildError> for ElaborationFailure {
     fn from(error: BuildError) -> Self {
-        Self::Core(error)
+        if error == BuildError::TypeWorkExceeded {
+            Self::TypeResourceExhausted
+        } else {
+            Self::Core(error)
+        }
     }
 }
 
@@ -554,6 +564,7 @@ pub struct Elaborator {
     next_generated_type_variable: u32,
     inference_solutions: HashMap<InferenceVariableId, Type>,
     monomorphic_recursive: HashSet<BinderId>,
+    type_work: TypeWorkBudget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -574,6 +585,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
+            type_work: TypeWorkBudget::default(),
         }
     }
 
@@ -595,6 +607,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
+            type_work: TypeWorkBudget::default(),
         })
     }
 
@@ -698,7 +711,9 @@ impl Elaborator {
             return Err(ElaborationFailure::InvalidState);
         }
         let solutions = &self.inference_solutions;
+        let type_work = &mut self.type_work;
         self.builder.rewrite_types(|ty| {
+            charge_type_cells(ty, type_work).map_err(|()| BuildError::TypeWorkExceeded)?;
             let zonked = zonk_type(ty, solutions);
             if contains_unsolved_inference(&zonked) {
                 Err(BuildError::InvalidPayload)
@@ -732,6 +747,7 @@ impl Elaborator {
         fact: &TypeFact,
         rigid: bool,
     ) -> Result<(Type, Vec<Type>), TypeError> {
+        self.charge_type(&fact.ty)?;
         if fact.quantified.is_empty() {
             return Ok((fact.ty.clone(), Vec::new()));
         }
@@ -752,18 +768,28 @@ impl Elaborator {
         ))
     }
 
-    fn zonk(&self, ty: &Type) -> Type {
-        zonk_type(ty, &self.inference_solutions)
+    fn zonk(&mut self, ty: &Type) -> Result<Type, TypeError> {
+        self.charge_type(ty)?;
+        Ok(zonk_type(ty, &self.inference_solutions))
+    }
+
+    fn charge_type(&mut self, ty: &Type) -> Result<(), TypeError> {
+        charge_type_cells(ty, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
     fn unify(&mut self, left: &Type, right: &Type) -> Result<(), UnificationFailure> {
         let mut work = vec![(left.clone(), right.clone())];
         while let Some((left, right)) = work.pop() {
-            let left = self.zonk(&left);
-            let right = self.zonk(&right);
+            let left = self.zonk(&left).map_err(|_| UnificationFailure::Resource)?;
+            let right = self
+                .zonk(&right)
+                .map_err(|_| UnificationFailure::Resource)?;
             match (left, right) {
                 (Type::Inference(left), Type::Inference(right)) if left == right => {}
                 (Type::Inference(variable), ty) | (ty, Type::Inference(variable)) => {
+                    self.charge_type(&ty)
+                        .map_err(|_| UnificationFailure::Resource)?;
                     if type_contains_inference(&ty, variable, &self.inference_solutions) {
                         return Err(UnificationFailure::Infinite);
                     }
@@ -855,6 +881,7 @@ impl Elaborator {
             {
                 return Err(invalid_state());
             }
+            context.set_quantified(name.id, quantified.clone())?;
             global_quantifiers.push((name.id, quantified));
             self.monomorphic_recursive.insert(name.id);
         }
@@ -939,7 +966,7 @@ impl Elaborator {
             },
             &mut context,
         )?;
-        if contains_unsolved_inference(&self.zonk(&result.ty)) {
+        if contains_unsolved_inference(&self.zonk(&result.ty)?) {
             return Err(inference_failure(
                 TypeReason::AmbiguousType,
                 program.result.span,
@@ -1252,17 +1279,22 @@ impl Elaborator {
                             return Err(check_mismatch(
                                 kind,
                                 span,
-                                self.zonk(&expected_ty),
-                                self.zonk(&found_ty),
+                                self.zonk(&expected_ty)?,
+                                self.zonk(&found_ty)?,
                                 expected.provenance.span(),
                                 &self.registry,
+                            ));
+                        }
+                        Err(UnificationFailure::Resource) => {
+                            return Err(TypeError::Internal(
+                                ElaborationFailure::TypeResourceExhausted,
                             ));
                         }
                     }
                     self.builder
                         .record_type_check(synthesized.node, expected.provenance.span())?;
                     values.push(TypedNode {
-                        ty: self.zonk(&synthesized.ty),
+                        ty: self.zonk(&synthesized.ty)?,
                         ..synthesized
                     });
                 }
@@ -1346,7 +1378,7 @@ impl Elaborator {
                     recursive_call,
                 } => {
                     let mut function = values.pop().ok_or_else(invalid_state)?;
-                    let mut function_ty = self.zonk(&function.ty);
+                    let mut function_ty = self.zonk(&function.ty)?;
                     if matches!(function_ty, Type::Inference(_)) {
                         let domain = self.fresh_inference()?;
                         let codomain = self.fresh_inference()?;
@@ -1364,8 +1396,11 @@ impl Elaborator {
                                     &function_ty,
                                     &self.registry,
                                 ),
+                                UnificationFailure::Resource => {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                }
                             })?;
-                        function_ty = self.zonk(&exposed);
+                        function_ty = self.zonk(&exposed)?;
                     }
                     let Type::Function(domain, codomain) = function_ty.clone() else {
                         return Err(not_applicable(
@@ -1428,8 +1463,8 @@ impl Elaborator {
                     )?;
                     values.push(TypedNode {
                         node,
-                        ty: self.zonk(&codomain.ty),
-                        provenance: TypeProvenance::unknown(&self.zonk(&codomain.ty)),
+                        ty: self.zonk(&codomain.ty)?,
+                        provenance: TypeProvenance::unknown(&self.zonk(&codomain.ty)?),
                     });
                 }
                 ElaborationTask::AfterLeft {
@@ -1489,16 +1524,29 @@ impl Elaborator {
                     if expected.is_none()
                         && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
                     {
-                        let inferred = self.zonk(&initializer.ty);
+                        let inferred = self.zonk(&initializer.ty)?;
+                        self.charge_type(&inferred)?;
                         let mut variables = Vec::new();
                         collect_unsolved_inference(&inferred, &mut variables);
+                        let environment_types = context
+                            .binders
+                            .values()
+                            .map(|fact| fact.ty.clone())
+                            .collect::<Vec<_>>();
+                        let mut environment_variables = Vec::new();
+                        for ty in environment_types {
+                            let ty = self.zonk(&ty)?;
+                            self.charge_type(&ty)?;
+                            collect_unsolved_inference(&ty, &mut environment_variables);
+                        }
+                        variables.retain(|variable| !environment_variables.contains(variable));
                         for variable in variables {
                             let binder = self.fresh_type_variable()?;
                             self.inference_solutions
                                 .insert(variable, Type::Variable(binder));
                             generalized.push(binder);
                         }
-                        initializer.ty = self.zonk(&initializer.ty);
+                        initializer.ty = self.zonk(&initializer.ty)?;
                     }
                     let binding_type = expected.unwrap_or_else(|| ProvenancedType {
                         ty: initializer.ty.clone(),
@@ -1938,6 +1986,7 @@ impl Elaborator {
                     return Err(invalid_state());
                 };
                 let info_owner = info.owner;
+                let declared_payload = info.payload.clone();
                 let parameters = self
                     .registry
                     .nominal_parameters(owner)
@@ -1950,10 +1999,13 @@ impl Elaborator {
                     .zip(arguments)
                     .map(|(parameter, argument)| (parameter.id, argument.clone()))
                     .collect::<HashMap<_, _>>();
-                let payload_type = info
-                    .payload
+                let payload_type = declared_payload
                     .as_ref()
-                    .map(|payload| substitute_type_variables(payload, &replacements));
+                    .map(|payload| {
+                        self.charge_type(payload)?;
+                        Ok::<Type, TypeError>(substitute_type_variables(payload, &replacements))
+                    })
+                    .transpose()?;
                 if info_owner != owner {
                     return Err(case_error(
                         TypeReason::ConstructorOwner,
@@ -3170,37 +3222,68 @@ pub fn structurally_equal(left: &Type, right: &Type) -> bool {
 enum UnificationFailure {
     Mismatch,
     Infinite,
+    Resource,
 }
 
 fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type {
-    match ty {
-        Type::Inference(identity) => solutions
-            .get(identity)
-            .map_or_else(|| ty.clone(), |solution| zonk_type(solution, solutions)),
-        Type::Tuple(elements) => Type::Tuple(
-            elements
-                .iter()
-                .map(|element| zonk_type(element, solutions))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        ),
-        Type::AppliedNominal(owner, arguments) => Type::AppliedNominal(
-            *owner,
-            arguments
-                .iter()
-                .map(|argument| zonk_type(argument, solutions))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        ),
-        Type::Function(domain, codomain) => Type::Function(
-            Box::new(zonk_type(domain, solutions)),
-            Box::new(zonk_type(codomain, solutions)),
-        ),
-        Type::Forall(parameters, body) => {
-            Type::Forall(parameters.clone(), Box::new(zonk_type(body, solutions)))
-        }
-        Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => ty.clone(),
+    enum Task<'a> {
+        Visit(&'a Type),
+        FinishTuple(usize),
+        FinishApplied(crate::types::NominalTypeId, usize),
+        FinishFunction,
+        FinishForall(Box<[TypeVariableId]>),
     }
+
+    let mut work = vec![Task::Visit(ty)];
+    let mut rebuilt = Vec::new();
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Visit(Type::Inference(identity)) if solutions.contains_key(identity) => {
+                work.push(Task::Visit(&solutions[identity]));
+            }
+            Task::Visit(Type::Int) => rebuilt.push(Type::Int),
+            Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
+            Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
+            Task::Visit(Type::Nominal(owner)) => rebuilt.push(Type::Nominal(*owner)),
+            Task::Visit(Type::Variable(identity)) => rebuilt.push(Type::Variable(*identity)),
+            Task::Visit(Type::Inference(identity)) => rebuilt.push(Type::Inference(*identity)),
+            Task::Visit(Type::Tuple(elements)) => {
+                work.push(Task::FinishTuple(elements.len()));
+                work.extend(elements.iter().rev().map(Task::Visit));
+            }
+            Task::Visit(Type::AppliedNominal(owner, arguments)) => {
+                work.push(Task::FinishApplied(*owner, arguments.len()));
+                work.extend(arguments.iter().rev().map(Task::Visit));
+            }
+            Task::Visit(Type::Function(domain, codomain)) => {
+                work.push(Task::FinishFunction);
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
+            }
+            Task::Visit(Type::Forall(parameters, body)) => {
+                work.push(Task::FinishForall(parameters.clone()));
+                work.push(Task::Visit(body));
+            }
+            Task::FinishTuple(count) => {
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+            }
+            Task::FinishApplied(owner, count) => {
+                let arguments = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::AppliedNominal(owner, arguments.into_boxed_slice()));
+            }
+            Task::FinishFunction => {
+                let codomain = rebuilt.pop().expect("zonked codomain");
+                let domain = rebuilt.pop().expect("zonked domain");
+                rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
+            }
+            Task::FinishForall(parameters) => {
+                let body = rebuilt.pop().expect("zonked scheme body");
+                rebuilt.push(Type::Forall(parameters, Box::new(body)));
+            }
+        }
+    }
+    rebuilt.pop().expect("one zonked type")
 }
 
 fn type_contains_inference(

@@ -21,7 +21,7 @@ use crate::{
         SurfaceExprKind, SurfaceLocalDeclaration, SurfacePattern, SurfacePatternKind,
         SurfaceProgram, SurfaceRecursiveGroup, SurfaceType, SurfaceTypeKind,
     },
-    types::{ConstructorId, NominalTypeId, Type, TypeVariableId},
+    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
 };
 
 /// The semantic reason that prevented name resolution.
@@ -53,6 +53,8 @@ pub enum ResolveReason {
     DuplicateRecursiveMember,
     /// The resolver cannot assign another distinct binder identity.
     BinderIdExhausted,
+    /// Cumulative source-type resolution exceeded the compiler work budget.
+    TypeResourceExhausted,
     /// An internal resolver invariant was lost.
     InternalState,
 }
@@ -73,6 +75,7 @@ impl fmt::Display for ResolveReason {
             Self::DuplicatePatternBinder => "pattern.duplicate-binder",
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
             Self::BinderIdExhausted => "resolve.binder-id-exhausted",
+            Self::TypeResourceExhausted => "resolve.type-resource",
             Self::InternalState => "resolve.internal-state",
         })
     }
@@ -138,6 +141,7 @@ struct Resolver {
     constructor_names: HashMap<String, ConstructorId>,
     type_scopes: Vec<HashMap<String, ResolvedTypeVariable>>,
     nominal_parameter_counts: Vec<usize>,
+    type_work: TypeWorkBudget,
 }
 
 struct GlobalFact {
@@ -156,6 +160,7 @@ impl Resolver {
             constructor_names: HashMap::new(),
             type_scopes: Vec::new(),
             nominal_parameter_counts: Vec::new(),
+            type_work: TypeWorkBudget::default(),
         }
     }
 
@@ -513,7 +518,7 @@ impl Resolver {
         );
     }
 
-    fn resolve_type(&self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
+    fn resolve_type(&mut self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
         enum Task<'a> {
             Visit(&'a SurfaceType),
             Tuple(usize, crate::source::Span),
@@ -525,72 +530,82 @@ impl Resolver {
         let mut provenance = Vec::new();
         while let Some(task) = tasks.pop() {
             match task {
-                Task::Visit(current) => match &current.kind {
-                    SurfaceTypeKind::Int => {
-                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                        completed.push((Type::Int, provenance.len() - 1));
-                    }
-                    SurfaceTypeKind::Bool => {
-                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                        completed.push((Type::Bool, provenance.len() - 1));
-                    }
-                    SurfaceTypeKind::Unit => {
-                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                        completed.push((Type::Unit, provenance.len() - 1));
-                    }
-                    SurfaceTypeKind::Named(name) => {
-                        if let Some(variable) = self
-                            .type_scopes
-                            .iter()
-                            .rev()
-                            .find_map(|scope| scope.get(&name.text))
-                        {
+                Task::Visit(current) => {
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            current.span,
+                            "source type resolution exceeded its work budget",
+                        )
+                    })?;
+                    match &current.kind {
+                        SurfaceTypeKind::Int => {
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                            completed.push((Type::Variable(variable.id), provenance.len() - 1));
-                            continue;
+                            completed.push((Type::Int, provenance.len() - 1));
                         }
-                        let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
-                            let mut diagnostic = Diagnostic::new(
-                                ResolveReason::UnknownType,
-                                SourceLabel::new(name.span, "this nominal type is not declared"),
-                            );
-                            diagnostic.found = Some(name.text.clone());
-                            ResolveError::from(diagnostic)
-                        })?;
-                        let expected = self.nominal_parameter_count(id).ok_or_else(|| {
-                            error(
-                                ResolveReason::InternalState,
-                                current.span,
-                                "the resolver lost nominal parameter metadata",
-                            )
-                        })?;
-                        if expected != 0 {
-                            return Err(type_argument_count(name.span, &name.text, expected, 0));
+                        SurfaceTypeKind::Bool => {
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            completed.push((Type::Bool, provenance.len() - 1));
                         }
-                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                        completed.push((Type::Nominal(id), provenance.len() - 1));
-                    }
-                    SurfaceTypeKind::Application {
-                        constructor,
-                        arguments,
-                    } => {
-                        if self
-                            .type_scopes
-                            .iter()
-                            .rev()
-                            .any(|scope| scope.contains_key(&constructor.text))
-                        {
-                            return Err(error(
-                                ResolveReason::TypeKind,
-                                constructor.span,
-                                "a parameter of kind Type cannot be applied",
-                            ));
+                        SurfaceTypeKind::Unit => {
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            completed.push((Type::Unit, provenance.len() - 1));
                         }
-                        let id =
-                            self.type_names
-                                .get(&constructor.text)
-                                .copied()
-                                .ok_or_else(|| {
+                        SurfaceTypeKind::Named(name) => {
+                            if let Some(variable) = self
+                                .type_scopes
+                                .iter()
+                                .rev()
+                                .find_map(|scope| scope.get(&name.text))
+                            {
+                                provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                                completed.push((Type::Variable(variable.id), provenance.len() - 1));
+                                continue;
+                            }
+                            let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
+                                let mut diagnostic = Diagnostic::new(
+                                    ResolveReason::UnknownType,
+                                    SourceLabel::new(
+                                        name.span,
+                                        "this nominal type is not declared",
+                                    ),
+                                );
+                                diagnostic.found = Some(name.text.clone());
+                                ResolveError::from(diagnostic)
+                            })?;
+                            let expected = self.nominal_parameter_count(id).ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    current.span,
+                                    "the resolver lost nominal parameter metadata",
+                                )
+                            })?;
+                            if expected != 0 {
+                                return Err(type_argument_count(
+                                    name.span, &name.text, expected, 0,
+                                ));
+                            }
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            completed.push((Type::Nominal(id), provenance.len() - 1));
+                        }
+                        SurfaceTypeKind::Application {
+                            constructor,
+                            arguments,
+                        } => {
+                            if self
+                                .type_scopes
+                                .iter()
+                                .rev()
+                                .any(|scope| scope.contains_key(&constructor.text))
+                            {
+                                return Err(error(
+                                    ResolveReason::TypeKind,
+                                    constructor.span,
+                                    "a parameter of kind Type cannot be applied",
+                                ));
+                            }
+                            let id = self.type_names.get(&constructor.text).copied().ok_or_else(
+                                || {
                                     let mut diagnostic = Diagnostic::new(
                                         ResolveReason::UnknownType,
                                         SourceLabel::new(
@@ -600,35 +615,37 @@ impl Resolver {
                                     );
                                     diagnostic.found = Some(constructor.text.clone());
                                     ResolveError::from(diagnostic)
-                                })?;
-                        let expected = self.nominal_parameter_count(id).ok_or_else(|| {
-                            error(
-                                ResolveReason::InternalState,
-                                current.span,
-                                "the resolver lost nominal parameter metadata",
-                            )
-                        })?;
-                        if expected != arguments.len() {
-                            return Err(type_argument_count(
-                                current.span,
-                                &constructor.text,
-                                expected,
-                                arguments.len(),
-                            ));
+                                },
+                            )?;
+                            let expected = self.nominal_parameter_count(id).ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    current.span,
+                                    "the resolver lost nominal parameter metadata",
+                                )
+                            })?;
+                            if expected != arguments.len() {
+                                return Err(type_argument_count(
+                                    current.span,
+                                    &constructor.text,
+                                    expected,
+                                    arguments.len(),
+                                ));
+                            }
+                            tasks.push(Task::Application(id, arguments.len(), current.span));
+                            tasks.extend(arguments.iter().rev().map(Task::Visit));
                         }
-                        tasks.push(Task::Application(id, arguments.len(), current.span));
-                        tasks.extend(arguments.iter().rev().map(Task::Visit));
+                        SurfaceTypeKind::Tuple(elements) => {
+                            tasks.push(Task::Tuple(elements.len(), current.span));
+                            tasks.extend(elements.iter().rev().map(Task::Visit));
+                        }
+                        SurfaceTypeKind::Function(function) => {
+                            tasks.push(Task::Function(current.span));
+                            tasks.push(Task::Visit(&function.codomain));
+                            tasks.push(Task::Visit(&function.domain));
+                        }
                     }
-                    SurfaceTypeKind::Tuple(elements) => {
-                        tasks.push(Task::Tuple(elements.len(), current.span));
-                        tasks.extend(elements.iter().rev().map(Task::Visit));
-                    }
-                    SurfaceTypeKind::Function(function) => {
-                        tasks.push(Task::Function(current.span));
-                        tasks.push(Task::Visit(&function.codomain));
-                        tasks.push(Task::Visit(&function.domain));
-                    }
-                },
+                }
                 Task::Tuple(count, span) => {
                     let split = completed.len().checked_sub(count).ok_or_else(|| {
                         error(

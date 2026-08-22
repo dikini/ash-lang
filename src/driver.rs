@@ -115,7 +115,9 @@ impl PipelineFailure {
             }
             Self::Resolution(error) => !matches!(
                 error.reason,
-                ResolveReason::BinderIdExhausted | ResolveReason::InternalState
+                ResolveReason::BinderIdExhausted
+                    | ResolveReason::TypeResourceExhausted
+                    | ResolveReason::InternalState
             ),
             Self::Typing(TypeError::Source(_) | TypeError::Mismatch(_)) => true,
             Self::SourceModel(_)

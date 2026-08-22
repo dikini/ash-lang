@@ -63,6 +63,25 @@ fn rejects_malformed_explicit_type_operations_and_free_type_variables() {
 }
 
 #[test]
+fn core_construction_charges_type_cells_cumulatively_before_storage() {
+    let file = source("bounded type construction");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let function = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("small node");
+    let error = builder
+        .type_application(
+            function,
+            vec![Type::Int; ash::types::TYPE_WORK_LIMIT],
+            Type::Unit,
+            origin,
+        )
+        .expect_err("cumulative argument admission must stop before storage");
+    assert_eq!(error, BuildError::TypeWorkExceeded);
+}
+
+#[test]
 fn validates_registry_tuples_constructors_and_structured_matches() {
     let file = source("data core");
     let origin = whole_origin(&file);

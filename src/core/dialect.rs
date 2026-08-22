@@ -24,7 +24,7 @@ use crate::{
     integer::Integer,
     resolved::{BinderId, ResolvedRegistry},
     source::{GeneratedReason, Origin, Span},
-    types::Type,
+    types::{Type, TypeWorkBudget},
 };
 
 /// Names the closed pure Core dialect selected by Mini-Ash.
@@ -433,6 +433,8 @@ pub enum BuildError {
     ForeignBinder,
     /// A Type contains more recursive wrappers than Core currently admits.
     TypeDepthExceeded,
+    /// Cumulative structural type work exceeded the compiler budget.
+    TypeWorkExceeded,
     /// An Origin contains more recursive wrappers than Core currently admits.
     OriginDepthExceeded,
     /// A structured pattern contains more wrappers than Core currently admits.
@@ -463,6 +465,7 @@ impl fmt::Display for BuildError {
             }
             Self::ForeignBinder => "core binder capability belongs to another arena",
             Self::TypeDepthExceeded => "core type structural depth is exceeded",
+            Self::TypeWorkExceeded => "core cumulative type work is exceeded",
             Self::OriginDepthExceeded => "core origin structural depth is exceeded",
             Self::PatternDepthExceeded => "core pattern structural depth is exceeded",
             Self::InvalidPayload => "core payload admission state is inconsistent",
@@ -485,6 +488,7 @@ pub struct CoreBuilder {
     materialized_resolved: HashSet<BinderId>,
     generated_binders: HashSet<BinderId>,
     binder_phase_started: bool,
+    type_work: TypeWorkBudget,
 }
 
 impl CoreBuilder {
@@ -499,6 +503,7 @@ impl CoreBuilder {
             materialized_resolved: HashSet::new(),
             generated_binders: HashSet::new(),
             binder_phase_started: false,
+            type_work: TypeWorkBudget::default(),
         }
     }
 
@@ -549,7 +554,7 @@ impl CoreBuilder {
     /// [`BuildError::ArenaIdExhausted`] without consuming the computed binder
     /// identity when no arena identity remains.
     pub fn binder(&mut self, ty: Type, origin: Origin) -> Result<TypedBinder, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin)?;
+        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
         let (id, next) = self.next_binder_candidate()?;
         let arena = self.ensure_arena()?;
         if !self.generated_binders.insert(id) {
@@ -576,7 +581,7 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<TypedBinder, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin)?;
+        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
         if !self.reserved_resolved.contains(&id) {
             return Err(BuildError::UnreservedResolvedBinder);
         }
@@ -653,7 +658,7 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let arms = admit_match_arms(arms)?;
+        let arms = admit_match_arms(arms, &mut self.type_work)?;
         self.push(
             ty,
             origin,
@@ -691,7 +696,7 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin)?;
+        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
         if self.arena != Some(parameter.arena()) {
             return Err(BuildError::ForeignBinder);
         }
@@ -719,7 +724,7 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin)?;
+        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
         if self.arena != Some(binder.arena()) {
             return Err(BuildError::ForeignBinder);
         }
@@ -752,7 +757,7 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin)?;
+        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
         if members
             .iter()
             .any(|(binder, _)| self.arena != Some(binder.arena()))
@@ -814,15 +819,16 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let arguments = arguments
-            .into_iter()
-            .map(admit_type)
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut admitted_arguments = Vec::new();
+        for argument in arguments {
+            admitted_arguments.push(admit_type(argument, &mut self.type_work)?);
+        }
         self.push(
             ty,
             origin,
             PureExprKind::Computation(PureComputation::TypeApplication(TypeApplicationNode::new(
-                function, arguments,
+                function,
+                admitted_arguments,
             ))),
         )
     }
@@ -953,7 +959,7 @@ impl CoreBuilder {
     }
 
     fn push(&mut self, ty: Type, origin: Origin, kind: PureExprKind) -> Result<NodeId, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin)?;
+        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
         self.push_admitted(ty, origin, kind)
     }
 
@@ -1022,12 +1028,15 @@ enum PatternToken {
     Constructor(Type, Origin, crate::types::ConstructorId, bool),
 }
 
-fn admit_match_arms(arms: Vec<CoreMatchArm>) -> Result<Vec<CoreMatchArm>, BuildError> {
+fn admit_match_arms(
+    arms: Vec<CoreMatchArm>,
+    type_work: &mut TypeWorkBudget,
+) -> Result<Vec<CoreMatchArm>, BuildError> {
     let mut admitted = Vec::with_capacity(arms.len());
     let mut first_error = None;
     for arm in arms {
         let (pattern, body, origin) = arm.into_parts();
-        let pattern = admit_pattern(pattern);
+        let pattern = admit_pattern(pattern, type_work);
         let origin = admit_origin(origin);
         match (pattern, origin) {
             (Ok(pattern), Ok(origin)) if first_error.is_none() => {
@@ -1042,7 +1051,10 @@ fn admit_match_arms(arms: Vec<CoreMatchArm>) -> Result<Vec<CoreMatchArm>, BuildE
     first_error.map_or(Ok(admitted), Err)
 }
 
-fn admit_pattern(pattern: CorePattern) -> Result<CorePattern, BuildError> {
+fn admit_pattern(
+    pattern: CorePattern,
+    type_work: &mut TypeWorkBudget,
+) -> Result<CorePattern, BuildError> {
     let mut work = vec![PatternAdmissionTask::Visit(pattern, 0)];
     let mut tokens = Vec::new();
     let mut first_error = None;
@@ -1053,7 +1065,7 @@ fn admit_pattern(pattern: CorePattern) -> Result<CorePattern, BuildError> {
                 if depth > CORE_PATTERN_DEPTH_LIMIT {
                     first_error.get_or_insert(BuildError::PatternDepthExceeded);
                 }
-                let payloads = admit_payloads(ty, origin);
+                let payloads = admit_payloads(ty, origin, type_work);
                 match kind {
                     CorePatternKind::Binder(binder) => match payloads {
                         Ok((ty, origin)) if first_error.is_none() => {
@@ -1212,8 +1224,12 @@ fn push_pattern_leaf(
     }
 }
 
-fn admit_payloads(ty: Type, origin: Origin) -> Result<(Type, Origin), BuildError> {
-    let admitted_type = admit_type(ty);
+fn admit_payloads(
+    ty: Type,
+    origin: Origin,
+    type_work: &mut TypeWorkBudget,
+) -> Result<(Type, Origin), BuildError> {
+    let admitted_type = admit_type(ty, type_work);
     let admitted_origin = admit_origin(origin);
     match (admitted_type, admitted_origin) {
         (Ok(ty), Ok(origin)) => Ok((ty, origin)),
@@ -1243,11 +1259,16 @@ enum TypeToken {
     Forall(Box<[crate::types::TypeVariableId]>),
 }
 
-fn admit_type(ty: Type) -> Result<Type, BuildError> {
+fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildError> {
     let mut work = vec![TypeAdmissionTask::Visit(ty, 0)];
     let mut tokens = Vec::new();
     let mut exceeded = false;
     while let Some(task) = work.pop() {
+        if matches!(task, TypeAdmissionTask::Visit(_, _)) {
+            type_work
+                .charge(1)
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
+        }
         match task {
             TypeAdmissionTask::Visit(Type::Int, _) => tokens.push(TypeToken::Int),
             TypeAdmissionTask::Visit(Type::Bool, _) => tokens.push(TypeToken::Bool),
