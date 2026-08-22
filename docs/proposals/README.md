@@ -13,4 +13,4 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Accepted changes
 
-No change proposal is currently accepted and awaiting implementation.
+- [CP-0004: Rank-1 Polymorphism](CP-0004-rank-1-polymorphism.md)

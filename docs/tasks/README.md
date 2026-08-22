@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No implementation task is currently active.
+- [TASK-0010: Finish Mini-Ash](TASK-0010-finish-mini-ash.md)
