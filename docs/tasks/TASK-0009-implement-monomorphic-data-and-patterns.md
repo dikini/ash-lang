@@ -2,7 +2,7 @@
 
 - ID: `TASK-0009`
 - Status: active
-- Related: [CP-0003: Monomorphic Data and Patterns](../proposals/CP-0003-monomorphic-data-and-patterns.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), [DN-0007: Data and Pattern Typing](../design/DN-0007-data-and-pattern-typing.md), [DN-0019: Primitive Feature Composition](../design/DN-0019-primitive-feature-composition.md), [execution plan](../plans/2026-08-22-monomorphic-data-and-patterns.md), [shared-pipeline remediation design](../plans/2026-08-22-data-and-patterns-shared-pipeline-design.md)
+- Related: [CP-0003: Monomorphic Data and Patterns](../proposals/CP-0003-monomorphic-data-and-patterns.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), [DN-0007: Data and Pattern Typing](../design/DN-0007-data-and-pattern-typing.md), [DN-0019: Primitive Feature Composition](../design/DN-0019-primitive-feature-composition.md), [execution plan](../plans/2026-08-22-monomorphic-data-and-patterns.md), [shared-pipeline remediation design](../plans/2026-08-22-data-and-patterns-shared-pipeline-design.md), [match-context correction design](../plans/2026-08-22-match-context-and-semantics-review-design.md), [match-context correction plan](../plans/2026-08-22-match-context-and-semantics-review.md)
 
 > This task organizes work. It does not define Ash semantics.
 
@@ -62,6 +62,14 @@ retained integration evidence.
   usefulness shaping and centralizes registry-aware type rendering for source
   diagnostics while retaining nominal identities for equality and structured
   mismatch inspection.
+- Review plan checkpoint `807329d` records the approved correction for
+  contextual match typing and normative formal consistency. Checkpoint
+  `46df1aa` passes an expected result type and diagnostic cause to every arm of
+  a checked match without changing match synthesis or Core.
+- Specification checkpoint `b157e14` adds typed-pattern and singleton-coverage
+  premises to function and local-binding rules, separates match synthesis from
+  checking, gives guarded recursive initialization explicit entry and storage
+  transitions, and describes integer and closure bindings as direct values.
 - Fresh post-review `cargo test --all-targets` and `cargo xtask verify` runs
   pass, including the 10,000-member small-stack cycle and all new depth and
   resource regressions. Changed Markdown passes with only the project-approved
