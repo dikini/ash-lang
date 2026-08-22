@@ -70,6 +70,11 @@ retained integration evidence.
   premises to function and local-binding rules, separates match synthesis from
   checking, gives guarded recursive initialization explicit entry and storage
   transitions, and describes integer and closure bindings as direct values.
+- Follow-up checkpoint `d349b0c` makes recursive allocation return the data
+  binder-to-location map separately from its source-ordered initializer work,
+  so the formal environment extension retains the identities used by lookup.
+  Checkpoint `a141d5c` directly tests contextual diagnostic-cause propagation
+  and each source-ordered initializer-entry and alias-storage continuation.
 - Fresh post-review `cargo test --all-targets` and `cargo xtask verify` runs
   pass, including the 10,000-member small-stack cycle and all new depth and
   resource regressions. Changed Markdown passes with only the project-approved

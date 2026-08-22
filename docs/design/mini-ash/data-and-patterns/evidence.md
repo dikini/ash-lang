@@ -7,7 +7,7 @@ define Ash semantics. The normative specification owns the merged language.
 
 ## Scope and environment
 
-The measurement covers `4d5ce64...b157e14` in the
+The measurement covers `4d5ce64...a141d5c` in the
 `feature/data-and-adts` worktree. Commit `8c1c6af` is the first checkpoint with
 the candidate parallel pipeline removed. Commit `79af325` closes the review
 findings around admitted depth, registry authentication and destruction,
@@ -18,16 +18,19 @@ budget and gives source-facing type errors registry-resolved nominal spellings.
 Commit `46df1aa` propagates a surrounding expected type to every match arm;
 commit `b157e14` aligns the normative pattern rules, recursive initialization
 steps, and representative value-binding derivations with retained behavior.
+Commit `d349b0c` retains the data binder-to-location map across recursive slot
+allocation. Commit `a141d5c` directly exercises contextual diagnostic causes
+and the source-ordered initializer-entry and alias-storage transitions.
 
 | Property | Observation |
 | --- | --- |
 | Baseline | recursive-definition merge `4d5ce64` |
-| Retained-pipeline checkpoint | unsigned commit `b157e14` |
+| Retained-pipeline checkpoint | unsigned commit `a141d5c` |
 | Rust | `rustc 1.97.1 (8bab26f4f 2026-07-14)` |
 | Cargo | `cargo 1.97.1 (c980f4866 2026-06-30)` |
 | Host | Linux `x86_64` |
 
-At the evidence checkpoint, the production diff under `src/` contains 5,958
+At the evidence checkpoint, the production diff under `src/` contains 6,068
 added and 662 deleted lines in 23 files. These counts exclude integration tests
 and do not measure semantic difficulty.
 
@@ -194,9 +197,9 @@ first-stratum invariants.
 | File-wide identities, namespaces, recursive references, pattern scope, shadowing, and restoration | `data_and_pattern_resolution_allocates_file_wide_identities_and_pattern_binders`, `data_namespaces_report_stable_resolution_reasons`, `match_arm_pattern_scope_does_not_leak_to_later_arms`, `nominal_declarations_are_file_wide_recursive_and_distinct`, and `failed_nested_and_recursive_resolution_restore_the_scope_stack` |
 | Nominal and tuple typing, constructor values, function domains, pattern typing, coverage, irrefutability, clause arity, guarded recursion, contextual matches, and bounded usefulness | `nominal_identity_and_tuple_structure_share_one_type_equality_rule`, `contextually_typed_matches_check_every_anonymous_function_arm`, `a_wide_constructor_set_has_practical_exhaustive_coverage`, `an_over_budget_case_group_reports_an_internal_resource_failure`, `usefulness_charges_every_pattern_cell_while_shaping`, and the typing and coverage cases in `data_and_adts` |
 | Registry, identity, source order, constructor, pattern, scope, coverage, provenance, handle, reachability, resource, ownership-cycle, and safe-destruction validation | `rejects_malformed_data_registries_and_constructor_annotations`, `rejects_registry_identity_order_spelling_and_source_forgery`, `rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack`, `rejects_missing_and_redundant_structured_match_arms`, `validates_a_deep_guarded_initializer_on_a_small_stack`, and the existing malformed-Core cases in `core_validation` |
-| Strict order, capture, mixed groups, finite and cyclic data, rendering, transition ownership, match selection, runtime failures, explicit stacks, and destruction | `constructor_tuple_payloads_enter_elements_strictly_left_to_right`, `match_trace_enters_the_scrutinee_once_and_only_the_selected_body`, `every_core_feature_has_one_named_entry_owner_and_explicit_return_owners`, `mixed_recursive_groups_support_functions_and_guarded_data`, `rendering_repeats_shared_values_and_marks_only_active_cycles`, `defensive_transition_failures_remain_structured`, and `ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack` |
+| Strict order, capture, mixed groups, finite and cyclic data, rendering, transition ownership, match selection, runtime failures, explicit stacks, and destruction | `constructor_tuple_payloads_enter_elements_strictly_left_to_right`, `match_trace_enters_the_scrutinee_once_and_only_the_selected_body`, `recursive_data_initializers_store_each_slot_before_entering_the_next`, `every_core_feature_has_one_named_entry_owner_and_explicit_return_owners`, `mixed_recursive_groups_support_functions_and_guarded_data`, `rendering_repeats_shared_values_and_marks_only_active_cycles`, `defensive_transition_failures_remain_structured`, and `ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack` |
 | Transform validation and differential evaluation | `shared_pipeline_elaborates_and_validates_finite_data_core`, which independently validates and evaluates identity and literal-folding results, plus the existing transform suite in `semantics` |
-| Executable specification, tool behavior, structured diagnostics, and provenance | the CP-0003 cases in `spec_examples`, including `static_semantics_contextual_match_checks_function_arms`, `data_resolution_diagnostics_retain_names_and_binder_sites`, `coverage_diagnostics_retain_arm_spans_and_concrete_witnesses`, `nominal_mismatches_render_source_declaration_spellings`, `unguarded_recursive_use_retains_the_transporting_expression_span`, and `provenance` |
+| Executable specification, tool behavior, structured diagnostics, and provenance | the CP-0003 cases in `spec_examples`, including `static_semantics_contextual_match_checks_function_arms`, `checked_match_arms_retain_the_definition_result_cause`, `data_resolution_diagnostics_retain_names_and_binder_sites`, `coverage_diagnostics_retain_arm_spans_and_concrete_witnesses`, `nominal_mismatches_render_source_declaration_spellings`, `unguarded_recursive_use_retains_the_transporting_expression_span`, and `provenance` |
 
 The parser rejection corpus covers integer, record, guarded, or-pattern, and
 other excluded pattern syntax. The type grammar and registry tests admit no
