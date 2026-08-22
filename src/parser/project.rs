@@ -133,6 +133,17 @@ fn structural_weight(node: &ConcreteNode) -> usize {
         | NodeKind::ApplicationExpression
         | NodeKind::ParenthesizedExpression
         | NodeKind::ParenthesizedType => 1,
+        NodeKind::Pattern
+            if child_nodes(node).any(|child| {
+                matches!(
+                    child.kind,
+                    NodeKind::ConstructorPattern | NodeKind::TuplePattern | NodeKind::Pattern
+                )
+            }) =>
+        {
+            super::PATTERN_STRUCTURAL_WEIGHT
+        }
+        NodeKind::MatchExpression => super::MATCH_STRUCTURAL_WEIGHT,
         NodeKind::Type if child_nodes(node).any(|child| child.kind == NodeKind::Type) => 1,
         _ => 0,
     }

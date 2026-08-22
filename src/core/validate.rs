@@ -10,13 +10,14 @@ use std::{
 use super::{
     dialect::{
         DialectId, NodeId, PureComputation, PureExprKind, PureProgram, PureValue, StoredNode,
-        TypedExpr, UnvalidatedProgram, ValidatedProgram,
+        TypedExpr, UnvalidatedProgram, ValidatedProgram, origin_depth_within_limit,
+        type_depth_within_limit,
     },
     variable::TypedBinder,
 };
 use crate::{
     core::{CorePattern, CorePatternKind},
-    pattern::{missing_witness_for_types, usefulness},
+    pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::BinderId,
     source::{Origin, SourceFile, SourceId, Span},
     types::{ConstructorId, Type, same_type},
@@ -51,6 +52,8 @@ pub enum ValidationReason {
     Pattern,
     /// Match arms are redundant or non-exhaustive.
     Coverage,
+    /// A deterministic validation resource budget was exhausted.
+    Resource,
 }
 
 impl fmt::Display for ValidationReason {
@@ -69,6 +72,7 @@ impl fmt::Display for ValidationReason {
             Self::Registry => "core.validation.registry",
             Self::Pattern => "core.validation.pattern",
             Self::Coverage => "core.validation.coverage",
+            Self::Resource => "core.validation.resource",
         })
     }
 }
@@ -109,6 +113,13 @@ impl fmt::Display for ValidationError {
 
 impl Error for ValidationError {}
 
+fn valid_upper_spelling(spelling: &str) -> bool {
+    let mut bytes = spelling.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_uppercase())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        && !matches!(spelling, "Int" | "Bool" | "Unit")
+}
+
 /// Consumes unchecked Core and returns the capability required by consumers.
 ///
 /// `sources` is the complete set admitted to the current compilation. Every
@@ -122,7 +133,16 @@ pub fn validate(
     program: UnvalidatedProgram,
     sources: &[&SourceFile],
 ) -> Result<ValidatedProgram, ValidationError> {
-    Validator::new(&program, sources).run()?;
+    if let Err(error) = Validator::new(&program, sources).run() {
+        let UnvalidatedProgram {
+            registry, nodes, ..
+        } = program;
+        drop(nodes);
+        if let Ok(registry) = Arc::try_unwrap(registry) {
+            registry.discard_iteratively();
+        }
+        return Err(error);
+    }
 
     let mut nodes = Vec::with_capacity(program.nodes.len());
     for (index, stored) in program.nodes.into_iter().enumerate() {
@@ -181,36 +201,95 @@ impl<'program, 'source> Validator<'program, 'source> {
         let mut nominal_names = HashSet::new();
         let mut constructor_ids = HashSet::new();
         let mut constructor_names = HashSet::new();
-        for nominal in registry.nominals() {
-            if nominal.id.source() != nominal.origin.primary_span().source()
-                || nominal.constructors.is_empty()
-                || !nominal_ids.insert(nominal.id)
-                || !nominal_names.insert(nominal.spelling.as_str())
+        let registry_source = registry
+            .nominals()
+            .first()
+            .map(|nominal| nominal.origin.primary_span().source());
+        if let (Some(registry_source), Ok(root)) = (registry_source, self.node(self.program.root)) {
+            if root
+                .origin
+                .as_ref()
+                .is_some_and(|origin| origin.primary_span().source() != registry_source)
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
+        }
+        let mut previous_nominal_end = None;
+        for (index, nominal) in registry.nominals().iter().enumerate() {
+            let index = u32::try_from(index)
+                .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
+            let source = registry_source.unwrap_or_else(|| nominal.id.source());
+            let nominal_range = nominal.origin.primary_span().range();
+            if nominal.id != crate::types::NominalTypeId::new(source, index)
+                || nominal.origin.primary_span().source() != source
+                || !origin_depth_within_limit(&nominal.origin)
+                || nominal.constructors.is_empty()
+                || !valid_upper_spelling(&nominal.spelling)
+                || !nominal_ids.insert(nominal.id)
+                || !nominal_names.insert(nominal.spelling.as_str())
+                || nominal_range.start() >= nominal_range.end()
+                || previous_nominal_end.is_some_and(|previous| nominal_range.start() < previous)
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            previous_nominal_end = Some(nominal_range.end());
             self.validate_origin(&nominal.origin, self.program.root)?;
         }
+        let mut previous_constructor_start = None;
         for constructor in registry.constructors() {
+            let constructor_span = constructor.origin.primary_span();
+            let constructor_range = constructor_span.range();
+            let owner_range = registry
+                .nominal(constructor.owner)
+                .map(|owner| owner.origin.primary_span().range());
             if constructor.id.owner() != constructor.owner
                 || !nominal_ids.contains(&constructor.owner)
+                || Some(constructor.origin.primary_span().source()) != registry_source
+                || !origin_depth_within_limit(&constructor.origin)
+                || !valid_upper_spelling(&constructor.spelling)
                 || !constructor_ids.insert(constructor.id)
                 || !constructor_names.insert(constructor.spelling.as_str())
                 || !self.valid_type(constructor.payload.as_ref())
+                || constructor
+                    .payload
+                    .as_ref()
+                    .is_some_and(|payload| !type_depth_within_limit(payload))
+                || owner_range.is_none_or(|owner| {
+                    constructor_range.start() < owner.start()
+                        || constructor_range.end() > owner.end()
+                })
+                || constructor_range.start() >= constructor_range.end()
+                || previous_constructor_start
+                    .is_some_and(|previous| constructor_range.start() <= previous)
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
+            previous_constructor_start = Some(constructor_range.start());
             self.validate_origin(&constructor.origin, self.program.root)?;
+        }
+        let expected_constructor_order = registry
+            .nominals()
+            .iter()
+            .flat_map(|nominal| nominal.constructors.iter().copied());
+        if !registry
+            .constructors()
+            .iter()
+            .map(|constructor| constructor.id)
+            .eq(expected_constructor_order)
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
         }
         for nominal in registry.nominals() {
             for (index, constructor) in nominal.constructors.iter().copied().enumerate() {
+                if registry.constructor(constructor).is_none() {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
                 if constructor
                     != ConstructorId::new(
                         nominal.id,
                         u32::try_from(index)
                             .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?,
                     )
-                    || registry.constructor(constructor).is_none()
                 {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
@@ -422,7 +501,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let Some(binder) = self.binders.get(&variable.binder()) else {
                         return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
                     };
-                    if node.ty != *binder.ty() {
+                    if !same_type(&node.ty, binder.ty()) {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                 }
@@ -462,7 +541,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 })
             }
         };
-        if node.ty != expected {
+        if !same_type(&node.ty, &expected) {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
         Ok(())
@@ -478,7 +557,9 @@ impl<'program, 'source> Validator<'program, 'source> {
             PureComputation::Bind(binding) => {
                 let initializer = self.node(binding.initializer())?;
                 let body = self.node(binding.body())?;
-                if initializer.ty != *binding.binder().ty() || node.ty != body.ty {
+                if !same_type(&initializer.ty, binding.binder().ty())
+                    || !same_type(&node.ty, &body.ty)
+                {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
             }
@@ -512,12 +593,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                             Some(id),
                         ));
                     }
-                    if initializer.ty != *member.binder().ty() {
+                    if !same_type(&initializer.ty, member.binder().ty()) {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                 }
                 let body = self.node(group.body())?;
-                if node.ty != body.ty {
+                if !same_type(&node.ty, &body.ty) {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
             }
@@ -530,7 +611,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Some(id),
                     ));
                 };
-                if domain.as_ref() != &argument.ty || codomain.as_ref() != &node.ty {
+                if !same_type(domain, &argument.ty) || !same_type(codomain, &node.ty) {
                     return Err(ValidationError::new(
                         ValidationReason::ApplicationType,
                         Some(id),
@@ -541,7 +622,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                 let left = self.node(primitive.left())?;
                 let right = self.node(primitive.right())?;
                 let (left_type, right_type, result_type) = primitive.primitive().signature();
-                if left.ty != left_type || right.ty != right_type || node.ty != result_type {
+                if !same_type(&left.ty, &left_type)
+                    || !same_type(&right.ty, &right_type)
+                    || !same_type(&node.ty, &result_type)
+                {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
             }
@@ -564,6 +648,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
                 }
                 let mut matrix = Vec::new();
+                let mut coverage_budget = UsefulnessBudget::default();
                 for arm in match_node.arms() {
                     self.validate_origin(arm.origin(), id)?;
                     self.validate_pattern(arm.pattern(), &scrutinee.ty, id)?;
@@ -571,23 +656,27 @@ impl<'program, 'source> Validator<'program, 'source> {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                     let row = vec![arm.pattern().clone()];
-                    if usefulness(
+                    if usefulness_with_budget(
                         &matrix,
                         &row,
                         std::slice::from_ref(&scrutinee.ty),
                         &self.program.registry,
+                        &mut coverage_budget,
                     )
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?
                     .is_none()
                     {
                         return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
                     }
                     matrix.push(row);
                 }
-                if missing_witness_for_types(
+                if missing_witness_for_types_with_budget(
                     &matrix,
                     std::slice::from_ref(&scrutinee.ty),
                     &self.program.registry,
+                    &mut coverage_budget,
                 )
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?
                 .is_some()
                 {
                     return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
@@ -640,60 +729,81 @@ impl<'program, 'source> Validator<'program, 'source> {
         root: NodeId,
         recursive: &HashSet<BinderId>,
     ) -> Result<bool, ValidationError> {
-        if !self.contains_recursive(root, recursive)? {
-            return Ok(true);
-        }
-        let node = self.node(root)?;
-        match &node.kind {
-            PureExprKind::Variable(variable) => Ok(recursive.contains(&variable.binder())),
-            PureExprKind::Computation(PureComputation::Tuple(tuple)) => {
-                for element in tuple.elements() {
-                    if !self.guarded_payload(*element, recursive)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-            PureExprKind::Computation(PureComputation::Apply(application)) => {
-                let function = self.node(application.function())?;
-                if !matches!(
-                    function.kind,
-                    PureExprKind::Value(PureValue::Constructor(_))
-                ) {
-                    return Ok(false);
-                }
-                self.guarded_payload(application.argument(), recursive)
-            }
-            PureExprKind::Value(PureValue::Function(_)) => Ok(true),
-            _ => Ok(false),
-        }
-    }
-
-    fn contains_recursive(
-        &self,
-        root: NodeId,
-        recursive: &HashSet<BinderId>,
-    ) -> Result<bool, ValidationError> {
+        let reaches_recursive = self.recursive_reachability(root, recursive)?;
         let mut work = vec![root];
-        let mut seen = HashSet::new();
         while let Some(id) = work.pop() {
-            if !seen.insert(id) {
+            if !reaches_recursive.get(&id).copied().unwrap_or(false) {
                 continue;
             }
             let node = self.node(id)?;
-            if matches!(&node.kind, PureExprKind::Variable(variable) if recursive.contains(&variable.binder()))
-            {
-                return Ok(true);
-            }
-            for index in 0..node.kind.child_count() {
-                work.push(
-                    node.kind.child_at(index).ok_or_else(|| {
-                        ValidationError::new(ValidationReason::NodeBounds, Some(id))
-                    })?,
-                );
+            match &node.kind {
+                PureExprKind::Variable(variable) if recursive.contains(&variable.binder()) => {}
+                PureExprKind::Computation(PureComputation::Tuple(tuple)) => {
+                    work.extend(tuple.elements().iter().copied());
+                }
+                PureExprKind::Computation(PureComputation::Apply(application)) => {
+                    let function = self.node(application.function())?;
+                    if !matches!(
+                        function.kind,
+                        PureExprKind::Value(PureValue::Constructor(_))
+                    ) {
+                        return Ok(false);
+                    }
+                    work.push(application.argument());
+                }
+                PureExprKind::Value(PureValue::Function(_)) => {}
+                _ => return Ok(false),
             }
         }
-        Ok(false)
+        Ok(true)
+    }
+
+    fn recursive_reachability(
+        &self,
+        root: NodeId,
+        recursive: &HashSet<BinderId>,
+    ) -> Result<HashMap<NodeId, bool>, ValidationError> {
+        enum Task {
+            Visit(NodeId),
+            Finish(NodeId),
+        }
+
+        let mut work = vec![Task::Visit(root)];
+        let mut scheduled = HashSet::new();
+        let mut result = HashMap::new();
+        while let Some(task) = work.pop() {
+            match task {
+                Task::Visit(id) => {
+                    if result.contains_key(&id) || !scheduled.insert(id) {
+                        continue;
+                    }
+                    let node = self.node(id)?;
+                    work.push(Task::Finish(id));
+                    for index in 0..node.kind.child_count() {
+                        work.push(Task::Visit(node.kind.child_at(index).ok_or_else(|| {
+                            ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                        })?));
+                    }
+                }
+                Task::Finish(id) => {
+                    let node = self.node(id)?;
+                    let direct = matches!(
+                        &node.kind,
+                        PureExprKind::Variable(variable)
+                            if recursive.contains(&variable.binder())
+                    );
+                    let mut reaches = direct;
+                    for index in 0..node.kind.child_count() {
+                        let child = node.kind.child_at(index).ok_or_else(|| {
+                            ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                        })?;
+                        reaches |= result.get(&child).copied().unwrap_or(false);
+                    }
+                    result.insert(id, reaches);
+                }
+            }
+        }
+        Ok(result)
     }
 
     fn validate_pattern(

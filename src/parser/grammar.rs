@@ -418,10 +418,21 @@ fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
 
 fn match_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::MatchExpression);
+    if !parser.enter_structures(super::MATCH_STRUCTURAL_WEIGHT) {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
     let _ = parser.bump();
     expression(parser);
     let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
     let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    if matches!(
+        parser.current(),
+        Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern);
+    }
     while !matches!(
         parser.current(),
         Some(TokenKind::RightBrace | TokenKind::EndOfFile)
@@ -434,6 +445,7 @@ fn match_expression(parser: &mut Parser<'_>) {
         }
     }
     let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.leave_structures(super::MATCH_STRUCTURAL_WEIGHT);
     parser.finish();
 }
 
@@ -664,7 +676,17 @@ fn pattern(parser: &mut Parser<'_>) {
 
 fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
     parser.start(NodeKind::Pattern);
-    match pattern_form(parser) {
+    let form = pattern_form(parser);
+    let owns_structure = matches!(
+        form,
+        Some(PatternForm::Constructor | PatternForm::Parenthesized)
+    );
+    if owns_structure && !parser.enter_structures(super::PATTERN_STRUCTURAL_WEIGHT) {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
+    match form {
         Some(PatternForm::Binder) => binder(parser),
         Some(PatternForm::Wildcard) => {
             parser.start(NodeKind::WildcardPattern);
@@ -679,6 +701,9 @@ fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
         Some(PatternForm::Constructor) => constructor_pattern(parser, allow_juxtaposed_payload),
         Some(PatternForm::Parenthesized) => parenthesized_pattern(parser),
         None => parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern),
+    }
+    if owns_structure {
+        parser.leave_structures(super::PATTERN_STRUCTURAL_WEIGHT);
     }
     parser.finish();
 }

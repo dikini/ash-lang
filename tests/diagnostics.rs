@@ -229,6 +229,103 @@ fn r001_reports_only_the_unknown_occurrence_without_an_unjustified_suggestion() 
 }
 
 #[test]
+fn data_resolution_diagnostics_retain_names_and_binder_sites() {
+    let duplicate_text = "type Thing =\nFirst\n\ntype Thing =\nSecond\n\nFirst\n";
+    let duplicate_source = source("duplicate-type.ash", duplicate_text);
+    let tree = parse(lex(&duplicate_source).expect("fixture should lex"));
+    let surface = project(&duplicate_source, &tree).expect("fixture should project");
+    let error = resolve(&surface).expect_err("duplicate type should fail");
+    assert_eq!(error.reason, ResolveReason::DuplicateType);
+    let first = duplicate_text.find("Thing").expect("first type name");
+    let second = duplicate_text.rfind("Thing").expect("second type name");
+    assert_eq!(error.primary.span().range().start(), offset(second));
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(error.related[0].span().range().start(), offset(first));
+    assert!(error.expected.is_none() && error.found.is_none() && error.help.is_none());
+
+    let binder_text = "{\nlet (value, value) = (1, 2)\nvalue\n}\n";
+    let binder_source = source("duplicate-pattern-binder.ash", binder_text);
+    let tree = parse(lex(&binder_source).expect("fixture should lex"));
+    let surface = project(&binder_source, &tree).expect("fixture should project");
+    let error = resolve(&surface).expect_err("duplicate binder should fail");
+    assert_eq!(error.reason, ResolveReason::DuplicatePatternBinder);
+    let first = binder_text.find("value").expect("first binder");
+    let second = binder_text[first + 1..]
+        .find("value")
+        .map(|relative| relative + first + 1)
+        .expect("second binder");
+    assert_eq!(error.primary.span().range().start(), offset(second));
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(error.related[0].span().range().start(), offset(first));
+
+    let unknown_text = "Missing\n";
+    let unknown_source = source("unknown-constructor.ash", unknown_text);
+    let tree = parse(lex(&unknown_source).expect("fixture should lex"));
+    let surface = project(&unknown_source, &tree).expect("fixture should project");
+    let error = resolve(&surface).expect_err("unknown constructor should fail");
+    assert_eq!(error.reason, ResolveReason::UnknownConstructor);
+    assert_eq!(error.primary.span().range().start(), 0);
+    assert_eq!(error.found.as_deref(), Some("Missing"));
+    assert!(error.related.is_empty() && error.expected.is_none() && error.help.is_none());
+}
+
+#[test]
+fn coverage_diagnostics_retain_arm_spans_and_concrete_witnesses() {
+    let missing_text = "match true {\ntrue => 1\n}\n";
+    let missing_source = source("missing-case.ash", missing_text);
+    let tree = parse(lex(&missing_source).expect("fixture should lex"));
+    let surface = project(&missing_source, &tree).expect("fixture should project");
+    let expected_span = resolve(&surface)
+        .expect("fixture should resolve")
+        .result
+        .span;
+    let error = run_source(missing_source).expect_err("false is uncovered");
+    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+        panic!("missing case should be a typed source diagnostic")
+    };
+    assert_eq!(diagnostic.reason, TypeReason::NonExhaustive);
+    assert_eq!(diagnostic.primary.span(), expected_span);
+    assert_eq!(diagnostic.found.as_deref(), Some("false"));
+    assert!(diagnostic.related.is_empty() && diagnostic.expected.is_none());
+
+    let redundant_text = "match true {\ntrue => 1\nfalse => 2\nfalse => 3\n}\n";
+    let redundant_source = source("redundant-case.ash", redundant_text);
+    let tree = parse(lex(&redundant_source).expect("fixture should lex"));
+    let surface = project(&redundant_source, &tree).expect("fixture should project");
+    let resolved = resolve(&surface).expect("fixture should resolve");
+    let ResolvedExprKind::Match(match_expression) = &resolved.result.kind else {
+        panic!("fixture should resolve to a match")
+    };
+    let expected_span = match_expression.arms[2].span;
+    let error = run_source(redundant_source).expect_err("third arm is redundant");
+    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+        panic!("redundant case should be a typed source diagnostic")
+    };
+    assert_eq!(diagnostic.reason, TypeReason::RedundantCase);
+    assert_eq!(diagnostic.primary.span(), expected_span);
+    assert!(diagnostic.found.is_none() && diagnostic.related.is_empty());
+}
+
+#[test]
+fn unguarded_recursive_use_retains_the_transporting_expression_span() {
+    let text = "type Stream =\nNext(Int, Stream)\n\nfn identity(value : Stream) -> Stream {\nvalue\n}\n\n{\nlet rec stream : Stream = Next(1, identity stream)\nstream\n}\n";
+    let source = source("unguarded-recursion.ash", text);
+    let error = run_source(source).expect_err("ordinary call cannot transport recursion");
+    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+        panic!("unguarded use should be a typed source diagnostic")
+    };
+    assert_eq!(diagnostic.reason, TypeReason::UnguardedRecursiveUse);
+    let start = text.find("identity stream").expect("transporting call");
+    assert_eq!(diagnostic.primary.span().range().start(), offset(start));
+    assert_eq!(
+        diagnostic.primary.span().range().end(),
+        offset(start + "identity stream".len())
+    );
+    assert!(diagnostic.related.is_empty());
+    assert!(diagnostic.expected.is_none() && diagnostic.found.is_none());
+}
+
+#[test]
 fn r002_relates_the_second_global_to_the_first_name_and_definition() {
     let source = source("r002.ash", R002);
     let tree = parse(lex(&source).expect("R-002 should lex"));

@@ -28,6 +28,9 @@ use crate::{
 /// later fully iterative representations may replace it.
 pub const STRUCTURAL_DEPTH_LIMIT: usize = 128;
 
+pub(super) const PATTERN_STRUCTURAL_WEIGHT: usize = 8;
+pub(super) const MATCH_STRUCTURAL_WEIGHT: usize = 32;
+
 /// A non-syntactic implementation resource failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResourceFailure {
@@ -493,16 +496,28 @@ impl Parser<'_> {
     }
 
     fn enter_structure(&mut self) -> bool {
-        if self.nesting_depth >= STRUCTURAL_DEPTH_LIMIT {
+        self.enter_structures(1)
+    }
+
+    fn enter_structures(&mut self, weight: usize) -> bool {
+        let Some(depth) = self.nesting_depth.checked_add(weight) else {
+            self.fail_structural_depth();
+            return false;
+        };
+        if depth > STRUCTURAL_DEPTH_LIMIT {
             self.fail_structural_depth();
             return false;
         }
-        self.nesting_depth += 1;
+        self.nesting_depth = depth;
         true
     }
 
     fn leave_structure(&mut self) {
         self.nesting_depth = self.nesting_depth.saturating_sub(1);
+    }
+
+    fn leave_structures(&mut self, weight: usize) {
+        self.nesting_depth = self.nesting_depth.saturating_sub(weight);
     }
 
     fn permits_expression_depth(&mut self, expression_depth: usize) -> bool {

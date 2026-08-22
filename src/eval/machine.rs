@@ -475,41 +475,14 @@ fn dispatch_entry(
             enter_application(*application, environment)
         }
         PureExprKind::Value(PureValue::Constructor(constructor)) => {
-            let info = program
-                .registry()
-                .constructor(constructor.constructor())
-                .ok_or(RuntimeFailure::InvalidLocation)?;
-            if info.payload.is_some() {
-                Transition::direct(Control::Return(Value::ConstructorFunction(
-                    constructor.constructor(),
-                )))
-            } else {
-                let location =
-                    allocate_heap(heap, HeapCell::Constructor(constructor.constructor(), None))?;
-                Transition::direct(Control::Return(Value::Location(location)))
-            }
+            enter_constructor(program, *constructor, heap)?
         }
         PureExprKind::Computation(PureComputation::Tuple(tuple)) => {
-            let Some(first) = tuple.elements().first().copied() else {
-                return Err(RuntimeFailure::InvalidControlState);
-            };
-            Transition::suspend(
-                Control::Evaluate(first, environment.clone()),
-                Frame::Tuple {
-                    elements: tuple.elements().to_vec().into_boxed_slice(),
-                    next: 1,
-                    values: Vec::with_capacity(tuple.elements().len()),
-                    environment,
-                },
-            )
+            enter_tuple(tuple, environment)?
         }
-        PureExprKind::Computation(PureComputation::Match(match_node)) => Transition::suspend(
-            Control::Evaluate(match_node.scrutinee(), environment.clone()),
-            Frame::Match {
-                arms: match_node.arms().to_vec().into_boxed_slice(),
-                environment,
-            },
-        ),
+        PureExprKind::Computation(PureComputation::Match(match_node)) => {
+            enter_match(match_node, environment)
+        }
     })
 }
 
@@ -523,6 +496,55 @@ fn enter_boolean(boolean: crate::core::literal::BooleanNode) -> Transition {
 
 fn enter_unit(_unit: crate::core::literal::UnitNode) -> Transition {
     Transition::direct(Control::Return(Value::Unit))
+}
+
+fn enter_constructor(
+    program: &Arc<PureProgram>,
+    constructor: crate::core::data::ConstructorNode,
+    heap: &mut Vec<HeapCell>,
+) -> Result<Transition, RuntimeFailure> {
+    let info = program
+        .registry()
+        .constructor(constructor.constructor())
+        .ok_or(RuntimeFailure::InvalidLocation)?;
+    if info.payload.is_some() {
+        Ok(Transition::direct(Control::Return(
+            Value::ConstructorFunction(constructor.constructor()),
+        )))
+    } else {
+        let location = allocate_heap(heap, HeapCell::Constructor(constructor.constructor(), None))?;
+        Ok(Transition::direct(Control::Return(Value::Location(
+            location,
+        ))))
+    }
+}
+
+fn enter_tuple(
+    tuple: &crate::core::data::TupleNode,
+    environment: Environment,
+) -> Result<Transition, RuntimeFailure> {
+    let Some(first) = tuple.elements().first().copied() else {
+        return Err(RuntimeFailure::InvalidControlState);
+    };
+    Ok(Transition::suspend(
+        Control::Evaluate(first, environment.clone()),
+        Frame::Tuple {
+            elements: tuple.elements().to_vec().into_boxed_slice(),
+            next: 1,
+            values: Vec::with_capacity(tuple.elements().len()),
+            environment,
+        },
+    ))
+}
+
+fn enter_match(match_node: &crate::core::data::MatchNode, environment: Environment) -> Transition {
+    Transition::suspend(
+        Control::Evaluate(match_node.scrutinee(), environment.clone()),
+        Frame::Match {
+            arms: match_node.arms().to_vec().into_boxed_slice(),
+            environment,
+        },
+    )
 }
 
 fn enter_function(
@@ -666,72 +688,97 @@ fn dispatch_return(
         Frame::Tuple {
             elements,
             next,
-            mut values,
+            values,
             environment,
-        } => {
-            values.push(value);
-            if let Some(element) = elements.get(next).copied() {
-                Ok(Transition::suspend(
-                    Control::Evaluate(element, environment.clone()),
-                    Frame::Tuple {
-                        elements,
-                        next: next + 1,
-                        values,
-                        environment,
-                    },
-                ))
-            } else {
-                let location = allocate_heap(heap, HeapCell::Tuple(values.into_boxed_slice()))?;
-                Ok(Transition::direct(Control::Return(Value::Location(
-                    location,
-                ))))
-            }
-        }
-        Frame::Match { arms, environment } => {
-            for arm in &arms {
-                let mut bindings = Vec::new();
-                if matches_pattern(arm.pattern(), &value, heap, &mut bindings)? {
-                    return Ok(Transition::direct(Control::Evaluate(
-                        arm.body(),
-                        environment.extend_many(bindings)?,
-                    )));
-                }
-            }
-            Err(RuntimeFailure::ImpossibleMatch)
-        }
+        } => return_tuple(elements, next, values, environment, value, heap),
+        Frame::Match { arms, environment } => return_match(arms, environment, value, heap),
         Frame::InitializeRecursive {
             pending,
             next,
             body,
             environment,
-        } => {
-            let Value::Location(value_location) = value else {
-                return Err(RuntimeFailure::UnexpectedRecursiveBinding);
-            };
-            let (slot, _) = pending
-                .get(next)
-                .copied()
-                .ok_or(RuntimeFailure::InvalidControlState)?;
-            let cell = heap.get_mut(slot).ok_or(RuntimeFailure::InvalidLocation)?;
-            if !matches!(cell, HeapCell::Uninitialized) {
-                return Err(RuntimeFailure::InvalidControlState);
-            }
-            *cell = HeapCell::Alias(value_location);
-            let next = next + 1;
-            if let Some((_, initializer)) = pending.get(next).copied() {
-                Ok(Transition::suspend(
-                    Control::Evaluate(initializer, environment.clone()),
-                    Frame::InitializeRecursive {
-                        pending,
-                        next,
-                        body,
-                        environment,
-                    },
-                ))
-            } else {
-                Ok(Transition::direct(Control::Evaluate(body, environment)))
-            }
+        } => return_recursive_initialization(pending, next, body, environment, value, heap),
+    }
+}
+
+fn return_tuple(
+    elements: Box<[NodeId]>,
+    next: usize,
+    mut values: Vec<Value>,
+    environment: Environment,
+    value: Value,
+    heap: &mut Vec<HeapCell>,
+) -> Result<Transition, RuntimeFailure> {
+    values.push(value);
+    if let Some(element) = elements.get(next).copied() {
+        Ok(Transition::suspend(
+            Control::Evaluate(element, environment.clone()),
+            Frame::Tuple {
+                elements,
+                next: next + 1,
+                values,
+                environment,
+            },
+        ))
+    } else {
+        let location = allocate_heap(heap, HeapCell::Tuple(values.into_boxed_slice()))?;
+        Ok(Transition::direct(Control::Return(Value::Location(
+            location,
+        ))))
+    }
+}
+
+fn return_match(
+    arms: Box<[crate::core::data::CoreMatchArm]>,
+    environment: Environment,
+    value: Value,
+    heap: &[HeapCell],
+) -> Result<Transition, RuntimeFailure> {
+    for arm in &arms {
+        let mut bindings = Vec::new();
+        if matches_pattern(arm.pattern(), &value, heap, &mut bindings)? {
+            return Ok(Transition::direct(Control::Evaluate(
+                arm.body(),
+                environment.extend_many(bindings)?,
+            )));
         }
+    }
+    Err(RuntimeFailure::ImpossibleMatch)
+}
+
+fn return_recursive_initialization(
+    pending: Box<[(Location, NodeId)]>,
+    next: usize,
+    body: NodeId,
+    environment: Environment,
+    value: Value,
+    heap: &mut [HeapCell],
+) -> Result<Transition, RuntimeFailure> {
+    let Value::Location(value_location) = value else {
+        return Err(RuntimeFailure::UnexpectedRecursiveBinding);
+    };
+    let (slot, _) = pending
+        .get(next)
+        .copied()
+        .ok_or(RuntimeFailure::InvalidControlState)?;
+    let cell = heap.get_mut(slot).ok_or(RuntimeFailure::InvalidLocation)?;
+    if !matches!(cell, HeapCell::Uninitialized) {
+        return Err(RuntimeFailure::InvalidControlState);
+    }
+    *cell = HeapCell::Alias(value_location);
+    let next = next + 1;
+    if let Some((_, initializer)) = pending.get(next).copied() {
+        Ok(Transition::suspend(
+            Control::Evaluate(initializer, environment.clone()),
+            Frame::InitializeRecursive {
+                pending,
+                next,
+                body,
+                environment,
+            },
+        ))
+    } else {
+        Ok(Transition::direct(Control::Evaluate(body, environment)))
     }
 }
 
@@ -967,6 +1014,12 @@ mod tests {
             returns: &[],
         },
         TransitionOwner {
+            feature: "constructor",
+            entry: "enter_constructor",
+            frames: &[],
+            returns: &[],
+        },
+        TransitionOwner {
             feature: "variable",
             entry: "enter_variable",
             frames: &[],
@@ -981,8 +1034,8 @@ mod tests {
         TransitionOwner {
             feature: "recursive binding",
             entry: "enter_recursive_binding",
-            frames: &[],
-            returns: &[],
+            frames: &["Frame::InitializeRecursive"],
+            returns: &["return_recursive_initialization"],
         },
         TransitionOwner {
             feature: "application",
@@ -995,6 +1048,18 @@ mod tests {
             entry: "enter_primitive",
             frames: &["Frame::PrimitiveLeft", "Frame::PrimitiveRight"],
             returns: &["return_primitive_left", "return_primitive_right"],
+        },
+        TransitionOwner {
+            feature: "tuple",
+            entry: "enter_tuple",
+            frames: &["Frame::Tuple"],
+            returns: &["return_tuple"],
+        },
+        TransitionOwner {
+            feature: "match",
+            entry: "enter_match",
+            frames: &["Frame::Match"],
+            returns: &["return_match"],
         },
     ];
 
@@ -1047,6 +1112,11 @@ mod tests {
         ) -> Transition = enter_function;
         let _: fn(
             &Arc<PureProgram>,
+            crate::core::data::ConstructorNode,
+            &mut Vec<HeapCell>,
+        ) -> Result<Transition, RuntimeFailure> = enter_constructor;
+        let _: fn(
+            &Arc<PureProgram>,
             VariableNode,
             Environment,
         ) -> Result<Transition, RuntimeFailure> = enter_variable;
@@ -1054,6 +1124,11 @@ mod tests {
         let _: EnterRecursive = enter_recursive_binding;
         let _: fn(ApplicationNode, Environment) -> Transition = enter_application;
         let _: fn(PrimitiveNode, Environment) -> Transition = enter_primitive;
+        let _: fn(
+            &crate::core::data::TupleNode,
+            Environment,
+        ) -> Result<Transition, RuntimeFailure> = enter_tuple;
+        let _: fn(&crate::core::data::MatchNode, Environment) -> Transition = enter_match;
         let _: fn(BinderId, NodeId, Environment, Value) -> Result<Transition, RuntimeFailure> =
             return_binding;
         let _: fn(Primitive, NodeId, Environment, Value) -> Transition = return_primitive_left;
@@ -1063,8 +1138,30 @@ mod tests {
             return_application_function;
         let _: fn(Value, Value, &mut Vec<HeapCell>) -> Result<Transition, RuntimeFailure> =
             return_application_argument;
+        let _: fn(
+            Box<[NodeId]>,
+            usize,
+            Vec<Value>,
+            Environment,
+            Value,
+            &mut Vec<HeapCell>,
+        ) -> Result<Transition, RuntimeFailure> = return_tuple;
+        let _: fn(
+            Box<[CoreMatchArm]>,
+            Environment,
+            Value,
+            &[HeapCell],
+        ) -> Result<Transition, RuntimeFailure> = return_match;
+        let _: fn(
+            Box<[(Location, NodeId)]>,
+            usize,
+            NodeId,
+            Environment,
+            Value,
+            &mut [HeapCell],
+        ) -> Result<Transition, RuntimeFailure> = return_recursive_initialization;
 
-        assert_eq!(TRANSITION_OWNERSHIP.len(), 9);
+        assert_eq!(TRANSITION_OWNERSHIP.len(), 12);
         assert_eq!(
             TRANSITION_OWNERSHIP
                 .iter()
@@ -1075,11 +1172,14 @@ mod tests {
                 "boolean",
                 "unit",
                 "function",
+                "constructor",
                 "variable",
                 "binding",
                 "recursive binding",
                 "application",
                 "primitive",
+                "tuple",
+                "match",
             ]
         );
         assert!(
@@ -1087,23 +1187,9 @@ mod tests {
                 .iter()
                 .all(|owner| !owner.entry.is_empty())
         );
-        assert!(
-            TRANSITION_OWNERSHIP[..5]
-                .iter()
-                .all(|owner| owner.frames.is_empty() && owner.returns.is_empty())
-        );
-        assert!(
-            [
-                &TRANSITION_OWNERSHIP[5],
-                &TRANSITION_OWNERSHIP[7],
-                &TRANSITION_OWNERSHIP[8]
-            ]
-            .iter()
-            .all(|owner| !owner.frames.is_empty() && !owner.returns.is_empty())
-        );
-        assert!(
-            TRANSITION_OWNERSHIP[6].frames.is_empty() && TRANSITION_OWNERSHIP[6].returns.is_empty()
-        );
+        for owner in TRANSITION_OWNERSHIP {
+            assert_eq!(owner.frames.is_empty(), owner.returns.is_empty());
+        }
     }
 
     #[test]

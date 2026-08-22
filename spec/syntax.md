@@ -65,7 +65,13 @@ pattern ::=
   | boolean
   | unit
   | upper_identifier [ "(" pattern { "," pattern } ")" ]
+  | parenthesized_pattern ;
+parenthesized_pattern ::=
+  "(" pattern ")"
+  | "(" juxtaposed_constructor_pattern ")"
   | "(" pattern "," pattern { "," pattern } ")" ;
+juxtaposed_constructor_pattern ::=
+  upper_identifier ( pattern | juxtaposed_constructor_pattern ) ;
 typed_pattern ::= pattern ":" type ;
 type ::= atomic_type [ "->" type ] ;
 atomic_type ::= "Int" | "Bool" | "Unit" | upper_identifier | parenthesized_type ;
@@ -162,7 +168,10 @@ patterns likewise receives one tuple domain from its expected type.
 
 Patterns are ordinary binders, `_`, Boolean and unit patterns, tuples, and
 nested constructors. Integer, record, guarded, or, and as-patterns are not in
-the grammar. Match arms occupy separate logical lines.
+the grammar. Parentheses group a pattern. Within that grouping, a constructor
+pattern may place its single payload after the constructor, so `(Leaf value)`
+has the same pattern structure as `Leaf(value)` and `(Outer Inner value)` nests
+the two constructors. Match arms occupy separate logical lines.
 
 The two presentations have different type-directed elaboration, described in
 [Elaboration](elaboration.md#function-presentations).

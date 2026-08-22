@@ -1,6 +1,6 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     integer::Integer,
@@ -64,15 +64,29 @@ pub struct ResolvedProgram {
 pub struct ResolvedRegistry {
     nominals: Box<[ResolvedNominalType]>,
     constructors: Box<[ResolvedConstructor]>,
+    nominal_positions: HashMap<NominalTypeId, usize>,
+    constructor_positions: HashMap<ConstructorId, usize>,
 }
 
 impl ResolvedRegistry {
     /// Constructs one closed registry after two-pass resolution.
     #[must_use]
     pub fn new(nominals: Vec<ResolvedNominalType>, constructors: Vec<ResolvedConstructor>) -> Self {
+        let nominal_positions = nominals
+            .iter()
+            .enumerate()
+            .map(|(index, nominal)| (nominal.id, index))
+            .collect();
+        let constructor_positions = constructors
+            .iter()
+            .enumerate()
+            .map(|(index, constructor)| (constructor.id, index))
+            .collect();
         Self {
             nominals: nominals.into_boxed_slice(),
             constructors: constructors.into_boxed_slice(),
+            nominal_positions,
+            constructor_positions,
         }
     }
 
@@ -91,17 +105,65 @@ impl ResolvedRegistry {
     /// Looks up a nominal declaration by stable identity.
     #[must_use]
     pub fn nominal(&self, id: NominalTypeId) -> Option<&ResolvedNominalType> {
-        self.nominals
-            .iter()
-            .find(|declaration| declaration.id == id)
+        self.nominal_positions
+            .get(&id)
+            .and_then(|index| self.nominals.get(*index))
+            .filter(|nominal| nominal.id == id)
     }
 
     /// Looks up a constructor by stable identity.
     #[must_use]
     pub fn constructor(&self, id: ConstructorId) -> Option<&ResolvedConstructor> {
-        self.constructors
-            .iter()
-            .find(|constructor| constructor.id == id)
+        self.constructor_positions
+            .get(&id)
+            .and_then(|index| self.constructors.get(*index))
+            .filter(|constructor| constructor.id == id)
+    }
+
+    /// Destroys untrusted registry payloads without following host recursion.
+    pub(crate) fn discard_iteratively(self) {
+        let Self {
+            nominals,
+            constructors,
+            nominal_positions,
+            constructor_positions,
+        } = self;
+        drop(nominal_positions);
+        drop(constructor_positions);
+        for nominal in nominals.into_vec() {
+            discard_origin(nominal.origin);
+        }
+        for constructor in constructors.into_vec() {
+            if let Some(payload) = constructor.payload {
+                discard_type(payload);
+            }
+            discard_origin(constructor.origin);
+        }
+    }
+}
+
+fn discard_type(root: Type) {
+    let mut work = vec![root];
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Tuple(elements) => work.extend(elements.into_vec()),
+            Type::Function(domain, codomain) => {
+                work.push(*domain);
+                work.push(*codomain);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+        }
+    }
+}
+
+fn discard_origin(root: Origin) {
+    let mut current = root;
+    loop {
+        match current {
+            Origin::Source(_) => return,
+            Origin::Generated { cause, .. } => current = *cause,
+            Origin::Related { primary, .. } => current = *primary,
+        }
     }
 }
 

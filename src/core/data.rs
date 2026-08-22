@@ -139,6 +139,10 @@ impl CoreMatchArm {
     pub const fn origin(&self) -> &Origin {
         &self.origin
     }
+
+    pub(super) fn into_parts(self) -> (CorePattern, NodeId, Origin) {
+        (self.pattern, self.body, self.origin)
+    }
 }
 
 /// A structured match whose scrutinee is evaluated once.

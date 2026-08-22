@@ -12,7 +12,7 @@ use std::{
 
 use super::{
     binding::BindingNode,
-    data::{ConstructorNode, CoreMatchArm, MatchNode, TupleNode},
+    data::{ConstructorNode, CoreMatchArm, CorePattern, CorePatternKind, MatchNode, TupleNode},
     function::{ApplicationNode, FunctionNode},
     literal::{BooleanNode, IntegerNode, UnitNode},
     primitive::{Primitive, PrimitiveNode},
@@ -38,8 +38,50 @@ impl MiniAshPureDialect {
 /// Maximum recursive Type or Origin wrappers admitted into Core storage.
 ///
 /// This is replaceable compiler resource behavior aligned with the current
-/// parser structural budget. It is not an Ash language-semantic limit.
-pub const CORE_PAYLOAD_DEPTH_LIMIT: usize = 128;
+/// parser structural budget plus the two wrappers that retained lowering may
+/// synthesize for tuple domains and constructor/function values. It is not an
+/// Ash language-semantic limit.
+pub const CORE_PAYLOAD_DEPTH_LIMIT: usize = 130;
+
+/// Maximum structured-pattern wrappers admitted into one Core pattern.
+pub const CORE_PATTERN_DEPTH_LIMIT: usize = 33;
+
+pub(super) fn type_depth_within_limit(root: &Type) -> bool {
+    let mut work = vec![(root, 0_usize)];
+    while let Some((ty, depth)) = work.pop() {
+        match ty {
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::Tuple(elements) => {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return false;
+                }
+                work.extend(elements.iter().map(|element| (element, child_depth)));
+            }
+            Type::Function(domain, codomain) => {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return false;
+                }
+                work.push((codomain, child_depth));
+                work.push((domain, child_depth));
+            }
+        }
+    }
+    true
+}
+
+pub(super) fn origin_depth_within_limit(root: &Origin) -> bool {
+    let mut current = root;
+    for _ in 0..=CORE_PAYLOAD_DEPTH_LIMIT {
+        match current {
+            Origin::Source(_) => return true,
+            Origin::Generated { cause, .. } => current = cause,
+            Origin::Related { primary, .. } => current = primary,
+        }
+    }
+    false
+}
 
 /// Identifies a node inside one Core arena.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -358,6 +400,8 @@ pub enum BuildError {
     TypeDepthExceeded,
     /// An Origin contains more recursive wrappers than Core currently admits.
     OriginDepthExceeded,
+    /// A structured pattern contains more wrappers than Core currently admits.
+    PatternDepthExceeded,
     /// Iterative payload rebuilding found inconsistent internal state.
     InvalidPayload,
     /// The requested root does not belong to this arena.
@@ -385,6 +429,7 @@ impl fmt::Display for BuildError {
             Self::ForeignBinder => "core binder capability belongs to another arena",
             Self::TypeDepthExceeded => "core type structural depth is exceeded",
             Self::OriginDepthExceeded => "core origin structural depth is exceeded",
+            Self::PatternDepthExceeded => "core pattern structural depth is exceeded",
             Self::InvalidPayload => "core payload admission state is inconsistent",
             Self::InvalidNodeId => "core node identity does not belong to the arena",
         })
@@ -573,6 +618,7 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
+        let arms = admit_match_arms(arms)?;
         self.push(
             ty,
             origin,
@@ -834,6 +880,220 @@ impl CoreBuilder {
     }
 }
 
+enum PatternAdmissionTask {
+    Visit(CorePattern, usize),
+    FinishTuple {
+        ty: Type,
+        origin: Origin,
+        count: usize,
+    },
+    FinishConstructor {
+        ty: Type,
+        origin: Origin,
+        constructor: crate::types::ConstructorId,
+        has_payload: bool,
+    },
+}
+
+enum PatternToken {
+    Binder(Type, Origin, TypedBinder),
+    Wildcard(Type, Origin),
+    Boolean(Type, Origin, bool),
+    Unit(Type, Origin),
+    Tuple(Type, Origin, usize),
+    Constructor(Type, Origin, crate::types::ConstructorId, bool),
+}
+
+fn admit_match_arms(arms: Vec<CoreMatchArm>) -> Result<Vec<CoreMatchArm>, BuildError> {
+    let mut admitted = Vec::with_capacity(arms.len());
+    let mut first_error = None;
+    for arm in arms {
+        let (pattern, body, origin) = arm.into_parts();
+        let pattern = admit_pattern(pattern);
+        let origin = admit_origin(origin);
+        match (pattern, origin) {
+            (Ok(pattern), Ok(origin)) if first_error.is_none() => {
+                admitted.push(CoreMatchArm::new(pattern, body, origin));
+            }
+            (Err(error), _) | (_, Err(error)) => {
+                first_error.get_or_insert(error);
+            }
+            (Ok(_), Ok(_)) => {}
+        }
+    }
+    first_error.map_or(Ok(admitted), Err)
+}
+
+fn admit_pattern(pattern: CorePattern) -> Result<CorePattern, BuildError> {
+    let mut work = vec![PatternAdmissionTask::Visit(pattern, 0)];
+    let mut tokens = Vec::new();
+    let mut first_error = None;
+    while let Some(task) = work.pop() {
+        match task {
+            PatternAdmissionTask::Visit(pattern, depth) => {
+                let CorePattern { ty, origin, kind } = pattern;
+                if depth > CORE_PATTERN_DEPTH_LIMIT {
+                    first_error.get_or_insert(BuildError::PatternDepthExceeded);
+                }
+                let payloads = admit_payloads(ty, origin);
+                match kind {
+                    CorePatternKind::Binder(binder) => match payloads {
+                        Ok((ty, origin)) if first_error.is_none() => {
+                            tokens.push(PatternToken::Binder(ty, origin, binder));
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                    },
+                    CorePatternKind::Wildcard => {
+                        push_pattern_leaf(payloads, &mut first_error, &mut tokens, |ty, origin| {
+                            PatternToken::Wildcard(ty, origin)
+                        })
+                    }
+                    CorePatternKind::Boolean(value) => {
+                        push_pattern_leaf(payloads, &mut first_error, &mut tokens, |ty, origin| {
+                            PatternToken::Boolean(ty, origin, value)
+                        })
+                    }
+                    CorePatternKind::Unit => {
+                        push_pattern_leaf(payloads, &mut first_error, &mut tokens, |ty, origin| {
+                            PatternToken::Unit(ty, origin)
+                        })
+                    }
+                    CorePatternKind::Tuple(elements) => {
+                        if let Ok((ty, origin)) = payloads {
+                            let count = elements.len();
+                            if first_error.is_none() {
+                                work.push(PatternAdmissionTask::FinishTuple { ty, origin, count });
+                            }
+                            for element in elements.into_vec().into_iter().rev() {
+                                work.push(PatternAdmissionTask::Visit(
+                                    element,
+                                    depth.saturating_add(1),
+                                ));
+                            }
+                        } else if let Err(error) = payloads {
+                            first_error.get_or_insert(error);
+                            for element in elements.into_vec().into_iter().rev() {
+                                work.push(PatternAdmissionTask::Visit(
+                                    element,
+                                    depth.saturating_add(1),
+                                ));
+                            }
+                        }
+                    }
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    } => {
+                        let has_payload = payload.is_some();
+                        if let Ok((ty, origin)) = payloads {
+                            if first_error.is_none() {
+                                work.push(PatternAdmissionTask::FinishConstructor {
+                                    ty,
+                                    origin,
+                                    constructor,
+                                    has_payload,
+                                });
+                            }
+                        } else if let Err(error) = payloads {
+                            first_error.get_or_insert(error);
+                        }
+                        if let Some(payload) = payload {
+                            work.push(PatternAdmissionTask::Visit(
+                                *payload,
+                                depth.saturating_add(1),
+                            ));
+                        }
+                    }
+                }
+            }
+            PatternAdmissionTask::FinishTuple { ty, origin, count } => {
+                tokens.push(PatternToken::Tuple(ty, origin, count));
+            }
+            PatternAdmissionTask::FinishConstructor {
+                ty,
+                origin,
+                constructor,
+                has_payload,
+            } => tokens.push(PatternToken::Constructor(
+                ty,
+                origin,
+                constructor,
+                has_payload,
+            )),
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+
+    let mut rebuilt = Vec::new();
+    for token in tokens {
+        let pattern = match token {
+            PatternToken::Binder(ty, origin, binder) => {
+                CorePattern::new(ty, origin, CorePatternKind::Binder(binder))
+            }
+            PatternToken::Wildcard(ty, origin) => {
+                CorePattern::new(ty, origin, CorePatternKind::Wildcard)
+            }
+            PatternToken::Boolean(ty, origin, value) => {
+                CorePattern::new(ty, origin, CorePatternKind::Boolean(value))
+            }
+            PatternToken::Unit(ty, origin) => CorePattern::new(ty, origin, CorePatternKind::Unit),
+            PatternToken::Tuple(ty, origin, count) => {
+                if rebuilt.len() < count {
+                    return Err(BuildError::InvalidPayload);
+                }
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                CorePattern::new(
+                    ty,
+                    origin,
+                    CorePatternKind::Tuple(elements.into_boxed_slice()),
+                )
+            }
+            PatternToken::Constructor(ty, origin, constructor, has_payload) => {
+                let payload = if has_payload {
+                    Some(Box::new(rebuilt.pop().ok_or(BuildError::InvalidPayload)?))
+                } else {
+                    None
+                };
+                CorePattern::new(
+                    ty,
+                    origin,
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    },
+                )
+            }
+        };
+        rebuilt.push(pattern);
+    }
+    let result = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
+    if rebuilt.is_empty() {
+        Ok(result)
+    } else {
+        Err(BuildError::InvalidPayload)
+    }
+}
+
+fn push_pattern_leaf(
+    payloads: Result<(Type, Origin), BuildError>,
+    first_error: &mut Option<BuildError>,
+    tokens: &mut Vec<PatternToken>,
+    token: impl FnOnce(Type, Origin) -> PatternToken,
+) {
+    match payloads {
+        Ok((ty, origin)) if first_error.is_none() => tokens.push(token(ty, origin)),
+        Ok(_) => {}
+        Err(error) => {
+            first_error.get_or_insert(error);
+        }
+    }
+}
+
 fn admit_payloads(ty: Type, origin: Origin) -> Result<(Type, Origin), BuildError> {
     let admitted_type = admit_type(ty);
     let admitted_origin = admit_origin(origin);
@@ -1051,6 +1311,63 @@ mod tests {
             };
         }
         origin
+    }
+
+    fn nested_pattern(source: &SourceFile, depth: usize) -> CorePattern {
+        let origin = generated_origin(source, 0);
+        let mut pattern = CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard);
+        for _ in 0..depth {
+            pattern = CorePattern::new(
+                Type::Unit,
+                origin.clone(),
+                CorePatternKind::Tuple(vec![pattern].into_boxed_slice()),
+            );
+        }
+        pattern
+    }
+
+    #[test]
+    fn pattern_payload_limit_rejects_deep_core_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("core-pattern-boundary".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("pattern.ash", "()").expect("test source");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let value = builder.unit(Type::Unit, origin.clone()).expect("unit node");
+                let before = builder.nodes.len();
+                assert_eq!(
+                    builder.match_expression(
+                        value,
+                        vec![CoreMatchArm::new(
+                            nested_pattern(&source, 50_000),
+                            value,
+                            origin.clone(),
+                        )],
+                        Type::Unit,
+                        origin.clone(),
+                    ),
+                    Err(BuildError::PatternDepthExceeded)
+                );
+                assert_eq!(builder.nodes.len(), before);
+
+                builder
+                    .match_expression(
+                        value,
+                        vec![CoreMatchArm::new(
+                            nested_pattern(&source, CORE_PATTERN_DEPTH_LIMIT),
+                            value,
+                            origin.clone(),
+                        )],
+                        Type::Unit,
+                        origin,
+                    )
+                    .expect("the exact pattern boundary is admitted");
+            })
+            .expect("pattern admission thread should start")
+            .join()
+            .expect("pattern admission should fit the small stack");
     }
 
     #[test]

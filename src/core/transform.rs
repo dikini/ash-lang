@@ -299,38 +299,95 @@ fn rebuild_pattern(
     builder: &mut CoreBuilder,
     pattern: &CorePattern,
 ) -> Result<CorePattern, TransformError> {
-    let kind = match &pattern.kind {
-        CorePatternKind::Binder(binder) => CorePatternKind::Binder(builder.resolved_binder(
-            binder.id(),
-            binder.ty().clone(),
-            binder.origin().clone(),
-        )?),
-        CorePatternKind::Wildcard => CorePatternKind::Wildcard,
-        CorePatternKind::Boolean(value) => CorePatternKind::Boolean(*value),
-        CorePatternKind::Unit => CorePatternKind::Unit,
-        CorePatternKind::Tuple(elements) => CorePatternKind::Tuple(
-            elements
-                .iter()
-                .map(|element| rebuild_pattern(builder, element))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_boxed_slice(),
-        ),
-        CorePatternKind::Constructor {
-            constructor,
-            payload,
-        } => CorePatternKind::Constructor {
-            constructor: *constructor,
-            payload: payload
-                .as_deref()
-                .map(|payload| rebuild_pattern(builder, payload).map(Box::new))
-                .transpose()?,
-        },
-    };
-    Ok(CorePattern::new(
-        pattern.ty.clone(),
-        pattern.origin.clone(),
-        kind,
-    ))
+    enum Task<'a> {
+        Visit(&'a CorePattern),
+        FinishTuple(&'a CorePattern, usize),
+        FinishConstructor(&'a CorePattern, crate::types::ConstructorId, bool),
+    }
+
+    let mut work = vec![Task::Visit(pattern)];
+    let mut rebuilt = Vec::new();
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Visit(pattern) => match &pattern.kind {
+                CorePatternKind::Binder(binder) => rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Binder(builder.resolved_binder(
+                        binder.id(),
+                        binder.ty().clone(),
+                        binder.origin().clone(),
+                    )?),
+                )),
+                CorePatternKind::Wildcard => rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Wildcard,
+                )),
+                CorePatternKind::Boolean(value) => rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Boolean(*value),
+                )),
+                CorePatternKind::Unit => rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Unit,
+                )),
+                CorePatternKind::Tuple(elements) => {
+                    work.push(Task::FinishTuple(pattern, elements.len()));
+                    work.extend(elements.iter().rev().map(Task::Visit));
+                }
+                CorePatternKind::Constructor {
+                    constructor,
+                    payload,
+                } => {
+                    work.push(Task::FinishConstructor(
+                        pattern,
+                        *constructor,
+                        payload.is_some(),
+                    ));
+                    if let Some(payload) = payload.as_deref() {
+                        work.push(Task::Visit(payload));
+                    }
+                }
+            },
+            Task::FinishTuple(pattern, count) => {
+                if rebuilt.len() < count {
+                    return Err(TransformError::InvalidValidatedInput);
+                }
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Tuple(elements.into_boxed_slice()),
+                ));
+            }
+            Task::FinishConstructor(pattern, constructor, has_payload) => {
+                let payload = if has_payload {
+                    Some(Box::new(
+                        rebuilt.pop().ok_or(TransformError::InvalidValidatedInput)?,
+                    ))
+                } else {
+                    None
+                };
+                rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    },
+                ));
+            }
+        }
+    }
+    let result = rebuilt.pop().ok_or(TransformError::InvalidValidatedInput)?;
+    if rebuilt.is_empty() {
+        Ok(result)
+    } else {
+        Err(TransformError::InvalidValidatedInput)
+    }
 }
 
 fn postorder(

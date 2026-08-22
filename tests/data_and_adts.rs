@@ -5,7 +5,7 @@ use ash::{
         validate,
     },
     driver::{Observation, PipelineFailure, run_source},
-    elaborate::Elaborator,
+    elaborate::{ElaborationFailure, Elaborator, TypeError},
     eval::{TraceEvent, evaluate},
     lexer::lex,
     parser::{parse, project},
@@ -340,6 +340,203 @@ fn retained_data_syntax_failures_keep_the_exact_current_token_span() {
         .expect("fixture offset should fit");
     assert_eq!(span.range().start(), start);
     assert_eq!(span.range().end(), start + 1);
+}
+
+#[test]
+fn an_empty_match_is_rejected_by_the_retained_syntax_stage() {
+    let source =
+        SourceFile::new("empty-match.ash", "match true {\n}\n").expect("fixture should fit");
+    let failure = run_source(source).expect_err("a match requires an arm");
+    let PipelineFailure::Syntax(failure) = failure else {
+        panic!("the retained grammar must reject an empty match")
+    };
+    let diagnostic = failure.parser.first().expect("parser rejection");
+    assert_eq!(diagnostic.reason.to_string(), "parse.expected-form");
+    assert_eq!(diagnostic.expected.as_deref(), Some("a pattern"));
+}
+
+#[test]
+fn admitted_nested_patterns_complete_the_full_pipeline_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let depth = ash::parser::STRUCTURAL_DEPTH_LIMIT / 8 - 4;
+                let mut pattern = "_".to_owned();
+                for _ in 0..depth {
+                    pattern = format!("Step({pattern})");
+                }
+                let text = format!(
+                    "type Chain =\nEnd\n| Step(Chain)\n\nmatch End {{\n{pattern} => 1\n_ => 0\n}}\n"
+                );
+                let source = SourceFile::new("pattern-full-boundary.ash", text)
+                    .expect("boundary fixture should fit");
+                let observation = run_source(source).expect("admitted pattern must complete");
+                assert_eq!(observation.value_display(), "0");
+
+                let match_depth = ash::parser::STRUCTURAL_DEPTH_LIMIT / 32;
+                let mut text = "match true {\n_ => ".repeat(match_depth);
+                text.push('0');
+                text.push('\n');
+                text.push_str(&"}\n".repeat(match_depth));
+                let source = SourceFile::new("match-full-boundary.ash", text)
+                    .expect("match boundary fixture should fit");
+                let observation = run_source(source).expect("admitted matches must complete");
+                assert_eq!(observation.value_display(), "0");
+
+                let mut deep_equation_pattern = "_".to_owned();
+                for _ in 0..(ash::parser::STRUCTURAL_DEPTH_LIMIT / 8) {
+                    deep_equation_pattern = format!("Step({deep_equation_pattern})");
+                }
+                let text = format!(
+                    "type Chain =\nStep(Chain)\n\npick : Chain -> Int -> Int\npick {deep_equation_pattern} value = value\n\n0\n"
+                );
+                let source = SourceFile::new("equation-pattern-boundary.ash", text)
+                    .expect("equation boundary fixture should fit");
+                let observation = run_source(source).expect("tuple-lowered equation must complete");
+                assert_eq!(observation.value_display(), "0");
+
+                let text = format!(
+                    "type Chain =\nStep(Chain)\n\nfn pick({deep_equation_pattern} : Chain, value : Int) -> Int {{\nvalue\n}}\n\n0\n"
+                );
+                let source = SourceFile::new("operational-pattern-boundary.ash", text)
+                    .expect("operational boundary fixture should fit");
+                let observation =
+                    run_source(source).expect("tuple-lowered operational header must complete");
+                assert_eq!(observation.value_display(), "0");
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("full pattern pipeline must fit the small stack");
+    });
+}
+
+#[test]
+fn admitted_type_depth_survives_synthesized_tuple_and_function_wrappers() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let mut deep_type = "Unit".to_owned();
+                for _ in 0..ash::parser::STRUCTURAL_DEPTH_LIMIT {
+                    deep_type = format!("Unit -> {deep_type}");
+                }
+                let operational =
+                    format!("fn pick(value : {deep_type}, other : Int) -> Int {{\n0\n}}\n\n0\n");
+                let source = SourceFile::new("operational-type-boundary.ash", operational)
+                    .expect("operational boundary fixture should fit");
+                let observation = run_source(source).expect("tuple/function lowering must fit");
+                assert_eq!(observation.value_display(), "0");
+
+                let declaration = format!("type Boxed =\nMake({deep_type}, Int)\n\n0\n");
+                let source = SourceFile::new("constructor-type-boundary.ash", declaration)
+                    .expect("constructor boundary fixture should fit");
+                let observation =
+                    run_source(source).expect("constructor payload lowering must fit");
+                assert_eq!(observation.value_display(), "0");
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("lowered type wrappers must fit the small stack");
+    });
+}
+
+#[test]
+fn a_wide_constructor_set_has_practical_exhaustive_coverage() {
+    const WIDTH: usize = 512;
+    let mut text = "type Wide =\nC0\n".to_owned();
+    for index in 1..WIDTH {
+        text.push_str(&format!("| C{index}\n"));
+    }
+    text.push_str(&format!("\nmatch C{} {{\n", WIDTH - 1));
+    for index in 0..WIDTH {
+        text.push_str(&format!("C{index} => {index}\n"));
+    }
+    text.push_str("}\n");
+    let source = SourceFile::new("wide-constructors.ash", text).expect("wide fixture should fit");
+    let observation = run_source(source).expect("wide exhaustive match should complete");
+    assert_eq!(observation.value_display(), (WIDTH - 1).to_string());
+}
+
+#[test]
+fn an_over_budget_case_group_reports_an_internal_resource_failure() {
+    const WIDTH: usize = 800;
+    let mut text = "type TooWide =\nC0\n".to_owned();
+    for index in 1..WIDTH {
+        text.push_str(&format!("| C{index}\n"));
+    }
+    text.push_str("\nmatch C0 {\n");
+    for index in 0..WIDTH {
+        text.push_str(&format!("C{index} => {index}\n"));
+    }
+    text.push_str("}\n");
+    let source =
+        SourceFile::new("coverage-resource.ash", text).expect("resource fixture should fit");
+    let error = run_source(source).expect_err("coverage work must be bounded");
+    let PipelineFailure::Typing(TypeError::Internal(failure)) = error else {
+        panic!("coverage exhaustion must remain an internal resource failure")
+    };
+    assert_eq!(failure, ElaborationFailure::CoverageResourceExhausted);
+}
+
+#[test]
+fn match_trace_enters_the_scrutinee_once_and_only_the_selected_body() {
+    use ash::{
+        core::{CoreBuilder, CoreMatchArm, CorePattern, CorePatternKind},
+        integer::Integer,
+        source::{ByteRange, Origin},
+        types::Type,
+    };
+
+    let file = SourceFile::new("match-trace.ash", "match trace").expect("trace fixture should fit");
+    let origin = Origin::Source(
+        file.span(ByteRange::new(0, 11).expect("ordered range"))
+            .expect("fixture span"),
+    );
+    let mut builder = CoreBuilder::new();
+    let scrutinee = builder
+        .boolean(true, Type::Bool, origin.clone())
+        .expect("scrutinee");
+    let selected = builder
+        .integer(
+            Integer::parse_decimal("1").expect("integer"),
+            Type::Int,
+            origin.clone(),
+        )
+        .expect("selected body");
+    let unselected = builder
+        .integer(
+            Integer::parse_decimal("2").expect("integer"),
+            Type::Int,
+            origin.clone(),
+        )
+        .expect("unselected body");
+    let arm = |value, body| {
+        CoreMatchArm::new(
+            CorePattern::new(Type::Bool, origin.clone(), CorePatternKind::Boolean(value)),
+            body,
+            origin.clone(),
+        )
+    };
+    let root = builder
+        .match_expression(
+            scrutinee,
+            vec![arm(true, selected), arm(false, unselected)],
+            Type::Int,
+            origin,
+        )
+        .expect("match");
+    let program = validate(builder.finish(root).expect("root"), &[&file]).expect("valid Core");
+    let evaluation = evaluate(&program).expect("match evaluation");
+    assert_eq!(evaluation.value.to_string(), "1");
+    assert_eq!(
+        evaluation.trace,
+        vec![
+            TraceEvent::Enter(root),
+            TraceEvent::Enter(scrutinee),
+            TraceEvent::Enter(selected),
+        ]
+    );
 }
 
 #[test]

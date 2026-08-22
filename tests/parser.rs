@@ -1181,6 +1181,133 @@ fn structural_depth_budget_bounds_parenthesized_types() {
     });
 }
 
+fn nested_constructor_pattern_source(depth: usize) -> String {
+    let mut source = "type Loop =\nEnd\n| Step(Loop)\n\nmatch End {\n".to_owned();
+    source.push_str(&"Step(".repeat(depth));
+    source.push('_');
+    source.push_str(&")".repeat(depth));
+    source.push_str(" => 1\n_ => 0\n}\n");
+    source
+}
+
+#[test]
+fn structural_depth_budget_bounds_nested_constructor_patterns() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let accepted_depth = STRUCTURAL_DEPTH_LIMIT / 8 - 4;
+                let accepted_source = SourceFile::new(
+                    "pattern-depth-boundary.ash",
+                    nested_constructor_pattern_source(accepted_depth),
+                )
+                .expect("the boundary source should fit");
+                let accepted = parse(lex(&accepted_source).expect("the boundary should lex"));
+                assert_eq!(accepted.resource_failure(), None);
+                project(&accepted_source, &accepted).expect("the boundary should project");
+
+                let rejected_source = SourceFile::new(
+                    "pattern-depth-overflow.ash",
+                    nested_constructor_pattern_source(accepted_depth + 1),
+                )
+                .expect("the overflow source should fit");
+                let rejected = parse(lex(&rejected_source).expect("the overflow should lex"));
+                assert_eq!(
+                    rejected.resource_failure(),
+                    Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    })
+                );
+                assert_eq!(
+                    project(&rejected_source, &rejected),
+                    Err(ProjectionError::ResourceLimit(
+                        ResourceFailure::StructuralDepth {
+                            limit: STRUCTURAL_DEPTH_LIMIT
+                        }
+                    ))
+                );
+
+                let far_source = SourceFile::new(
+                    "pattern-depth-far-overflow.ash",
+                    nested_constructor_pattern_source(1_000),
+                )
+                .expect("the far-overflow source should fit");
+                let far = parse(lex(&far_source).expect("the far overflow should lex"));
+                assert_eq!(
+                    far.resource_failure(),
+                    Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    })
+                );
+            })
+            .expect("the pattern-depth thread should start")
+            .join()
+            .expect("pattern depth should fit the small stack");
+    });
+}
+
+fn nested_match_source(depth: usize) -> String {
+    let mut source = "match true {\n_ => ".repeat(depth);
+    source.push('0');
+    source.push('\n');
+    source.push_str(&"}\n".repeat(depth));
+    source
+}
+
+#[test]
+fn structural_depth_budget_bounds_nested_matches() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let accepted_depth = STRUCTURAL_DEPTH_LIMIT / 32;
+                let accepted_source = SourceFile::new(
+                    "match-depth-boundary.ash",
+                    nested_match_source(accepted_depth),
+                )
+                .expect("the boundary source should fit");
+                let accepted = parse(lex(&accepted_source).expect("the boundary should lex"));
+                assert_eq!(accepted.resource_failure(), None);
+                project(&accepted_source, &accepted).expect("the boundary should project");
+
+                let rejected_source = SourceFile::new(
+                    "match-depth-overflow.ash",
+                    nested_match_source(accepted_depth + 1),
+                )
+                .expect("the overflow source should fit");
+                let rejected = parse(lex(&rejected_source).expect("the overflow should lex"));
+                assert_eq!(
+                    rejected.resource_failure(),
+                    Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    })
+                );
+                assert_eq!(
+                    project(&rejected_source, &rejected),
+                    Err(ProjectionError::ResourceLimit(
+                        ResourceFailure::StructuralDepth {
+                            limit: STRUCTURAL_DEPTH_LIMIT
+                        }
+                    ))
+                );
+
+                let far_source =
+                    SourceFile::new("match-depth-far-overflow.ash", nested_match_source(1_000))
+                        .expect("the far-overflow source should fit");
+                let far = parse(lex(&far_source).expect("the far overflow should lex"));
+                assert_eq!(
+                    far.resource_failure(),
+                    Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    })
+                );
+            })
+            .expect("the match-depth thread should start")
+            .join()
+            .expect("match depth should fit the small stack");
+    });
+}
+
 #[test]
 fn structural_depth_budget_bounds_nested_blocks() {
     assert_depth_boundary(|depth| format!("{}1\n{}", "{\n".repeat(depth), "}\n".repeat(depth)));

@@ -135,7 +135,7 @@ used by `E-Constructor-Apply`.
 A match evaluates its scrutinee exactly once. Pattern matching follows aliases
 only when it must inspect a tuple or constructor. It compares constructor
 identities, visits tuple and payload components left to right, and returns the
-pattern's binder-to-location map. Arms are tried in source order; only the first
+pattern's binder-to-value map. Arms are tried in source order; only the first
 matching arm body evaluates. Exhaustiveness makes complete failure unreachable.
 
 ```sequent

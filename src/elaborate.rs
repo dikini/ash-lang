@@ -13,7 +13,10 @@ use crate::{
         TypedBinder, UnvalidatedProgram,
     },
     diagnostic::{Diagnostic, SourceLabel},
-    pattern::{display_witness, missing_witness_for_types, usefulness},
+    pattern::{
+        UsefulnessBudget, UsefulnessError, display_witness, missing_witness_for_types,
+        missing_witness_for_types_with_budget, usefulness_with_budget,
+    },
     resolved::{
         BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
         ResolvedExprKind, ResolvedLocalDeclaration, ResolvedPattern, ResolvedPatternKind,
@@ -129,6 +132,8 @@ pub enum ElaborationFailure {
     Core(BuildError),
     /// The explicit elaboration work stack lost an invariant.
     InvalidState,
+    /// Pattern coverage exceeded its deterministic compiler resource budget.
+    CoverageResourceExhausted,
 }
 
 impl fmt::Display for ElaborationFailure {
@@ -136,6 +141,9 @@ impl fmt::Display for ElaborationFailure {
         match self {
             Self::Core(error) => write!(formatter, "typed Core construction failed: {error}"),
             Self::InvalidState => formatter.write_str("typed elaboration state is inconsistent"),
+            Self::CoverageResourceExhausted => {
+                formatter.write_str("pattern coverage resource limit exceeded")
+            }
         }
     }
 }
@@ -178,6 +186,12 @@ impl Error for TypeError {}
 impl From<BuildError> for TypeError {
     fn from(error: BuildError) -> Self {
         Self::Internal(error.into())
+    }
+}
+
+impl From<UsefulnessError> for TypeError {
+    fn from(_: UsefulnessError) -> Self {
+        Self::Internal(ElaborationFailure::CoverageResourceExhausted)
     }
 }
 
@@ -981,7 +995,7 @@ impl Elaborator {
                             &matrix,
                             std::slice::from_ref(&domain),
                             &self.registry,
-                        ) {
+                        )? {
                             return Err(case_error(
                                 TypeReason::RefutableFunctionDomain,
                                 pattern.origin.primary_span(),
@@ -1142,7 +1156,7 @@ impl Elaborator {
                         &matrix,
                         std::slice::from_ref(&binding_type.ty),
                         &self.registry,
-                    ) {
+                    )? {
                         self.remove_pattern_binders(context, &binder_ids)?;
                         return Err(case_error(
                             TypeReason::RefutableBinding,
@@ -1349,6 +1363,7 @@ impl Elaborator {
             context,
         )?;
         let mut matrix = Vec::new();
+        let mut coverage_budget = UsefulnessBudget::default();
         let mut arms = Vec::with_capacity(expression.arms.len());
         let mut result_type: Option<(Type, TypeProvenance)> = None;
         for arm in &expression.arms {
@@ -1361,12 +1376,13 @@ impl Elaborator {
                 GeneratedReason::BindingLowering,
             )?;
             let row = vec![pattern.clone()];
-            if usefulness(
+            if usefulness_with_budget(
                 &matrix,
                 &row,
                 std::slice::from_ref(&scrutinee.ty),
                 &self.registry,
-            )
+                &mut coverage_budget,
+            )?
             .is_none()
             {
                 self.remove_pattern_binders(context, &binders)?;
@@ -1416,9 +1432,12 @@ impl Elaborator {
                 None,
             ));
         };
-        if let Some(witness) =
-            missing_witness_for_types(&matrix, std::slice::from_ref(&scrutinee.ty), &self.registry)
-        {
+        if let Some(witness) = missing_witness_for_types_with_budget(
+            &matrix,
+            std::slice::from_ref(&scrutinee.ty),
+            &self.registry,
+            &mut coverage_budget,
+        )? {
             return Err(case_error(
                 TypeReason::NonExhaustive,
                 span,
@@ -1674,6 +1693,7 @@ impl Elaborator {
         }
 
         let mut coverage_matrix = Vec::new();
+        let mut coverage_budget = UsefulnessBudget::default();
         let mut arms = Vec::with_capacity(equational.equations.len());
         for clause in &equational.equations {
             let mut binder_ids = Vec::new();
@@ -1687,7 +1707,7 @@ impl Elaborator {
                     GeneratedReason::FunctionLowering,
                 )?);
             }
-            if usefulness(
+            if usefulness_with_budget(
                 &coverage_matrix,
                 &patterns,
                 &domains
@@ -1695,7 +1715,8 @@ impl Elaborator {
                     .map(|domain| domain.ty.clone())
                     .collect::<Vec<_>>(),
                 &self.registry,
-            )
+                &mut coverage_budget,
+            )?
             .is_none()
             {
                 self.remove_pattern_binders(context, &binder_ids)?;
@@ -1744,9 +1765,12 @@ impl Elaborator {
             .iter()
             .map(|domain| domain.ty.clone())
             .collect::<Vec<_>>();
-        if let Some(witness) =
-            missing_witness_for_types(&coverage_matrix, &domain_types, &self.registry)
-        {
+        if let Some(witness) = missing_witness_for_types_with_budget(
+            &coverage_matrix,
+            &domain_types,
+            &self.registry,
+            &mut coverage_budget,
+        )? {
             return Err(case_error(
                 TypeReason::NonExhaustive,
                 definition_span,
@@ -1879,9 +1903,11 @@ impl Elaborator {
         let mut body = body_result?;
         if let Some(pattern) = retained_pattern {
             let matrix = vec![vec![pattern.clone()]];
-            if let Some(witness) =
-                missing_witness_for_types(&matrix, std::slice::from_ref(&domain.ty), &self.registry)
-            {
+            if let Some(witness) = missing_witness_for_types(
+                &matrix,
+                std::slice::from_ref(&domain.ty),
+                &self.registry,
+            )? {
                 return Err(case_error(
                     TypeReason::RefutableFunctionDomain,
                     operational.header.span,
