@@ -13,4 +13,5 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Accepted changes
 
-No change proposal is currently accepted and awaiting implementation.
+- [CP-0003: Monomorphic Data and Patterns](CP-0003-monomorphic-data-and-patterns.md)
+  authorizes the active data, tuple, pattern, and guarded-recursion increment.
