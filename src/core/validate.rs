@@ -18,7 +18,7 @@ use super::{
 use crate::{
     core::{CorePattern, CorePatternKind},
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
-    resolved::BinderId,
+    resolved::{BinderId, ResolvedNominalType},
     source::{Origin, SourceFile, SourceId, Span},
     types::{ConstructorId, Type, same_type},
 };
@@ -118,6 +118,16 @@ fn valid_upper_spelling(spelling: &str) -> bool {
     bytes.next().is_some_and(|byte| byte.is_ascii_uppercase())
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         && !matches!(spelling, "Int" | "Bool" | "Unit")
+}
+
+fn constructor_belongs_to_owner(owner: &ResolvedNominalType, constructor: ConstructorId) -> bool {
+    if constructor.owner() != owner.id {
+        return false;
+    }
+    usize::try_from(constructor.constructor())
+        .ok()
+        .and_then(|index| owner.constructors.get(index))
+        .is_some_and(|owned| *owned == constructor)
 }
 
 /// Consumes unchecked Core and returns the capability required by consumers.
@@ -297,7 +307,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         if registry.constructors().iter().any(|constructor| {
             registry
                 .nominal(constructor.owner)
-                .is_none_or(|owner| !owner.constructors.contains(&constructor.id))
+                .is_none_or(|owner| !constructor_belongs_to_owner(owner, constructor.id))
         }) {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
@@ -1084,6 +1094,36 @@ mod tests {
     fn origin(source: &SourceFile) -> Origin {
         let range = ByteRange::new(0, 2).expect("ordered range");
         Origin::Source(source.span(range).expect("source span"))
+    }
+
+    #[test]
+    fn constructor_owner_membership_uses_the_identity_index_for_wide_declarations() {
+        const WIDTH: u32 = 10_000;
+        let file = source();
+        let nominal = crate::types::NominalTypeId::new(file.id(), 0);
+        let constructors = (0..WIDTH)
+            .map(|index| ConstructorId::new(nominal, index))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let owner = crate::resolved::ResolvedNominalType {
+            id: nominal,
+            spelling: "Wide".into(),
+            constructors,
+            origin: origin(&file),
+        };
+
+        assert!(constructor_belongs_to_owner(
+            &owner,
+            ConstructorId::new(nominal, WIDTH - 1)
+        ));
+        assert!(!constructor_belongs_to_owner(
+            &owner,
+            ConstructorId::new(nominal, WIDTH)
+        ));
+        assert!(!constructor_belongs_to_owner(
+            &owner,
+            ConstructorId::new(crate::types::NominalTypeId::new(file.id(), 1), WIDTH - 1,)
+        ));
     }
 
     #[test]

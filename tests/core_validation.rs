@@ -105,6 +105,47 @@ fn rejects_malformed_data_registries_and_constructor_annotations() {
 }
 
 #[test]
+fn validates_ten_thousand_constructor_owner_links_without_pairwise_scanning() {
+    const WIDTH: u32 = 10_000;
+    let file = source(&"x".repeat(WIDTH as usize + 1));
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let ids = (0..WIDTH)
+        .map(|index| ConstructorId::new(nominal, index))
+        .collect::<Vec<_>>();
+    let constructors = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| ResolvedConstructor {
+            id: *id,
+            owner: nominal,
+            spelling: format!("C{index}"),
+            payload: None,
+            origin: range_origin(
+                &file,
+                u32::try_from(index + 1).expect("test index should fit"),
+                u32::try_from(index + 2).expect("test index should fit"),
+            ),
+        })
+        .collect();
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "Wide".into(),
+            constructors: ids.into_boxed_slice(),
+            origin: whole_origin(&file),
+        }],
+        constructors,
+    ));
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder
+        .unit(Type::Unit, whole_origin(&file))
+        .expect("unit root");
+
+    validate(builder.finish(root).expect("root"), &[&file])
+        .expect("wide registry should validate with indexed ownership checks");
+}
+
+#[test]
 fn rejects_registry_identity_order_spelling_and_source_forgery() {
     let file = source("registry root");
     let foreign = source("foreign registry origin");
