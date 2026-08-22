@@ -12,6 +12,7 @@ use std::{
 
 use super::{
     binding::BindingNode,
+    data::{ConstructorNode, CoreMatchArm, MatchNode, TupleNode},
     function::{ApplicationNode, FunctionNode},
     literal::{BooleanNode, IntegerNode, UnitNode},
     primitive::{Primitive, PrimitiveNode},
@@ -20,7 +21,7 @@ use super::{
 };
 use crate::{
     integer::Integer,
-    resolved::BinderId,
+    resolved::{BinderId, ResolvedRegistry},
     source::{GeneratedReason, Origin, Span},
     types::Type,
 };
@@ -132,6 +133,7 @@ impl PureExprKind {
                 PureValue::Boolean(node) => fixed_child_count(node.children()),
                 PureValue::Unit(node) => fixed_child_count(node.children()),
                 PureValue::Function(node) => fixed_child_count(node.children()),
+                PureValue::Constructor(_) => 0,
             },
             Self::Variable(node) => fixed_child_count(node.children()),
             Self::Computation(computation) => match computation {
@@ -139,6 +141,8 @@ impl PureExprKind {
                 PureComputation::RecursiveBind(node) => node.child_count(),
                 PureComputation::Apply(node) => fixed_child_count(node.children()),
                 PureComputation::Primitive(node) => fixed_child_count(node.children()),
+                PureComputation::Tuple(node) => node.elements().len(),
+                PureComputation::Match(node) => node.arms().len() + 1,
             },
         }
     }
@@ -150,6 +154,7 @@ impl PureExprKind {
                 PureValue::Boolean(node) => fixed_child_at(node.children(), index),
                 PureValue::Unit(node) => fixed_child_at(node.children(), index),
                 PureValue::Function(node) => fixed_child_at(node.children(), index),
+                PureValue::Constructor(_) => None,
             },
             Self::Variable(node) => fixed_child_at(node.children(), index),
             Self::Computation(computation) => match computation {
@@ -157,6 +162,14 @@ impl PureExprKind {
                 PureComputation::RecursiveBind(node) => node.child_at(index),
                 PureComputation::Apply(node) => fixed_child_at(node.children(), index),
                 PureComputation::Primitive(node) => fixed_child_at(node.children(), index),
+                PureComputation::Tuple(node) => node.elements().get(index).copied(),
+                PureComputation::Match(node) => {
+                    if index == 0 {
+                        Some(node.scrutinee())
+                    } else {
+                        node.arms().get(index - 1).map(CoreMatchArm::body)
+                    }
+                }
             },
         }
     }
@@ -181,6 +194,8 @@ pub enum PureValue {
     Unit(UnitNode),
     /// A unary function value.
     Function(FunctionNode),
+    /// A nullary value or payload-constructor function.
+    Constructor(ConstructorNode),
 }
 
 /// The closed computation families in the pure Mini-Ash dialect.
@@ -194,6 +209,10 @@ pub enum PureComputation {
     Apply(ApplicationNode),
     /// A primitive operation.
     Primitive(PrimitiveNode),
+    /// Strict tuple construction.
+    Tuple(TupleNode),
+    /// Structured first-match selection.
+    Match(MatchNode),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -217,6 +236,7 @@ pub(super) struct StoredNode {
 /// An unchecked Core arena which must cross [`super::validate()`] before use.
 #[derive(Debug)]
 pub struct UnvalidatedProgram {
+    pub(super) registry: Arc<ResolvedRegistry>,
     pub(super) arena: ArenaId,
     pub(super) nodes: Vec<StoredNode>,
     pub(super) root: NodeId,
@@ -225,14 +245,21 @@ pub struct UnvalidatedProgram {
 /// A pure Core arena whose graph, types, scope, dialect, and provenance hold.
 #[derive(Debug)]
 pub struct PureProgram {
+    registry: Arc<ResolvedRegistry>,
     arena: ArenaId,
     nodes: Box<[TypedExpr]>,
     root: NodeId,
 }
 
 impl PureProgram {
-    pub(super) fn new(arena: ArenaId, nodes: Vec<TypedExpr>, root: NodeId) -> Self {
+    pub(super) fn new(
+        registry: Arc<ResolvedRegistry>,
+        arena: ArenaId,
+        nodes: Vec<TypedExpr>,
+        root: NodeId,
+    ) -> Self {
         Self {
+            registry,
             arena,
             nodes: nodes.into_boxed_slice(),
             root,
@@ -260,6 +287,12 @@ impl PureProgram {
     #[must_use]
     pub const fn node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Returns the immutable nominal and constructor registry.
+    #[must_use]
+    pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
+        &self.registry
     }
 }
 
@@ -293,6 +326,12 @@ impl ValidatedProgram {
     #[must_use]
     pub fn node_count(&self) -> usize {
         self.0.node_count()
+    }
+
+    /// Returns the immutable nominal and constructor registry.
+    #[must_use]
+    pub fn registry(&self) -> &Arc<ResolvedRegistry> {
+        self.0.registry()
     }
 }
 
@@ -358,6 +397,7 @@ impl Error for BuildError {}
 #[derive(Debug, Default)]
 #[must_use]
 pub struct CoreBuilder {
+    registry: Arc<ResolvedRegistry>,
     arena: Option<ArenaId>,
     nodes: Vec<StoredNode>,
     next_binder: u32,
@@ -371,6 +411,7 @@ impl CoreBuilder {
     /// Starts an empty Core arena.
     pub fn new() -> Self {
         Self {
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
             arena: None,
             nodes: Vec::new(),
             next_binder: 0,
@@ -378,6 +419,15 @@ impl CoreBuilder {
             materialized_resolved: HashSet::new(),
             generated_binders: HashSet::new(),
             binder_phase_started: false,
+        }
+    }
+
+    /// Starts an empty arena carrying an immutable resolved data registry.
+    #[must_use]
+    pub fn with_registry(registry: Arc<ResolvedRegistry>) -> Self {
+        Self {
+            registry,
+            ..Self::new()
         }
     }
 
@@ -486,6 +536,49 @@ impl CoreBuilder {
     /// Adds a unit payload with an unchecked result annotation.
     pub fn unit(&mut self, ty: Type, origin: Origin) -> Result<NodeId, BuildError> {
         self.push(ty, origin, PureExprKind::Value(PureValue::Unit(UnitNode)))
+    }
+
+    /// Adds an unchecked constructor occurrence.
+    pub fn constructor(
+        &mut self,
+        constructor: crate::types::ConstructorId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Value(PureValue::Constructor(ConstructorNode::new(constructor))),
+        )
+    }
+
+    /// Adds strict tuple construction with an unchecked result annotation.
+    pub fn tuple(
+        &mut self,
+        elements: Vec<NodeId>,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::Tuple(TupleNode::new(elements))),
+        )
+    }
+
+    /// Adds a structured match with unchecked pattern and branch invariants.
+    pub fn match_expression(
+        &mut self,
+        scrutinee: NodeId,
+        arms: Vec<CoreMatchArm>,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::Match(MatchNode::new(scrutinee, arms))),
+        )
     }
 
     /// Adds a variable occurrence with an unchecked result annotation.
@@ -689,6 +782,7 @@ impl CoreBuilder {
             return Err(BuildError::InvalidNodeId);
         }
         Ok(UnvalidatedProgram {
+            registry: self.registry,
             arena,
             nodes: self.nodes,
             root,

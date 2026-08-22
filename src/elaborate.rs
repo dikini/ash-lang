@@ -1,14 +1,24 @@
 //! Bidirectional typed elaboration from resolved surface syntax to pure Core.
 
-use std::{collections::HashMap, error::Error, fmt, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    fmt,
+    sync::Arc,
+};
 
 use crate::{
-    core::{BuildError, CoreBuilder, NodeId, Primitive, TypedBinder, UnvalidatedProgram},
+    core::{
+        BuildError, CoreBuilder, CoreMatchArm, CorePattern, CorePatternKind, NodeId, Primitive,
+        TypedBinder, UnvalidatedProgram,
+    },
     diagnostic::{Diagnostic, SourceLabel},
+    pattern::{display_witness, missing_witness_for_types, usefulness},
     resolved::{
-        Binder, BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
-        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram, ResolvedRecursiveGroup,
-        ResolvedType, ResolvedTypeProvenanceNode,
+        BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
+        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedPattern, ResolvedPatternKind,
+        ResolvedProgram, ResolvedRecursiveGroup, ResolvedRegistry, ResolvedType,
+        ResolvedTypeProvenanceNode,
     },
     source::{GeneratedReason, Origin, Span},
     types::{Type, same_type},
@@ -33,6 +43,26 @@ pub enum TypeReason {
     EquationInterfaceNotFunction,
     /// A recursive member is not initialized directly by an anonymous function.
     UnsafeRecursiveInitializer,
+    /// A recursive data member is not rooted at its declared constructor.
+    UnsafeRecursiveRoot,
+    /// A recursive occurrence crosses a forcing or transporting form.
+    UnguardedRecursiveUse,
+    /// A constructor occurrence or pattern disagrees with its declaration.
+    ConstructorMismatch,
+    /// A pattern constructor belongs to a different nominal declaration.
+    ConstructorOwner,
+    /// A pattern form disagrees with its expected type.
+    PatternMismatch,
+    /// Equational clauses consume different or impossible arrow arities.
+    EquationArity,
+    /// A local binding pattern is semantically refutable.
+    RefutableBinding,
+    /// A single anonymous or operational domain pattern can fail.
+    RefutableFunctionDomain,
+    /// A case group leaves a concrete value uncovered.
+    NonExhaustive,
+    /// A case can never be selected after preceding cases.
+    RedundantCase,
 }
 
 impl fmt::Display for TypeReason {
@@ -48,6 +78,18 @@ impl fmt::Display for TypeReason {
                 formatter.write_str("type.equation-interface-not-function")
             }
             Self::UnsafeRecursiveInitializer => formatter.write_str("recursion.unsafe-initializer"),
+            Self::UnsafeRecursiveRoot => formatter.write_str("recursion.unsafe-root"),
+            Self::UnguardedRecursiveUse => formatter.write_str("recursion.unguarded-use"),
+            Self::ConstructorMismatch => formatter.write_str("pattern.constructor-payload"),
+            Self::ConstructorOwner => formatter.write_str("pattern.constructor-owner"),
+            Self::PatternMismatch => formatter.write_str("pattern.type-mismatch"),
+            Self::EquationArity => formatter.write_str("equation.arity"),
+            Self::RefutableBinding => formatter.write_str("pattern.refutable-binding"),
+            Self::RefutableFunctionDomain => {
+                formatter.write_str("pattern.refutable-function-domain")
+            }
+            Self::NonExhaustive => formatter.write_str("coverage.non-exhaustive"),
+            Self::RedundantCase => formatter.write_str("coverage.redundant-case"),
         }
     }
 }
@@ -440,6 +482,7 @@ pub struct TypedNode {
 #[must_use]
 pub struct Elaborator {
     builder: CoreBuilder,
+    registry: Arc<ResolvedRegistry>,
     state: ElaboratorState,
 }
 
@@ -452,8 +495,10 @@ enum ElaboratorState {
 impl Elaborator {
     /// Starts an elaborator for an expression with no resolved binder namespace.
     pub fn new() -> Self {
+        let registry = Arc::new(ResolvedRegistry::default());
         Self {
-            builder: CoreBuilder::new(),
+            builder: CoreBuilder::with_registry(Arc::clone(&registry)),
+            registry,
             state: ElaboratorState::Ready,
         }
     }
@@ -465,10 +510,12 @@ impl Elaborator {
     /// Returns a Core construction failure if the complete namespace cannot be
     /// reserved before elaboration starts.
     pub fn for_program(program: &ResolvedProgram) -> Result<Self, ElaborationFailure> {
-        let mut builder = CoreBuilder::new();
+        let registry = Arc::clone(&program.registry);
+        let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
         builder.reserve_resolved_binders(resolved_binders(program))?;
         Ok(Self {
             builder,
+            registry,
             state: ElaboratorState::Ready,
         })
     }
@@ -594,8 +641,10 @@ impl Elaborator {
                     (&equational.interface.name, function_type)
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
-                    let domain =
-                        ProvenancedType::from_resolved(&operational.header.parameter.annotation);
+                    let domain = operational_domain(
+                        &operational.header.parameters,
+                        operational.header.span,
+                    )?;
                     let codomain = ProvenancedType::from_resolved(&operational.header.result_type);
                     (
                         &operational.header.name,
@@ -621,75 +670,53 @@ impl Elaborator {
         }
 
         for definition in &program.definitions {
-            let (name, parameter, function_type, body, presentation, result_cause) =
-                match &definition.kind {
-                    ResolvedDefinitionKind::Equational(equational) => {
-                        let interface_type =
-                            ProvenancedType::from_resolved(&equational.interface.annotation);
-                        if !matches!(interface_type.ty, Type::Function(_, _)) {
-                            return Err(equation_interface_not_function(
-                                &equational.interface.annotation,
-                                &equational.equation.name,
-                            ));
-                        }
-                        let (_, codomain) = interface_type.function_parts()?;
-                        let result_cause = codomain
-                            .provenance
-                            .span()
-                            .unwrap_or(equational.interface.annotation.span);
-                        (
-                            &equational.interface.name,
-                            &equational.equation.binder,
-                            interface_type,
-                            FunctionBody::Expression(&equational.equation.body),
-                            equational_origin(definition.span, equational),
-                            result_cause,
-                        )
+            let (name, function) = match &definition.kind {
+                ResolvedDefinitionKind::Equational(equational) => {
+                    let function_type =
+                        ProvenancedType::from_resolved(&equational.interface.annotation);
+                    if !matches!(function_type.ty, Type::Function(_, _)) {
+                        return Err(equation_interface_not_function(
+                            &equational.interface.annotation,
+                            &equational.equation.name,
+                        ));
                     }
-                    ResolvedDefinitionKind::InlineOperational(operational) => {
-                        let domain = ProvenancedType::from_resolved(
-                            &operational.header.parameter.annotation,
-                        );
-                        let codomain =
-                            ProvenancedType::from_resolved(&operational.header.result_type);
-                        let function_type = ProvenancedType::function(
-                            domain,
-                            codomain,
-                            Some(operational.header.span),
-                        )?;
-                        (
-                            &operational.header.name,
-                            &operational.header.parameter.binder,
+                    (
+                        &equational.interface.name,
+                        self.elaborate_equation_group(
+                            equational,
                             function_type,
-                            FunctionBody::Block(&operational.body),
-                            operational_origin(definition.span, operational),
-                            operational.header.result_type.span,
-                        )
-                    }
-                };
-            let (domain, codomain) = function_type.function_parts()?;
-            let function = self.elaborate_expression_with_context(
-                ElaborationTask::CheckFunction {
-                    parameter,
-                    domain,
-                    codomain,
-                    body,
-                    presentation,
-                    function_type: function_type.clone(),
-                    body_check: CheckKind::Definition { result_cause },
-                },
-                &mut context,
-            )?;
-            if !structurally_equal(&function.ty, &function_type.ty)
-                || !function.provenance.aligns(&function.ty)
-            {
+                            &mut context,
+                            definition.span,
+                        )?,
+                    )
+                }
+                ResolvedDefinitionKind::InlineOperational(operational) => {
+                    let function_type = ProvenancedType::function(
+                        operational_domain(
+                            &operational.header.parameters,
+                            operational.header.span,
+                        )?,
+                        ProvenancedType::from_resolved(&operational.header.result_type),
+                        Some(operational.header.span),
+                    )?;
+                    (
+                        &operational.header.name,
+                        self.elaborate_operational_function(
+                            operational,
+                            function_type,
+                            &mut context,
+                            definition.span,
+                        )?,
+                    )
+                }
+            };
+            if !function.provenance.aligns(&function.ty) {
                 return Err(invalid_state());
             }
             let binder = global_binders.remove(&name.id).ok_or_else(invalid_state)?;
             globals.push(ElaboratedBinding {
                 binder,
                 initializer: function.node,
-                origin: global_binding_origin(definition),
             });
         }
 
@@ -798,6 +825,38 @@ impl Elaborator {
                             provenance,
                         });
                     }
+                    ResolvedExprKind::Constructor(occurrence) => {
+                        let constructor = self
+                            .registry
+                            .constructor(occurrence.constructor)
+                            .ok_or_else(invalid_state)?;
+                        let result = Type::Nominal(constructor.owner);
+                        let ty = constructor
+                            .payload
+                            .as_ref()
+                            .map_or(result.clone(), |payload| {
+                                Type::Function(Box::new(payload.clone()), Box::new(result))
+                            });
+                        let node = self.builder.constructor(
+                            occurrence.constructor,
+                            ty.clone(),
+                            occurrence.origin.clone(),
+                        )?;
+                        values.push(TypedNode {
+                            node,
+                            provenance: TypeProvenance::unknown(&ty),
+                            ty,
+                        });
+                    }
+                    ResolvedExprKind::Tuple(elements) => {
+                        let tuple = self.elaborate_tuple(elements, current.span, context)?;
+                        values.push(tuple);
+                    }
+                    ResolvedExprKind::Match(match_expression) => {
+                        let matched =
+                            self.elaborate_match(match_expression, current.span, context)?;
+                        values.push(matched);
+                    }
                     ResolvedExprKind::Apply(application) => {
                         tasks.push(ElaborationTask::AfterApplicationFunction {
                             whole_span: current.span,
@@ -815,9 +874,6 @@ impl Elaborator {
                     ResolvedExprKind::Function(_) => {
                         return Err(function_needs_context(current.span, cause));
                     }
-                    ResolvedExprKind::Constructor(_)
-                    | ResolvedExprKind::Tuple(_)
-                    | ResolvedExprKind::Match(_) => return Err(invalid_state()),
                 },
                 ElaborationTask::Check {
                     expression,
@@ -830,7 +886,7 @@ impl Elaborator {
                         }
                         let (domain, codomain) = expected.function_parts()?;
                         tasks.push(ElaborationTask::CheckFunction {
-                            parameter: &function.parameter,
+                            parameter: &function.pattern,
                             domain,
                             codomain,
                             body: FunctionBody::Block(&function.body),
@@ -893,8 +949,7 @@ impl Elaborator {
                     function_type,
                     body_check,
                 } => {
-                    schedule_function_check(
-                        &mut self.builder,
+                    self.schedule_function_check(
                         context,
                         &mut tasks,
                         declarations.len(),
@@ -910,15 +965,44 @@ impl Elaborator {
                     )?;
                 }
                 ElaborationTask::FinishFunction {
-                    parameter,
+                    pattern_binders,
                     binder,
+                    pattern,
+                    domain,
                     ty,
                     origin,
                     provenance,
                 } => {
-                    let body = values.pop().ok_or_else(invalid_state)?;
-                    if context.binders.remove(&parameter).is_none() {
-                        return Err(invalid_state());
+                    let mut body = values.pop().ok_or_else(invalid_state)?;
+                    self.remove_pattern_binders(context, &pattern_binders)?;
+                    if let Some(pattern) = pattern {
+                        let matrix = vec![vec![pattern.clone()]];
+                        if let Some(witness) = missing_witness_for_types(
+                            &matrix,
+                            std::slice::from_ref(&domain),
+                            &self.registry,
+                        ) {
+                            return Err(case_error(
+                                TypeReason::RefutableFunctionDomain,
+                                pattern.origin.primary_span(),
+                                "this function pattern is not exhaustive",
+                                Some(display_witness(&witness, &self.registry)),
+                            ));
+                        }
+                        let scrutinee =
+                            self.builder
+                                .variable(binder.id(), domain, pattern.origin.clone())?;
+                        let match_node = self.builder.match_expression(
+                            scrutinee,
+                            vec![CoreMatchArm::new(
+                                pattern.clone(),
+                                body.node,
+                                pattern.origin.clone(),
+                            )],
+                            body.ty.clone(),
+                            pattern.origin.clone(),
+                        )?;
+                        body.node = match_node;
                     }
                     let node = self
                         .builder
@@ -1045,33 +1129,47 @@ impl Elaborator {
                         ty: initializer.ty.clone(),
                         provenance: initializer.provenance.clone(),
                     });
-                    let ty = binding_type.ty.clone();
-                    let binder_origin = Origin::Generated {
-                        cause: Box::new(binding.binder.origin.clone()),
-                        reason: GeneratedReason::BindingLowering,
-                    };
-                    let binder = self.builder.resolved_binder(
-                        binding.binder.id,
-                        ty.clone(),
-                        binder_origin,
+                    let mut binder_ids = Vec::new();
+                    let pattern = self.check_core_pattern(
+                        &binding.pattern,
+                        &binding_type.ty,
+                        context,
+                        &mut binder_ids,
+                        GeneratedReason::BindingLowering,
                     )?;
-                    if context
-                        .insert_with_provenance(binding.binder.id, ty, binding_type.provenance)?
-                        .is_some()
-                    {
-                        return Err(invalid_state());
+                    let matrix = vec![vec![pattern.clone()]];
+                    if let Some(witness) = missing_witness_for_types(
+                        &matrix,
+                        std::slice::from_ref(&binding_type.ty),
+                        &self.registry,
+                    ) {
+                        self.remove_pattern_binders(context, &binder_ids)?;
+                        return Err(case_error(
+                            TypeReason::RefutableBinding,
+                            binding.span,
+                            "this local binding pattern can fail",
+                            Some(display_witness(&witness, &self.registry)),
+                        ));
                     }
-                    declarations.push(ElaboratedDeclaration::Binding(ElaboratedBinding {
-                        binder,
-                        initializer: initializer.node,
-                        origin: binding_origin(binding),
-                    }));
+                    let origin = binding_origin(binding);
+                    match &pattern.kind {
+                        CorePatternKind::Binder(binder) => {
+                            declarations.push(ElaboratedDeclaration::Binding {
+                                binder: binder.clone(),
+                                initializer: initializer.node,
+                                origin,
+                            });
+                        }
+                        _ => declarations.push(ElaboratedDeclaration::PatternBinding {
+                            pattern,
+                            initializer: initializer.node,
+                            origin,
+                        }),
+                    }
                 }
                 ElaborationTask::BeginRecursiveGroup(group) => {
                     for member in &group.members {
-                        if !matches!(member.initializer.kind, ResolvedExprKind::Function(_)) {
-                            return Err(unsafe_recursive_initializer(group, member));
-                        }
+                        validate_recursive_member(group, member, &self.registry)?;
                     }
                     let expected_types = group
                         .members
@@ -1140,12 +1238,27 @@ impl Elaborator {
                     }
                     for declaration in declarations.drain(declaration_start..).rev() {
                         let node = match declaration {
-                            ElaboratedDeclaration::Binding(binding) => self.builder.binding(
-                                binding.binder,
-                                binding.initializer,
+                            ElaboratedDeclaration::Binding {
+                                binder,
+                                initializer,
+                                origin,
+                            } => self.builder.binding(
+                                binder,
+                                initializer,
                                 body.node,
                                 body.ty.clone(),
-                                binding.origin,
+                                origin,
+                            )?,
+                            ElaboratedDeclaration::PatternBinding {
+                                pattern,
+                                initializer,
+                                origin,
+                                ..
+                            } => self.builder.match_expression(
+                                initializer,
+                                vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
+                                body.ty.clone(),
+                                origin,
                             )?,
                             ElaboratedDeclaration::Recursive { members, origin } => self
                                 .builder
@@ -1160,8 +1273,12 @@ impl Elaborator {
                     for declaration in source_declarations {
                         match declaration {
                             ResolvedLocalDeclaration::Binding(binding) => {
-                                if context.binders.remove(&binding.binder.id).is_none() {
-                                    return Err(invalid_state());
+                                let mut ids = Vec::new();
+                                collect_pattern_binders(&binding.pattern, &mut ids);
+                                for id in ids {
+                                    if context.binders.remove(&id).is_none() {
+                                        return Err(invalid_state());
+                                    }
                                 }
                             }
                             ResolvedLocalDeclaration::Recursive(group) => {
@@ -1183,6 +1300,625 @@ impl Elaborator {
         } else {
             Err(invalid_state())
         }
+    }
+
+    fn elaborate_tuple(
+        &mut self,
+        elements: &[ResolvedExpr],
+        span: Span,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        if elements.len() < 2 {
+            return Err(invalid_state());
+        }
+        let mut nodes = Vec::with_capacity(elements.len());
+        let mut types = Vec::with_capacity(elements.len());
+        for element in elements {
+            let typed = self.elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression: element,
+                    cause: None,
+                },
+                context,
+            )?;
+            nodes.push(typed.node);
+            types.push(typed.ty);
+        }
+        let ty = Type::Tuple(types.into_boxed_slice());
+        let node = self
+            .builder
+            .tuple(nodes, ty.clone(), Origin::Source(span))?;
+        Ok(TypedNode {
+            node,
+            provenance: TypeProvenance::atom(Some(span)),
+            ty,
+        })
+    }
+
+    fn elaborate_match(
+        &mut self,
+        expression: &crate::resolved::ResolvedMatchExpr,
+        span: Span,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let scrutinee = self.elaborate_expression_with_context(
+            ElaborationTask::Synthesize {
+                expression: &expression.scrutinee,
+                cause: None,
+            },
+            context,
+        )?;
+        let mut matrix = Vec::new();
+        let mut arms = Vec::with_capacity(expression.arms.len());
+        let mut result_type: Option<(Type, TypeProvenance)> = None;
+        for arm in &expression.arms {
+            let mut binders = Vec::new();
+            let pattern = self.check_core_pattern(
+                &arm.pattern,
+                &scrutinee.ty,
+                context,
+                &mut binders,
+                GeneratedReason::BindingLowering,
+            )?;
+            let row = vec![pattern.clone()];
+            if usefulness(
+                &matrix,
+                &row,
+                std::slice::from_ref(&scrutinee.ty),
+                &self.registry,
+            )
+            .is_none()
+            {
+                self.remove_pattern_binders(context, &binders)?;
+                return Err(case_error(
+                    TypeReason::RedundantCase,
+                    arm.span,
+                    "this match arm can never be selected",
+                    None,
+                ));
+            }
+            let body_result = if let Some((ty, provenance)) = &result_type {
+                self.elaborate_expression_with_context(
+                    ElaborationTask::Check {
+                        expression: &arm.body,
+                        expected: ProvenancedType {
+                            ty: ty.clone(),
+                            provenance: provenance.clone(),
+                        },
+                        kind: CheckKind::General,
+                    },
+                    context,
+                )
+            } else {
+                self.elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: &arm.body,
+                        cause: None,
+                    },
+                    context,
+                )
+            };
+            self.remove_pattern_binders(context, &binders)?;
+            let body = body_result?;
+            result_type.get_or_insert_with(|| (body.ty.clone(), body.provenance.clone()));
+            matrix.push(row);
+            arms.push(CoreMatchArm::new(
+                pattern,
+                body.node,
+                Origin::Source(arm.span),
+            ));
+        }
+        let Some((ty, provenance)) = result_type else {
+            return Err(case_error(
+                TypeReason::NonExhaustive,
+                span,
+                "a match requires at least one arm",
+                None,
+            ));
+        };
+        if let Some(witness) =
+            missing_witness_for_types(&matrix, std::slice::from_ref(&scrutinee.ty), &self.registry)
+        {
+            return Err(case_error(
+                TypeReason::NonExhaustive,
+                span,
+                "this match does not cover every value",
+                Some(display_witness(&witness, &self.registry)),
+            ));
+        }
+        let node = self.builder.match_expression(
+            scrutinee.node,
+            arms,
+            ty.clone(),
+            Origin::Source(span),
+        )?;
+        Ok(TypedNode {
+            node,
+            ty,
+            provenance,
+        })
+    }
+
+    fn check_core_pattern(
+        &mut self,
+        pattern: &ResolvedPattern,
+        expected: &Type,
+        context: &mut TypeContext,
+        binders: &mut Vec<BinderId>,
+        binder_reason: GeneratedReason,
+    ) -> Result<CorePattern, TypeError> {
+        let kind = match &pattern.kind {
+            ResolvedPatternKind::Binder(binder) => {
+                let typed = self.builder.resolved_binder(
+                    binder.id,
+                    expected.clone(),
+                    Origin::Generated {
+                        cause: Box::new(binder.origin.clone()),
+                        reason: binder_reason,
+                    },
+                )?;
+                if context
+                    .insert_with_provenance(
+                        binder.id,
+                        expected.clone(),
+                        TypeProvenance::unknown(expected),
+                    )?
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+                binders.push(binder.id);
+                CorePatternKind::Binder(typed)
+            }
+            ResolvedPatternKind::Wildcard => CorePatternKind::Wildcard,
+            ResolvedPatternKind::Boolean(value) if matches!(expected, Type::Bool) => {
+                CorePatternKind::Boolean(*value)
+            }
+            ResolvedPatternKind::Unit if matches!(expected, Type::Unit) => CorePatternKind::Unit,
+            ResolvedPatternKind::Tuple(patterns) => {
+                let Type::Tuple(types) = expected else {
+                    return Err(pattern_mismatch(pattern.span, expected));
+                };
+                if patterns.len() != types.len() {
+                    return Err(pattern_mismatch(pattern.span, expected));
+                }
+                let mut checked = Vec::with_capacity(patterns.len());
+                for (pattern, ty) in patterns.iter().zip(types) {
+                    checked.push(self.check_core_pattern(
+                        pattern,
+                        ty,
+                        context,
+                        binders,
+                        binder_reason,
+                    )?);
+                }
+                CorePatternKind::Tuple(checked.into_boxed_slice())
+            }
+            ResolvedPatternKind::Constructor {
+                constructor,
+                payload,
+                ..
+            } => {
+                let Type::Nominal(owner) = expected else {
+                    return Err(pattern_mismatch(pattern.span, expected));
+                };
+                let Some(info) = self.registry.constructor(*constructor) else {
+                    return Err(invalid_state());
+                };
+                let info_owner = info.owner;
+                let payload_type = info.payload.clone();
+                if &info_owner != owner {
+                    return Err(case_error(
+                        TypeReason::ConstructorOwner,
+                        pattern.span,
+                        "this constructor belongs to another nominal type",
+                        None,
+                    ));
+                }
+                let checked_payload = match (payload.as_deref(), payload_type.as_ref()) {
+                    (None, None) => None,
+                    (Some(pattern), Some(ty)) => Some(Box::new(self.check_core_pattern(
+                        pattern,
+                        ty,
+                        context,
+                        binders,
+                        binder_reason,
+                    )?)),
+                    _ => return Err(constructor_mismatch(pattern.span)),
+                };
+                CorePatternKind::Constructor {
+                    constructor: *constructor,
+                    payload: checked_payload,
+                }
+            }
+            _ => return Err(pattern_mismatch(pattern.span, expected)),
+        };
+        Ok(CorePattern::new(
+            expected.clone(),
+            Origin::Source(pattern.span),
+            kind,
+        ))
+    }
+
+    fn remove_pattern_binders(
+        &self,
+        context: &mut TypeContext,
+        binders: &[BinderId],
+    ) -> Result<(), TypeError> {
+        for binder in binders {
+            if context.binders.remove(binder).is_none() {
+                return Err(invalid_state());
+            }
+        }
+        Ok(())
+    }
+
+    fn schedule_function_check<'a>(
+        &mut self,
+        context: &mut TypeContext,
+        tasks: &mut Vec<ElaborationTask<'a>>,
+        binding_start: usize,
+        check: FunctionCheck<'a>,
+    ) -> Result<(), TypeError> {
+        let FunctionCheck {
+            parameter,
+            domain,
+            codomain,
+            body,
+            presentation,
+            function_type,
+            body_check,
+        } = check;
+        let mut pattern_binders = Vec::new();
+        let pattern = self.check_core_pattern(
+            parameter,
+            &domain.ty,
+            context,
+            &mut pattern_binders,
+            GeneratedReason::FunctionLowering,
+        )?;
+        let (parameter_binder, retained_pattern) = match &pattern.kind {
+            CorePatternKind::Binder(binder) => (binder.clone(), None),
+            _ => (
+                self.builder.binder(
+                    domain.ty.clone(),
+                    Origin::Generated {
+                        cause: Box::new(Origin::Source(parameter.span)),
+                        reason: GeneratedReason::FunctionLowering,
+                    },
+                )?,
+                Some(pattern),
+            ),
+        };
+        if !structurally_equal(
+            &function_type.ty,
+            &Type::Function(Box::new(domain.ty.clone()), Box::new(codomain.ty.clone())),
+        ) || !function_type.provenance.aligns(&function_type.ty)
+        {
+            return Err(invalid_state());
+        }
+        let origin = Origin::Generated {
+            cause: Box::new(presentation),
+            reason: GeneratedReason::FunctionLowering,
+        };
+        tasks.push(ElaborationTask::FinishFunction {
+            pattern_binders,
+            binder: parameter_binder,
+            pattern: retained_pattern,
+            domain: domain.ty,
+            ty: function_type.ty,
+            origin,
+            provenance: function_type.provenance,
+        });
+        match body {
+            FunctionBody::Block(block) => schedule_block(
+                block,
+                Some((codomain, body_check)),
+                None,
+                tasks,
+                binding_start,
+            )?,
+        }
+        Ok(())
+    }
+
+    fn elaborate_equation_group(
+        &mut self,
+        equational: &crate::resolved::ResolvedEquationalGlobal,
+        function_type: ProvenancedType,
+        context: &mut TypeContext,
+        definition_span: Span,
+    ) -> Result<TypedNode, TypeError> {
+        let Some(first) = equational.equations.first() else {
+            return Err(invalid_state());
+        };
+        let arity = first.patterns.len();
+        if arity == 0
+            || equational
+                .equations
+                .iter()
+                .any(|clause| clause.patterns.len() != arity)
+        {
+            return Err(case_error(
+                TypeReason::EquationArity,
+                definition_span,
+                "equational clauses must have the same positive pattern count",
+                None,
+            ));
+        }
+        let mut remainder = function_type.clone();
+        let mut domains = Vec::with_capacity(arity);
+        for _ in 0..arity {
+            if !matches!(remainder.ty, Type::Function(_, _)) {
+                return Err(case_error(
+                    TypeReason::EquationArity,
+                    definition_span,
+                    "the equation has more patterns than the declared arrows",
+                    None,
+                ));
+            }
+            let (domain, codomain) = remainder.function_parts()?;
+            domains.push(domain);
+            remainder = codomain;
+        }
+
+        let mut parameters = Vec::with_capacity(arity);
+        for domain in &domains {
+            parameters.push(self.builder.binder(
+                domain.ty.clone(),
+                Origin::Generated {
+                    cause: Box::new(equational_origin(definition_span, equational)),
+                    reason: GeneratedReason::FunctionLowering,
+                },
+            )?);
+        }
+
+        let mut coverage_matrix = Vec::new();
+        let mut arms = Vec::with_capacity(equational.equations.len());
+        for clause in &equational.equations {
+            let mut binder_ids = Vec::new();
+            let mut patterns = Vec::with_capacity(arity);
+            for (pattern, domain) in clause.patterns.iter().zip(&domains) {
+                patterns.push(self.check_core_pattern(
+                    pattern,
+                    &domain.ty,
+                    context,
+                    &mut binder_ids,
+                    GeneratedReason::FunctionLowering,
+                )?);
+            }
+            if usefulness(
+                &coverage_matrix,
+                &patterns,
+                &domains
+                    .iter()
+                    .map(|domain| domain.ty.clone())
+                    .collect::<Vec<_>>(),
+                &self.registry,
+            )
+            .is_none()
+            {
+                self.remove_pattern_binders(context, &binder_ids)?;
+                return Err(case_error(
+                    TypeReason::RedundantCase,
+                    clause.span,
+                    "this equation clause can never be selected",
+                    None,
+                ));
+            }
+            let body_result = self.elaborate_expression_with_context(
+                ElaborationTask::Check {
+                    expression: &clause.body,
+                    expected: remainder.clone(),
+                    kind: CheckKind::Definition {
+                        result_cause: remainder.provenance.span().unwrap_or(definition_span),
+                    },
+                },
+                context,
+            );
+            self.remove_pattern_binders(context, &binder_ids)?;
+            let body = body_result?;
+            let arm_pattern = if patterns.len() == 1 {
+                patterns[0].clone()
+            } else {
+                CorePattern::new(
+                    Type::Tuple(
+                        domains
+                            .iter()
+                            .map(|domain| domain.ty.clone())
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    ),
+                    Origin::Source(clause.span),
+                    CorePatternKind::Tuple(patterns.clone().into_boxed_slice()),
+                )
+            };
+            coverage_matrix.push(patterns);
+            arms.push(CoreMatchArm::new(
+                arm_pattern,
+                body.node,
+                Origin::Source(clause.span),
+            ));
+        }
+        let domain_types = domains
+            .iter()
+            .map(|domain| domain.ty.clone())
+            .collect::<Vec<_>>();
+        if let Some(witness) =
+            missing_witness_for_types(&coverage_matrix, &domain_types, &self.registry)
+        {
+            return Err(case_error(
+                TypeReason::NonExhaustive,
+                definition_span,
+                "these equation clauses do not cover every argument",
+                Some(display_witness(&witness, &self.registry)),
+            ));
+        }
+
+        let direct_binder = if arity == 1 && arms.len() == 1 {
+            match &arms[0].pattern().kind {
+                CorePatternKind::Binder(binder) => Some(binder.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let mut body_node = if let Some(parameter) = direct_binder.clone() {
+            parameters[0] = parameter;
+            arms[0].body()
+        } else {
+            let mut arguments = Vec::with_capacity(parameters.len());
+            for (parameter, domain) in parameters.iter().zip(&domains) {
+                arguments.push(self.builder.variable(
+                    parameter.id(),
+                    domain.ty.clone(),
+                    Origin::Source(definition_span),
+                )?);
+            }
+            let scrutinee = if arguments.len() == 1 {
+                arguments[0]
+            } else {
+                let ty = Type::Tuple(domain_types.clone().into_boxed_slice());
+                self.builder
+                    .tuple(arguments, ty, Origin::Source(definition_span))?
+            };
+            self.builder.match_expression(
+                scrutinee,
+                arms,
+                remainder.ty.clone(),
+                Origin::Source(definition_span),
+            )?
+        };
+        let mut body_type = remainder.ty.clone();
+        for (parameter, domain) in parameters.iter().zip(&domains).rev() {
+            let ty = Type::Function(Box::new(domain.ty.clone()), Box::new(body_type));
+            body_node = self.builder.function(
+                parameter.clone(),
+                body_node,
+                ty.clone(),
+                Origin::Generated {
+                    cause: Box::new(equational_origin(definition_span, equational)),
+                    reason: GeneratedReason::FunctionLowering,
+                },
+            )?;
+            body_type = ty;
+        }
+        if !same_type(&body_type, &function_type.ty) {
+            return Err(invalid_state());
+        }
+        Ok(TypedNode {
+            node: body_node,
+            ty: body_type,
+            provenance: function_type.provenance,
+        })
+    }
+
+    fn elaborate_operational_function(
+        &mut self,
+        operational: &crate::resolved::ResolvedInlineOperationalGlobal,
+        function_type: ProvenancedType,
+        context: &mut TypeContext,
+        definition_span: Span,
+    ) -> Result<TypedNode, TypeError> {
+        let (domain, codomain) = function_type.function_parts()?;
+        let mut binder_ids = Vec::new();
+        let pattern = if operational.header.parameters.len() == 1 {
+            self.check_core_pattern(
+                &operational.header.parameters[0].pattern,
+                &domain.ty,
+                context,
+                &mut binder_ids,
+                GeneratedReason::FunctionLowering,
+            )?
+        } else {
+            let Type::Tuple(types) = &domain.ty else {
+                return Err(invalid_state());
+            };
+            if types.len() != operational.header.parameters.len() {
+                return Err(invalid_state());
+            }
+            let mut elements = Vec::with_capacity(types.len());
+            for (parameter, ty) in operational.header.parameters.iter().zip(types) {
+                elements.push(self.check_core_pattern(
+                    &parameter.pattern,
+                    ty,
+                    context,
+                    &mut binder_ids,
+                    GeneratedReason::FunctionLowering,
+                )?);
+            }
+            CorePattern::new(
+                domain.ty.clone(),
+                Origin::Source(operational.header.span),
+                CorePatternKind::Tuple(elements.into_boxed_slice()),
+            )
+        };
+        let (parameter, retained_pattern) = match &pattern.kind {
+            CorePatternKind::Binder(binder) => (binder.clone(), None),
+            _ => (
+                self.builder
+                    .binder(domain.ty.clone(), Origin::Source(operational.header.span))?,
+                Some(pattern),
+            ),
+        };
+        let body_expression = ResolvedExpr {
+            kind: ResolvedExprKind::Block(operational.body.clone()),
+            span: operational.body.span,
+        };
+        let body_result = self.elaborate_expression_with_context(
+            ElaborationTask::Check {
+                expression: &body_expression,
+                expected: codomain,
+                kind: CheckKind::Definition {
+                    result_cause: operational.header.result_type.span,
+                },
+            },
+            context,
+        );
+        self.remove_pattern_binders(context, &binder_ids)?;
+        let mut body = body_result?;
+        if let Some(pattern) = retained_pattern {
+            let matrix = vec![vec![pattern.clone()]];
+            if let Some(witness) =
+                missing_witness_for_types(&matrix, std::slice::from_ref(&domain.ty), &self.registry)
+            {
+                return Err(case_error(
+                    TypeReason::RefutableFunctionDomain,
+                    operational.header.span,
+                    "this operational parameter pattern is not exhaustive",
+                    Some(display_witness(&witness, &self.registry)),
+                ));
+            }
+            let scrutinee = self.builder.variable(
+                parameter.id(),
+                domain.ty.clone(),
+                Origin::Source(operational.header.span),
+            )?;
+            body.node = self.builder.match_expression(
+                scrutinee,
+                vec![CoreMatchArm::new(
+                    pattern,
+                    body.node,
+                    Origin::Source(operational.header.span),
+                )],
+                body.ty.clone(),
+                Origin::Source(operational.header.span),
+            )?;
+        }
+        let node = self.builder.function(
+            parameter,
+            body.node,
+            function_type.ty.clone(),
+            Origin::Generated {
+                cause: Box::new(operational_origin(definition_span, operational)),
+                reason: GeneratedReason::FunctionLowering,
+            },
+        )?;
+        Ok(TypedNode {
+            node,
+            ty: function_type.ty,
+            provenance: function_type.provenance,
+        })
     }
 }
 
@@ -1208,7 +1944,7 @@ enum ElaborationTask<'a> {
         kind: CheckKind,
     },
     CheckFunction {
-        parameter: &'a Binder,
+        parameter: &'a ResolvedPattern,
         domain: ProvenancedType,
         codomain: ProvenancedType,
         body: FunctionBody<'a>,
@@ -1217,8 +1953,10 @@ enum ElaborationTask<'a> {
         body_check: CheckKind,
     },
     FinishFunction {
-        parameter: BinderId,
+        pattern_binders: Vec<BinderId>,
         binder: TypedBinder,
+        pattern: Option<CorePattern>,
+        domain: Type,
         ty: Type,
         origin: Origin,
         provenance: TypeProvenance,
@@ -1266,7 +2004,6 @@ enum ElaborationTask<'a> {
 
 #[derive(Clone, Copy)]
 enum FunctionBody<'a> {
-    Expression(&'a ResolvedExpr),
     Block(&'a ResolvedBlock),
 }
 
@@ -1295,7 +2032,7 @@ enum SynthesisCause {
 }
 
 struct FunctionCheck<'a> {
-    parameter: &'a Binder,
+    parameter: &'a ResolvedPattern,
     domain: ProvenancedType,
     codomain: ProvenancedType,
     body: FunctionBody<'a>,
@@ -1307,7 +2044,6 @@ struct FunctionCheck<'a> {
 struct ElaboratedBinding {
     binder: TypedBinder,
     initializer: NodeId,
-    origin: Origin,
 }
 
 struct ElaboratedRecursiveMemberSeed {
@@ -1315,11 +2051,43 @@ struct ElaboratedRecursiveMemberSeed {
 }
 
 enum ElaboratedDeclaration {
-    Binding(ElaboratedBinding),
+    Binding {
+        binder: TypedBinder,
+        initializer: NodeId,
+        origin: Origin,
+    },
+    PatternBinding {
+        pattern: CorePattern,
+        initializer: NodeId,
+        origin: Origin,
+    },
     Recursive {
         members: Vec<(TypedBinder, NodeId)>,
         origin: Origin,
     },
+}
+
+fn operational_domain(
+    parameters: &[crate::resolved::ResolvedTypedPattern],
+    span: Span,
+) -> Result<ProvenancedType, TypeError> {
+    match parameters {
+        [] => Err(invalid_state()),
+        [parameter] => Ok(ProvenancedType::from_resolved(&parameter.annotation)),
+        parameters => {
+            let ty = Type::Tuple(
+                parameters
+                    .iter()
+                    .map(|parameter| parameter.annotation.ty.clone())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
+            Ok(ProvenancedType {
+                provenance: TypeProvenance::atom(Some(span)),
+                ty,
+            })
+        }
+    }
 }
 
 fn schedule_block<'a>(
@@ -1376,71 +2144,6 @@ fn schedule_block<'a>(
                 tasks.push(ElaborationTask::BeginRecursiveGroup(group));
             }
         }
-    }
-    Ok(())
-}
-
-fn schedule_function_check<'a>(
-    builder: &mut CoreBuilder,
-    context: &mut TypeContext,
-    tasks: &mut Vec<ElaborationTask<'a>>,
-    binding_start: usize,
-    check: FunctionCheck<'a>,
-) -> Result<(), TypeError> {
-    let FunctionCheck {
-        parameter,
-        domain,
-        codomain,
-        body,
-        presentation,
-        function_type,
-        body_check,
-    } = check;
-    let parameter_binder = builder.resolved_binder(
-        parameter.id,
-        domain.ty.clone(),
-        Origin::Generated {
-            cause: Box::new(parameter.origin.clone()),
-            reason: GeneratedReason::FunctionLowering,
-        },
-    )?;
-    if context
-        .insert_with_provenance(parameter.id, domain.ty.clone(), domain.provenance.clone())?
-        .is_some()
-    {
-        return Err(invalid_state());
-    }
-    if !structurally_equal(
-        &function_type.ty,
-        &Type::Function(Box::new(domain.ty.clone()), Box::new(codomain.ty.clone())),
-    ) || !function_type.provenance.aligns(&function_type.ty)
-    {
-        return Err(invalid_state());
-    }
-    let origin = Origin::Generated {
-        cause: Box::new(presentation),
-        reason: GeneratedReason::FunctionLowering,
-    };
-    tasks.push(ElaborationTask::FinishFunction {
-        parameter: parameter.id,
-        binder: parameter_binder,
-        ty: function_type.ty,
-        origin,
-        provenance: function_type.provenance,
-    });
-    match body {
-        FunctionBody::Expression(expression) => tasks.push(ElaborationTask::Check {
-            expression,
-            expected: codomain,
-            kind: body_check,
-        }),
-        FunctionBody::Block(block) => schedule_block(
-            block,
-            Some((codomain, body_check)),
-            None,
-            tasks,
-            binding_start,
-        )?,
     }
     Ok(())
 }
@@ -1631,6 +2334,33 @@ fn invalid_state() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
 }
 
+fn pattern_mismatch(span: Span, expected: &Type) -> TypeError {
+    let mut diagnostic = Diagnostic::new(
+        TypeReason::PatternMismatch,
+        SourceLabel::new(span, "this pattern does not match its expected type"),
+    );
+    diagnostic.expected = Some(expected.to_string());
+    TypeError::Source(Box::new(diagnostic))
+}
+
+fn constructor_mismatch(span: Span) -> TypeError {
+    TypeError::Source(Box::new(Diagnostic::new(
+        TypeReason::ConstructorMismatch,
+        SourceLabel::new(span, "this constructor has the wrong payload shape"),
+    )))
+}
+
+fn case_error(
+    reason: TypeReason,
+    span: Span,
+    message: &'static str,
+    witness: Option<String>,
+) -> TypeError {
+    let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
+    diagnostic.found = witness;
+    TypeError::Source(Box::new(diagnostic))
+}
+
 fn binding_origin(binding: &ResolvedBinding) -> Origin {
     let mut related = vec![binding.initializer.span];
     if let Some(annotation) = &binding.annotation {
@@ -1660,6 +2390,184 @@ fn recursive_group_origin(group: &ResolvedRecursiveGroup) -> Origin {
     }
 }
 
+fn validate_recursive_member(
+    group: &ResolvedRecursiveGroup,
+    member: &crate::resolved::ResolvedRecursiveMember,
+    registry: &ResolvedRegistry,
+) -> Result<(), TypeError> {
+    match &member.annotation.ty {
+        Type::Function(_, _)
+            if matches!(member.initializer.kind, ResolvedExprKind::Function(_)) =>
+        {
+            Ok(())
+        }
+        Type::Function(_, _) => Err(unsafe_recursive_initializer(group, member)),
+        Type::Nominal(owner) => {
+            let payload = match &member.initializer.kind {
+                ResolvedExprKind::Constructor(occurrence) => {
+                    let Some(constructor) = registry.constructor(occurrence.constructor) else {
+                        return Err(invalid_state());
+                    };
+                    if constructor.owner != *owner || constructor.payload.is_some() {
+                        return Err(unsafe_recursive_root(group, member));
+                    }
+                    None
+                }
+                ResolvedExprKind::Apply(application) => {
+                    let ResolvedExprKind::Constructor(occurrence) = &application.function.kind
+                    else {
+                        return Err(unsafe_recursive_root(group, member));
+                    };
+                    let Some(constructor) = registry.constructor(occurrence.constructor) else {
+                        return Err(invalid_state());
+                    };
+                    if constructor.owner != *owner || constructor.payload.is_none() {
+                        return Err(unsafe_recursive_root(group, member));
+                    }
+                    Some(application.argument.as_ref())
+                }
+                _ => return Err(unsafe_recursive_root(group, member)),
+            };
+            if let Some(payload) = payload {
+                let recursive = group
+                    .members
+                    .iter()
+                    .map(|member| member.binder.id)
+                    .collect::<HashSet<_>>();
+                validate_guarded_payload(payload, &recursive, registry)?;
+            }
+            Ok(())
+        }
+        Type::Int | Type::Bool | Type::Unit | Type::Tuple(_) => {
+            Err(unsafe_recursive_root(group, member))
+        }
+    }
+}
+
+fn validate_guarded_payload(
+    expression: &ResolvedExpr,
+    recursive: &HashSet<BinderId>,
+    registry: &ResolvedRegistry,
+) -> Result<(), TypeError> {
+    if !contains_recursive_occurrence(expression, recursive) {
+        return Ok(());
+    }
+    match &expression.kind {
+        ResolvedExprKind::Occurrence(occurrence) if recursive.contains(&occurrence.binder) => {
+            Ok(())
+        }
+        ResolvedExprKind::Tuple(elements) => {
+            for element in elements {
+                validate_guarded_payload(element, recursive, registry)?;
+            }
+            Ok(())
+        }
+        ResolvedExprKind::Apply(application)
+            if matches!(application.function.kind, ResolvedExprKind::Constructor(_)) =>
+        {
+            let ResolvedExprKind::Constructor(occurrence) = &application.function.kind else {
+                return Err(invalid_state());
+            };
+            if registry.constructor(occurrence.constructor).is_none() {
+                return Err(invalid_state());
+            }
+            validate_guarded_payload(&application.argument, recursive, registry)
+        }
+        ResolvedExprKind::Function(_) => Ok(()),
+        _ => Err(unguarded_recursive_use(expression.span)),
+    }
+}
+
+fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<BinderId>) -> bool {
+    let mut work = vec![expression];
+    while let Some(expression) = work.pop() {
+        match &expression.kind {
+            ResolvedExprKind::Occurrence(occurrence) if recursive.contains(&occurrence.binder) => {
+                return true;
+            }
+            ResolvedExprKind::Apply(application) => {
+                work.push(&application.argument);
+                work.push(&application.function);
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                work.push(&binary.right);
+                work.push(&binary.left);
+            }
+            ResolvedExprKind::Tuple(elements) => work.extend(elements),
+            ResolvedExprKind::Block(block) => {
+                work.push(&block.result);
+                for declaration in &block.declarations {
+                    match declaration {
+                        ResolvedLocalDeclaration::Binding(binding) => {
+                            work.push(&binding.initializer)
+                        }
+                        ResolvedLocalDeclaration::Recursive(group) => {
+                            work.extend(group.members.iter().map(|member| &member.initializer));
+                        }
+                    }
+                }
+            }
+            ResolvedExprKind::Function(function) => {
+                work.push(&function.body.result);
+                for declaration in &function.body.declarations {
+                    match declaration {
+                        ResolvedLocalDeclaration::Binding(binding) => {
+                            work.push(&binding.initializer)
+                        }
+                        ResolvedLocalDeclaration::Recursive(group) => {
+                            work.extend(group.members.iter().map(|member| &member.initializer));
+                        }
+                    }
+                }
+            }
+            ResolvedExprKind::Match(match_expression) => {
+                work.push(&match_expression.scrutinee);
+                work.extend(match_expression.arms.iter().map(|arm| &arm.body));
+            }
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Constructor(_)
+            | ResolvedExprKind::Occurrence(_) => {}
+        }
+    }
+    false
+}
+
+fn unsafe_recursive_root(
+    group: &ResolvedRecursiveGroup,
+    member: &crate::resolved::ResolvedRecursiveMember,
+) -> TypeError {
+    let mut diagnostic = Diagnostic::new(
+        TypeReason::UnsafeRecursiveRoot,
+        SourceLabel::new(
+            member.initializer.span,
+            "this recursive data initializer has no fully applied constructor root",
+        ),
+    );
+    diagnostic.related.push(SourceLabel::new(
+        group.span,
+        "this declaration is a simultaneous recursive group",
+    ));
+    diagnostic.related.push(SourceLabel::new(
+        member.annotation.span,
+        "this is the member's declared nominal type",
+    ));
+    TypeError::Source(Box::new(diagnostic))
+}
+
+fn unguarded_recursive_use(span: Span) -> TypeError {
+    TypeError::Source(Box::new(Diagnostic::new(
+        TypeReason::UnguardedRecursiveUse,
+        SourceLabel::new(
+            span,
+            "a recursive occurrence crosses a forcing or transporting expression",
+        ),
+    )))
+}
+
 fn unsafe_recursive_initializer(
     group: &ResolvedRecursiveGroup,
     member: &crate::resolved::ResolvedRecursiveMember,
@@ -1682,13 +2590,6 @@ fn unsafe_recursive_initializer(
     diagnostic.expected = Some("a direct `fn` initializer".into());
     diagnostic.help = Some("initialize the recursive member directly with `fn`".into());
     TypeError::Source(Box::new(diagnostic))
-}
-
-fn global_binding_origin(definition: &crate::resolved::ResolvedDefinition) -> Origin {
-    Origin::Generated {
-        cause: Box::new(Origin::Source(definition.span)),
-        reason: GeneratedReason::BindingLowering,
-    }
 }
 
 fn equational_origin(

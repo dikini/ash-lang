@@ -60,7 +60,7 @@ pub struct ResolvedProgram {
 }
 
 /// Immutable resolved metadata for one source file.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResolvedRegistry {
     nominals: Box<[ResolvedNominalType]>,
     constructors: Box<[ResolvedConstructor]>,
@@ -86,6 +86,22 @@ impl ResolvedRegistry {
     #[must_use]
     pub fn constructors(&self) -> &[ResolvedConstructor] {
         &self.constructors
+    }
+
+    /// Looks up a nominal declaration by stable identity.
+    #[must_use]
+    pub fn nominal(&self, id: NominalTypeId) -> Option<&ResolvedNominalType> {
+        self.nominals
+            .iter()
+            .find(|declaration| declaration.id == id)
+    }
+
+    /// Looks up a constructor by stable identity.
+    #[must_use]
+    pub fn constructor(&self, id: ConstructorId) -> Option<&ResolvedConstructor> {
+        self.constructors
+            .iter()
+            .find(|constructor| constructor.id == id)
     }
 }
 

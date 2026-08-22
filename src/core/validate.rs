@@ -1,6 +1,11 @@
 //! Independent validation for unchecked pure Core arenas.
 
-use std::{collections::HashMap, error::Error, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    fmt,
+    sync::Arc,
+};
 
 use super::{
     dialect::{
@@ -10,9 +15,11 @@ use super::{
     variable::TypedBinder,
 };
 use crate::{
+    core::{CorePattern, CorePatternKind},
+    pattern::{missing_witness_for_types, usefulness},
     resolved::BinderId,
     source::{Origin, SourceFile, SourceId, Span},
-    types::Type,
+    types::{ConstructorId, Type, same_type},
 };
 
 /// The independently checked invariant that malformed Core violated.
@@ -38,6 +45,12 @@ pub enum ValidationReason {
     Root,
     /// The arena contains a node unreachable from its selected root.
     Unreachable,
+    /// The immutable nominal and constructor registry is malformed.
+    Registry,
+    /// A typed structured pattern is malformed.
+    Pattern,
+    /// Match arms are redundant or non-exhaustive.
+    Coverage,
 }
 
 impl fmt::Display for ValidationReason {
@@ -53,6 +66,9 @@ impl fmt::Display for ValidationReason {
             Self::Cycle => "core.validation.cycle",
             Self::Root => "core.validation.root",
             Self::Unreachable => "core.validation.unreachable",
+            Self::Registry => "core.validation.registry",
+            Self::Pattern => "core.validation.pattern",
+            Self::Coverage => "core.validation.coverage",
         })
     }
 }
@@ -125,6 +141,7 @@ pub fn validate(
     }
 
     Ok(ValidatedProgram::new(PureProgram::new(
+        Arc::clone(&program.registry),
         program.arena,
         nodes,
         program.root,
@@ -150,6 +167,7 @@ impl<'program, 'source> Validator<'program, 'source> {
     }
 
     fn run(mut self) -> Result<(), ValidationError> {
+        self.validate_registry()?;
         self.validate_envelopes()?;
         self.validate_graph()?;
         self.collect_binders()?;
@@ -157,9 +175,84 @@ impl<'program, 'source> Validator<'program, 'source> {
         self.validate_scopes()
     }
 
+    fn validate_registry(&self) -> Result<(), ValidationError> {
+        let registry = &self.program.registry;
+        let mut nominal_ids = HashSet::new();
+        let mut nominal_names = HashSet::new();
+        let mut constructor_ids = HashSet::new();
+        let mut constructor_names = HashSet::new();
+        for nominal in registry.nominals() {
+            if nominal.id.source() != nominal.origin.primary_span().source()
+                || nominal.constructors.is_empty()
+                || !nominal_ids.insert(nominal.id)
+                || !nominal_names.insert(nominal.spelling.as_str())
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            self.validate_origin(&nominal.origin, self.program.root)?;
+        }
+        for constructor in registry.constructors() {
+            if constructor.id.owner() != constructor.owner
+                || !nominal_ids.contains(&constructor.owner)
+                || !constructor_ids.insert(constructor.id)
+                || !constructor_names.insert(constructor.spelling.as_str())
+                || !self.valid_type(constructor.payload.as_ref())
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            self.validate_origin(&constructor.origin, self.program.root)?;
+        }
+        for nominal in registry.nominals() {
+            for (index, constructor) in nominal.constructors.iter().copied().enumerate() {
+                if constructor
+                    != ConstructorId::new(
+                        nominal.id,
+                        u32::try_from(index)
+                            .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?,
+                    )
+                    || registry.constructor(constructor).is_none()
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
+        if registry.constructors().iter().any(|constructor| {
+            registry
+                .nominal(constructor.owner)
+                .is_none_or(|owner| !owner.constructors.contains(&constructor.id))
+        }) {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        Ok(())
+    }
+
+    fn valid_type(&self, root: Option<&Type>) -> bool {
+        let Some(root) = root else {
+            return true;
+        };
+        let mut work = vec![root];
+        while let Some(ty) = work.pop() {
+            match ty {
+                Type::Int | Type::Bool | Type::Unit => {}
+                Type::Nominal(id) if self.program.registry.nominal(*id).is_some() => {}
+                Type::Nominal(_) => return false,
+                Type::Tuple(elements) if elements.len() >= 2 => work.extend(elements),
+                Type::Tuple(_) => return false,
+                Type::Function(domain, codomain) => {
+                    work.push(codomain);
+                    work.push(domain);
+                }
+            }
+        }
+        true
+    }
+
     fn validate_envelopes(&self) -> Result<(), ValidationError> {
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
+            if !self.valid_type(Some(&node.ty)) {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
             if node.dialect != DialectId::PURE {
                 return Err(ValidationError::new(
                     ValidationReason::DialectMembership,
@@ -279,12 +372,26 @@ impl<'program, 'source> Validator<'program, 'source> {
                         self.collect_binder(id, member.binder())?;
                     }
                 }
+                PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                    for arm in match_node.arms() {
+                        let mut binders = Vec::new();
+                        arm.pattern().binders(&mut binders);
+                        for binder in binders {
+                            self.collect_binder(id, binder)?;
+                        }
+                    }
+                }
                 PureExprKind::Value(
-                    PureValue::Integer(_) | PureValue::Boolean(_) | PureValue::Unit(_),
+                    PureValue::Integer(_)
+                    | PureValue::Boolean(_)
+                    | PureValue::Unit(_)
+                    | PureValue::Constructor(_),
                 )
                 | PureExprKind::Variable(_)
                 | PureExprKind::Computation(
-                    PureComputation::Apply(_) | PureComputation::Primitive(_),
+                    PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_),
                 ) => {}
             }
         }
@@ -344,6 +451,16 @@ impl<'program, 'source> Validator<'program, 'source> {
                     Box::new(body.ty.clone()),
                 )
             }
+            PureValue::Constructor(constructor) => {
+                let Some(info) = self.program.registry.constructor(constructor.constructor())
+                else {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                };
+                let result = Type::Nominal(info.owner);
+                info.payload.as_ref().map_or(result.clone(), |payload| {
+                    Type::Function(Box::new(payload.clone()), Box::new(result))
+                })
+            }
         };
         if node.ty != expected {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
@@ -372,12 +489,24 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Some(id),
                     ));
                 }
+                let recursive = group
+                    .members()
+                    .iter()
+                    .map(|member| member.binder().id())
+                    .collect::<HashSet<_>>();
                 for member in group.members() {
                     let initializer = self.node(member.initializer())?;
-                    if !matches!(
-                        initializer.kind,
-                        PureExprKind::Value(PureValue::Function(_))
-                    ) {
+                    let safe = match member.binder().ty() {
+                        Type::Function(_, _) => matches!(
+                            initializer.kind,
+                            PureExprKind::Value(PureValue::Function(_))
+                        ),
+                        Type::Nominal(owner) => {
+                            self.guarded_data_root(member.initializer(), *owner, &recursive)?
+                        }
+                        Type::Int | Type::Bool | Type::Unit | Type::Tuple(_) => false,
+                    };
+                    if !safe {
                         return Err(ValidationError::new(
                             ValidationReason::RecursiveBinding,
                             Some(id),
@@ -415,6 +544,216 @@ impl<'program, 'source> Validator<'program, 'source> {
                 if left.ty != left_type || right.ty != right_type || node.ty != result_type {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
+            }
+            PureComputation::Tuple(tuple) => {
+                let Type::Tuple(element_types) = &node.ty else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                if element_types.len() < 2 || element_types.len() != tuple.elements().len() {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                for (element, expected) in tuple.elements().iter().zip(element_types) {
+                    if !same_type(&self.node(*element)?.ty, expected) {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                    }
+                }
+            }
+            PureComputation::Match(match_node) => {
+                let scrutinee = self.node(match_node.scrutinee())?;
+                if match_node.arms().is_empty() {
+                    return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
+                }
+                let mut matrix = Vec::new();
+                for arm in match_node.arms() {
+                    self.validate_origin(arm.origin(), id)?;
+                    self.validate_pattern(arm.pattern(), &scrutinee.ty, id)?;
+                    if !same_type(&self.node(arm.body())?.ty, &node.ty) {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                    }
+                    let row = vec![arm.pattern().clone()];
+                    if usefulness(
+                        &matrix,
+                        &row,
+                        std::slice::from_ref(&scrutinee.ty),
+                        &self.program.registry,
+                    )
+                    .is_none()
+                    {
+                        return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
+                    }
+                    matrix.push(row);
+                }
+                if missing_witness_for_types(
+                    &matrix,
+                    std::slice::from_ref(&scrutinee.ty),
+                    &self.program.registry,
+                )
+                .is_some()
+                {
+                    return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn guarded_data_root(
+        &self,
+        initializer: NodeId,
+        owner: crate::types::NominalTypeId,
+        recursive: &HashSet<BinderId>,
+    ) -> Result<bool, ValidationError> {
+        let root = self.node(initializer)?;
+        let payload = match &root.kind {
+            PureExprKind::Value(PureValue::Constructor(constructor)) => {
+                let Some(info) = self.program.registry.constructor(constructor.constructor())
+                else {
+                    return Ok(false);
+                };
+                if info.owner != owner || info.payload.is_some() {
+                    return Ok(false);
+                }
+                return Ok(true);
+            }
+            PureExprKind::Computation(PureComputation::Apply(application)) => {
+                let function = self.node(application.function())?;
+                let PureExprKind::Value(PureValue::Constructor(constructor)) = &function.kind
+                else {
+                    return Ok(false);
+                };
+                let Some(info) = self.program.registry.constructor(constructor.constructor())
+                else {
+                    return Ok(false);
+                };
+                if info.owner != owner || info.payload.is_none() {
+                    return Ok(false);
+                }
+                application.argument()
+            }
+            _ => return Ok(false),
+        };
+        self.guarded_payload(payload, recursive)
+    }
+
+    fn guarded_payload(
+        &self,
+        root: NodeId,
+        recursive: &HashSet<BinderId>,
+    ) -> Result<bool, ValidationError> {
+        if !self.contains_recursive(root, recursive)? {
+            return Ok(true);
+        }
+        let node = self.node(root)?;
+        match &node.kind {
+            PureExprKind::Variable(variable) => Ok(recursive.contains(&variable.binder())),
+            PureExprKind::Computation(PureComputation::Tuple(tuple)) => {
+                for element in tuple.elements() {
+                    if !self.guarded_payload(*element, recursive)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            PureExprKind::Computation(PureComputation::Apply(application)) => {
+                let function = self.node(application.function())?;
+                if !matches!(
+                    function.kind,
+                    PureExprKind::Value(PureValue::Constructor(_))
+                ) {
+                    return Ok(false);
+                }
+                self.guarded_payload(application.argument(), recursive)
+            }
+            PureExprKind::Value(PureValue::Function(_)) => Ok(true),
+            _ => Ok(false),
+        }
+    }
+
+    fn contains_recursive(
+        &self,
+        root: NodeId,
+        recursive: &HashSet<BinderId>,
+    ) -> Result<bool, ValidationError> {
+        let mut work = vec![root];
+        let mut seen = HashSet::new();
+        while let Some(id) = work.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let node = self.node(id)?;
+            if matches!(&node.kind, PureExprKind::Variable(variable) if recursive.contains(&variable.binder()))
+            {
+                return Ok(true);
+            }
+            for index in 0..node.kind.child_count() {
+                work.push(
+                    node.kind.child_at(index).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                    })?,
+                );
+            }
+        }
+        Ok(false)
+    }
+
+    fn validate_pattern(
+        &self,
+        pattern: &CorePattern,
+        expected: &Type,
+        node: NodeId,
+    ) -> Result<(), ValidationError> {
+        let mut work = vec![(pattern, expected)];
+        let mut binders = HashSet::new();
+        while let Some((pattern, expected)) = work.pop() {
+            self.validate_origin(&pattern.origin, node)?;
+            if !same_type(&pattern.ty, expected) || !self.valid_type(Some(&pattern.ty)) {
+                return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+            }
+            match (&pattern.kind, expected) {
+                (CorePatternKind::Binder(binder), _) => {
+                    if binder.arena() != self.program.arena
+                        || !same_type(binder.ty(), expected)
+                        || !binders.insert(binder.id())
+                    {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    }
+                    self.validate_origin(binder.origin(), node)?;
+                }
+                (CorePatternKind::Wildcard, _) => {}
+                (CorePatternKind::Boolean(_), Type::Bool) | (CorePatternKind::Unit, Type::Unit) => {
+                }
+                (CorePatternKind::Tuple(patterns), Type::Tuple(types))
+                    if patterns.len() == types.len() =>
+                {
+                    work.extend(patterns.iter().zip(types).rev());
+                }
+                (
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    },
+                    Type::Nominal(owner),
+                ) => {
+                    let Some(info) = self.program.registry.constructor(*constructor) else {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    };
+                    if &info.owner != owner {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    }
+                    match (&info.payload, payload.as_deref()) {
+                        (None, None) => {}
+                        (Some(payload_type), Some(payload_pattern)) => {
+                            work.push((payload_pattern, payload_type))
+                        }
+                        _ => {
+                            return Err(ValidationError::new(
+                                ValidationReason::Pattern,
+                                Some(node),
+                            ));
+                        }
+                    }
+                }
+                _ => return Err(ValidationError::new(ValidationReason::Pattern, Some(node))),
             }
         }
         Ok(())
@@ -503,8 +842,36 @@ impl<'program, 'source> Validator<'program, 'source> {
                             let right = self.requirements_for(&requirements, primitive.right())?;
                             union_requirements(left, right)
                         }
+                        PureExprKind::Computation(PureComputation::Tuple(tuple)) => {
+                            let mut free = HashMap::new();
+                            for element in tuple.elements() {
+                                free = union_requirements(
+                                    free,
+                                    self.requirements_for(&requirements, *element)?,
+                                );
+                            }
+                            free
+                        }
+                        PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                            let mut free =
+                                self.requirements_for(&requirements, match_node.scrutinee())?;
+                            for arm in match_node.arms() {
+                                let mut arm_free =
+                                    self.requirements_for(&requirements, arm.body())?;
+                                let mut binders = Vec::new();
+                                arm.pattern().binders(&mut binders);
+                                for binder in binders {
+                                    arm_free.remove(&binder.id());
+                                }
+                                free = union_requirements(free, arm_free);
+                            }
+                            free
+                        }
                         PureExprKind::Value(
-                            PureValue::Integer(_) | PureValue::Boolean(_) | PureValue::Unit(_),
+                            PureValue::Integer(_)
+                            | PureValue::Boolean(_)
+                            | PureValue::Unit(_)
+                            | PureValue::Constructor(_),
                         ) => HashMap::new(),
                     };
                     let index = self.index(id)?;
@@ -643,6 +1010,7 @@ mod tests {
         let file = source();
         let arena = super::super::dialect::ArenaId::new(100);
         let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             arena,
             nodes: Vec::new(),
             root: NodeId::new(arena, 0),
@@ -676,6 +1044,7 @@ mod tests {
             )),
         };
         let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             arena,
             nodes: vec![unit, function],
             root: NodeId::new(arena, 1),
@@ -702,6 +1071,7 @@ mod tests {
             )),
         };
         let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             arena,
             nodes: vec![stored],
             root: NodeId::new(arena, 0),
@@ -721,6 +1091,7 @@ mod tests {
             )),
         };
         let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             arena,
             nodes: vec![cyclic],
             root: NodeId::new(arena, 0),
@@ -771,6 +1142,7 @@ mod tests {
             kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
         };
         let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             arena,
             nodes: vec![group, function, unit],
             root: NodeId::new(arena, 0),

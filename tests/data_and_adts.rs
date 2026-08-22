@@ -1,8 +1,88 @@
 use ash::{
+    core::{PureComputation, PureExprKind, transform::identity_traversal, validate},
     driver::{Observation, PipelineFailure, run_source},
-    extended::ExtendedStage,
+    elaborate::Elaborator,
+    eval::evaluate,
+    lexer::lex,
+    parser::{parse, project},
+    resolve::resolve,
     source::SourceFile,
 };
+
+#[test]
+fn shared_pipeline_elaborates_and_validates_finite_data_core() {
+    let source = SourceFile::new(
+        "shared-data.ash",
+        "type Wrapped =\nWrap(Int)\n\nmatch Wrap(42) {\nWrap(value) => value\n}\n",
+    )
+    .expect("fixture should fit");
+    let tree = parse(lex(&source).expect("lex"));
+    assert!(tree.parse_diagnostics().is_empty());
+    let surface = project(&source, &tree).expect("project");
+    let resolved = resolve(&surface).expect("resolve");
+    let mut elaborator = Elaborator::for_program(&resolved).expect("reserve binders");
+    let typed = elaborator
+        .synthesize_program(&resolved)
+        .expect("shared elaboration");
+    let program = validate(elaborator.finish(typed.node).expect("finish"), &[&source])
+        .expect("independent validation");
+
+    assert_eq!(typed.ty.to_string(), "Int");
+    assert!(matches!(
+        program.node(program.root()).expect("root").kind,
+        PureExprKind::Computation(PureComputation::Match(_))
+    ));
+    assert_eq!(
+        evaluate(&program)
+            .expect("retained machine")
+            .value
+            .to_string(),
+        "42"
+    );
+    let transformed = identity_traversal(&program).expect("identity transform");
+    let transformed = validate(transformed, &[&source]).expect("transformed validation");
+    assert_eq!(
+        evaluate(&transformed)
+            .expect("transformed retained machine")
+            .value
+            .to_string(),
+        "42"
+    );
+}
+
+#[test]
+fn shared_pipeline_validates_equations_tuple_domains_and_local_patterns() {
+    for (text, expected) in [
+        (
+            "type Tree =\nLeaf(Int)\n| Node(Tree, Tree)\n\ndepth : Tree -> Int\ndepth (Leaf value) = 1\ndepth (Node(left, right)) = depth left + depth right\n\ndepth (Node(Leaf(1), Leaf(2)))\n",
+            "2",
+        ),
+        (
+            "fn add(left : Int, right : Int) -> Int {\nleft + right\n}\n\nadd(20, 22)\n",
+            "42",
+        ),
+        ("{\nlet (left, right) = (20, 22)\nleft + right\n}\n", "42"),
+    ] {
+        let source = SourceFile::new("shared-patterns.ash", text).expect("fixture should fit");
+        let tree = parse(lex(&source).expect("lex"));
+        assert!(tree.parse_diagnostics().is_empty());
+        let resolved = resolve(&project(&source, &tree).expect("project")).expect("resolve");
+        let mut elaborator = Elaborator::for_program(&resolved).expect("reserve binders");
+        let typed = elaborator
+            .synthesize_program(&resolved)
+            .expect("shared elaboration");
+        let program = validate(elaborator.finish(typed.node).expect("finish"), &[&source])
+            .expect("independent validation");
+        assert_eq!(typed.ty.to_string(), "Int");
+        assert_eq!(
+            evaluate(&program)
+                .expect("retained machine")
+                .value
+                .to_string(),
+            expected
+        );
+    }
+}
 
 fn run(text: &str) -> Observation {
     run_source(SourceFile::new("data-and-adts.ash", text).expect("fixture should fit"))
@@ -14,7 +94,7 @@ fn rejection(text: &str) -> String {
         SourceFile::new("data-and-adts-rejection.ash", text).expect("fixture should fit"),
     )
     .expect_err("fixture should be rejected");
-    format!("{error:?}")
+    format!("{} {error:?}", error.reason_code())
 }
 
 #[test]
@@ -189,14 +269,12 @@ fn extended_syntax_failures_keep_the_exact_current_token_span() {
     let text = "match true {\ntrue 0\nfalse => 1\n}\n";
     let source = SourceFile::new("extended-span.ash", text).expect("fixture should fit");
     let failure = run_source(source).expect_err("the missing arrow must be rejected");
-    let PipelineFailure::Extended(failure) = failure else {
-        panic!("the extended grammar should own this rejection")
+    let PipelineFailure::Syntax(failure) = failure else {
+        panic!("the retained grammar should own this rejection")
     };
-    assert_eq!(failure.stage, ExtendedStage::Syntax);
-    assert_eq!(failure.reason, "parse.expected-form");
-    let span = failure
-        .primary
-        .expect("syntax rejection needs a primary span");
+    let diagnostic = failure.parser.first().expect("parser rejection");
+    assert_eq!(diagnostic.reason.to_string(), "parse.expected-form");
+    let span = diagnostic.primary.span();
     let start = u32::try_from(text.find('0').expect("fixture contains zero"))
         .expect("fixture offset should fit");
     assert_eq!(span.range().start(), start);
@@ -212,7 +290,7 @@ fn nominal_declarations_are_file_wide_recursive_and_distinct() {
     let mismatch = rejection(
         "type First =\nFirst(Int)\n\ntype Second =\nSecond(Int)\n\nfn take(value : First) -> Int {\nmatch value {\nFirst(payload) => payload\n}\n}\n\ntake Second(1)\n",
     );
-    assert!(mismatch.contains("type.mismatch"));
+    assert!(mismatch.contains("type.argument"));
 }
 
 #[test]

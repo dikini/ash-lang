@@ -84,6 +84,33 @@ pub enum PipelineFailure {
 }
 
 impl PipelineFailure {
+    /// Returns the stable reason owned by the first failing stage.
+    #[must_use]
+    pub fn reason_code(&self) -> String {
+        match self {
+            Self::SourceModel(_) => "source.invalid".into(),
+            Self::Syntax(failure) => failure
+                .lexical
+                .first()
+                .map(|diagnostic| diagnostic.reason.to_string())
+                .or_else(|| {
+                    failure
+                        .parser
+                        .first()
+                        .map(|diagnostic| diagnostic.reason.to_string())
+                })
+                .unwrap_or_else(|| "parse.resource".into()),
+            Self::Projection(_) => "projection.malformed-tree".into(),
+            Self::Resolution(error) => error.reason.to_string(),
+            Self::Typing(TypeError::Source(diagnostic)) => diagnostic.reason.to_string(),
+            Self::Typing(TypeError::Mismatch(_)) => "type.mismatch".into(),
+            Self::Typing(TypeError::Internal(_)) => "type.internal".into(),
+            Self::Validation(error) => error.reason().to_string(),
+            Self::Runtime(error) => format!("runtime.{error:?}"),
+            Self::Extended(failure) => failure.reason.to_owned(),
+        }
+    }
+
     /// Reports whether this failure rejects Ash source rather than the tool.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
@@ -184,9 +211,6 @@ impl Error for FileFailure {}
 /// Returns a stage-specific failure without allowing recovery-bearing syntax,
 /// unchecked Core, or a pending feature to bypass its owning stage.
 pub fn run_source(source: SourceFile) -> Result<Observation, PipelineFailure> {
-    if crate::extended::uses_extended_syntax(source.text()) {
-        return crate::extended::run(&source).map_err(PipelineFailure::Extended);
-    }
     run_source_with_consumers(source, validate, evaluate)
 }
 
@@ -214,12 +238,14 @@ where
     }
     let surface = project(&source, &tree).map_err(PipelineFailure::Projection)?;
     let resolved = resolve(&surface).map_err(PipelineFailure::Resolution)?;
+    let registry = std::sync::Arc::clone(&resolved.registry);
     let mut elaborator = Elaborator::for_program(&resolved)
         .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
     let typed = elaborator
         .synthesize_program(&resolved)
         .map_err(PipelineFailure::Typing)?;
     let ty = typed.ty;
+    let type_display = render_type(&ty, &registry);
     let unchecked = elaborator
         .finish(typed.node)
         .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
@@ -228,8 +254,39 @@ where
     Ok(Observation {
         value: evaluation.value,
         ty,
-        type_display: None,
+        type_display: Some(type_display),
     })
+}
+
+fn render_type(ty: &Type, registry: &crate::resolved::ResolvedRegistry) -> String {
+    fn render(ty: &Type, registry: &crate::resolved::ResolvedRegistry) -> String {
+        match ty {
+            Type::Int => "Int".into(),
+            Type::Bool => "Bool".into(),
+            Type::Unit => "Unit".into(),
+            Type::Nominal(id) => registry
+                .nominal(*id)
+                .map_or_else(|| ty.to_string(), |nominal| nominal.spelling.clone()),
+            Type::Tuple(elements) => format!(
+                "({})",
+                elements
+                    .iter()
+                    .map(|element| render(element, registry))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Type::Function(input, output) => {
+                let rendered_input = render(input, registry);
+                let rendered_input = if matches!(input.as_ref(), Type::Function(_, _)) {
+                    format!("({rendered_input})")
+                } else {
+                    rendered_input
+                };
+                format!("{rendered_input} -> {}", render(output, registry))
+            }
+        }
+    }
+    render(ty, registry)
 }
 
 fn retained_parser_diagnostics(

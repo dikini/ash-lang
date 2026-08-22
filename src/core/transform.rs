@@ -1,10 +1,10 @@
 //! Bounded transformations over independently validated pure Core.
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, sync::Arc};
 
 use super::{
-    BuildError, CoreBuilder, NodeId, Primitive, PureComputation, PureExprKind, PureValue,
-    UnvalidatedProgram, ValidatedProgram,
+    BuildError, CoreBuilder, CoreMatchArm, CorePattern, CorePatternKind, NodeId, Primitive,
+    PureComputation, PureExprKind, PureValue, UnvalidatedProgram, ValidatedProgram,
 };
 use crate::source::{GeneratedReason, Origin};
 
@@ -79,7 +79,7 @@ fn rebuild(
     fold_literal_primitives: bool,
 ) -> Result<UnvalidatedProgram, TransformError> {
     let order = postorder(program, fold_literal_primitives)?;
-    let mut builder = CoreBuilder::new();
+    let mut builder = CoreBuilder::with_registry(Arc::clone(program.registry()));
     let mut binders = Vec::new();
     for id in &order {
         let expression = program
@@ -95,12 +95,24 @@ fn rebuild(
             PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
                 binders.extend(group.members().iter().map(|member| member.binder().id()));
             }
+            PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                for arm in match_node.arms() {
+                    let mut pattern_binders = Vec::new();
+                    arm.pattern().binders(&mut pattern_binders);
+                    binders.extend(pattern_binders.into_iter().map(|binder| binder.id()));
+                }
+            }
             PureExprKind::Value(
-                PureValue::Integer(_) | PureValue::Boolean(_) | PureValue::Unit(_),
+                PureValue::Integer(_)
+                | PureValue::Boolean(_)
+                | PureValue::Unit(_)
+                | PureValue::Constructor(_),
             )
             | PureExprKind::Variable(_)
             | PureExprKind::Computation(
-                PureComputation::Apply(_) | PureComputation::Primitive(_),
+                PureComputation::Apply(_)
+                | PureComputation::Primitive(_)
+                | PureComputation::Tuple(_),
             ) => {}
         }
     }
@@ -167,6 +179,13 @@ fn rebuild_node(
             .map_err(TransformError::from),
         PureExprKind::Value(PureValue::Unit(_)) => builder
             .unit(expression.ty.clone(), expression.origin.clone())
+            .map_err(TransformError::from),
+        PureExprKind::Value(PureValue::Constructor(node)) => builder
+            .constructor(
+                node.constructor(),
+                expression.ty.clone(),
+                expression.origin.clone(),
+            )
             .map_err(TransformError::from),
         PureExprKind::Value(PureValue::Function(node)) => {
             let parameter = builder.resolved_binder(
@@ -242,7 +261,76 @@ fn rebuild_node(
                 expression.origin.clone(),
             )
             .map_err(TransformError::from),
+        PureExprKind::Computation(PureComputation::Tuple(node)) => builder
+            .tuple(
+                node.elements()
+                    .iter()
+                    .map(|element| remap(remapped, *element))
+                    .collect::<Result<Vec<_>, _>>()?,
+                expression.ty.clone(),
+                expression.origin.clone(),
+            )
+            .map_err(TransformError::from),
+        PureExprKind::Computation(PureComputation::Match(node)) => {
+            let arms = node
+                .arms()
+                .iter()
+                .map(|arm| {
+                    Ok(CoreMatchArm::new(
+                        rebuild_pattern(builder, arm.pattern())?,
+                        remap(remapped, arm.body())?,
+                        arm.origin().clone(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, TransformError>>()?;
+            builder
+                .match_expression(
+                    remap(remapped, node.scrutinee())?,
+                    arms,
+                    expression.ty.clone(),
+                    expression.origin.clone(),
+                )
+                .map_err(TransformError::from)
+        }
     }
+}
+
+fn rebuild_pattern(
+    builder: &mut CoreBuilder,
+    pattern: &CorePattern,
+) -> Result<CorePattern, TransformError> {
+    let kind = match &pattern.kind {
+        CorePatternKind::Binder(binder) => CorePatternKind::Binder(builder.resolved_binder(
+            binder.id(),
+            binder.ty().clone(),
+            binder.origin().clone(),
+        )?),
+        CorePatternKind::Wildcard => CorePatternKind::Wildcard,
+        CorePatternKind::Boolean(value) => CorePatternKind::Boolean(*value),
+        CorePatternKind::Unit => CorePatternKind::Unit,
+        CorePatternKind::Tuple(elements) => CorePatternKind::Tuple(
+            elements
+                .iter()
+                .map(|element| rebuild_pattern(builder, element))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_boxed_slice(),
+        ),
+        CorePatternKind::Constructor {
+            constructor,
+            payload,
+        } => CorePatternKind::Constructor {
+            constructor: *constructor,
+            payload: payload
+                .as_deref()
+                .map(|payload| rebuild_pattern(builder, payload).map(Box::new))
+                .transpose()?,
+        },
+    };
+    Ok(CorePattern::new(
+        pattern.ty.clone(),
+        pattern.origin.clone(),
+        kind,
+    ))
 }
 
 fn postorder(

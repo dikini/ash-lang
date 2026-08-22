@@ -61,7 +61,7 @@ impl fmt::Display for ResolveReason {
             Self::DuplicateConstructor => "resolve.duplicate-constructor",
             Self::UnknownType => "resolve.unknown-type",
             Self::UnknownConstructor => "resolve.unknown-constructor",
-            Self::DuplicatePatternBinder => "resolve.duplicate-pattern-binder",
+            Self::DuplicatePatternBinder => "pattern.duplicate-binder",
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
             Self::BinderIdExhausted => "resolve.binder-id-exhausted",
             Self::InternalState => "resolve.internal-state",

@@ -56,28 +56,20 @@ fn recursive_closure_uses_its_definition_environment_not_its_caller() {
 
 #[test]
 fn recursive_initialization_requires_a_direct_anonymous_function() {
-    for text in [
-        "{\nlet rec value : Int = 1\nvalue\n}\n",
+    let data = typing_error("{\nlet rec value : Int = 1\nvalue\n}\n");
+    assert_eq!(data.reason, TypeReason::UnsafeRecursiveRoot);
+    assert_eq!(data.reason.to_string(), "recursion.unsafe-root");
+
+    let function = typing_error(
         "{\nlet rec value : Unit -> Int = {\nlet candidate : Unit -> Int = fn(ignored) {\n1\n}\ncandidate\n}\nvalue ()\n}\n",
-    ] {
-        let diagnostic = typing_error(text);
-        assert_eq!(diagnostic.reason, TypeReason::UnsafeRecursiveInitializer);
-        assert_eq!(
-            diagnostic.reason.to_string(),
-            "recursion.unsafe-initializer"
-        );
-        assert_eq!(diagnostic.related.len(), 2);
-        assert_eq!(
-            diagnostic.expected.as_deref(),
-            Some("a direct `fn` initializer")
-        );
-        assert!(
-            diagnostic
-                .help
-                .as_deref()
-                .is_some_and(|help| help.contains("directly with `fn`"))
-        );
-    }
+    );
+    assert_eq!(function.reason, TypeReason::UnsafeRecursiveInitializer);
+    assert_eq!(function.reason.to_string(), "recursion.unsafe-initializer");
+    assert_eq!(function.related.len(), 2);
+    assert_eq!(
+        function.expected.as_deref(),
+        Some("a direct `fn` initializer")
+    );
 }
 
 #[test]

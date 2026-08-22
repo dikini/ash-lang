@@ -1,12 +1,156 @@
 use ash::{
     core::{
-        BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, Primitive, PureComputation,
-        PureExprKind, PureValue, ValidationReason, validate,
+        BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
+        CorePatternKind, Primitive, PureComputation, PureExprKind, PureValue, ValidationReason,
+        validate,
     },
     integer::Integer,
+    resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry},
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
-    types::{NominalTypeId, Type, same_type},
+    types::{ConstructorId, NominalTypeId, Type, same_type},
 };
+use std::sync::Arc;
+
+#[test]
+fn validates_registry_tuples_constructors_and_structured_matches() {
+    let file = source("data core");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let empty = ConstructorId::new(nominal, 0);
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "Choice".into(),
+            constructors: vec![empty].into_boxed_slice(),
+            origin: origin.clone(),
+        }],
+        vec![ResolvedConstructor {
+            id: empty,
+            owner: nominal,
+            spelling: "Empty".into(),
+            payload: None,
+            origin: origin.clone(),
+        }],
+    ));
+    let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+    let constructor = builder
+        .constructor(empty, Type::Nominal(nominal), origin.clone())
+        .expect("constructor node");
+    let arm = CoreMatchArm::new(
+        CorePattern::new(
+            Type::Nominal(nominal),
+            origin.clone(),
+            CorePatternKind::Constructor {
+                constructor: empty,
+                payload: None,
+            },
+        ),
+        constructor,
+        origin.clone(),
+    );
+    let root = builder
+        .match_expression(constructor, vec![arm], Type::Nominal(nominal), origin)
+        .expect("match node");
+
+    let program = validate(builder.finish(root).expect("root"), &[&file])
+        .expect("well-formed data Core should validate");
+    assert!(Arc::ptr_eq(program.registry(), &registry));
+}
+
+#[test]
+fn rejects_malformed_data_registries_and_constructor_annotations() {
+    let file = source("malformed data core");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let empty_registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "Empty".into(),
+            constructors: Box::new([]),
+            origin: origin.clone(),
+        }],
+        Vec::new(),
+    ));
+    let mut builder = CoreBuilder::with_registry(empty_registry);
+    let root = builder.unit(Type::Unit, origin.clone()).expect("unit");
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("empty nominal declaration");
+    assert_eq!(error.reason(), ValidationReason::Registry);
+
+    let constructor = ConstructorId::new(nominal, 0);
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "One".into(),
+            constructors: vec![constructor].into_boxed_slice(),
+            origin: origin.clone(),
+        }],
+        vec![ResolvedConstructor {
+            id: constructor,
+            owner: nominal,
+            spelling: "One".into(),
+            payload: None,
+            origin: origin.clone(),
+        }],
+    ));
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder
+        .constructor(constructor, Type::Int, origin)
+        .expect("unchecked wrong annotation");
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("constructor type disagreement");
+    assert_eq!(error.reason(), ValidationReason::NodeType);
+}
+
+#[test]
+fn rejects_missing_and_redundant_structured_match_arms() {
+    let file = source("coverage core");
+    let origin = whole_origin(&file);
+    let mut missing = CoreBuilder::new();
+    let scrutinee = missing
+        .boolean(true, Type::Bool, origin.clone())
+        .expect("scrutinee");
+    let body = missing
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("body");
+    let arm = CoreMatchArm::new(
+        CorePattern::new(Type::Bool, origin.clone(), CorePatternKind::Boolean(true)),
+        body,
+        origin.clone(),
+    );
+    let root = missing
+        .match_expression(scrutinee, vec![arm], Type::Int, origin.clone())
+        .expect("unchecked match");
+    let error =
+        validate(missing.finish(root).expect("root"), &[&file]).expect_err("missing false witness");
+    assert_eq!(error.reason(), ValidationReason::Coverage);
+
+    let mut redundant = CoreBuilder::new();
+    let scrutinee = redundant
+        .boolean(true, Type::Bool, origin.clone())
+        .expect("scrutinee");
+    let first = redundant
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("first body");
+    let second = redundant
+        .integer(integer("2"), Type::Int, origin.clone())
+        .expect("second body");
+    let wildcard = || CorePattern::new(Type::Bool, origin.clone(), CorePatternKind::Wildcard);
+    let root = redundant
+        .match_expression(
+            scrutinee,
+            vec![
+                CoreMatchArm::new(wildcard(), first, origin.clone()),
+                CoreMatchArm::new(wildcard(), second, origin.clone()),
+            ],
+            Type::Int,
+            origin,
+        )
+        .expect("unchecked redundant match");
+    let error =
+        validate(redundant.finish(root).expect("root"), &[&file]).expect_err("redundant wildcard");
+    assert_eq!(error.reason(), ValidationReason::Coverage);
+}
 
 #[test]
 fn nominal_identity_and_tuple_structure_share_one_type_equality_rule() {

@@ -19,6 +19,7 @@ pub mod extended;
 pub mod integer;
 pub mod lexer;
 pub mod parser;
+pub mod pattern;
 pub mod render;
 pub mod resolve;
 pub mod resolved;
