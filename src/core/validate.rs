@@ -54,6 +54,10 @@ pub enum ValidationReason {
     Coverage,
     /// A deterministic validation resource budget was exhausted.
     Resource,
+    /// An explicit Core type abstraction or application is malformed.
+    TypeOperation,
+    /// A Core type variable occurs outside its abstraction scope.
+    TypeScope,
 }
 
 impl fmt::Display for ValidationReason {
@@ -73,6 +77,8 @@ impl fmt::Display for ValidationReason {
             Self::Pattern => "core.validation.pattern",
             Self::Coverage => "core.validation.coverage",
             Self::Resource => "core.validation.resource",
+            Self::TypeOperation => "core.validation.type-operation",
+            Self::TypeScope => "core.validation.type-scope",
         })
     }
 }
@@ -202,7 +208,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         self.validate_graph()?;
         self.collect_binders()?;
         self.validate_node_types()?;
-        self.validate_scopes()
+        self.validate_scopes()?;
+        self.validate_type_scopes()
     }
 
     fn validate_registry(&self) -> Result<(), ValidationError> {
@@ -318,8 +325,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         let Some(root) = root else {
             return true;
         };
-        let mut work = vec![root];
-        while let Some(ty) = work.pop() {
+        let mut work = vec![(root, true)];
+        while let Some((ty, allow_scheme)) = work.pop() {
             match ty {
                 Type::Int | Type::Bool | Type::Unit => {}
                 Type::Nominal(id) if self.program.registry.nominal(*id).is_some() => {}
@@ -338,13 +345,23 @@ impl<'program, 'source> Validator<'program, 'source> {
                     {
                         return false;
                     }
-                    work.extend(arguments);
+                    work.extend(arguments.iter().map(|argument| (argument, false)));
                 }
-                Type::Tuple(elements) if elements.len() >= 2 => work.extend(elements),
+                Type::Forall(parameters, body) if allow_scheme => {
+                    let unique = parameters.iter().copied().collect::<HashSet<_>>();
+                    if parameters.is_empty() || unique.len() != parameters.len() {
+                        return false;
+                    }
+                    work.push((body, false));
+                }
+                Type::Forall(_, _) => return false,
+                Type::Tuple(elements) if elements.len() >= 2 => {
+                    work.extend(elements.iter().map(|element| (element, false)));
+                }
                 Type::Tuple(_) => return false,
                 Type::Function(domain, codomain) => {
-                    work.push(codomain);
-                    work.push(domain);
+                    work.push((codomain, false));
+                    work.push((domain, false));
                 }
             }
         }
@@ -495,7 +512,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                 | PureExprKind::Computation(
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
-                    | PureComputation::Tuple(_),
+                    | PureComputation::Tuple(_)
+                    | PureComputation::TypeAbstraction(_)
+                    | PureComputation::TypeApplication(_),
                 ) => {}
             }
         }
@@ -526,7 +545,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let Some(binder) = self.binders.get(&variable.binder()) else {
                         return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
                     };
-                    if !type_is_instance(&node.ty, binder.ty()) {
+                    if !same_type(&node.ty, binder.ty()) {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                 }
@@ -577,10 +596,22 @@ impl<'program, 'source> Validator<'program, 'source> {
                             .into_boxed_slice(),
                     )
                 };
-                let expected = info.payload.as_ref().map_or(result.clone(), |payload| {
+                let monotype = info.payload.as_ref().map_or(result.clone(), |payload| {
                     Type::Function(Box::new(payload.clone()), Box::new(result))
                 });
-                if !type_is_instance(&node.ty, &expected) {
+                let expected = if parameters.is_empty() {
+                    monotype
+                } else {
+                    Type::Forall(
+                        parameters
+                            .iter()
+                            .map(|parameter| parameter.id)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                        Box::new(monotype),
+                    )
+                };
+                if !same_type(&node.ty, &expected) {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
                 return Ok(());
@@ -633,12 +664,31 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Type::AppliedNominal(owner, _) => {
                             self.guarded_data_root(member.initializer(), *owner, &recursive)?
                         }
+                        Type::Forall(parameters, body)
+                            if matches!(body.as_ref(), Type::Function(_, _)) =>
+                        {
+                            let PureExprKind::Computation(PureComputation::TypeAbstraction(
+                                abstraction,
+                            )) = &initializer.kind
+                            else {
+                                return Err(ValidationError::new(
+                                    ValidationReason::RecursiveBinding,
+                                    Some(id),
+                                ));
+                            };
+                            abstraction.parameters() == parameters.as_ref()
+                                && matches!(
+                                    self.node(abstraction.body())?.kind,
+                                    PureExprKind::Value(PureValue::Function(_))
+                                )
+                        }
                         Type::Int
                         | Type::Bool
                         | Type::Unit
                         | Type::Tuple(_)
                         | Type::Variable(_)
-                        | Type::Inference(_) => false,
+                        | Type::Inference(_)
+                        | Type::Forall(_, _) => false,
                     };
                     if !safe {
                         return Err(ValidationError::new(
@@ -735,6 +785,62 @@ impl<'program, 'source> Validator<'program, 'source> {
                     return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
                 }
             }
+            PureComputation::TypeAbstraction(abstraction) => {
+                let body = self.node(abstraction.body())?;
+                let Type::Forall(parameters, scheme_body) = &node.ty else {
+                    return Err(ValidationError::new(
+                        ValidationReason::TypeOperation,
+                        Some(id),
+                    ));
+                };
+                let unique = abstraction
+                    .parameters()
+                    .iter()
+                    .copied()
+                    .collect::<HashSet<_>>();
+                if abstraction.parameters().is_empty()
+                    || unique.len() != abstraction.parameters().len()
+                    || abstraction.parameters() != parameters.as_ref()
+                    || !same_type(&body.ty, scheme_body)
+                    || matches!(scheme_body.as_ref(), Type::Forall(_, _))
+                {
+                    return Err(ValidationError::new(
+                        ValidationReason::TypeOperation,
+                        Some(id),
+                    ));
+                }
+            }
+            PureComputation::TypeApplication(application) => {
+                let function = self.node(application.function())?;
+                let Type::Forall(parameters, body) = &function.ty else {
+                    return Err(ValidationError::new(
+                        ValidationReason::TypeOperation,
+                        Some(id),
+                    ));
+                };
+                if parameters.len() != application.arguments().len()
+                    || application.arguments().iter().any(|argument| {
+                        matches!(argument, Type::Forall(_, _)) || !self.valid_type(Some(argument))
+                    })
+                {
+                    return Err(ValidationError::new(
+                        ValidationReason::TypeOperation,
+                        Some(id),
+                    ));
+                }
+                let replacements = parameters
+                    .iter()
+                    .zip(application.arguments())
+                    .map(|(parameter, argument)| (*parameter, argument.clone()))
+                    .collect();
+                let instantiated = substitute_type_variables(body, &replacements);
+                if !same_type(&node.ty, &instantiated) {
+                    return Err(ValidationError::new(
+                        ValidationReason::TypeOperation,
+                        Some(id),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -745,6 +851,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         owner: crate::types::NominalTypeId,
         recursive: &HashSet<BinderId>,
     ) -> Result<bool, ValidationError> {
+        let initializer = self.erase_type_applications(initializer)?;
         let root = self.node(initializer)?;
         let payload = match &root.kind {
             PureExprKind::Value(PureValue::Constructor(constructor)) => {
@@ -758,7 +865,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 return Ok(true);
             }
             PureExprKind::Computation(PureComputation::Apply(application)) => {
-                let function = self.node(application.function())?;
+                let function = self.node(self.erase_type_applications(application.function())?)?;
                 let PureExprKind::Value(PureValue::Constructor(constructor)) = &function.kind
                 else {
                     return Ok(false);
@@ -795,7 +902,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.extend(tuple.elements().iter().copied());
                 }
                 PureExprKind::Computation(PureComputation::Apply(application)) => {
-                    let function = self.node(application.function())?;
+                    let function =
+                        self.node(self.erase_type_applications(application.function())?)?;
                     if !matches!(
                         function.kind,
                         PureExprKind::Value(PureValue::Constructor(_))
@@ -809,6 +917,18 @@ impl<'program, 'source> Validator<'program, 'source> {
             }
         }
         Ok(true)
+    }
+
+    fn erase_type_applications(&self, mut id: NodeId) -> Result<NodeId, ValidationError> {
+        loop {
+            let node = self.node(id)?;
+            let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+                &node.kind
+            else {
+                return Ok(id);
+            };
+            id = application.function();
+        }
     }
 
     fn recursive_reachability(
@@ -971,6 +1091,102 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(())
     }
 
+    fn validate_type_scopes(&self) -> Result<(), ValidationError> {
+        let mut scheduled = vec![false; self.program.nodes.len()];
+        let mut requirements = vec![None; self.program.nodes.len()];
+        let mut work = vec![ScopeAnalysisTask::Enter(self.program.root)];
+        while let Some(task) = work.pop() {
+            match task {
+                ScopeAnalysisTask::Enter(id) => {
+                    let index = self.index(id)?;
+                    if scheduled[index] {
+                        continue;
+                    }
+                    scheduled[index] = true;
+                    work.push(ScopeAnalysisTask::Finish(id));
+                    let kind = &self.node(id)?.kind;
+                    for child_index in (0..kind.child_count()).rev() {
+                        let child = kind.child_at(child_index).ok_or_else(|| {
+                            ValidationError::new(ValidationReason::TypeScope, Some(id))
+                        })?;
+                        work.push(ScopeAnalysisTask::Enter(child));
+                    }
+                }
+                ScopeAnalysisTask::Finish(id) => {
+                    let node = self.node(id)?;
+                    let mut free = HashSet::new();
+                    collect_free_type_variables(&node.ty, &mut free);
+                    for child_index in 0..node.kind.child_count() {
+                        let child = node.kind.child_at(child_index).ok_or_else(|| {
+                            ValidationError::new(ValidationReason::TypeScope, Some(id))
+                        })?;
+                        let child_index = self.index(child)?;
+                        let child_free = requirements
+                            .get(child_index)
+                            .and_then(Option::as_ref)
+                            .ok_or_else(|| {
+                                ValidationError::new(ValidationReason::TypeScope, Some(id))
+                            })?;
+                        free.extend(child_free);
+                    }
+                    match &node.kind {
+                        PureExprKind::Value(PureValue::Function(function)) => {
+                            collect_free_type_variables(function.parameter().ty(), &mut free);
+                        }
+                        PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                            collect_free_type_variables(binding.binder().ty(), &mut free);
+                        }
+                        PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                            for member in group.members() {
+                                collect_free_type_variables(member.binder().ty(), &mut free);
+                            }
+                        }
+                        PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                            for arm in match_node.arms() {
+                                collect_pattern_type_variables(arm.pattern(), &mut free);
+                            }
+                        }
+                        PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                            for argument in operation.arguments() {
+                                collect_free_type_variables(argument, &mut free);
+                            }
+                        }
+                        PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+                            for parameter in operation.parameters() {
+                                free.remove(parameter);
+                            }
+                        }
+                        PureExprKind::Value(
+                            PureValue::Integer(_)
+                            | PureValue::Boolean(_)
+                            | PureValue::Unit(_)
+                            | PureValue::Constructor(_),
+                        )
+                        | PureExprKind::Variable(_)
+                        | PureExprKind::Computation(
+                            PureComputation::Apply(_)
+                            | PureComputation::Primitive(_)
+                            | PureComputation::Tuple(_),
+                        ) => {}
+                    }
+                    requirements[self.index(id)?] = Some(free);
+                }
+            }
+        }
+        let root = requirements
+            .get(self.index(self.program.root)?)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, None))?;
+        if root.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationError::new(
+                ValidationReason::TypeScope,
+                Some(self.program.root),
+            ))
+        }
+    }
+
     fn analyze_free_binders(&self) -> Result<ScopeAnalysis, ValidationError> {
         let mut scheduled = vec![false; self.program.nodes.len()];
         let mut requirements = vec![None; self.program.nodes.len()];
@@ -1060,6 +1276,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                                 free = union_requirements(free, arm_free);
                             }
                             free
+                        }
+                        PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+                            self.requirements_for(&requirements, operation.body())?
+                        }
+                        PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                            self.requirements_for(&requirements, operation.function())?
                         }
                         PureExprKind::Value(
                             PureValue::Integer(_)
@@ -1154,41 +1376,55 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
         .map_err(|_| ValidationError::new(ValidationReason::NodeBounds, None))
 }
 
-fn type_is_instance(instance: &Type, scheme: &Type) -> bool {
-    let mut substitutions = HashMap::new();
-    let mut work = vec![(instance, scheme)];
-    while let Some((instance, scheme)) = work.pop() {
-        match (instance, scheme) {
-            (_, Type::Variable(variable)) => {
-                if let Some(previous) = substitutions.get(variable) {
-                    if !same_type(previous, instance) {
-                        return false;
-                    }
-                } else {
-                    substitutions.insert(*variable, instance.clone());
-                }
+fn collect_free_type_variables(ty: &Type, output: &mut HashSet<crate::types::TypeVariableId>) {
+    let mut bound = Vec::new();
+    let mut discovered = HashSet::new();
+    let mut work = vec![ty];
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Variable(variable) => {
+                discovered.insert(*variable);
             }
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
-            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
-                if left_id == right_id && left.len() == right.len() =>
-            {
-                work.extend(left.iter().zip(right.iter()));
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                work.extend(elements);
             }
-            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
-                work.extend(left.iter().zip(right.iter()));
+            Type::Function(domain, codomain) => {
+                work.push(codomain);
+                work.push(domain);
             }
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                work.push((left_codomain, right_codomain));
-                work.push((left_domain, right_domain));
+            Type::Forall(parameters, body) => {
+                bound.extend(parameters.iter().copied());
+                work.push(body);
             }
-            _ => return false,
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
         }
     }
-    true
+    for variable in bound {
+        discovered.remove(&variable);
+    }
+    output.extend(discovered);
+}
+
+fn collect_pattern_type_variables(
+    pattern: &CorePattern,
+    output: &mut HashSet<crate::types::TypeVariableId>,
+) {
+    let mut work = vec![pattern];
+    while let Some(pattern) = work.pop() {
+        collect_free_type_variables(&pattern.ty, output);
+        match &pattern.kind {
+            CorePatternKind::Binder(binder) => {
+                collect_free_type_variables(binder.ty(), output);
+            }
+            CorePatternKind::Tuple(elements) => work.extend(elements),
+            CorePatternKind::Constructor { payload, .. } => {
+                if let Some(payload) = payload.as_deref() {
+                    work.push(payload);
+                }
+            }
+            CorePatternKind::Wildcard | CorePatternKind::Boolean(_) | CorePatternKind::Unit => {}
+        }
+    }
 }
 
 #[cfg(test)]

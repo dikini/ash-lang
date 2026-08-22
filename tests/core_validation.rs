@@ -7,9 +7,60 @@ use ash::{
     integer::Integer,
     resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry},
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
-    types::{ConstructorId, NominalTypeId, Type, same_type},
+    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, same_type},
 };
 use std::sync::Arc;
+
+#[test]
+fn rejects_malformed_explicit_type_operations_and_free_type_variables() {
+    let file = source("explicit type operations");
+    let origin = whole_origin(&file);
+    let parameter = TypeVariableId::new(7);
+
+    let mut builder = CoreBuilder::new();
+    let body = builder.unit(Type::Unit, origin.clone()).expect("unit body");
+    let abstraction = builder
+        .type_abstraction(
+            vec![parameter],
+            body,
+            Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+            origin.clone(),
+        )
+        .expect("unchecked abstraction");
+    let malformed = builder
+        .type_application(
+            abstraction,
+            vec![Type::Int, Type::Bool],
+            Type::Unit,
+            origin.clone(),
+        )
+        .expect("unchecked application");
+    let error = validate(builder.finish(malformed).expect("root"), &[&file])
+        .expect_err("type argument arity must be rechecked");
+    assert_eq!(error.reason(), ValidationReason::TypeOperation);
+
+    let mut builder = CoreBuilder::new();
+    let binder = builder
+        .binder(Type::Variable(parameter), origin.clone())
+        .expect("unchecked parameter binder");
+    let occurrence = builder
+        .variable(binder.id(), Type::Variable(parameter), origin.clone())
+        .expect("unchecked variable");
+    let root = builder
+        .function(
+            binder,
+            occurrence,
+            Type::Function(
+                Box::new(Type::Variable(parameter)),
+                Box::new(Type::Variable(parameter)),
+            ),
+            origin,
+        )
+        .expect("unchecked function");
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("a free Core type variable must not escape");
+    assert_eq!(error.reason(), ValidationReason::TypeScope);
+}
 
 #[test]
 fn validates_registry_tuples_constructors_and_structured_matches() {

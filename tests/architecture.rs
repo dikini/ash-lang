@@ -10,6 +10,7 @@ use ash::{
         literal::{BooleanNode, IntegerNode, UnitNode},
         primitive::PrimitiveNode,
         recursion::RecursiveBindingNode,
+        type_ops::{TypeAbstractionNode, TypeApplicationNode},
         validate,
         variable::VariableNode,
     },
@@ -142,6 +143,8 @@ enum ShadowPureComputation {
     Primitive(PrimitiveNode),
     Tuple(TupleNode),
     Match(MatchNode),
+    TypeAbstraction(TypeAbstractionNode),
+    TypeApplication(TypeApplicationNode),
 }
 
 fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
@@ -163,6 +166,12 @@ fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
             PureComputation::Primitive(node) => ShadowPureComputation::Primitive(*node),
             PureComputation::Tuple(node) => ShadowPureComputation::Tuple(node.clone()),
             PureComputation::Match(node) => ShadowPureComputation::Match(node.clone()),
+            PureComputation::TypeAbstraction(node) => {
+                ShadowPureComputation::TypeAbstraction(node.clone())
+            }
+            PureComputation::TypeApplication(node) => {
+                ShadowPureComputation::TypeApplication(node.clone())
+            }
         }),
     };
     ShadowTypedExpr {
@@ -274,6 +283,14 @@ fn validate_shadow_computation(
                     .iter()
                     .all(|arm| facts.node_type(arm.body()) == Some(ty))
         }
+        ShadowPureComputation::TypeAbstraction(node) => {
+            matches!(ty, Type::Forall(parameters, body)
+                if parameters.as_ref() == node.parameters()
+                    && facts.node_type(node.body()) == Some(body.as_ref()))
+        }
+        ShadowPureComputation::TypeApplication(node) => {
+            !node.arguments().is_empty() && facts.node_type(node.function()).is_some()
+        }
     }
 }
 
@@ -301,6 +318,8 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
             ShadowPureComputation::Match(node) => std::iter::once(node.scrutinee())
                 .chain(node.arms().iter().map(|arm| arm.body()))
                 .collect(),
+            ShadowPureComputation::TypeAbstraction(node) => vec![node.body()],
+            ShadowPureComputation::TypeApplication(node) => vec![node.function()],
         },
     }
 }
@@ -346,6 +365,12 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
                     .chain(node.arms().iter().map(|arm| arm.body()))
                     .collect(),
             ),
+            ShadowPureComputation::TypeAbstraction(node) => {
+                ShadowTransformPlan::Preserve(vec![node.body()])
+            }
+            ShadowPureComputation::TypeApplication(node) => {
+                ShadowTransformPlan::Preserve(vec![node.function()])
+            }
         },
         ShadowExprKind::Mock(_) => ShadowTransformPlan::ReplaceWithMockUnit,
     }
@@ -368,6 +393,8 @@ fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
             ShadowPureComputation::Primitive(_) => "primitive",
             ShadowPureComputation::Tuple(_) => "tuple",
             ShadowPureComputation::Match(_) => "match",
+            ShadowPureComputation::TypeAbstraction(_) => "type abstraction",
+            ShadowPureComputation::TypeApplication(_) => "type application",
         },
         ShadowExprKind::Mock(_) => "mock",
     }

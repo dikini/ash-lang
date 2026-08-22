@@ -17,6 +17,7 @@ use super::{
     literal::{BooleanNode, IntegerNode, UnitNode},
     primitive::{Primitive, PrimitiveNode},
     recursion::{RecursiveBindingMember, RecursiveBindingNode},
+    type_ops::{TypeAbstractionNode, TypeApplicationNode},
     variable::{TypedBinder, VariableNode},
 };
 use crate::{
@@ -62,6 +63,13 @@ pub(super) fn type_depth_within_limit(root: &Type) -> bool {
                     return false;
                 }
                 work.extend(arguments.iter().map(|argument| (argument, child_depth)));
+            }
+            Type::Forall(_, body) => {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return false;
+                }
+                work.push((body, child_depth));
             }
             Type::Tuple(elements) => {
                 let child_depth = depth.saturating_add(1);
@@ -180,7 +188,9 @@ pub enum PureExprKind {
 }
 
 impl PureExprKind {
-    pub(super) fn child_count(&self) -> usize {
+    /// Returns the number of graph edges owned by this closed payload.
+    #[must_use]
+    pub fn child_count(&self) -> usize {
         match self {
             Self::Value(value) => match value {
                 PureValue::Integer(node) => fixed_child_count(node.children()),
@@ -197,11 +207,14 @@ impl PureExprKind {
                 PureComputation::Primitive(node) => fixed_child_count(node.children()),
                 PureComputation::Tuple(node) => node.elements().len(),
                 PureComputation::Match(node) => node.arms().len() + 1,
+                PureComputation::TypeAbstraction(_) | PureComputation::TypeApplication(_) => 1,
             },
         }
     }
 
-    pub(super) fn child_at(&self, index: usize) -> Option<NodeId> {
+    /// Returns one graph edge in deterministic evaluation-independent order.
+    #[must_use]
+    pub fn child_at(&self, index: usize) -> Option<NodeId> {
         match self {
             Self::Value(value) => match value {
                 PureValue::Integer(node) => fixed_child_at(node.children(), index),
@@ -223,6 +236,12 @@ impl PureExprKind {
                     } else {
                         node.arms().get(index - 1).map(CoreMatchArm::body)
                     }
+                }
+                PureComputation::TypeAbstraction(node) => {
+                    fixed_child_at([Some(node.body())], index)
+                }
+                PureComputation::TypeApplication(node) => {
+                    fixed_child_at([Some(node.function())], index)
                 }
             },
         }
@@ -267,6 +286,10 @@ pub enum PureComputation {
     Tuple(TupleNode),
     /// Structured first-match selection.
     Match(MatchNode),
+    /// An explicit erased rank-1 type abstraction.
+    TypeAbstraction(TypeAbstractionNode),
+    /// An explicit erased rank-1 type application.
+    TypeApplication(TypeApplicationNode),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -766,6 +789,44 @@ impl CoreBuilder {
         )
     }
 
+    /// Adds an unchecked explicit type abstraction.
+    pub fn type_abstraction(
+        &mut self,
+        parameters: Vec<crate::types::TypeVariableId>,
+        body: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::TypeAbstraction(TypeAbstractionNode::new(
+                parameters, body,
+            ))),
+        )
+    }
+
+    /// Adds an unchecked explicit type application.
+    pub fn type_application(
+        &mut self,
+        function: NodeId,
+        arguments: Vec<Type>,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        let arguments = arguments
+            .into_iter()
+            .map(admit_type)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::TypeApplication(TypeApplicationNode::new(
+                function, arguments,
+            ))),
+        )
+    }
+
     /// Adds a primitive operation with an unchecked result annotation.
     pub fn primitive(
         &mut self,
@@ -846,6 +907,9 @@ impl CoreBuilder {
                         arm.pattern_mut().rewrite_types(&mut rewrite)?;
                     }
                 }
+                PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+                    application.rewrite_types(&mut rewrite)?;
+                }
                 PureExprKind::Value(
                     PureValue::Integer(_)
                     | PureValue::Boolean(_)
@@ -856,7 +920,8 @@ impl CoreBuilder {
                 | PureExprKind::Computation(
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
-                    | PureComputation::Tuple(_),
+                    | PureComputation::Tuple(_)
+                    | PureComputation::TypeAbstraction(_),
                 ) => {}
             }
         }
@@ -1162,6 +1227,7 @@ enum TypeAdmissionTask {
     FinishFunction,
     FinishTuple(usize),
     FinishAppliedNominal(crate::types::NominalTypeId, usize),
+    FinishForall(Box<[crate::types::TypeVariableId]>),
 }
 
 enum TypeToken {
@@ -1174,6 +1240,7 @@ enum TypeToken {
     AppliedNominal(crate::types::NominalTypeId, usize),
     Tuple(usize),
     Function,
+    Forall(Box<[crate::types::TypeVariableId]>),
 }
 
 fn admit_type(ty: Type) -> Result<Type, BuildError> {
@@ -1203,6 +1270,12 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
                     work.push(TypeAdmissionTask::Visit(argument, child_depth));
                 }
             }
+            TypeAdmissionTask::Visit(Type::Forall(parameters, body), depth) => {
+                let child_depth = depth.saturating_add(1);
+                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                work.push(TypeAdmissionTask::FinishForall(parameters));
+                work.push(TypeAdmissionTask::Visit(*body, child_depth));
+            }
             TypeAdmissionTask::Visit(Type::Tuple(elements), depth) => {
                 let child_depth = depth.saturating_add(1);
                 exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
@@ -1223,6 +1296,9 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
             TypeAdmissionTask::FinishTuple(count) => tokens.push(TypeToken::Tuple(count)),
             TypeAdmissionTask::FinishAppliedNominal(identity, count) => {
                 tokens.push(TypeToken::AppliedNominal(identity, count));
+            }
+            TypeAdmissionTask::FinishForall(parameters) => {
+                tokens.push(TypeToken::Forall(parameters));
             }
         }
     }
@@ -1261,6 +1337,10 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
                     return Err(BuildError::InvalidPayload);
                 };
                 rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
+            }
+            TypeToken::Forall(parameters) => {
+                let body = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
+                rebuilt.push(Type::Forall(parameters, Box::new(body)));
             }
         }
     }

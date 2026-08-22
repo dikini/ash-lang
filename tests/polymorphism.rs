@@ -1,4 +1,17 @@
-use ash::{driver::run_source, source::SourceFile};
+use ash::{
+    core::{
+        PureComputation, PureExprKind,
+        transform::{fold_literal_primitives, identity_traversal},
+        validate,
+    },
+    driver::run_source,
+    elaborate::Elaborator,
+    eval::evaluate,
+    lexer::lex,
+    parser::{parse, project},
+    resolve::resolve,
+    source::SourceFile,
+};
 
 fn run(text: &str) -> ash::driver::Observation {
     run_source(SourceFile::new("polymorphism.ash", text).expect("fixture should fit"))
@@ -9,6 +22,86 @@ fn reason(text: &str) -> String {
     run_source(SourceFile::new("polymorphism-rejection.ash", text).expect("fixture should fit"))
         .expect_err("fixture should be rejected")
         .reason_code()
+}
+
+fn elaborated(text: &str) -> ash::core::ValidatedProgram {
+    let source = SourceFile::new("polymorphic-core.ash", text).expect("fixture should fit");
+    let tree = parse(lex(&source).expect("source should lex"));
+    let surface = project(&source, &tree).expect("source should project");
+    let resolved = resolve(&surface).expect("source should resolve");
+    let mut elaborator = Elaborator::for_program(&resolved).expect("Core namespace should fit");
+    let typed = elaborator
+        .synthesize_program(&resolved)
+        .expect("source should elaborate");
+    validate(
+        elaborator.finish(typed.node).expect("Core should finish"),
+        &[&source],
+    )
+    .expect("Core should validate")
+}
+
+#[test]
+fn source_instantiation_is_explicit_in_validated_core() {
+    let program = elaborated("id : A -> A\nid value = value\n\nid(42)\n");
+    let mut work = vec![program.root()];
+    let mut abstractions = 0;
+    let mut applications = 0;
+    while let Some(id) = work.pop() {
+        let node = program.node(id).expect("validated node");
+        match &node.kind {
+            PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+                abstractions += 1;
+                work.push(operation.body());
+            }
+            PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                applications += 1;
+                work.push(operation.function());
+            }
+            kind => {
+                for index in 0..kind.child_count() {
+                    work.push(kind.child_at(index).expect("validated child"));
+                }
+            }
+        }
+    }
+    assert!(abstractions >= 1);
+    assert!(applications >= 1);
+}
+
+#[test]
+fn explicit_type_operations_survive_both_core_transforms_and_erasure() {
+    let source = SourceFile::new(
+        "polymorphic-transform.ash",
+        "id : A -> A\nid value = value\n\nid(40 + 2)\n",
+    )
+    .expect("fixture should fit");
+    let before = {
+        let tree = parse(lex(&source).expect("source should lex"));
+        let surface = project(&source, &tree).expect("source should project");
+        let resolved = resolve(&surface).expect("source should resolve");
+        let mut elaborator = Elaborator::for_program(&resolved).expect("Core namespace should fit");
+        let typed = elaborator
+            .synthesize_program(&resolved)
+            .expect("source should elaborate");
+        validate(
+            elaborator.finish(typed.node).expect("Core should finish"),
+            &[&source],
+        )
+        .expect("Core should validate")
+    };
+    for transformed in [
+        identity_traversal(&before).expect("identity traversal"),
+        fold_literal_primitives(&before).expect("literal folding"),
+    ] {
+        let transformed = validate(transformed, &[&source]).expect("transformed Core validates");
+        assert_eq!(
+            evaluate(&transformed)
+                .expect("transformed Core evaluates")
+                .value
+                .to_string(),
+            "42"
+        );
+    }
 }
 
 #[test]
@@ -45,6 +138,14 @@ fn constructor_patterns_instantiate_the_expected_nominal_arguments() {
 
     assert_eq!(observation.value_display(), "42");
     assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn coverage_substitutes_parameterized_constructor_payloads() {
+    let observation = run(
+        "type Option<A> =\nNone\n| Some(A)\n\nclassify : Option<Bool> -> Int\nclassify None = 0\nclassify (Some true) = 1\nclassify (Some false) = 2\n\nclassify(Some(false))\n",
+    );
+    assert_eq!(observation.value_display(), "2");
 }
 
 #[test]
@@ -112,5 +213,13 @@ fn infinite_inferred_types_are_rejected_by_the_occurs_check() {
     assert_eq!(
         reason("{\nlet omega = fn(value) {\nvalue(value)\n}\nomega\n}\n"),
         "type.infinite"
+    );
+}
+
+#[test]
+fn unresolved_local_function_inference_is_a_source_ambiguity() {
+    assert_eq!(
+        reason("{\nlet constant = fn(ignored) {\n42\n}\nconstant\n}\n"),
+        "type.ambiguous"
     );
 }

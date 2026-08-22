@@ -120,6 +120,8 @@ pub enum Type {
     Inference(InferenceVariableId),
     /// A nominal type constructor saturated with its ordered arguments.
     AppliedNominal(NominalTypeId, Box<[Type]>),
+    /// A rank-1 type scheme binding variables in its monotype body.
+    Forall(Box<[TypeVariableId]>, Box<Type>),
     /// A unary function from a domain to a codomain.
     Function(Box<Type>, Box<Type>),
 }
@@ -163,6 +165,16 @@ impl fmt::Display for Type {
                 }
                 formatter.write_str(">")
             }
+            Self::Forall(parameters, body) => {
+                formatter.write_str("forall ")?;
+                for (index, parameter) in parameters.iter().enumerate() {
+                    if index > 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    write!(formatter, "<type-variable:{}>", parameter.value())?;
+                }
+                write!(formatter, ". {body}")
+            }
             Self::Function(domain, codomain) => {
                 if matches!(domain.as_ref(), Self::Function(_, _)) {
                     write!(formatter, "({domain})")?;
@@ -193,6 +205,11 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
                 if left_id == right_id && left.len() == right.len() =>
             {
                 pending.extend(left.iter().zip(right.iter()));
+            }
+            (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
+                if left_parameters == right_parameters =>
+            {
+                pending.push((left, right));
             }
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
                 pending.extend(left.iter().zip(right.iter()));
@@ -240,6 +257,25 @@ pub(crate) fn substitute_type_variables(
             Box::new(substitute_type_variables(domain, replacements)),
             Box::new(substitute_type_variables(codomain, replacements)),
         ),
+        Type::Forall(parameters, body) => {
+            let mut scoped = replacements.clone();
+            for parameter in parameters {
+                scoped.remove(parameter);
+            }
+            Type::Forall(
+                parameters.clone(),
+                Box::new(substitute_type_variables(body, &scoped)),
+            )
+        }
         Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => ty.clone(),
     }
+}
+
+/// The internal kind language used to check type constructors.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Kind {
+    /// The kind of every source-admitted value type.
+    Type,
+    /// An internal unary type-constructor kind.
+    Arrow(Box<Kind>, Box<Kind>),
 }

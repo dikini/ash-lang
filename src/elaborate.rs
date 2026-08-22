@@ -292,7 +292,8 @@ impl TypeProvenance {
                 | Type::Nominal(_)
                 | Type::Variable(_)
                 | Type::Inference(_)
-                | Type::AppliedNominal(_, _) => {
+                | Type::AppliedNominal(_, _)
+                | Type::Forall(_, _) => {
                     nodes.push(TypeProvenanceNode::Fact(None));
                     roots.push(nodes.len() - 1);
                 }
@@ -726,15 +727,29 @@ impl Elaborator {
         Ok(identity)
     }
 
-    fn instantiate(&mut self, fact: &TypeFact) -> Result<Type, TypeError> {
+    fn instantiate(
+        &mut self,
+        fact: &TypeFact,
+        rigid: bool,
+    ) -> Result<(Type, Vec<Type>), TypeError> {
         if fact.quantified.is_empty() {
-            return Ok(fact.ty.clone());
+            return Ok((fact.ty.clone(), Vec::new()));
         }
         let mut replacements = HashMap::with_capacity(fact.quantified.len());
+        let mut arguments = Vec::with_capacity(fact.quantified.len());
         for binder in &fact.quantified {
-            replacements.insert(*binder, self.fresh_inference()?);
+            let argument = if rigid {
+                Type::Variable(*binder)
+            } else {
+                self.fresh_inference()?
+            };
+            replacements.insert(*binder, argument.clone());
+            arguments.push(argument);
         }
-        Ok(substitute_type_variables(&fact.ty, &replacements))
+        Ok((
+            substitute_type_variables(&fact.ty, &replacements),
+            arguments,
+        ))
     }
 
     fn zonk(&self, ty: &Type) -> Type {
@@ -815,9 +830,19 @@ impl Elaborator {
                     )
                 }
             };
+            let quantified = type_parameters
+                .iter()
+                .map(|parameter| parameter.id)
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let binder_type = if quantified.is_empty() {
+                function_type.ty.clone()
+            } else {
+                Type::Forall(quantified.clone(), Box::new(function_type.ty.clone()))
+            };
             let binder = self.builder.resolved_binder(
                 name.id,
-                function_type.ty.clone(),
+                binder_type,
                 Origin::Generated {
                     cause: Box::new(name.origin.clone()),
                     reason: GeneratedReason::BindingLowering,
@@ -830,17 +855,12 @@ impl Elaborator {
             {
                 return Err(invalid_state());
             }
-            let quantified = type_parameters
-                .iter()
-                .map(|parameter| parameter.id)
-                .collect::<Vec<_>>()
-                .into_boxed_slice();
             global_quantifiers.push((name.id, quantified));
             self.monomorphic_recursive.insert(name.id);
         }
 
         for definition in &program.definitions {
-            let (name, function) = match &definition.kind {
+            let (name, mut function) = match &definition.kind {
                 ResolvedDefinitionKind::Equational(equational) => {
                     let function_type =
                         ProvenancedType::from_resolved(&equational.interface.annotation);
@@ -885,6 +905,22 @@ impl Elaborator {
                 return Err(invalid_state());
             }
             let binder = global_binders.remove(&name.id).ok_or_else(invalid_state)?;
+            let quantified = global_quantifiers
+                .iter()
+                .find_map(|(binder, quantified)| (*binder == name.id).then_some(quantified))
+                .ok_or_else(invalid_state)?;
+            if !quantified.is_empty() {
+                let scheme = Type::Forall(quantified.clone(), Box::new(function.ty.clone()));
+                function.node = self.builder.type_abstraction(
+                    quantified.to_vec(),
+                    function.node,
+                    scheme,
+                    Origin::Generated {
+                        cause: Box::new(name.origin.clone()),
+                        reason: GeneratedReason::TypeChecking,
+                    },
+                )?;
+            }
             globals.push(ElaboratedBinding {
                 binder,
                 initializer: function.node,
@@ -903,6 +939,13 @@ impl Elaborator {
             },
             &mut context,
         )?;
+        if contains_unsolved_inference(&self.zonk(&result.ty)) {
+            return Err(inference_failure(
+                TypeReason::AmbiguousType,
+                program.result.span,
+                "this result does not determine every inferred type",
+            ));
+        }
         if !globals.is_empty() {
             let members = globals
                 .into_iter()
@@ -991,13 +1034,27 @@ impl Elaborator {
                             .fact(occurrence.binder)
                             .cloned()
                             .ok_or_else(invalid_state)?;
-                        let ty = self.instantiate(&fact)?;
+                        let rigid = self.monomorphic_recursive.contains(&occurrence.binder);
+                        let (ty, arguments) = self.instantiate(&fact, rigid)?;
                         let provenance = fact.provenance.clone();
-                        let node = self.builder.variable(
+                        let scheme = if fact.quantified.is_empty() {
+                            fact.ty.clone()
+                        } else {
+                            Type::Forall(fact.quantified.clone(), Box::new(fact.ty.clone()))
+                        };
+                        let mut node = self.builder.variable(
                             occurrence.binder,
-                            ty.clone(),
+                            scheme,
                             occurrence.origin.clone(),
                         )?;
+                        if !arguments.is_empty() {
+                            node = self.builder.type_application(
+                                node,
+                                arguments,
+                                ty.clone(),
+                                occurrence.origin.clone(),
+                            )?;
+                        }
                         values.push(TypedNode {
                             node,
                             ty,
@@ -1040,12 +1097,25 @@ impl Elaborator {
                                 .collect::<Vec<_>>()
                                 .into_boxed_slice(),
                         };
-                        let ty = self.instantiate(&fact)?;
-                        let node = self.builder.constructor(
+                        let (ty, arguments) = self.instantiate(&fact, false)?;
+                        let core_scheme = if fact.quantified.is_empty() {
+                            fact.ty.clone()
+                        } else {
+                            Type::Forall(fact.quantified.clone(), Box::new(fact.ty.clone()))
+                        };
+                        let mut node = self.builder.constructor(
                             occurrence.constructor,
-                            ty.clone(),
+                            core_scheme,
                             occurrence.origin.clone(),
                         )?;
+                        if !arguments.is_empty() {
+                            node = self.builder.type_application(
+                                node,
+                                arguments,
+                                ty.clone(),
+                                occurrence.origin.clone(),
+                            )?;
+                        }
                         values.push(TypedNode {
                             node,
                             provenance: TypeProvenance::unknown(&ty),
@@ -1435,7 +1505,7 @@ impl Elaborator {
                         provenance: initializer.provenance.clone(),
                     });
                     let mut binder_ids = Vec::new();
-                    let pattern = self.check_core_pattern(
+                    let mut pattern = self.check_core_pattern(
                         &binding.pattern,
                         &binding_type.ty,
                         context,
@@ -1457,9 +1527,26 @@ impl Elaborator {
                         ));
                     }
                     let origin = binding_origin(binding);
-                    match &pattern.kind {
+                    match &mut pattern.kind {
                         CorePatternKind::Binder(binder) => {
-                            context.set_quantified(binder.id(), generalized.into_boxed_slice())?;
+                            let quantified = generalized.into_boxed_slice();
+                            context.set_quantified(binder.id(), quantified.clone())?;
+                            if !quantified.is_empty() {
+                                let scheme = Type::Forall(
+                                    quantified.clone(),
+                                    Box::new(binding_type.ty.clone()),
+                                );
+                                binder.replace_type(scheme.clone());
+                                initializer.node = self.builder.type_abstraction(
+                                    quantified.to_vec(),
+                                    initializer.node,
+                                    scheme,
+                                    Origin::Generated {
+                                        cause: Box::new(origin.clone()),
+                                        reason: GeneratedReason::TypeChecking,
+                                    },
+                                )?;
+                            }
                             declarations.push(ElaboratedDeclaration::Binding {
                                 binder: binder.clone(),
                                 initializer: initializer.node,
@@ -2869,7 +2956,8 @@ fn validate_recursive_member(
         | Type::Unit
         | Type::Tuple(_)
         | Type::Variable(_)
-        | Type::Inference(_) => Err(unsafe_recursive_root(group, member)),
+        | Type::Inference(_)
+        | Type::Forall(_, _) => Err(unsafe_recursive_root(group, member)),
     }
 }
 
@@ -3108,6 +3196,9 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
             Box::new(zonk_type(domain, solutions)),
             Box::new(zonk_type(codomain, solutions)),
         ),
+        Type::Forall(parameters, body) => {
+            Type::Forall(parameters.clone(), Box::new(zonk_type(body, solutions)))
+        }
         Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => ty.clone(),
     }
 }
@@ -3134,6 +3225,7 @@ fn type_contains_inference(
                 work.push(codomain);
                 work.push(domain);
             }
+            Type::Forall(_, body) => work.push(body),
             Type::Int
             | Type::Bool
             | Type::Unit
@@ -3157,6 +3249,7 @@ fn collect_unsolved_inference(ty: &Type, output: &mut Vec<InferenceVariableId>) 
                 work.push(codomain);
                 work.push(domain);
             }
+            Type::Forall(_, body) => work.push(body),
             Type::Int
             | Type::Bool
             | Type::Unit

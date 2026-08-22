@@ -494,6 +494,12 @@ fn dispatch_entry(
         PureExprKind::Computation(PureComputation::Match(match_node)) => {
             enter_match(match_node, environment)
         }
+        PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+            Transition::direct(Control::Evaluate(operation.body(), environment))
+        }
+        PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+            Transition::direct(Control::Evaluate(operation.function(), environment))
+        }
     })
 }
 
@@ -596,7 +602,22 @@ fn enter_recursive_binding(
         let initializer = program
             .node(member.initializer())
             .ok_or(RuntimeFailure::MissingNode)?;
-        let kind = match &initializer.kind {
+        let mut erased_initializer = member.initializer();
+        loop {
+            let expression = program
+                .node(erased_initializer)
+                .ok_or(RuntimeFailure::MissingNode)?;
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) =
+                &expression.kind
+            else {
+                break;
+            };
+            erased_initializer = operation.body();
+        }
+        let erased = program
+            .node(erased_initializer)
+            .ok_or(RuntimeFailure::MissingNode)?;
+        let kind = match &erased.kind {
             PureExprKind::Value(PureValue::Function(function)) => RecursiveMemberKind::Function {
                 parameter: function.parameter().id(),
                 body: function.body(),

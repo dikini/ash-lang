@@ -55,6 +55,10 @@ impl TypedBinder {
         self.ty = rewrite(&self.ty)?;
         Ok(())
     }
+
+    pub(crate) fn replace_type(&mut self, ty: Type) {
+        self.ty = ty;
+    }
 }
 
 /// A resolved variable occurrence payload.

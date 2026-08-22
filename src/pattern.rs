@@ -8,7 +8,7 @@ use std::{
 use crate::{
     core::{CorePattern, CorePatternKind},
     resolved::ResolvedRegistry,
-    types::{ConstructorId, Type},
+    types::{ConstructorId, Type, substitute_type_variables},
 };
 
 /// A binder-free pattern shape used for coverage witnesses.
@@ -556,7 +556,8 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
                     | Type::Unit
                     | Type::Nominal(_)
                     | Type::Variable(_)
-                    | Type::Inference(_) => {}
+                    | Type::Inference(_)
+                    | Type::Forall(_, _) => {}
                 }
             }
         }
@@ -623,7 +624,11 @@ fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads
         Type::AppliedNominal(id, _) => {
             Some(Heads::Constructors(&registry.nominal(*id)?.constructors))
         }
-        Type::Int | Type::Function(_, _) | Type::Variable(_) | Type::Inference(_) => None,
+        Type::Int
+        | Type::Function(_, _)
+        | Type::Variable(_)
+        | Type::Inference(_)
+        | Type::Forall(_, _) => None,
     }
 }
 
@@ -639,15 +644,34 @@ fn head_types(
             Type::Tuple(elements) if elements.len() == count => clone_types(elements, budget),
             _ => Ok(Vec::new()),
         },
-        Head::Constructor(id) => registry.constructor(id).map_or_else(
-            || Ok(Vec::new()),
-            |constructor| {
-                constructor.payload.as_ref().map_or_else(
-                    || Ok(Vec::new()),
-                    |payload| clone_types(std::slice::from_ref(payload), budget),
-                )
-            },
-        ),
+        Head::Constructor(id) => {
+            let Some(constructor) = registry.constructor(id) else {
+                return Ok(Vec::new());
+            };
+            let Some(payload) = constructor.payload.as_ref() else {
+                return Ok(Vec::new());
+            };
+            let instantiated = match ty {
+                Type::AppliedNominal(owner, arguments) if *owner == constructor.owner => {
+                    let Some(parameters) = registry.nominal_parameters(*owner) else {
+                        return Ok(Vec::new());
+                    };
+                    if parameters.len() != arguments.len() {
+                        return Ok(Vec::new());
+                    }
+                    let replacements = parameters
+                        .iter()
+                        .zip(arguments)
+                        .map(|(parameter, argument)| (parameter.id, argument.clone()))
+                        .collect::<HashMap<_, _>>();
+                    substitute_type_variables(payload, &replacements)
+                }
+                Type::Nominal(owner) if *owner == constructor.owner => payload.clone(),
+                _ => return Ok(Vec::new()),
+            };
+            charge_types(std::slice::from_ref(&instantiated), budget)?;
+            Ok(vec![instantiated])
+        }
     }
 }
 

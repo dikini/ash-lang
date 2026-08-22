@@ -201,6 +201,21 @@ impl ResolvedRegistry {
                         }
                     }
                 }
+                Task::Type(Type::Forall(parameters, body)) => {
+                    output.push_str("forall ");
+                    for (index, parameter) in parameters.iter().enumerate() {
+                        if index > 0 {
+                            output.push_str(", ");
+                        }
+                        if let Some(variable) = self.type_variable(*parameter) {
+                            output.push_str(&variable.spelling);
+                        } else {
+                            output.push_str(&format!("T{}", parameter.value()));
+                        }
+                    }
+                    output.push_str(". ");
+                    work.push(Task::Type(body));
+                }
                 Task::Type(Type::Tuple(elements)) => {
                     output.push('(');
                     work.push(Task::Text(")"));
@@ -263,6 +278,7 @@ fn discard_type(root: Type) {
                 work.push(*codomain);
             }
             Type::AppliedNominal(_, arguments) => work.extend(arguments.into_vec()),
+            Type::Forall(_, body) => work.push(*body),
             Type::Int
             | Type::Bool
             | Type::Unit
