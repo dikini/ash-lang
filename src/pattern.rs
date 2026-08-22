@@ -118,11 +118,8 @@ pub fn usefulness_with_budget(
     budget: &mut UsefulnessBudget,
 ) -> Result<Option<Vec<WitnessPattern>>, UsefulnessError> {
     budget.charge(matrix.len().saturating_add(candidate.len()))?;
-    let matrix = matrix
-        .iter()
-        .map(|row| row.iter().map(shape).collect())
-        .collect::<Vec<Vec<_>>>();
-    let candidate = candidate.iter().map(shape).collect::<Vec<_>>();
+    let matrix = shape_matrix(matrix, budget)?;
+    let candidate = shape_row(candidate, budget)?;
     usefulness_shapes(
         &matrix,
         &candidate,
@@ -151,10 +148,7 @@ pub fn missing_witness_for_types_with_budget(
     budget: &mut UsefulnessBudget,
 ) -> Result<Option<Vec<WitnessPattern>>, UsefulnessError> {
     budget.charge(matrix.len().saturating_add(types.len()))?;
-    let matrix = matrix
-        .iter()
-        .map(|row| row.iter().map(shape).collect())
-        .collect::<Vec<Vec<_>>>();
+    let matrix = shape_matrix(matrix, budget)?;
     let candidate = vec![WitnessPattern::Wildcard; types.len()];
     usefulness_shapes(
         &matrix,
@@ -166,7 +160,24 @@ pub fn missing_witness_for_types_with_budget(
     )
 }
 
-fn shape(pattern: &CorePattern) -> WitnessPattern {
+fn shape_matrix(
+    matrix: &[Vec<CorePattern>],
+    budget: &mut UsefulnessBudget,
+) -> Result<Vec<Vec<WitnessPattern>>, UsefulnessError> {
+    matrix.iter().map(|row| shape_row(row, budget)).collect()
+}
+
+fn shape_row(
+    row: &[CorePattern],
+    budget: &mut UsefulnessBudget,
+) -> Result<Vec<WitnessPattern>, UsefulnessError> {
+    row.iter().map(|pattern| shape(pattern, budget)).collect()
+}
+
+fn shape(
+    pattern: &CorePattern,
+    budget: &mut UsefulnessBudget,
+) -> Result<WitnessPattern, UsefulnessError> {
     enum Task<'a> {
         Visit(&'a CorePattern),
         FinishTuple(usize),
@@ -177,28 +188,31 @@ fn shape(pattern: &CorePattern) -> WitnessPattern {
     let mut rebuilt = Vec::new();
     while let Some(task) = work.pop() {
         match task {
-            Task::Visit(pattern) => match &pattern.kind {
-                CorePatternKind::Binder(_) | CorePatternKind::Wildcard => {
-                    rebuilt.push(WitnessPattern::Wildcard);
-                }
-                CorePatternKind::Boolean(value) => {
-                    rebuilt.push(WitnessPattern::Boolean(*value));
-                }
-                CorePatternKind::Unit => rebuilt.push(WitnessPattern::Unit),
-                CorePatternKind::Tuple(elements) => {
-                    work.push(Task::FinishTuple(elements.len()));
-                    work.extend(elements.iter().rev().map(Task::Visit));
-                }
-                CorePatternKind::Constructor {
-                    constructor,
-                    payload,
-                } => {
-                    work.push(Task::FinishConstructor(*constructor, payload.is_some()));
-                    if let Some(payload) = payload.as_deref() {
-                        work.push(Task::Visit(payload));
+            Task::Visit(pattern) => {
+                budget.charge(1)?;
+                match &pattern.kind {
+                    CorePatternKind::Binder(_) | CorePatternKind::Wildcard => {
+                        rebuilt.push(WitnessPattern::Wildcard);
+                    }
+                    CorePatternKind::Boolean(value) => {
+                        rebuilt.push(WitnessPattern::Boolean(*value));
+                    }
+                    CorePatternKind::Unit => rebuilt.push(WitnessPattern::Unit),
+                    CorePatternKind::Tuple(elements) => {
+                        work.push(Task::FinishTuple(elements.len()));
+                        work.extend(elements.iter().rev().map(Task::Visit));
+                    }
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    } => {
+                        work.push(Task::FinishConstructor(*constructor, payload.is_some()));
+                        if let Some(payload) = payload.as_deref() {
+                            work.push(Task::Visit(payload));
+                        }
                     }
                 }
-            },
+            }
             Task::FinishTuple(count) => {
                 let elements = rebuilt.split_off(rebuilt.len().saturating_sub(count));
                 rebuilt.push(WitnessPattern::Tuple(elements.into_boxed_slice()));
@@ -209,7 +223,7 @@ fn shape(pattern: &CorePattern) -> WitnessPattern {
             }
         }
     }
-    rebuilt.pop().unwrap_or(WitnessPattern::Wildcard)
+    Ok(rebuilt.pop().unwrap_or(WitnessPattern::Wildcard))
 }
 
 fn usefulness_shapes(
@@ -527,6 +541,11 @@ fn display_pattern(pattern: &WitnessPattern, registry: &ResolvedRegistry) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::{ByteRange, Origin, SourceFile};
+
+    fn wildcard(ty: Type, origin: &Origin) -> CorePattern {
+        CorePattern::new(ty, origin.clone(), CorePatternKind::Wildcard)
+    }
 
     #[test]
     fn usefulness_reports_state_budget_exhaustion() {
@@ -557,6 +576,36 @@ mod tests {
                 USEFULNESS_STATE_LIMIT,
                 &mut budget,
             ),
+            Err(UsefulnessError::WorkLimit)
+        );
+    }
+
+    #[test]
+    fn usefulness_charges_every_pattern_cell_while_shaping() {
+        let source = SourceFile::new("wide-pattern.ash", "_").expect("test source");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("ordered range"))
+            .expect("test span");
+        let origin = Origin::Source(span);
+        let element_types = vec![Type::Int; 8].into_boxed_slice();
+        let tuple_type = Type::Tuple(element_types.clone());
+        let tuple = CorePattern::new(
+            tuple_type.clone(),
+            origin.clone(),
+            CorePatternKind::Tuple(
+                element_types
+                    .iter()
+                    .cloned()
+                    .map(|ty| wildcard(ty, &origin))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+        );
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        let mut budget = UsefulnessBudget { remaining: 6 };
+
+        assert_eq!(
+            usefulness_with_budget(&[], &[tuple], &[tuple_type], &registry, &mut budget),
             Err(UsefulnessError::WorkLimit)
         );
     }

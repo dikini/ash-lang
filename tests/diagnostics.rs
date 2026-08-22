@@ -307,6 +307,58 @@ fn coverage_diagnostics_retain_arm_spans_and_concrete_witnesses() {
 }
 
 #[test]
+fn nominal_mismatches_render_source_declaration_spellings() {
+    let declarations = "type Left =\nLeftValue\n\ntype Right =\nRightValue\n\n";
+    let cases = [
+        (
+            "fn select(value : Left) -> Left {\nvalue\n}\n\nselect RightValue\n",
+            TypeReason::Argument,
+        ),
+        (
+            "{\nlet value : Left = RightValue\nvalue\n}\n",
+            TypeReason::BindingInitializer,
+        ),
+        (
+            "fn select(value : Left) -> Left {\nRightValue\n}\n\nselect LeftValue\n",
+            TypeReason::DefinitionResult,
+        ),
+    ];
+
+    for (index, (program, reason)) in cases.into_iter().enumerate() {
+        let source = source(
+            &format!("nominal-mismatch-{index}.ash"),
+            &format!("{declarations}{program}"),
+        );
+        let error = run_source(source).expect_err("distinct nominal declarations should differ");
+        let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+            panic!("nominal mismatch should be a typed source diagnostic")
+        };
+
+        assert_eq!(diagnostic.reason, reason);
+        assert_eq!(diagnostic.expected.as_deref(), Some("Left"));
+        assert_eq!(diagnostic.found.as_deref(), Some("Right"));
+        assert!(!diagnostic.render_plain().contains("<type:"));
+    }
+
+    let source = source(
+        "nominal-match-result.ash",
+        &format!("{declarations}match true {{\ntrue => LeftValue\nfalse => RightValue\n}}\n"),
+    );
+    let error = run_source(source).expect_err("match arms should have one nominal result type");
+    let PipelineFailure::Typing(error) = error else {
+        panic!("match result mismatch should fail during typing")
+    };
+    assert_eq!(
+        error.to_string(),
+        "type mismatch: expected Left, found Right"
+    );
+    let TypeError::Mismatch(mismatch) = error else {
+        panic!("match result mismatch should retain its structural types")
+    };
+    assert_ne!(mismatch.expected(), mismatch.found());
+}
+
+#[test]
 fn unguarded_recursive_use_retains_the_transporting_expression_span() {
     let text = "type Stream =\nNext(Int, Stream)\n\nfn identity(value : Stream) -> Stream {\nvalue\n}\n\n{\nlet rec stream : Stream = Next(1, identity stream)\nstream\n}\n";
     let source = source("unguarded-recursion.ash", text);

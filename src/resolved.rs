@@ -120,6 +120,55 @@ impl ResolvedRegistry {
             .filter(|constructor| constructor.id == id)
     }
 
+    /// Renders a type with source declaration spellings for nominal identities.
+    #[must_use]
+    pub fn display_type(&self, ty: &Type) -> String {
+        enum Task<'a> {
+            Type(&'a Type),
+            Text(&'static str),
+        }
+
+        let mut output = String::new();
+        let mut work = vec![Task::Type(ty)];
+        while let Some(task) = work.pop() {
+            match task {
+                Task::Text(text) => output.push_str(text),
+                Task::Type(Type::Int) => output.push_str("Int"),
+                Task::Type(Type::Bool) => output.push_str("Bool"),
+                Task::Type(Type::Unit) => output.push_str("Unit"),
+                Task::Type(Type::Nominal(id)) => {
+                    if let Some(nominal) = self.nominal(*id) {
+                        output.push_str(&nominal.spelling);
+                    } else {
+                        output.push_str(&Type::Nominal(*id).to_string());
+                    }
+                }
+                Task::Type(Type::Tuple(elements)) => {
+                    output.push('(');
+                    work.push(Task::Text(")"));
+                    for (index, element) in elements.iter().enumerate().rev() {
+                        work.push(Task::Type(element));
+                        if index > 0 {
+                            work.push(Task::Text(", "));
+                        }
+                    }
+                }
+                Task::Type(Type::Function(domain, codomain)) => {
+                    work.push(Task::Type(codomain));
+                    work.push(Task::Text(" -> "));
+                    if matches!(domain.as_ref(), Type::Function(_, _)) {
+                        work.push(Task::Text(")"));
+                        work.push(Task::Type(domain));
+                        work.push(Task::Text("("));
+                    } else {
+                        work.push(Task::Type(domain));
+                    }
+                }
+            }
+        }
+        output
+    }
+
     /// Destroys untrusted registry payloads without following host recursion.
     pub(crate) fn discard_iteratively(self) {
         let Self {

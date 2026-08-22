@@ -103,6 +103,8 @@ pub struct TypeMismatch {
     span: Span,
     expected: Type,
     found: Type,
+    expected_display: String,
+    found_display: String,
 }
 
 impl TypeMismatch {
@@ -174,7 +176,7 @@ impl fmt::Display for TypeError {
             Self::Mismatch(mismatch) => write!(
                 formatter,
                 "type mismatch: expected {}, found {}",
-                mismatch.expected, mismatch.found
+                mismatch.expected_display, mismatch.found_display
             ),
             Self::Internal(failure) => failure.fmt(formatter),
         }
@@ -650,6 +652,7 @@ impl Elaborator {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
                             &equational.equations.first().ok_or_else(invalid_state)?.name,
+                            &self.registry,
                         ));
                     }
                     (&equational.interface.name, function_type)
@@ -692,6 +695,7 @@ impl Elaborator {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
                             &equational.equations.first().ok_or_else(invalid_state)?.name,
+                            &self.registry,
                         ));
                     }
                     (
@@ -948,6 +952,7 @@ impl Elaborator {
                             expected.ty,
                             synthesized.ty,
                             expected.provenance.span(),
+                            &self.registry,
                         ));
                     }
                     self.builder
@@ -1034,7 +1039,12 @@ impl Elaborator {
                 } => {
                     let function = values.pop().ok_or_else(invalid_state)?;
                     let Type::Function(domain, codomain) = &function.ty else {
-                        return Err(not_applicable(function_span, whole_span, &function.ty));
+                        return Err(not_applicable(
+                            function_span,
+                            whole_span,
+                            &function.ty,
+                            &self.registry,
+                        ));
                     };
                     let (domain_provenance, codomain_provenance) =
                         function.provenance.function_parts(&function.ty)?;
@@ -1094,7 +1104,7 @@ impl Elaborator {
                     left_span,
                 } => {
                     let left = values.pop().ok_or_else(invalid_state)?;
-                    require_integer(&left, left_span, operator_span)?;
+                    require_integer(&left, left_span, operator_span, &self.registry)?;
                     tasks.push(ElaborationTask::AfterRight {
                         primitive,
                         whole_span,
@@ -1115,7 +1125,7 @@ impl Elaborator {
                     right_span,
                 } => {
                     let right = values.pop().ok_or_else(invalid_state)?;
-                    require_integer(&right, right_span, operator_span)?;
+                    require_integer(&right, right_span, operator_span, &self.registry)?;
                     let ty = match primitive {
                         Primitive::Add | Primitive::Multiply => Type::Int,
                         Primitive::Equal => Type::Bool,
@@ -1496,10 +1506,10 @@ impl Elaborator {
             ResolvedPatternKind::Unit if matches!(expected, Type::Unit) => CorePatternKind::Unit,
             ResolvedPatternKind::Tuple(patterns) => {
                 let Type::Tuple(types) = expected else {
-                    return Err(pattern_mismatch(pattern.span, expected));
+                    return Err(pattern_mismatch(pattern.span, expected, &self.registry));
                 };
                 if patterns.len() != types.len() {
-                    return Err(pattern_mismatch(pattern.span, expected));
+                    return Err(pattern_mismatch(pattern.span, expected, &self.registry));
                 }
                 let mut checked = Vec::with_capacity(patterns.len());
                 for (pattern, ty) in patterns.iter().zip(types) {
@@ -1519,7 +1529,7 @@ impl Elaborator {
                 ..
             } => {
                 let Type::Nominal(owner) = expected else {
-                    return Err(pattern_mismatch(pattern.span, expected));
+                    return Err(pattern_mismatch(pattern.span, expected, &self.registry));
                 };
                 let Some(info) = self.registry.constructor(*constructor) else {
                     return Err(invalid_state());
@@ -1550,7 +1560,7 @@ impl Elaborator {
                     payload: checked_payload,
                 }
             }
-            _ => return Err(pattern_mismatch(pattern.span, expected)),
+            _ => return Err(pattern_mismatch(pattern.span, expected, &self.registry)),
         };
         Ok(CorePattern::new(
             expected.clone(),
@@ -2180,10 +2190,13 @@ fn check_mismatch(
     expected: Type,
     found: Type,
     expected_cause: Option<Span>,
+    registry: &ResolvedRegistry,
 ) -> TypeError {
     match kind {
         CheckKind::General => TypeError::Mismatch(TypeMismatch {
             span,
+            expected_display: registry.display_type(&expected),
+            found_display: registry.display_type(&found),
             expected,
             found,
         }),
@@ -2191,6 +2204,8 @@ fn check_mismatch(
             function_span,
             whole_span,
         } => {
+            let expected = registry.display_type(&expected);
+            let found = registry.display_type(&found);
             let mut diagnostic = Diagnostic::new(
                 TypeReason::Argument,
                 SourceLabel::new(span, "this argument does not match the function domain"),
@@ -2205,11 +2220,13 @@ fn check_mismatch(
                     "this application supplies the argument",
                 ));
             }
-            diagnostic.expected = Some(expected.to_string());
-            diagnostic.found = Some(found.to_string());
+            diagnostic.expected = Some(expected);
+            diagnostic.found = Some(found);
             TypeError::Source(Box::new(diagnostic))
         }
         CheckKind::Definition { result_cause } => {
+            let expected = registry.display_type(&expected);
+            let found = registry.display_type(&found);
             let mut diagnostic = Diagnostic::new(
                 TypeReason::DefinitionResult,
                 SourceLabel::new(span, "this function body has the wrong result type"),
@@ -2218,14 +2235,16 @@ fn check_mismatch(
                 expected_cause.unwrap_or(result_cause),
                 "the function interface requires this result type",
             ));
-            diagnostic.expected = Some(expected.to_string());
-            diagnostic.found = Some(found.to_string());
+            diagnostic.expected = Some(expected);
+            diagnostic.found = Some(found);
             TypeError::Source(Box::new(diagnostic))
         }
         CheckKind::BindingInitializer {
             initializer_span,
             annotation_span,
         } => {
+            let expected = registry.display_type(&expected);
+            let found = registry.display_type(&found);
             let mut diagnostic = Diagnostic::new(
                 TypeReason::BindingInitializer,
                 SourceLabel::new(
@@ -2237,8 +2256,8 @@ fn check_mismatch(
                 annotation_span,
                 format!("this binding annotation requires {expected}"),
             ));
-            diagnostic.expected = Some(expected.to_string());
-            diagnostic.found = Some(found.to_string());
+            diagnostic.expected = Some(expected);
+            diagnostic.found = Some(found);
             TypeError::Source(Box::new(diagnostic))
         }
     }
@@ -2281,7 +2300,12 @@ fn function_needs_context(span: Span, cause: Option<SynthesisCause>) -> TypeErro
     TypeError::Source(Box::new(diagnostic))
 }
 
-fn not_applicable(function_span: Span, whole_span: Span, found: &Type) -> TypeError {
+fn not_applicable(
+    function_span: Span,
+    whole_span: Span,
+    found: &Type,
+    registry: &ResolvedRegistry,
+) -> TypeError {
     let mut diagnostic = Diagnostic::new(
         TypeReason::NotApplicable,
         SourceLabel::new(function_span, "this expression is not a function"),
@@ -2291,15 +2315,16 @@ fn not_applicable(function_span: Span, whole_span: Span, found: &Type) -> TypeEr
         "this application requires a function here",
     ));
     diagnostic.expected = Some("function".to_owned());
-    diagnostic.found = Some(found.to_string());
+    diagnostic.found = Some(registry.display_type(found));
     TypeError::Source(Box::new(diagnostic))
 }
 
 fn equation_interface_not_function(
     annotation: &ResolvedType,
     equation_name: &crate::resolved::ResolvedOccurrence,
+    registry: &ResolvedRegistry,
 ) -> TypeError {
-    let found = annotation.ty.to_string();
+    let found = registry.display_type(&annotation.ty);
     let mut diagnostic = Diagnostic::new(
         TypeReason::EquationInterfaceNotFunction,
         SourceLabel::new(
@@ -2339,6 +2364,7 @@ fn require_integer(
     operand: &TypedNode,
     operand_span: Span,
     operator_span: Span,
+    registry: &ResolvedRegistry,
 ) -> Result<(), TypeError> {
     if structurally_equal(&operand.ty, &Type::Int) {
         return Ok(());
@@ -2352,7 +2378,7 @@ fn require_integer(
         "this primitive operator requires Int operands",
     ));
     diagnostic.expected = Some(Type::Int.to_string());
-    diagnostic.found = Some(operand.ty.to_string());
+    diagnostic.found = Some(registry.display_type(&operand.ty));
     Err(TypeError::Source(Box::new(diagnostic)))
 }
 
@@ -2360,12 +2386,12 @@ fn invalid_state() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
 }
 
-fn pattern_mismatch(span: Span, expected: &Type) -> TypeError {
+fn pattern_mismatch(span: Span, expected: &Type, registry: &ResolvedRegistry) -> TypeError {
     let mut diagnostic = Diagnostic::new(
         TypeReason::PatternMismatch,
         SourceLabel::new(span, "this pattern does not match its expected type"),
     );
-    diagnostic.expected = Some(expected.to_string());
+    diagnostic.expected = Some(registry.display_type(expected));
     TypeError::Source(Box::new(diagnostic))
 }
 

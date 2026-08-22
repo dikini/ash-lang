@@ -226,7 +226,7 @@ where
         .synthesize_program(&resolved)
         .map_err(PipelineFailure::Typing)?;
     let ty = typed.ty;
-    let type_display = render_type(&ty, &registry);
+    let type_display = registry.display_type(&ty);
     let unchecked = elaborator
         .finish(typed.node)
         .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
@@ -237,37 +237,6 @@ where
         ty,
         type_display: Some(type_display),
     })
-}
-
-fn render_type(ty: &Type, registry: &crate::resolved::ResolvedRegistry) -> String {
-    fn render(ty: &Type, registry: &crate::resolved::ResolvedRegistry) -> String {
-        match ty {
-            Type::Int => "Int".into(),
-            Type::Bool => "Bool".into(),
-            Type::Unit => "Unit".into(),
-            Type::Nominal(id) => registry
-                .nominal(*id)
-                .map_or_else(|| ty.to_string(), |nominal| nominal.spelling.clone()),
-            Type::Tuple(elements) => format!(
-                "({})",
-                elements
-                    .iter()
-                    .map(|element| render(element, registry))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            Type::Function(input, output) => {
-                let rendered_input = render(input, registry);
-                let rendered_input = if matches!(input.as_ref(), Type::Function(_, _)) {
-                    format!("({rendered_input})")
-                } else {
-                    rendered_input
-                };
-                format!("{rendered_input} -> {}", render(output, registry))
-            }
-        }
-    }
-    render(ty, registry)
 }
 
 fn retained_parser_diagnostics(
