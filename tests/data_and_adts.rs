@@ -137,7 +137,32 @@ fn equation_groups_reject_inconsistent_pattern_arity() {
 }
 
 #[test]
+fn pattern_equations_route_to_the_extended_pipeline_without_data_markers() {
+    let curried = run(
+        "choose : Bool -> Int -> Int\nchoose true left = left\nchoose false right = right + 1\n\nchoose false 41\n",
+    );
+    assert_eq!(curried.value_display(), "42");
+
+    let unit = run("answer : Unit -> Int\nanswer () = 42\n\nanswer ()\n");
+    assert_eq!(unit.value_display(), "42");
+
+    let redundant =
+        rejection("keep : Int -> Int\nkeep value = value\nkeep other = other\n\nkeep 42\n");
+    assert!(redundant.contains("coverage.redundant-case"));
+
+    let duplicate = rejection("same : Int -> Int -> Int\nsame value value = value\n\nsame 1 2\n");
+    assert!(duplicate.contains("pattern.duplicate-binder"));
+
+    let equality_bodies =
+        run("truth : Bool -> Bool\ntruth true = 1 == 1\ntruth false = 0 == 1\n\ntruth true\n");
+    assert_eq!(equality_bodies.value_display(), "true");
+}
+
+#[test]
 fn recursive_data_requires_a_constructor_root_and_guarded_occurrences() {
+    let nullary = run("type Flag =\nOff\n| On\n\n{\nlet rec flag : Flag = Off\nflag\n}\n");
+    assert_eq!(nullary.value_display(), "Off");
+
     let unsafe_root = rejection(
         "type Stream =\nNext(Int, Stream)\n\n{\nlet rec stream : Stream = {\nNext(1, stream)\n}\nstream\n}\n",
     );
@@ -229,6 +254,19 @@ fn tuple_domain_anonymous_functions_receive_one_expected_tuple() {
         "fn apply(operation : (Int, Int) -> Int) -> Int {\noperation(20, 22)\n}\n\napply (fn(left, right) {\nleft + right\n})\n",
     );
     assert_eq!(observation.value_display(), "42");
+}
+
+#[test]
+fn single_clause_function_domain_patterns_must_be_irrefutable() {
+    let operational = rejection(
+        "type Maybe =\nNone\n| Some(Int)\n\nfn unsafe(Some(value) : Maybe) -> Int {\nvalue\n}\n\nunsafe None\n",
+    );
+    assert!(operational.contains("pattern.refutable-function-domain"));
+
+    let anonymous = rejection(
+        "type Maybe =\nNone\n| Some(Int)\n\n{\nlet unsafe : Maybe -> Int = fn(Some(value)) {\nvalue\n}\nunsafe None\n}\n",
+    );
+    assert!(anonymous.contains("pattern.refutable-function-domain"));
 }
 
 #[test]

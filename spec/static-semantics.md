@@ -102,6 +102,9 @@ An anonymous function in a position that must synthesize has no applicable
 rule and is rejected with `type.function-needs-context`. Mini-Ash does not infer
 a parameter type for that case. The parameter position is a pattern. Two or
 more syntactic parameters form one tuple pattern and consume one tuple domain.
+Because an anonymous or operational function has no alternate clauses, its
+domain pattern must be irrefutable under the same usefulness analysis as a
+local binding.
 
 ## Patterns, matches, and coverage
 

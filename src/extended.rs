@@ -23,8 +23,20 @@ use crate::{
 /// Reports whether a source needs the CP-0003 grammar.
 #[must_use]
 pub fn uses_extended_syntax(text: &str) -> bool {
-    text.lines().any(|line| {
-        let code = line.split_once("//").map_or(line, |(code, _)| code);
+    fn ordinary_identifier(word: &str) -> bool {
+        let mut bytes = word.bytes();
+        bytes
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase() || first == b'_')
+            && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            && word != "_"
+    }
+
+    let lines = text
+        .lines()
+        .map(|line| line.split_once("//").map_or(line, |(code, _)| code).trim())
+        .collect::<Vec<_>>();
+    if lines.iter().any(|code| {
         code.contains(',')
             || code.contains('|')
             || code.contains("=>")
@@ -37,7 +49,59 @@ pub fn uses_extended_syntax(text: &str) -> bool {
                         || (word.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
                             && !matches!(word, "Int" | "Bool" | "Unit"))
                 })
-    })
+    }) {
+        return true;
+    }
+
+    let mut previous_equation = None;
+    for code in lines {
+        if code.is_empty() {
+            continue;
+        }
+        if let Some(rest) = code.strip_prefix("let ") {
+            let pattern = rest.split_whitespace().next().unwrap_or_default();
+            if matches!(pattern, "true" | "false" | "()") {
+                return true;
+            }
+        }
+        if code.starts_with("fn")
+            && let Some((_, after_open)) = code.split_once('(')
+            && let Some((parameter, _)) = after_open.split_once(')')
+        {
+            let pattern = parameter
+                .split_once(':')
+                .map_or(parameter, |(pattern, _)| pattern)
+                .trim();
+            if matches!(pattern, "true" | "false" | "()") {
+                return true;
+            }
+        }
+
+        let Some((left, _)) = code.split_once('=') else {
+            previous_equation = None;
+            continue;
+        };
+        if left.contains(':') {
+            previous_equation = None;
+            continue;
+        }
+        let words = left.split_whitespace().collect::<Vec<_>>();
+        if words.len() < 2
+            || !ordinary_identifier(words[0])
+            || matches!(words[0], "let" | "and" | "fn" | "type")
+        {
+            previous_equation = None;
+            continue;
+        }
+        if words.len() > 2 || !ordinary_identifier(words[1]) {
+            return true;
+        }
+        if previous_equation == Some(words[0]) {
+            return true;
+        }
+        previous_equation = Some(words[0]);
+    }
+    false
 }
 
 /// Stage that owns an extended-pipeline source rejection or internal failure.
@@ -1286,11 +1350,12 @@ impl Checker {
                 for clause in clauses {
                     let mut environment = self.globals.clone();
                     let mut row = Vec::new();
+                    let mut bindings = HashMap::new();
                     for (pattern, domain) in clause.patterns.iter().zip(domains.iter()) {
-                        let (checked, bindings) = self.check_pattern(pattern, domain)?;
-                        environment.extend(bindings);
+                        let checked = self.check_pattern_into(pattern, domain, &mut bindings)?;
                         row.push(checked);
                     }
+                    environment.extend(bindings);
                     if usefulness(&checked_rows, &row, &domains, &self.registry).is_none() {
                         return Err(self.typing(
                             "coverage.redundant-case",
@@ -1336,7 +1401,8 @@ impl Checker {
                             .collect(),
                     )
                 };
-                let (_, bindings) = self.check_pattern(&pattern, domain)?;
+                let (checked, bindings) = self.check_pattern(&pattern, domain)?;
+                self.require_irrefutable_function_domain(&checked, domain)?;
                 let mut environment = self.globals.clone();
                 environment.extend(bindings);
                 self.check_expr(body, codomain, &environment)
@@ -1431,14 +1497,7 @@ impl Checker {
                             {
                                 return Err(self.internal());
                             }
-                            if usefulness(
-                                &[vec![checked]],
-                                &[CheckedPattern::Wildcard],
-                                std::slice::from_ref(&ty),
-                                &self.registry,
-                            )
-                            .is_some()
-                            {
+                            if !self.pattern_is_irrefutable(&checked, &ty) {
                                 return Err(self.typing(
                                     "pattern.refutable-binding",
                                     "an unconditional local pattern must be irrefutable",
@@ -1512,7 +1571,8 @@ impl Checker {
         if let (Expr::Function(pattern, body), Type::Function(domain, codomain)) =
             (expression, expected)
         {
-            let (_, bindings) = self.check_pattern(pattern, domain)?;
+            let (checked, bindings) = self.check_pattern(pattern, domain)?;
+            self.require_irrefutable_function_domain(&checked, domain)?;
             let mut local = environment.clone();
             local.extend(bindings);
             return self.check_expr(body, codomain, &local);
@@ -1576,6 +1636,31 @@ impl Checker {
         let mut binders = HashMap::new();
         let checked = self.check_pattern_into(pattern, expected, &mut binders)?;
         Ok((checked, binders))
+    }
+
+    fn pattern_is_irrefutable(&self, pattern: &CheckedPattern, ty: &Type) -> bool {
+        usefulness(
+            &[vec![pattern.clone()]],
+            &[CheckedPattern::Wildcard],
+            std::slice::from_ref(ty),
+            &self.registry,
+        )
+        .is_none()
+    }
+
+    fn require_irrefutable_function_domain(
+        &self,
+        pattern: &CheckedPattern,
+        ty: &Type,
+    ) -> Result<(), ExtendedFailure> {
+        if self.pattern_is_irrefutable(pattern, ty) {
+            Ok(())
+        } else {
+            Err(self.typing(
+                "pattern.refutable-function-domain",
+                "a function without alternate clauses requires an irrefutable domain pattern",
+            ))
+        }
     }
 
     fn check_pattern_into(
@@ -1839,11 +1924,18 @@ fn check_guarded_root(
     recursive_names: &HashSet<String>,
     registry: &Registry,
 ) -> Result<(), ExtendedFailure> {
+    if let Expr::Name(name) = expression
+        && registry
+            .constructor_named(name)
+            .is_some_and(|constructor| constructor.owner == owner && constructor.payload.is_none())
+    {
+        return Ok(());
+    }
     let Expr::Apply(function, payload) = expression else {
         return Err(ExtendedFailure::source(
             ExtendedStage::Typing,
             "recursion.unsafe-root",
-            "recursive data must be rooted at a fully applied payload constructor",
+            "recursive data must be rooted at a fully applied constructor",
         ));
     };
     let Expr::Name(name) = function.as_ref() else {
