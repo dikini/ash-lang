@@ -52,9 +52,13 @@ retained integration evidence.
 - Checkpoint `ac840eb` adds strict tuple-construction trace evidence and literal
   folding through structured data, makes usefulness iterative and memoized,
   and closes the project lint findings exposed by the retained forms.
-- `cargo test --locked --all-targets` passes after remediation, including the
-  10,000-member small-stack case. The remaining project-wide gates run before
-  the review stop.
+- The final remediation gate passes `cargo fmt --all --check`,
+  `cargo check --locked --all-targets`, `cargo test --locked --all-targets`,
+  and `cargo xtask verify`, including the 10,000-member small-stack case.
+- Markdown lint passes for every changed document with line-length and repeated
+  execution-step headings disabled. All changed relative links and anchors
+  resolve. Authority, formal notation, exclusions, and the requirement mapping
+  have been reviewed against CP-0003 and the normative specification.
 
 ## Verification
 
