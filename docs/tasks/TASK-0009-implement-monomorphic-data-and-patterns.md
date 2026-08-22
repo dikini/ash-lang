@@ -81,6 +81,10 @@ retained integration evidence.
   gives operational globals the accepted pattern and singleton-exhaustiveness
   premises, and removes obsolete function-only recursion and binder-only
   equation wording from normative and Rust documentation.
+- Review checkpoint `cff6fb5` replaces the quadratic reverse constructor-owner
+  scan with direct lookup at the constructor identity index. A focused unit
+  test fixes the indexed invariant, and a 10,000-constructor full-validation
+  regression completes in 0.06 seconds on the retained evidence environment.
 - Fresh post-review `cargo test --all-targets` and `cargo xtask verify` runs
   pass, including the 10,000-member small-stack cycle and all new depth and
   resource regressions. Changed Markdown passes with only the project-approved
