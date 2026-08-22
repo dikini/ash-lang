@@ -188,6 +188,16 @@ fn payload_constructors_are_higher_order_unary_values() {
 }
 
 #[test]
+fn contextually_typed_matches_check_every_anonymous_function_arm() {
+    let observation = run(
+        "fn choose(flag : Bool) -> Int -> Int {\nmatch flag {\ntrue => fn(value) {\nvalue + 1\n}\nfalse => fn(value) {\nvalue * 2\n}\n}\n}\n\nchoose true 41\n",
+    );
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
 fn local_tuple_patterns_are_irrefutable() {
     let observation = run("{\nlet (left, right) = (20, 22)\nleft + right\n}\n");
 

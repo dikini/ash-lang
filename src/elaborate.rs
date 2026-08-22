@@ -872,7 +872,7 @@ impl Elaborator {
                     }
                     ResolvedExprKind::Match(match_expression) => {
                         let matched =
-                            self.elaborate_match(match_expression, current.span, context)?;
+                            self.elaborate_match(match_expression, current.span, context, None)?;
                         values.push(matched);
                     }
                     ResolvedExprKind::Apply(application) => {
@@ -921,6 +921,15 @@ impl Elaborator {
                             &mut tasks,
                             declarations.len(),
                         )?;
+                    }
+                    ResolvedExprKind::Match(match_expression) => {
+                        let matched = self.elaborate_match(
+                            match_expression,
+                            expression.span,
+                            context,
+                            Some((expected, kind)),
+                        )?;
+                        values.push(matched);
                     }
                     _ => {
                         tasks.push(ElaborationTask::FinishCheck {
@@ -1364,6 +1373,7 @@ impl Elaborator {
         expression: &crate::resolved::ResolvedMatchExpr,
         span: Span,
         context: &mut TypeContext,
+        expected: Option<(ProvenancedType, CheckKind)>,
     ) -> Result<TypedNode, TypeError> {
         let scrutinee = self.elaborate_expression_with_context(
             ElaborationTask::Synthesize {
@@ -1372,10 +1382,19 @@ impl Elaborator {
             },
             context,
         )?;
+        if expression.arms.is_empty() {
+            return Err(case_error(
+                TypeReason::NonExhaustive,
+                span,
+                "a match requires at least one arm",
+                None,
+            ));
+        }
         let mut matrix = Vec::new();
         let mut coverage_budget = UsefulnessBudget::default();
         let mut arms = Vec::with_capacity(expression.arms.len());
-        let mut result_type: Option<(Type, TypeProvenance)> = None;
+        let mut result_type =
+            expected.map(|(expected, kind)| (expected.ty, expected.provenance, kind));
         for arm in &expression.arms {
             let mut binders = Vec::new();
             let pattern = self.check_core_pattern(
@@ -1403,7 +1422,7 @@ impl Elaborator {
                     None,
                 ));
             }
-            let body_result = if let Some((ty, provenance)) = &result_type {
+            let body_result = if let Some((ty, provenance, kind)) = &result_type {
                 self.elaborate_expression_with_context(
                     ElaborationTask::Check {
                         expression: &arm.body,
@@ -1411,7 +1430,7 @@ impl Elaborator {
                             ty: ty.clone(),
                             provenance: provenance.clone(),
                         },
-                        kind: CheckKind::General,
+                        kind: *kind,
                     },
                     context,
                 )
@@ -1426,7 +1445,9 @@ impl Elaborator {
             };
             self.remove_pattern_binders(context, &binders)?;
             let body = body_result?;
-            result_type.get_or_insert_with(|| (body.ty.clone(), body.provenance.clone()));
+            result_type.get_or_insert_with(|| {
+                (body.ty.clone(), body.provenance.clone(), CheckKind::General)
+            });
             matrix.push(row);
             arms.push(CoreMatchArm::new(
                 pattern,
@@ -1434,13 +1455,8 @@ impl Elaborator {
                 Origin::Source(arm.span),
             ));
         }
-        let Some((ty, provenance)) = result_type else {
-            return Err(case_error(
-                TypeReason::NonExhaustive,
-                span,
-                "a match requires at least one arm",
-                None,
-            ));
+        let Some((ty, provenance, _)) = result_type else {
+            return Err(invalid_state());
         };
         if let Some(witness) = missing_witness_for_types_with_budget(
             &matrix,
