@@ -87,9 +87,11 @@ checks the argument against its domain.
 ```sequent
 family function-typing:
   T-Function-Check :=
-    GAMMA, x : domain |- body ⇐ codomain
+    pattern ⇐ domain => bindings
+    exhaustive([pattern], domain)
+    GAMMA, bindings |- body ⇐ codomain
     ===>
-    GAMMA |- fn(x) { body } ⇐ Function(domain, codomain)
+    GAMMA |- fn(pattern) { body } ⇐ Function(domain, codomain)
 
   T-Apply :=
     GAMMA |- function ⇒ Function(domain, codomain)
@@ -102,9 +104,11 @@ An anonymous function in a position that must synthesize has no applicable
 rule and is rejected with `type.function-needs-context`. Mini-Ash does not infer
 a parameter type for that case. The parameter position is a pattern. Two or
 more syntactic parameters form one tuple pattern and consume one tuple domain.
-Because an anonymous or operational function has no alternate clauses, its
-domain pattern must be irrefutable under the same usefulness analysis as a
-local binding.
+Because an anonymous or operational function has no alternate clauses,
+`exhaustive([pattern], domain)` requires its singleton domain pattern to be
+irrefutable under the same usefulness analysis as a local binding. The
+`bindings` returned by pattern checking, rather than one distinguished binder,
+extend the function body environment.
 
 ## Patterns, matches, and coverage
 
@@ -125,14 +129,48 @@ no witness outside all arms. A useless arm is rejected with
 
 ```sequent
 family match-typing:
-  T-Match :=
+  T-Match-Synthesize :=
     GAMMA |- scrutinee ⇒ input_type
     for each i, pattern_i ⇐ input_type => bindings_i
     for each i, useful(previous_patterns_i, pattern_i, input_type)
-    for each i, GAMMA, bindings_i |- body_i ⇐ result_type
+    GAMMA, bindings_1 |- body_1 ⇒ result_type
+    for each i > 1, GAMMA, bindings_i |- body_i ⇐ result_type
     exhaustive(all_patterns, input_type)
     ===>
     GAMMA |- match scrutinee { arms } ⇒ result_type
+
+  T-Match-Check :=
+    GAMMA |- scrutinee ⇒ input_type
+    for each i, pattern_i ⇐ input_type => bindings_i
+    for each i, useful(previous_patterns_i, pattern_i, input_type)
+    for each i, GAMMA, bindings_i |- body_i ⇐ expected_type
+    exhaustive(all_patterns, input_type)
+    ===>
+    GAMMA |- match scrutinee { arms } ⇐ expected_type
+```
+
+A match has at least one arm. `T-Match-Synthesize` obtains its result type from
+the first arm and checks every later arm against that type.
+`T-Match-Check` propagates a result type supplied by the surrounding context to
+every arm, including the first. This admits anonymous functions and other
+checking-only forms in all arms when their context supplies a type.
+
+The executable test
+`static_semantics_contextual_match_checks_function_arms` checks this propagation:
+
+```ash
+fn choose(flag : Bool) -> Int -> Int {
+    match flag {
+        true => fn(value) {
+            value + 1
+        }
+        false => fn(value) {
+            value * 2
+        }
+    }
+}
+
+choose true 41
 ```
 
 The same usefulness relation checks equation groups. Each equation pattern
@@ -155,8 +193,8 @@ checks local destructuring:
 
 Block bindings are checked from left to right. An annotated initializer checks
 against its annotation. An unannotated initializer must synthesize its binding
-type. The new binder is available only in the remainder. A block can synthesize
-from its result or check by passing an expected type to its result.
+type. The new pattern bindings are available only in the remainder. A block can
+synthesize from its result or check by passing an expected type to its result.
 
 ```sequent
 family block-typing:
@@ -167,15 +205,19 @@ family block-typing:
 
   T-Block-Let-Inferred :=
     GAMMA |- initializer ⇒ binding_type
-    GAMMA, x : binding_type |- { remainder } ⇒ result_type
+    pattern ⇐ binding_type => bindings
+    exhaustive([pattern], binding_type)
+    GAMMA, bindings |- { remainder } ⇒ result_type
     ===>
-    GAMMA |- { let x = initializer; remainder } ⇒ result_type
+    GAMMA |- { let pattern = initializer; remainder } ⇒ result_type
 
   T-Block-Let-Checked :=
     GAMMA |- initializer ⇐ binding_type
-    GAMMA, x : binding_type |- { remainder } ⇒ result_type
+    pattern ⇐ binding_type => bindings
+    exhaustive([pattern], binding_type)
+    GAMMA, bindings |- { remainder } ⇒ result_type
     ===>
-    GAMMA |- { let x : binding_type = initializer; remainder } ⇒ result_type
+    GAMMA |- { let pattern : binding_type = initializer; remainder } ⇒ result_type
 
   T-Block-Check-Result :=
     GAMMA |- result ⇐ expected_type
@@ -184,21 +226,27 @@ family block-typing:
 
   T-Block-Check-Let-Inferred :=
     GAMMA |- initializer ⇒ binding_type
-    GAMMA, x : binding_type |- { remainder } ⇐ expected_type
+    pattern ⇐ binding_type => bindings
+    exhaustive([pattern], binding_type)
+    GAMMA, bindings |- { remainder } ⇐ expected_type
     ===>
-    GAMMA |- { let x = initializer; remainder } ⇐ expected_type
+    GAMMA |- { let pattern = initializer; remainder } ⇐ expected_type
 
   T-Block-Check-Let-Annotated :=
     GAMMA |- initializer ⇐ binding_type
-    GAMMA, x : binding_type |- { remainder } ⇐ expected_type
+    pattern ⇐ binding_type => bindings
+    exhaustive([pattern], binding_type)
+    GAMMA, bindings |- { remainder } ⇐ expected_type
     ===>
-    GAMMA |- { let x : binding_type = initializer; remainder } ⇐ expected_type
+    GAMMA |- { let pattern : binding_type = initializer; remainder } ⇐ expected_type
 ```
 
 The first three rules synthesize a block type. The last three rules check a
-block, carrying the expected type through its bindings to the result. The
-checking rules overlap with `T-Check-Inferred` when the result synthesizes, but
-also admit a result that itself needs an expected type, such as an anonymous
+block, carrying the expected type through its bindings to the result. Every
+binding checks its complete pattern, requires that singleton pattern to cover
+the initializer type, and extends the remainder with all returned bindings.
+The checking rules overlap with `T-Check-Inferred` when the result synthesizes,
+but also admit a result that itself needs an expected type, such as an anonymous
 function. The semicolons in the binding conclusions separate semantic fields.
 They do not add semicolon punctuation to Ash source.
 

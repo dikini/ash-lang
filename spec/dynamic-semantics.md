@@ -50,23 +50,36 @@ lexical function from its template and the recursive environment.
 ```sequent
 family recursive-binding-steps:
   E-Let-Rec-Allocate :=
-    allocate_uninitialized(heap, data_members) = heap_1, data_locations
-    environment_1 = extend_recursive(environment, function_templates, data_locations)
+    allocate_uninitialized(heap, data_members) = heap_1, pending
+    environment_1 = extend_recursive(environment, function_templates, data_locations(pending))
     ===>
-    CONFIG(heap, environment, let rec members; body, continuation) -> CONFIG(heap_1, environment_1, initialize(data_members, data_locations, body), continuation)
+    CONFIG(heap, environment, let rec members; body, continuation) -> CONFIG(heap_1, environment_1, initialize(pending, body), continuation)
+
+  E-Let-Rec-Initialize :=
+    ===>
+    CONFIG(heap, recursive_environment, initialize((initializer, member_location) :: rest, body), continuation) -> CONFIG(heap, recursive_environment, initializer, INITIALIZE_MEMBER(member_location, rest, body, recursive_environment) :: continuation)
 
   E-Let-Rec-Store :=
-    member_initializer_i evaluates to value_location
-    heap_2 = store_alias(heap_1, member_location_i, value_location)
+    heap_1 = store_alias(heap, member_location, value_location)
     ===>
-    CONFIG(heap_1, environment_1, initialize(member_i :: rest, data_locations, body), continuation) -> CONFIG(heap_2, environment_1, initialize(rest, data_locations, body), continuation)
+    CONFIG(heap, environment_value, value_location, INITIALIZE_MEMBER(member_location, rest, body, recursive_environment) :: continuation) -> CONFIG(heap_1, recursive_environment, initialize(rest, body), continuation)
 
   E-Let-Rec-Body :=
     ===>
-    CONFIG(heap, environment, initialize(empty, data_locations, body), continuation) -> CONFIG(heap, environment, body, continuation)
+    CONFIG(heap, recursive_environment, initialize(empty, body), continuation) -> CONFIG(heap, recursive_environment, body, continuation)
 ```
 
 Function templates and data locations enter scope before data initialization.
+`pending` pairs each guarded data initializer with its preallocated location in
+source order. `E-Let-Rec-Initialize` enters only the first initializer and saves
+the remaining pairs, group body, and recursive environment in a continuation.
+When that initializer returns its constructed location, `E-Let-Rec-Store`
+stores the alias and resumes the remaining initialization control. Repeating
+these two one-step rules makes every intermediate heap and control state, and
+therefore source order, explicit. A function-only group has an empty `pending`
+sequence and proceeds through `E-Let-Rec-Body`; its templates were installed by
+`E-Let-Rec-Allocate`.
+
 Reaching an uninitialized cell, an alias loop, or an invalid location is an
 internal runtime failure. The static guardedness judgment makes those states
 unreachable from accepted source. These rules provide allocation for explicit
@@ -273,9 +286,9 @@ binders where needed to show distinct lexical identities.
 | --- | --- | --- |
 | `V-003` | `dynamic_binding_derivation_example_v003_is_executable` | `E-Let-Enter`, `E-Let-Continue`, `E-Add-Values` |
 | `V-001` | `dynamic_primitive_derivation_example_v001_is_executable` | `E-Add-Right`, `E-Multiply-Values`, `E-Add-Values` |
-| `V-002` | `dynamic_application_derivation_example_v002_is_executable` | `E-Let-Rec-Allocate`, `E-Let-Rec-Store`, `E-Beta`, `E-Add-Values` |
+| `V-002` | `dynamic_application_derivation_example_v002_is_executable` | `E-Let-Rec-Allocate`, `E-Let-Rec-Body`, `E-Beta`, `E-Add-Values` |
 | `V-004` | `dynamic_capture_derivation_example_v004_is_executable` | `E-Let-Enter`, `E-Let-Continue`, `E-Beta`, `E-Add-Values` |
-| `V-008` | `dynamic_nested_application_derivation_example_v008_is_executable` | recursive allocation, strict application frames, `E-Beta`, and integer primitives |
+| `V-008` | `dynamic_nested_application_derivation_example_v008_is_executable` | `E-Let-Rec-Allocate`, `E-Let-Rec-Body`, strict application frames, `E-Beta`, and integer primitives |
 
 ### Binding and shadowing: V-003
 
@@ -290,7 +303,7 @@ binders where needed to show distinct lexical identities.
 Elaboration gives the two `value` binders distinct identities. The first
 `E-Let-Continue` extends the environment for the second initializer.
 `E-Add-Values` produces `2`, and the second continuation extends the result
-environment with that location. Thus the file evaluates to `2`.
+environment with that integer value. Thus the file evaluates to `2`.
 
 ### Primitive precedence: V-001
 
@@ -312,9 +325,11 @@ increment 41
 ```
 
 The global elaborates as a one-member recursive binding.
-`E-Let-Rec-Allocate` exposes its slot in the file result and
-`E-Let-Rec-Store` installs the function template. `E-Beta` extends the captured
-environment with `41`, and `E-Add-Values` produces `42`.
+`E-Let-Rec-Allocate` installs its function template in the recursive
+environment without allocating a data slot. The empty initialization sequence
+then enters the file result through `E-Let-Rec-Body`. Looking up `increment`
+materializes the closure value. `E-Beta` extends its captured environment with
+the integer value `41`, and `E-Add-Values` produces `42`.
 
 ### Lexical capture: V-004
 
@@ -328,10 +343,11 @@ environment with `41`, and `E-Add-Values` produces `42`.
 }
 ```
 
-The first `E-Let-Continue` binds the location containing `40`. The function
-captures that lexical environment, and the second binding stores its location.
-`E-Beta` extends the captured environment with `2`; `E-Add-Values` then
-produces `42`. This is lexical rather than dynamic scope.
+The first `E-Let-Continue` binds the integer value `40` directly. The function
+captures that lexical environment, and the second binding stores the closure
+value directly. `E-Beta` extends the captured environment with the integer
+value `2`; `E-Add-Values` then produces `42`. This is lexical rather than
+dynamic scope.
 
 ### Nested application: V-008
 
@@ -346,8 +362,8 @@ fn double(value : Int) -> Int {
 double (increment 20)
 ```
 
-The two globals elaborate as one recursive group. Allocation exposes both
-function slots in the file result. Strict application frames evaluate
-`increment 20` before applying `double`: `E-Beta` enters `20 + 1`, then
-`E-Add-Values` produces `21`. The outer `E-Beta` enters `21 * 2`, and
-`E-Multiply-Values` produces `42`.
+The two globals elaborate as one recursive group. Allocation installs both
+function templates in the recursive environment; it allocates no data slots.
+Strict application frames evaluate `increment 20` before applying `double`:
+`E-Beta` enters `20 + 1`, then `E-Add-Values` produces `21`. The outer
+`E-Beta` enters `21 * 2`, and `E-Multiply-Values` produces `42`.

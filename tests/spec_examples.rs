@@ -32,6 +32,7 @@ const COMMENT_REJECTION: &str = "// comments are not in Mini-Ash\n1\n";
 const UNKNOWN_NAME_REJECTION: &str = "missing 1\n";
 const TYPE_REJECTION: &str = "true + 1\n";
 const IRREFUTABLE_TUPLE: &str = "{\n    let (left, right) = (20, 22)\n    left + right\n}\n";
+const CONTEXTUAL_MATCH: &str = "fn choose(flag : Bool) -> Int -> Int {\n    match flag {\n        true => fn(value) {\n            value + 1\n        }\n        false => fn(value) {\n            value * 2\n        }\n    }\n}\n\nchoose true 41\n";
 const TREE_PRESENTATIONS: &str = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn size_match(tree : Tree) -> Int {\n    match tree {\n        Tip(value) => 1\n        Fork(left, right) => size_match left + size_match right\n    }\n}\n\nsize (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))\n";
 const HIGHER_ORDER_CONSTRUCTOR: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmatch build Wrap {\n    Wrap(value) => value\n}\n";
 const CYCLIC_STREAM: &str = "type Stream =\n    Next(Int, Stream)\n\n{\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
@@ -234,6 +235,12 @@ fn static_semantics_higher_order_operational_example_is_executable() {
 fn static_semantics_irrefutable_tuple_binding_is_executable() {
     assert_observation("spec-irrefutable-tuple.ash", IRREFUTABLE_TUPLE, "42", "Int");
     assert_documented("spec/static-semantics.md", IRREFUTABLE_TUPLE);
+}
+
+#[test]
+fn static_semantics_contextual_match_checks_function_arms() {
+    assert_observation("spec-contextual-match.ash", CONTEXTUAL_MATCH, "42", "Int");
+    assert_documented("spec/static-semantics.md", CONTEXTUAL_MATCH);
 }
 
 #[test]
