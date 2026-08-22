@@ -382,6 +382,73 @@ fn rejects_missing_and_redundant_structured_match_arms() {
 }
 
 #[test]
+fn oversized_unchecked_match_maps_coverage_exhaustion_to_resource() {
+    const WIDTH: u32 = 800;
+    let file = source(&"x".repeat(WIDTH as usize + 1));
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructors = (0..WIDTH)
+        .map(|index| ConstructorId::new(nominal, index))
+        .collect::<Vec<_>>();
+    let constructor_entries = constructors
+        .iter()
+        .enumerate()
+        .map(|(index, id)| ResolvedConstructor {
+            id: *id,
+            owner: nominal,
+            spelling: format!("C{index}"),
+            payload: None,
+            origin: range_origin(
+                &file,
+                u32::try_from(index + 1).expect("test index should fit"),
+                u32::try_from(index + 2).expect("test index should fit"),
+            ),
+        })
+        .collect();
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "TooWide".into(),
+            constructors: constructors.clone().into_boxed_slice(),
+            origin: origin.clone(),
+        }],
+        constructor_entries,
+    ));
+    let mut builder = CoreBuilder::with_registry(registry);
+    let scrutinee = builder
+        .constructor(constructors[0], Type::Nominal(nominal), origin.clone())
+        .expect("constructor scrutinee");
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("shared arm body");
+    let arms = constructors
+        .into_iter()
+        .map(|constructor| {
+            CoreMatchArm::new(
+                CorePattern::new(
+                    Type::Nominal(nominal),
+                    origin.clone(),
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload: None,
+                    },
+                ),
+                body,
+                origin.clone(),
+            )
+        })
+        .collect();
+    let root = builder
+        .match_expression(scrutinee, arms, Type::Unit, origin)
+        .expect("unchecked oversized match");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("coverage budget exhaustion must reject unchecked Core");
+    assert_eq!(error.reason(), ValidationReason::Resource);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
 fn nominal_identity_and_tuple_structure_share_one_type_equality_rule() {
     let first_source = source("first nominal source");
     let second_source = source("second nominal source");
