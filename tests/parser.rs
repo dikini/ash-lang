@@ -16,6 +16,11 @@ fn parse_valid(text: &str) -> (ash::parser::ConcreteTree, ash::surface::SurfaceP
     let lexed = lex(&source).expect("lexing should preserve source invariants");
     assert!(lexed.diagnostics.is_empty());
     let tree = parse(lexed);
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "unexpected parse diagnostics: {:?}",
+        tree.parse_diagnostics()
+    );
     let program = project(&source, &tree).expect("the fixture should project");
     (tree, program)
 }
@@ -46,6 +51,130 @@ fn binding(block: &SurfaceBlock, index: usize) -> &SurfaceBinding {
         panic!("expected ordinary binding")
     };
     binding
+}
+
+fn concrete_kinds(tree: &ash::parser::ConcreteTree) -> Vec<NodeKind> {
+    let mut kinds = Vec::new();
+    let mut pending = tree.root().into_iter().collect::<Vec<_>>();
+    while let Some(node) = pending.pop() {
+        kinds.push(node.kind);
+        pending.extend(node.children.iter().filter_map(|child| match child {
+            ash::parser::ConcreteElement::Node(child) => Some(child),
+            ash::parser::ConcreteElement::Token(_)
+            | ash::parser::ConcreteElement::Missing { .. }
+            | ash::parser::ConcreteElement::Error(_) => None,
+        }));
+    }
+    kinds
+}
+
+#[test]
+fn data_and_pattern_forms_build_one_token_complete_concrete_tree() {
+    let source = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\ntype Choice =\n    Choice((Bool, Tree))\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn choose(flag : Bool, tree : Tree) -> Int {\n    match (flag, tree) {\n        (true, Tip(value)) => value\n        (_, Fork(left, right)) => size left + size right\n        (_, Tip(value)) => value\n    }\n}\n\nchoose(true, Tip(42))\n";
+    let (_source, tree) = parse_tree(source);
+
+    assert!(tree.lexical_diagnostics().is_empty());
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+    let kinds = concrete_kinds(&tree);
+    for expected in [
+        NodeKind::TypeDeclaration,
+        NodeKind::ConstructorDeclaration,
+        NodeKind::Pattern,
+        NodeKind::TuplePattern,
+        NodeKind::MatchExpression,
+        NodeKind::MatchArm,
+        NodeKind::TupleExpression,
+        NodeKind::TupleType,
+    ] {
+        assert!(kinds.contains(&expected), "missing {expected:?}: {kinds:?}");
+    }
+    assert_eq!(
+        tree.events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Token(index) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        (0..tree.tokens().len()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn data_and_pattern_recovery_stays_balanced_and_synchronizes_at_the_arm_line() {
+    let text = "match true {\n    true 1\n    false => 2\n}\n";
+    let (source, tree) = parse_tree(text);
+
+    let diagnostic = tree
+        .parse_diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.reason == ParseReason::ExpectedForm
+                && diagnostic.expected.as_deref() == Some("=>")
+        })
+        .expect("the missing arm arrow should have one structured diagnostic");
+    assert!(matches!(
+        diagnostic.context.as_slice(),
+        [ParseContext::Synchronization {
+            boundary: SynchronizationBoundary::LogicalLineEnd,
+            ..
+        }]
+    ));
+    assert_eq!(
+        project(&source, &tree),
+        Err(ProjectionError::RecoveryNodesPresent)
+    );
+    assert_eq!(
+        tree.events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Token(index) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        (0..tree.tokens().len()).collect::<Vec<_>>()
+    );
+    let mut depth = 0_u32;
+    for event in tree.events() {
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::Finish => depth -= 1,
+            Event::Token(_) | Event::Missing { .. } | Event::Error(_) => {}
+        }
+    }
+    assert_eq!(depth, 0);
+}
+
+#[test]
+fn projects_data_declarations_tuples_matches_and_pattern_vectors() {
+    let source = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nmatch (true, Tip(42)) {\n    (true, Tip(value)) => value\n    (_, Fork(left, right)) => size left + size right\n    (_, Tip(value)) => value\n}\n";
+    let (_tree, program) = parse_valid(source);
+
+    assert_eq!(program.type_declarations.len(), 1);
+    assert_eq!(program.type_declarations[0].name.text, "Tree");
+    assert_eq!(program.type_declarations[0].constructors.len(), 2);
+    assert_eq!(program.type_declarations[0].constructors[1].fields.len(), 2);
+    let SurfaceDefinitionKind::Equational(definition) = &program.definitions[0].kind else {
+        panic!("expected equational definition");
+    };
+    assert_eq!(definition.equations.len(), 2);
+    assert_eq!(definition.equations[0].patterns.len(), 1);
+    assert!(matches!(
+        definition.equations[0].patterns[0].kind,
+        ash::surface::SurfacePatternKind::Constructor { .. }
+    ));
+    let SurfaceExprKind::Match(match_expression) = &program.result.kind else {
+        panic!("expected structured match");
+    };
+    assert!(matches!(
+        match_expression.scrutinee.kind,
+        SurfaceExprKind::Tuple(_)
+    ));
+    assert_eq!(match_expression.arms.len(), 3);
 }
 
 #[test]
@@ -360,19 +489,21 @@ fn both_v002_presentations_preserve_their_distinct_source_structure() {
             .end(),
         22
     );
-    assert_eq!(equational_definition.equation.span.range().start(), 23);
-    assert_eq!(equational_definition.equation.span.range().end(), 50);
-    assert_eq!(equational_definition.equation.name.text, "increment");
-    assert_eq!(equational_definition.equation.name.span.range().start(), 23);
-    assert_eq!(equational_definition.equation.name.span.range().end(), 32);
-    assert_eq!(
-        equational_definition.equation.binder.span.range().start(),
-        33
-    );
-    assert_eq!(equational_definition.equation.binder.span.range().end(), 38);
-    assert_eq!(equational_definition.equation.body.span.range().start(), 41);
-    assert_eq!(equational_definition.equation.body.span.range().end(), 50);
-    let SurfaceExprKind::Add(equational_add) = &equational_definition.equation.body.kind else {
+    let equation = &equational_definition.equations[0];
+    assert_eq!(equation.span.range().start(), 23);
+    assert_eq!(equation.span.range().end(), 50);
+    assert_eq!(equation.name.text, "increment");
+    assert_eq!(equation.name.span.range().start(), 23);
+    assert_eq!(equation.name.span.range().end(), 32);
+    let ash::surface::SurfacePatternKind::Binder(equation_binder) = &equation.patterns[0].kind
+    else {
+        panic!("expected equation binder");
+    };
+    assert_eq!(equation_binder.span.range().start(), 33);
+    assert_eq!(equation_binder.span.range().end(), 38);
+    assert_eq!(equation.body.span.range().start(), 41);
+    assert_eq!(equation.body.span.range().end(), 50);
+    let SurfaceExprKind::Add(equational_add) = &equation.body.kind else {
         panic!("expected equational addition body");
     };
     assert_eq!(equational_add.operator_span.range().start(), 47);
@@ -391,11 +522,17 @@ fn both_v002_presentations_preserve_their_distinct_source_structure() {
     assert_eq!(operational_definition.header.name.span.range().start(), 3);
     assert_eq!(operational_definition.header.name.span.range().end(), 12);
     assert_eq!(
-        operational_definition.header.parameter.span.range().start(),
+        operational_definition.header.parameters[0]
+            .span
+            .range()
+            .start(),
         13
     );
     assert_eq!(
-        operational_definition.header.parameter.span.range().end(),
+        operational_definition.header.parameters[0]
+            .span
+            .range()
+            .end(),
         24
     );
     assert_eq!(
@@ -483,7 +620,7 @@ fn higher_order_operational_parameter_and_parenthesized_function_argument_projec
         panic!("expected inline operational definition");
     };
     assert!(matches!(
-        definition.header.parameter.annotation.kind,
+        definition.header.parameters[0].annotation.kind,
         SurfaceTypeKind::Function(_)
     ));
     let SurfaceExprKind::Apply(application) = &program.result.kind else {
@@ -498,16 +635,6 @@ fn higher_order_operational_parameter_and_parenthesized_function_argument_projec
 #[test]
 fn excluded_structural_forms_report_owned_reasons_and_never_project() {
     let cases = [
-        ("(1, 2)", ParseReason::TupleSyntax),
-        ("match value {\n    true\n}", ParseReason::MatchSyntax),
-        (
-            "fn add(left : Int, right : Int) -> Int {\n    left\n}\n\nadd\n",
-            ParseReason::MultipleParameters,
-        ),
-        (
-            "add : Int -> Int\nadd left right = left\n\nadd\n",
-            ParseReason::MultipleBinders,
-        ),
         (
             "fn identity<a>(value : Int) -> Int {\n    value\n}\n\nidentity\n",
             ParseReason::PolymorphicHeader,
@@ -568,7 +695,7 @@ fn missing_final_result_and_lexical_errors_are_hard_projection_boundaries() {
 
 #[test]
 fn recovery_events_remain_balanced_and_retain_mismatched_delimiters() {
-    for text in ["(", "{\n1\n)", "fn(value, other) {\nvalue\n}"] {
+    for text in ["(", "{\n1\n)", "fn(value,, other) {\nvalue\n}"] {
         let (_source, tree) = parse_tree(text);
         let mut depth = 0_u32;
         for event in tree.events() {
@@ -614,8 +741,8 @@ fn every_surface_construct_retains_its_complete_accepted_span() {
         panic!("expected inline definition");
     };
     assert_eq!(definition.header.name.span.range().start(), 3);
-    assert_eq!(definition.header.parameter.span.range().start(), 13);
-    assert_eq!(definition.header.parameter.span.range().end(), 24);
+    assert_eq!(definition.header.parameters[0].span.range().start(), 13);
+    assert_eq!(definition.header.parameters[0].span.range().end(), 24);
     assert_eq!(binding(&definition.body, 0).span.range().start(), 39);
     assert_eq!(binding(&definition.body, 0).span.range().end(), 56);
     assert_eq!(program.span.range().start(), 0);
@@ -867,9 +994,9 @@ fn crlf_programs_retain_two_byte_boundaries_and_surface_spans() {
     };
     assert_eq!(definition.interface.span.range().start(), 0);
     assert_eq!(definition.interface.span.range().end(), 22);
-    assert_eq!(definition.equation.span.range().start(), 24);
-    assert_eq!(definition.equation.span.range().end(), 51);
-    let SurfaceExprKind::Add(addition) = &definition.equation.body.kind else {
+    assert_eq!(definition.equations[0].span.range().start(), 24);
+    assert_eq!(definition.equations[0].span.range().end(), 51);
+    let SurfaceExprKind::Add(addition) = &definition.equations[0].body.kind else {
         panic!("expected addition body");
     };
     assert_eq!(addition.operator_span.range().start(), 48);

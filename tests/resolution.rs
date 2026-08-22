@@ -7,7 +7,7 @@ use ash::{
         ResolvedLocalDeclaration,
     },
     source::SourceFile,
-    surface::SurfaceTypeKind,
+    types::Type,
 };
 
 fn resolve_valid(text: &str) -> ash::resolved::ResolvedProgram {
@@ -17,6 +17,72 @@ fn resolve_valid(text: &str) -> ash::resolved::ResolvedProgram {
     let tree = parse(lexed);
     let surface = project(&source, &tree).expect("the fixture should project");
     resolve(&surface).expect("the fixture should resolve")
+}
+
+#[test]
+fn data_and_pattern_resolution_allocates_file_wide_identities_and_pattern_binders() {
+    let program = resolve_valid(
+        "type First =\n    First(Second)\n\ntype Second =\n    Empty\n    | More(First)\n\nunwrap : First -> Second\nunwrap (First value) = value\n\nmatch First(Empty) {\n    First(value) => value\n}\n",
+    );
+
+    assert_eq!(program.registry.nominals().len(), 2);
+    let first = &program.registry.nominals()[0];
+    let second = &program.registry.nominals()[1];
+    assert_ne!(first.id, second.id);
+    let first_constructor = &program.registry.constructors()[0];
+    assert_eq!(first_constructor.owner, first.id);
+    assert_eq!(first_constructor.payload, Some(Type::Nominal(second.id)));
+    let ResolvedDefinitionKind::Equational(definition) = &program.definitions[0].kind else {
+        panic!("expected equation group");
+    };
+    let pattern = &definition.equations[0].patterns[0];
+    let ash::resolved::ResolvedPatternKind::Constructor { payload, .. } = &pattern.kind else {
+        panic!("expected resolved constructor pattern");
+    };
+    let ash::resolved::ResolvedPatternKind::Binder(pattern_binder) =
+        &payload.as_ref().expect("payload pattern").kind
+    else {
+        panic!("expected payload binder");
+    };
+    let ash::resolved::ResolvedExprKind::Occurrence(body_use) = &definition.equations[0].body.kind
+    else {
+        panic!("expected resolved body occurrence");
+    };
+    assert_eq!(body_use.binder, pattern_binder.id);
+}
+
+#[test]
+fn data_namespaces_report_stable_resolution_reasons() {
+    let cases = [
+        (
+            "type T = A\n\ntype T = B\n\nA\n",
+            ResolveReason::DuplicateType,
+        ),
+        (
+            "type T = Same\n\ntype U = Same\n\nSame\n",
+            ResolveReason::DuplicateConstructor,
+        ),
+        (
+            "type T = Make(Missing)\n\nMake\n",
+            ResolveReason::UnknownType,
+        ),
+        ("Missing\n", ResolveReason::UnknownConstructor),
+        (
+            "type Pair = Pair(Int, Int)\n\nmatch Pair(1, 2) {\n    Pair(value, value) => value\n}\n",
+            ResolveReason::DuplicatePatternBinder,
+        ),
+    ];
+
+    for (source, reason) in cases {
+        assert_eq!(resolve_error(source).reason, reason, "source:\n{source}");
+    }
+}
+
+#[test]
+fn match_arm_pattern_scope_does_not_leak_to_later_arms() {
+    let error = resolve_error("match true {\n    value => value\n    _ => value\n}\n");
+
+    assert_eq!(error.reason, ResolveReason::UnknownName);
 }
 
 fn resolve_error(text: &str) -> ash::resolve::ResolveError {
@@ -481,21 +547,18 @@ fn resolved_presentations_retain_annotations_component_spans_and_full_spans() {
     );
     assert_eq!(definition.header.parameter.span.range().start(), 13);
     assert_eq!(definition.header.parameter.span.range().end(), 24);
-    assert!(matches!(
-        definition.header.parameter.annotation.kind,
-        SurfaceTypeKind::Int
-    ));
+    assert_eq!(definition.header.parameter.annotation.ty, Type::Int);
     assert_eq!(definition.header.result_type.span.range().start(), 29);
     assert_eq!(definition.header.result_type.span.range().end(), 32);
     assert_eq!(binding(&definition.body, 0).span.range().start(), 39);
     assert_eq!(binding(&definition.body, 0).span.range().end(), 56);
-    assert!(matches!(
+    assert_eq!(
         binding(&definition.body, 0)
             .annotation
             .as_ref()
-            .map(|annotation| &annotation.kind),
-        Some(SurfaceTypeKind::Int)
-    ));
+            .map(|annotation| &annotation.ty),
+        Some(&Type::Int)
+    );
     let ResolvedExprKind::Add(addition) = &definition.body.result.kind else {
         panic!("expected an addition body");
     };

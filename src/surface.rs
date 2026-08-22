@@ -5,11 +5,35 @@ use crate::{integer::Integer, source::Span};
 /// One parsed Mini-Ash source file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceProgram {
+    /// Nominal type declarations in source order.
+    pub type_declarations: Vec<SurfaceTypeDeclaration>,
     /// Global definitions in source order.
     pub definitions: Vec<SurfaceDefinition>,
     /// The required final result expression.
     pub result: SurfaceExpr,
     /// The complete accepted source span.
+    pub span: Span,
+}
+
+/// One source nominal type declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceTypeDeclaration {
+    /// The declared type spelling.
+    pub name: SurfaceName,
+    /// Its nonempty constructor list.
+    pub constructors: Vec<SurfaceConstructorDeclaration>,
+    /// The complete declaration span.
+    pub span: Span,
+}
+
+/// One source constructor declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceConstructorDeclaration {
+    /// The constructor spelling.
+    pub name: SurfaceName,
+    /// Zero or more syntactic fields.
+    pub fields: Vec<SurfaceType>,
+    /// The complete constructor span.
     pub span: Span,
 }
 
@@ -36,8 +60,8 @@ pub enum SurfaceDefinitionKind {
 pub struct EquationalGlobal {
     /// The separately written external interface.
     pub interface: SurfaceExternalInterface,
-    /// The binder-only equation.
-    pub equation: SurfaceEquation,
+    /// The nonempty contiguous clause group.
+    pub equations: Vec<SurfaceEquation>,
 }
 
 /// One external name and type interface.
@@ -56,8 +80,8 @@ pub struct SurfaceExternalInterface {
 pub struct SurfaceEquation {
     /// The name repeated by the equation head.
     pub name: SurfaceName,
-    /// The equation's one binder.
-    pub binder: SurfaceBinder,
+    /// Patterns consuming successive arrow domains.
+    pub patterns: Vec<SurfacePattern>,
     /// The equation body.
     pub body: SurfaceExpr,
     /// The complete equation span.
@@ -78,8 +102,8 @@ pub struct InlineOperationalGlobal {
 pub struct SurfaceInlineOperationalHeader {
     /// The global function name.
     pub name: SurfaceName,
-    /// The one typed parameter.
-    pub parameter: SurfaceTypedBinder,
+    /// The nonempty operational parameter vector.
+    pub parameters: Vec<SurfaceTypedPattern>,
     /// The declared result type.
     pub result_type: SurfaceType,
     /// The complete header span, excluding the body.
@@ -106,6 +130,8 @@ pub enum SurfaceExprKind {
     Unit,
     /// An unresolved source name.
     Name(SurfaceName),
+    /// A strict structural tuple.
+    Tuple(Vec<SurfaceExpr>),
     /// Strict unary application.
     Apply(ApplicationExpr),
     /// Integer multiplication.
@@ -118,6 +144,28 @@ pub enum SurfaceExprKind {
     Block(SurfaceBlock),
     /// An anonymous unary function.
     Function(FunctionExpr),
+    /// A structured total match.
+    Match(SurfaceMatchExpr),
+}
+
+/// A structured match expression.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceMatchExpr {
+    /// The scrutinee evaluated once.
+    pub scrutinee: Box<SurfaceExpr>,
+    /// Source-ordered arms.
+    pub arms: Vec<SurfaceMatchArm>,
+}
+
+/// One source match arm.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceMatchArm {
+    /// The arm pattern.
+    pub pattern: SurfacePattern,
+    /// The selected body.
+    pub body: SurfaceExpr,
+    /// The complete arm span.
+    pub span: Span,
 }
 
 /// A binary source expression.
@@ -187,8 +235,8 @@ pub struct SurfaceRecursiveMember {
 /// One immutable local binding.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceBinding {
-    /// The introduced binder.
-    pub binder: SurfaceBinder,
+    /// The irrefutable source pattern.
+    pub pattern: SurfacePattern,
     /// Its optional type annotation.
     pub annotation: Option<SurfaceType>,
     /// The initializer expression.
@@ -200,8 +248,8 @@ pub struct SurfaceBinding {
 /// An anonymous function expression.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FunctionExpr {
-    /// The function's one binder.
-    pub parameter: SurfaceBinder,
+    /// The unary domain pattern; comma syntax forms one tuple pattern.
+    pub parameter: SurfacePattern,
     /// The braced body.
     pub body: SurfaceBlock,
 }
@@ -235,6 +283,48 @@ pub struct SurfaceTypedBinder {
     pub span: Span,
 }
 
+/// One pattern with a source type annotation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceTypedPattern {
+    /// The source pattern.
+    pub pattern: SurfacePattern,
+    /// Its required type.
+    pub annotation: SurfaceType,
+    /// The complete typed-pattern span.
+    pub span: Span,
+}
+
+/// One source pattern and its complete span.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfacePattern {
+    /// The pattern payload.
+    pub kind: SurfacePatternKind,
+    /// The complete pattern span.
+    pub span: Span,
+}
+
+/// The closed source pattern family.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfacePatternKind {
+    /// An ordinary binding pattern.
+    Binder(SurfaceBinder),
+    /// A nonbinding wildcard.
+    Wildcard,
+    /// A Boolean literal pattern.
+    Boolean(bool),
+    /// The unit pattern.
+    Unit,
+    /// A structural tuple pattern.
+    Tuple(Vec<SurfacePattern>),
+    /// A nominal constructor pattern with an optional semantic payload.
+    Constructor {
+        /// The unresolved constructor spelling.
+        name: SurfaceName,
+        /// Its optional payload pattern.
+        payload: Option<Box<SurfacePattern>>,
+    },
+}
+
 /// A source type.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceType {
@@ -253,6 +343,10 @@ pub enum SurfaceTypeKind {
     Bool,
     /// The unit value.
     Unit,
+    /// An unresolved nominal type spelling.
+    Named(SurfaceName),
+    /// A structural tuple with at least two elements.
+    Tuple(Vec<SurfaceType>),
     /// A unary function type.
     Function(FunctionType),
 }

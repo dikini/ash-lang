@@ -90,7 +90,12 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
     let start_event = parser.event_position();
     parser.start(NodeKind::PrimaryExpression);
     match primary_form(parser, forms) {
-        Some(PrimaryForm::Integer | PrimaryForm::Boolean | PrimaryForm::Identifier) => {
+        Some(
+            PrimaryForm::Integer
+            | PrimaryForm::Boolean
+            | PrimaryForm::Identifier
+            | PrimaryForm::UpperIdentifier,
+        ) => {
             let _ = parser.bump();
         }
         Some(PrimaryForm::Parenthesized) => parse_parenthesized(parser),
@@ -118,16 +123,22 @@ fn parse_parenthesized(parser: &mut Parser<'_>) {
         parser.finish();
         return;
     }
+    let tuple_start = parser.event_position();
     grammar::expression(parser);
     parser.leave_structure();
     if parser.at(&TokenKind::Comma) {
-        parser.error_at_current(ParseReason::TupleSyntax);
-        while !matches!(
-            parser.current(),
-            Some(TokenKind::RightParen | TokenKind::EndOfFile)
-        ) {
+        let _ = parser.insert_start(tuple_start, NodeKind::TupleExpression);
+        while parser.at(&TokenKind::Comma) {
             let _ = parser.bump();
+            if parser.enter_structure() {
+                grammar::expression(parser);
+                parser.leave_structure();
+            } else {
+                parser.consume_rest();
+                break;
+            }
         }
+        parser.finish();
     }
     if parser.at(&TokenKind::RightParen) {
         parser.resolve_pending_at_current(
@@ -177,6 +188,10 @@ fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryFor
                     Some(TokenKind::True | TokenKind::False)
                 )
                 | (PrimaryForm::Identifier, Some(TokenKind::Identifier(_)))
+                | (
+                    PrimaryForm::UpperIdentifier,
+                    Some(TokenKind::UpperIdentifier(_))
+                )
                 | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen))
         )
     })

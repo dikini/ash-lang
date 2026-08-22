@@ -139,10 +139,15 @@ fn successful_definition_checks_retain_the_body_and_declared_result_origins() {
             ResolvedDefinitionKind::Equational(definition) => assert_check_origin(
                 &body.origin,
                 definition.equation.body.span,
-                match &definition.interface.annotation.kind {
-                    ash::surface::SurfaceTypeKind::Function(function) => function.codomain.span,
-                    _ => panic!("expected function annotation"),
-                },
+                definition
+                    .interface
+                    .annotation
+                    .provenance
+                    .function_parts()
+                    .expect("expected function annotation")
+                    .1
+                    .span()
+                    .expect("expected codomain provenance"),
             ),
             ResolvedDefinitionKind::InlineOperational(definition) => assert_check_origin(
                 &body.origin,
@@ -287,12 +292,13 @@ fn t001_and_t004_diagnostics_keep_their_source_cause_spans() {
         diagnostic.primary.span(),
         t001_definition.equation.body.span
     );
-    let ash::surface::SurfaceTypeKind::Function(function_type) =
-        &t001_definition.interface.annotation.kind
-    else {
-        panic!("expected function annotation")
-    };
-    assert_eq!(diagnostic.related[0].span(), function_type.codomain.span);
+    let (_, codomain) = t001_definition
+        .interface
+        .annotation
+        .provenance
+        .function_parts()
+        .expect("expected function annotation");
+    assert_eq!(diagnostic.related[0].span(), codomain.span().unwrap());
 
     let t004_source = SourceFile::new(
         "t004.ash",
@@ -312,12 +318,13 @@ fn t001_and_t004_diagnostics_keep_their_source_cause_spans() {
     };
     assert_eq!(diagnostic.reason, TypeReason::Argument);
     assert_eq!(diagnostic.primary.span(), application.argument.span);
-    let ash::surface::SurfaceTypeKind::Function(function_type) =
-        &t004_definition.interface.annotation.kind
-    else {
-        panic!("expected function annotation")
-    };
-    assert_eq!(diagnostic.related[0].span(), function_type.domain.span);
+    let (domain, _) = t004_definition
+        .interface
+        .annotation
+        .provenance
+        .function_parts()
+        .expect("expected function annotation");
+    assert_eq!(diagnostic.related[0].span(), domain.span().unwrap());
 
     let operational_source = SourceFile::new(
         "t004-operational.ash",

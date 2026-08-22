@@ -43,6 +43,10 @@ pub enum ResourceFailure {
 pub enum NodeKind {
     /// A complete source file.
     Program,
+    /// A nominal type declaration.
+    TypeDeclaration,
+    /// One constructor declaration under a nominal type.
+    ConstructorDeclaration,
     /// An equational global definition.
     EquationalGlobal,
     /// An external name and type interface.
@@ -63,6 +67,10 @@ pub enum NodeKind {
     RecursiveBindingMember,
     /// An anonymous function expression.
     FunctionExpression,
+    /// A structured match expression.
+    MatchExpression,
+    /// One line-delimited match arm.
+    MatchArm,
     /// The non-associative equality layer.
     EqualityExpression,
     /// The additive layer.
@@ -75,16 +83,34 @@ pub enum NodeKind {
     PrimaryExpression,
     /// A grouped expression.
     ParenthesizedExpression,
+    /// A structural tuple expression.
+    TupleExpression,
+    /// A typed or untyped binding pattern.
+    Pattern,
+    /// A parenthesized structural tuple pattern.
+    TuplePattern,
+    /// A nominal constructor pattern.
+    ConstructorPattern,
+    /// A wildcard pattern.
+    WildcardPattern,
+    /// A Boolean pattern.
+    BooleanPattern,
+    /// The unit pattern.
+    UnitPattern,
     /// A binder-only source form.
     Binder,
     /// A binder with a type annotation.
     TypedBinder,
+    /// A pattern with a type annotation.
+    TypedPattern,
     /// A right-associated type.
     Type,
     /// An atomic type.
     AtomicType,
     /// A grouped type.
     ParenthesizedType,
+    /// A structural tuple type.
+    TupleType,
     /// Rejected syntax retained until projection fails.
     Error,
 }
@@ -100,6 +126,8 @@ pub enum ExpectedForm {
     Identifier,
     /// A source type.
     Type,
+    /// A source pattern.
+    Pattern,
     /// `(`.
     LeftParen,
     /// `)`.
@@ -114,6 +142,8 @@ pub enum ExpectedForm {
     Equal,
     /// `->`.
     Arrow,
+    /// `=>`.
+    FatArrow,
     /// A logical line boundary.
     LineEnd,
     /// End of input.
@@ -574,6 +604,7 @@ const fn expected_name(expected: ExpectedForm) -> &'static str {
         ExpectedForm::Operand => "an operand",
         ExpectedForm::Identifier => "an identifier",
         ExpectedForm::Type => "a type",
+        ExpectedForm::Pattern => "a pattern",
         ExpectedForm::LeftParen => "(",
         ExpectedForm::RightParen => ")",
         ExpectedForm::LeftBrace => "{",
@@ -581,6 +612,7 @@ const fn expected_name(expected: ExpectedForm) -> &'static str {
         ExpectedForm::Colon => ":",
         ExpectedForm::Equal => "=",
         ExpectedForm::Arrow => "->",
+        ExpectedForm::FatArrow => "=>",
         ExpectedForm::LineEnd => "a logical line end",
         ExpectedForm::EndOfFile => "end of input",
     }

@@ -8,9 +8,9 @@ use crate::{
     resolved::{
         Binder, BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
         ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram, ResolvedRecursiveGroup,
+        ResolvedType, ResolvedTypeProvenanceNode,
     },
     source::{GeneratedReason, Origin, Span},
-    surface::{SurfaceType, SurfaceTypeKind},
     types::{Type, same_type},
 };
 
@@ -294,8 +294,35 @@ impl ProvenancedType {
         Self { ty, provenance }
     }
 
-    fn from_surface(surface: &SurfaceType) -> Result<Self, TypeError> {
-        lower_surface_type(surface)
+    fn from_resolved(resolved: &ResolvedType) -> Self {
+        let nodes = resolved
+            .provenance
+            .nodes()
+            .iter()
+            .map(|node| match node {
+                ResolvedTypeProvenanceNode::Fact(span)
+                | ResolvedTypeProvenanceNode::Tuple { span, .. } => {
+                    TypeProvenanceNode::Fact(Some(*span))
+                }
+                ResolvedTypeProvenanceNode::Function {
+                    span,
+                    domain,
+                    codomain,
+                } => TypeProvenanceNode::Function {
+                    span: Some(*span),
+                    domain: *domain,
+                    codomain: *codomain,
+                },
+            })
+            .collect::<Vec<_>>()
+            .into();
+        Self {
+            ty: resolved.ty.clone(),
+            provenance: TypeProvenance {
+                nodes,
+                root: resolved.provenance.root(),
+            },
+        }
     }
 
     fn function(domain: Self, codomain: Self, span: Option<Span>) -> Result<Self, TypeError> {
@@ -557,7 +584,7 @@ impl Elaborator {
             let (name, function_type) = match &definition.kind {
                 ResolvedDefinitionKind::Equational(equational) => {
                     let function_type =
-                        ProvenancedType::from_surface(&equational.interface.annotation)?;
+                        ProvenancedType::from_resolved(&equational.interface.annotation);
                     if !matches!(function_type.ty, Type::Function(_, _)) {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
@@ -568,8 +595,8 @@ impl Elaborator {
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
                     let domain =
-                        ProvenancedType::from_surface(&operational.header.parameter.annotation)?;
-                    let codomain = ProvenancedType::from_surface(&operational.header.result_type)?;
+                        ProvenancedType::from_resolved(&operational.header.parameter.annotation);
+                    let codomain = ProvenancedType::from_resolved(&operational.header.result_type);
                     (
                         &operational.header.name,
                         ProvenancedType::function(domain, codomain, Some(operational.header.span))?,
@@ -598,7 +625,7 @@ impl Elaborator {
                 match &definition.kind {
                     ResolvedDefinitionKind::Equational(equational) => {
                         let interface_type =
-                            ProvenancedType::from_surface(&equational.interface.annotation)?;
+                            ProvenancedType::from_resolved(&equational.interface.annotation);
                         if !matches!(interface_type.ty, Type::Function(_, _)) {
                             return Err(equation_interface_not_function(
                                 &equational.interface.annotation,
@@ -620,11 +647,11 @@ impl Elaborator {
                         )
                     }
                     ResolvedDefinitionKind::InlineOperational(operational) => {
-                        let domain = ProvenancedType::from_surface(
+                        let domain = ProvenancedType::from_resolved(
                             &operational.header.parameter.annotation,
-                        )?;
+                        );
                         let codomain =
-                            ProvenancedType::from_surface(&operational.header.result_type)?;
+                            ProvenancedType::from_resolved(&operational.header.result_type);
                         let function_type = ProvenancedType::function(
                             domain,
                             codomain,
@@ -788,6 +815,9 @@ impl Elaborator {
                     ResolvedExprKind::Function(_) => {
                         return Err(function_needs_context(current.span, cause));
                     }
+                    ResolvedExprKind::Constructor(_)
+                    | ResolvedExprKind::Tuple(_)
+                    | ResolvedExprKind::Match(_) => return Err(invalid_state()),
                 },
                 ElaborationTask::Check {
                     expression,
@@ -1046,8 +1076,8 @@ impl Elaborator {
                     let expected_types = group
                         .members
                         .iter()
-                        .map(|member| ProvenancedType::from_surface(&member.annotation))
-                        .collect::<Result<Vec<_>, _>>()?;
+                        .map(|member| ProvenancedType::from_resolved(&member.annotation))
+                        .collect::<Vec<_>>();
                     let mut members = Vec::with_capacity(group.members.len());
                     for (member, expected) in group.members.iter().zip(&expected_types) {
                         let binder = self.builder.resolved_binder(
@@ -1321,8 +1351,7 @@ fn schedule_block<'a>(
                 let expected = binding
                     .annotation
                     .as_ref()
-                    .map(lower_surface_type)
-                    .transpose()?;
+                    .map(ProvenancedType::from_resolved);
                 tasks.push(ElaborationTask::FinishBinding {
                     binding,
                     expected: expected.clone(),
@@ -1538,12 +1567,10 @@ fn not_applicable(function_span: Span, whole_span: Span, found: &Type) -> TypeEr
 }
 
 fn equation_interface_not_function(
-    annotation: &SurfaceType,
+    annotation: &ResolvedType,
     equation_name: &crate::resolved::ResolvedOccurrence,
 ) -> TypeError {
-    let found = lower_surface_type(annotation)
-        .map(|ty| ty.ty.to_string())
-        .unwrap_or_else(|_| "invalid type".to_owned());
+    let found = annotation.ty.to_string();
     let mut diagnostic = Diagnostic::new(
         TypeReason::EquationInterfaceNotFunction,
         SourceLabel::new(
@@ -1602,50 +1629,6 @@ fn require_integer(
 
 fn invalid_state() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
-}
-
-fn lower_surface_type(surface: &SurfaceType) -> Result<ProvenancedType, TypeError> {
-    enum Task<'a> {
-        Visit(&'a SurfaceType),
-        Function(Span),
-    }
-
-    let mut tasks = vec![Task::Visit(surface)];
-    let mut types = Vec::new();
-    while let Some(task) = tasks.pop() {
-        match task {
-            Task::Visit(current) => match &current.kind {
-                SurfaceTypeKind::Int => types.push(ProvenancedType {
-                    ty: Type::Int,
-                    provenance: TypeProvenance::atom(Some(current.span)),
-                }),
-                SurfaceTypeKind::Bool => types.push(ProvenancedType {
-                    ty: Type::Bool,
-                    provenance: TypeProvenance::atom(Some(current.span)),
-                }),
-                SurfaceTypeKind::Unit => types.push(ProvenancedType {
-                    ty: Type::Unit,
-                    provenance: TypeProvenance::atom(Some(current.span)),
-                }),
-                SurfaceTypeKind::Function(function) => {
-                    tasks.push(Task::Function(current.span));
-                    tasks.push(Task::Visit(&function.codomain));
-                    tasks.push(Task::Visit(&function.domain));
-                }
-            },
-            Task::Function(span) => {
-                let codomain = types.pop().ok_or_else(invalid_state)?;
-                let domain = types.pop().ok_or_else(invalid_state)?;
-                types.push(ProvenancedType::function(domain, codomain, Some(span))?);
-            }
-        }
-    }
-    let ty = types.pop().ok_or_else(invalid_state)?;
-    if types.is_empty() {
-        Ok(ty)
-    } else {
-        Err(invalid_state())
-    }
 }
 
 fn binding_origin(binding: &ResolvedBinding) -> Origin {
@@ -1761,12 +1744,18 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
         match &definition.kind {
             ResolvedDefinitionKind::Equational(equational) => {
                 binders.push(equational.interface.name.id);
-                binders.push(equational.equation.binder.id);
-                expressions.push(&equational.equation.body);
+                for equation in &equational.equations {
+                    for pattern in &equation.patterns {
+                        collect_pattern_binders(pattern, &mut binders);
+                    }
+                    expressions.push(&equation.body);
+                }
             }
             ResolvedDefinitionKind::InlineOperational(operational) => {
                 binders.push(operational.header.name.id);
-                binders.push(operational.header.parameter.binder.id);
+                for parameter in &operational.header.parameters {
+                    collect_pattern_binders(&parameter.pattern, &mut binders);
+                }
                 expressions.push(&operational.body.result);
                 for declaration in &operational.body.declarations {
                     collect_resolved_declaration(declaration, &mut binders, &mut expressions);
@@ -1793,16 +1782,25 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
                 }
             }
             ResolvedExprKind::Function(function) => {
-                binders.push(function.parameter.id);
+                collect_pattern_binders(&function.pattern, &mut binders);
                 expressions.push(&function.body.result);
                 for declaration in &function.body.declarations {
                     collect_resolved_declaration(declaration, &mut binders, &mut expressions);
                 }
             }
+            ResolvedExprKind::Tuple(elements) => expressions.extend(elements),
+            ResolvedExprKind::Match(match_expression) => {
+                expressions.push(&match_expression.scrutinee);
+                for arm in &match_expression.arms {
+                    collect_pattern_binders(&arm.pattern, &mut binders);
+                    expressions.push(&arm.body);
+                }
+            }
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
-            | ResolvedExprKind::Occurrence(_) => {}
+            | ResolvedExprKind::Occurrence(_)
+            | ResolvedExprKind::Constructor(_) => {}
         }
     }
     binders
@@ -1815,7 +1813,7 @@ fn collect_resolved_declaration<'a>(
 ) {
     match declaration {
         ResolvedLocalDeclaration::Binding(binding) => {
-            binders.push(binding.binder.id);
+            collect_pattern_binders(&binding.pattern, binders);
             expressions.push(&binding.initializer);
         }
         ResolvedLocalDeclaration::Recursive(group) => {
@@ -1823,6 +1821,27 @@ fn collect_resolved_declaration<'a>(
                 binders.push(member.binder.id);
                 expressions.push(&member.initializer);
             }
+        }
+    }
+}
+
+fn collect_pattern_binders(
+    pattern: &crate::resolved::ResolvedPattern,
+    binders: &mut Vec<BinderId>,
+) {
+    let mut patterns = vec![pattern];
+    while let Some(pattern) = patterns.pop() {
+        match &pattern.kind {
+            crate::resolved::ResolvedPatternKind::Binder(binder) => binders.push(binder.id),
+            crate::resolved::ResolvedPatternKind::Tuple(elements) => patterns.extend(elements),
+            crate::resolved::ResolvedPatternKind::Constructor { payload, .. } => {
+                if let Some(payload) = payload {
+                    patterns.push(payload);
+                }
+            }
+            crate::resolved::ResolvedPatternKind::Wildcard
+            | crate::resolved::ResolvedPatternKind::Boolean(_)
+            | crate::resolved::ResolvedPatternKind::Unit => {}
         }
     }
 }
