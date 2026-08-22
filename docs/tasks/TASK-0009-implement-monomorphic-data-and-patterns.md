@@ -58,6 +58,10 @@ retained integration evidence.
   complete evaluator transition ownership; and adds full-pipeline depth,
   wide-constructor, match-trace, and structured-diagnostic evidence.
 - Checkpoint `ca3ae75` records the corresponding warning-free Clippy gate.
+- Review checkpoint `77ca07b` charges every nested pattern cell during
+  usefulness shaping and centralizes registry-aware type rendering for source
+  diagnostics while retaining nominal identities for equality and structured
+  mismatch inspection.
 - Fresh post-review `cargo test --all-targets` and `cargo xtask verify` runs
   pass, including the 10,000-member small-stack cycle and all new depth and
   resource regressions. Changed Markdown passes with only the project-approved

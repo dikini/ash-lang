@@ -7,23 +7,25 @@ define Ash semantics. The normative specification owns the merged language.
 
 ## Scope and environment
 
-The measurement covers `4d5ce64...ca3ae75` in the
+The measurement covers `4d5ce64...77ca07b` in the
 `feature/data-and-adts` worktree. Commit `8c1c6af` is the first checkpoint with
 the candidate parallel pipeline removed. Commit `79af325` closes the review
 findings around admitted depth, registry authentication and destruction,
 coverage resources, transition ownership, trace behavior, and diagnostics;
 commit `ca3ae75` records the clean lint checkpoint for that remediation.
+Commit `77ca07b` charges nested pattern shaping against the cumulative coverage
+budget and gives source-facing type errors registry-resolved nominal spellings.
 
 | Property | Observation |
 | --- | --- |
 | Baseline | recursive-definition merge `4d5ce64` |
-| Retained-pipeline checkpoint | unsigned commit `ca3ae75` |
+| Retained-pipeline checkpoint | unsigned commit `77ca07b` |
 | Rust | `rustc 1.97.1 (8bab26f4f 2026-07-14)` |
 | Cargo | `cargo 1.97.1 (c980f4866 2026-06-30)` |
 | Host | Linux `x86_64` |
 
-At the evidence checkpoint, the production diff under `src/` contains 5,836
-added and 649 deleted lines in 23 files. These counts exclude integration tests
+At the evidence checkpoint, the production diff under `src/` contains 5,942
+added and 662 deleted lines in 23 files. These counts exclude integration tests
 and do not measure semantic difficulty.
 
 ## Changed composition points
@@ -44,7 +46,7 @@ and do not measure semantic difficulty.
 - `Observation` and `Value` add one heap-backed result boundary. Scalar and
   closure observations retain their representations.
 
-The exact audit below found 226 occurrences in production files at the
+The exact audit below found 234 occurrences in production files at the
 checkpoint. It locates declarations and consumers; it is not an edit count.
 
 ```text
@@ -78,8 +80,13 @@ Coverage uses both a memoized-state limit and one cumulative work budget shared
 by all usefulness queries in a case group. A 512-constructor exhaustive match
 is the retained practical-width regression; an 800-constructor group reaches
 the default budget and reports compiler resource exhaustion rather than a
-source-level coverage result. Registry lookup indexes keep identity lookup
-independent of declaration width.
+source-level coverage result. Pattern shaping charges each visited tuple and
+constructor cell before scheduling its children, so repeated conversion of
+earlier wide rows cannot run outside that budget. A direct 100-arm by 200-field
+tuple reproduction reached the resource failure at the one-million-work limit
+in 20.11 seconds with 77,924 KiB maximum resident memory on the environment
+above. Registry lookup indexes keep identity lookup independent of declaration
+width.
 
 ## What necessarily crossed stages
 
@@ -88,6 +95,14 @@ coverage, validation, evaluation, and source-facing type display. Tuple shape
 likewise crosses parsing, typing, constructor payload metadata, pattern
 checking, application, matching, and rendering. These are semantic facts, not
 registration data.
+
+The registry now owns source-facing type rendering. It resolves nominal
+identities to declaration spellings while formatting tuples and arrows with an
+explicit work stack. Structured argument, binding, definition-result, pattern,
+operator, and application diagnostics use that rendering. General mismatch
+values retain their identity-bearing `Type` members while their textual view
+uses the same source spelling. `Type`'s registry-free display remains the
+internal identity view.
 
 Constructor-guarded recursion changes group initialization. Function templates
 alone cannot represent it: all member slots must exist before initialization,
@@ -160,11 +175,11 @@ first-stratum invariants.
 | --- | --- |
 | Grammar, recovery, token coverage, spans, projection refusal, and admitted depth | `data_and_pattern_forms_build_one_token_complete_concrete_tree`, `data_and_pattern_recovery_stays_balanced_and_synchronizes_at_the_arm_line`, `projects_data_declarations_tuples_matches_and_pattern_vectors`, `structural_depth_budget_bounds_nested_constructor_patterns`, `structural_depth_budget_bounds_nested_matches`, `admitted_nested_patterns_complete_the_full_pipeline_on_a_small_stack`, and `admitted_type_depth_survives_synthesized_tuple_and_function_wrappers` |
 | File-wide identities, namespaces, recursive references, pattern scope, shadowing, and restoration | `data_and_pattern_resolution_allocates_file_wide_identities_and_pattern_binders`, `data_namespaces_report_stable_resolution_reasons`, `match_arm_pattern_scope_does_not_leak_to_later_arms`, `nominal_declarations_are_file_wide_recursive_and_distinct`, and `failed_nested_and_recursive_resolution_restore_the_scope_stack` |
-| Nominal and tuple typing, constructor values, function domains, pattern typing, coverage, irrefutability, clause arity, guarded recursion, and bounded usefulness | `nominal_identity_and_tuple_structure_share_one_type_equality_rule`, `a_wide_constructor_set_has_practical_exhaustive_coverage`, `an_over_budget_case_group_reports_an_internal_resource_failure`, and the typing and coverage cases in `data_and_adts` |
+| Nominal and tuple typing, constructor values, function domains, pattern typing, coverage, irrefutability, clause arity, guarded recursion, and bounded usefulness | `nominal_identity_and_tuple_structure_share_one_type_equality_rule`, `a_wide_constructor_set_has_practical_exhaustive_coverage`, `an_over_budget_case_group_reports_an_internal_resource_failure`, `usefulness_charges_every_pattern_cell_while_shaping`, and the typing and coverage cases in `data_and_adts` |
 | Registry, identity, source order, constructor, pattern, scope, coverage, provenance, handle, reachability, resource, ownership-cycle, and safe-destruction validation | `rejects_malformed_data_registries_and_constructor_annotations`, `rejects_registry_identity_order_spelling_and_source_forgery`, `rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack`, `rejects_missing_and_redundant_structured_match_arms`, `validates_a_deep_guarded_initializer_on_a_small_stack`, and the existing malformed-Core cases in `core_validation` |
 | Strict order, capture, mixed groups, finite and cyclic data, rendering, transition ownership, match selection, runtime failures, explicit stacks, and destruction | `constructor_tuple_payloads_enter_elements_strictly_left_to_right`, `match_trace_enters_the_scrutinee_once_and_only_the_selected_body`, `every_core_feature_has_one_named_entry_owner_and_explicit_return_owners`, `mixed_recursive_groups_support_functions_and_guarded_data`, `rendering_repeats_shared_values_and_marks_only_active_cycles`, `defensive_transition_failures_remain_structured`, and `ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack` |
 | Transform validation and differential evaluation | `shared_pipeline_elaborates_and_validates_finite_data_core`, which independently validates and evaluates identity and literal-folding results, plus the existing transform suite in `semantics` |
-| Executable specification, tool behavior, structured diagnostics, and provenance | the CP-0003 cases in `spec_examples`, `data_resolution_diagnostics_retain_names_and_binder_sites`, `coverage_diagnostics_retain_arm_spans_and_concrete_witnesses`, `unguarded_recursive_use_retains_the_transporting_expression_span`, and `provenance` |
+| Executable specification, tool behavior, structured diagnostics, and provenance | the CP-0003 cases in `spec_examples`, `data_resolution_diagnostics_retain_names_and_binder_sites`, `coverage_diagnostics_retain_arm_spans_and_concrete_witnesses`, `nominal_mismatches_render_source_declaration_spellings`, `unguarded_recursive_use_retains_the_transporting_expression_span`, and `provenance` |
 
 The parser rejection corpus covers integer, record, guarded, or-pattern, and
 other excluded pattern syntax. The type grammar and registry tests admit no
