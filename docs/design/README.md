@@ -20,6 +20,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   corpus, component experiments, and retained product increments.
 - [DN-0016: First Mini-Ash Corpus Stratum](DN-0016-first-mini-ash-corpus.md) —
   shared evidence for the initial monomorphic functional nucleus.
+- [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md) — Mini-Ash
+  closure through rank-1 polymorphism, followed by a distinct Modular Ash
+  milestone and core-versus-library analysis.
 
 ### Surface language, typing, and elaboration
 
