@@ -166,14 +166,6 @@ pub enum ParseReason {
     UnclosedGroup,
     /// Equality was repeated despite being non-associative.
     RepeatedEquality,
-    /// Tuple syntax is excluded from this increment.
-    TupleSyntax,
-    /// Match syntax is excluded from this increment.
-    MatchSyntax,
-    /// A function header contains more than one parameter.
-    MultipleParameters,
-    /// An equation contains more than one binder.
-    MultipleBinders,
     /// A polymorphic header is excluded from this increment.
     PolymorphicHeader,
     /// A recursive delimiter is not followed by a member.
@@ -253,10 +245,6 @@ impl fmt::Display for ParseReason {
             Self::ExpectedOperand => "parse.expected-operand",
             Self::UnclosedGroup => "parse.unclosed-group",
             Self::RepeatedEquality => "parse.repeated-equality",
-            Self::TupleSyntax => "parse.tuple-syntax",
-            Self::MatchSyntax => "parse.match-syntax",
-            Self::MultipleParameters => "parse.multiple-parameters",
-            Self::MultipleBinders => "parse.multiple-binders",
             Self::PolymorphicHeader => "parse.polymorphic-header",
             Self::ExpectedRecursiveMember => "parse.expected-recursive-member",
             Self::UnexpectedAnd => "parse.unexpected-and",
@@ -599,10 +587,6 @@ const fn primary_message(reason: ParseReason) -> &'static str {
         ParseReason::ExpectedOperand => "the operator requires a right operand",
         ParseReason::UnclosedGroup => "the opening parenthesis is not closed",
         ParseReason::RepeatedEquality => "equality is non-associative",
-        ParseReason::TupleSyntax => "tuple syntax is not available in Mini-Ash",
-        ParseReason::MatchSyntax => "match syntax is not available in Mini-Ash",
-        ParseReason::MultipleParameters => "Mini-Ash functions have one parameter",
-        ParseReason::MultipleBinders => "Mini-Ash equations have one binder",
         ParseReason::PolymorphicHeader => "polymorphic headers are not available in Mini-Ash",
         ParseReason::ExpectedRecursiveMember => {
             "the recursive delimiter requires another binding member"

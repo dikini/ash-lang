@@ -68,7 +68,7 @@ pub enum TokenKind {
     FatArrow,
     /// `|`.
     Pipe,
-    /// `,`, retained so the parser can reject excluded tuple syntax.
+    /// `,`, separating tuple elements, parameters, and constructor fields.
     Comma,
     /// `;`, retained so the parser can reject excluded semicolon syntax.
     Semicolon,

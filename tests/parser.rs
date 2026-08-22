@@ -68,6 +68,39 @@ fn concrete_kinds(tree: &ash::parser::ConcreteTree) -> Vec<NodeKind> {
     kinds
 }
 
+fn retained_reason_code(reason: ParseReason) -> &'static str {
+    match reason {
+        ParseReason::ExpectedResult => "parse.expected-result",
+        ParseReason::ExpectedForm => "parse.expected-form",
+        ParseReason::ExpectedOperand => "parse.expected-operand",
+        ParseReason::UnclosedGroup => "parse.unclosed-group",
+        ParseReason::RepeatedEquality => "parse.repeated-equality",
+        ParseReason::PolymorphicHeader => "parse.polymorphic-header",
+        ParseReason::ExpectedRecursiveMember => "parse.expected-recursive-member",
+        ParseReason::UnexpectedAnd => "parse.unexpected-and",
+        ParseReason::Semicolon => "parse.semicolon",
+        ParseReason::UnexpectedToken => "parse.unexpected-token",
+    }
+}
+
+#[test]
+fn public_parse_reasons_describe_only_retained_diagnostics() {
+    for reason in [
+        ParseReason::ExpectedResult,
+        ParseReason::ExpectedForm,
+        ParseReason::ExpectedOperand,
+        ParseReason::UnclosedGroup,
+        ParseReason::RepeatedEquality,
+        ParseReason::PolymorphicHeader,
+        ParseReason::ExpectedRecursiveMember,
+        ParseReason::UnexpectedAnd,
+        ParseReason::Semicolon,
+        ParseReason::UnexpectedToken,
+    ] {
+        assert_eq!(retained_reason_code(reason), reason.to_string());
+    }
+}
+
 #[test]
 fn data_and_pattern_forms_build_one_token_complete_concrete_tree() {
     let source = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\ntype Choice =\n    Choice((Bool, Tree))\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn choose(flag : Bool, tree : Tree) -> Int {\n    match (flag, tree) {\n        (true, Tip(value)) => value\n        (_, Fork(left, right)) => size left + size right\n        (_, Tip(value)) => value\n    }\n}\n\nchoose(true, Tip(42))\n";
