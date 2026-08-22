@@ -33,8 +33,8 @@ pub enum ProjectionError {
 ///
 /// # Errors
 ///
-/// Returns [`ProjectionError::ResourceLimit`] when parsing exceeded the
-/// replaceable implementation depth budget. Returns
+/// Returns [`ProjectionError::ResourceLimit`] when parsing exceeded a
+/// replaceable implementation resource budget. Returns
 /// [`ProjectionError::RecoveryNodesPresent`] whenever lexical or parse
 /// diagnostics, missing forms, or error events remain. Returns
 /// [`ProjectionError::MalformedTree`] for incomplete or inconsistent concrete

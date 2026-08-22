@@ -24,4 +24,5 @@ pub mod resolve;
 pub mod resolved;
 pub mod source;
 pub mod surface;
+mod syntax_resource;
 pub mod types;

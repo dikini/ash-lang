@@ -8,7 +8,8 @@ use ash::{
     elaborate::{ElaborationFailure, Elaborator, TypeError},
     eval::{TraceEvent, evaluate},
     lexer::lex,
-    parser::{parse, project},
+    parser::{ResourceFailure, SYNTAX_WORK_LIMIT, parse, project},
+    render,
     resolve::resolve,
     source::SourceFile,
 };
@@ -516,6 +517,47 @@ fn a_wide_tuple_case_group_charges_type_and_specialization_cells() {
         panic!("coverage exhaustion must remain an internal resource failure")
     };
     assert_eq!(failure, ElaborationFailure::CoverageResourceExhausted);
+}
+
+#[test]
+fn wider_tuple_syntax_reports_a_structured_internal_resource_failure() {
+    const WIDTH: usize = 110_000;
+    let mut text = String::with_capacity(WIDTH * 5 + 32);
+    text.push_str("match (");
+    for index in 0..WIDTH {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push('0');
+    }
+    text.push_str(") {\n(");
+    for index in 0..WIDTH {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push('_');
+    }
+    text.push_str(") => 0\n}\n");
+    let source = SourceFile::new("syntax-work-pipeline.ash", text)
+        .expect("the syntax work pipeline fixture should fit");
+
+    let error = run_source(source).expect_err("syntax work must be bounded before projection");
+
+    let PipelineFailure::Syntax(failure) = &error else {
+        panic!("syntax work exhaustion must remain owned by the syntax stage")
+    };
+    assert_eq!(
+        failure.resource,
+        Some(ResourceFailure::SyntaxWork {
+            limit: SYNTAX_WORK_LIMIT
+        })
+    );
+    assert_eq!(error.reason_code(), "parse.resource");
+    assert!(!error.is_source_rejection());
+    assert_eq!(
+        render::pipeline_failure(&error),
+        format!("internal.resource.syntax-work\nlimit {SYNTAX_WORK_LIMIT}")
+    );
 }
 
 #[test]

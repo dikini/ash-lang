@@ -83,6 +83,7 @@ impl PipelineFailure {
     pub fn reason_code(&self) -> String {
         match self {
             Self::SourceModel(_) => "source.invalid".into(),
+            Self::Syntax(failure) if failure.resource.is_some() => "parse.resource".into(),
             Self::Syntax(failure) => failure
                 .lexical
                 .first()
@@ -222,7 +223,9 @@ where
         })));
     }
     let surface = project(&source, &tree).map_err(PipelineFailure::Projection)?;
+    drop(tree);
     let resolved = resolve(&surface).map_err(PipelineFailure::Resolution)?;
+    drop(surface);
     let registry = std::sync::Arc::clone(&resolved.registry);
     let mut elaborator = Elaborator::for_program(&resolved)
         .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;

@@ -1,5 +1,6 @@
 use ash::{
     lexer::{LexReason, Token, TokenKind, lex},
+    parser::{ResourceFailure, SYNTAX_WORK_LIMIT},
     source::SourceFile,
 };
 
@@ -517,4 +518,25 @@ fn adjacent_integer_and_identifier_tokens_split_at_the_normative_boundaries() {
     assert_range(&lexed.tokens[0], 0, 1);
     assert_range(&lexed.tokens[1], 1, 3);
     assert_range(&lexed.tokens[2], 3, 3);
+}
+
+#[test]
+fn syntax_work_budget_stops_token_retention_before_the_next_allocation() {
+    let source = SourceFile::new("token-work-limit.ash", ",".repeat(SYNTAX_WORK_LIMIT + 1))
+        .expect("the token work fixture should fit");
+
+    let lexed = lex(&source).expect("resource exhaustion preserves source invariants");
+
+    assert_eq!(
+        lexed.resource_failure(),
+        Some(ResourceFailure::SyntaxWork {
+            limit: SYNTAX_WORK_LIMIT
+        })
+    );
+    assert_eq!(lexed.tokens.len(), SYNTAX_WORK_LIMIT);
+    assert!(lexed.diagnostics.is_empty());
+    assert!(!matches!(
+        lexed.tokens.last().map(|token| &token.kind),
+        Some(TokenKind::EndOfFile)
+    ));
 }

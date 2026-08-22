@@ -77,6 +77,9 @@ fn resource_failure(failure: ResourceFailure) -> String {
         ResourceFailure::StructuralDepth { limit } => {
             format!("internal.resource.structural-depth\nlimit {limit}")
         }
+        ResourceFailure::SyntaxWork { limit } => {
+            format!("internal.resource.syntax-work\nlimit {limit}")
+        }
     }
 }
 

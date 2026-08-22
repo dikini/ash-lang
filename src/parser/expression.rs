@@ -307,6 +307,8 @@ mod tests {
             pending_recoveries: Vec::new(),
             nesting_depth: 0,
             resource_failure: None,
+            syntax_budget: crate::syntax_resource::SyntaxBudget::default(),
+            syntax_work_exhausted: false,
         };
 
         operator_expression_with(&mut parser, &dialect);

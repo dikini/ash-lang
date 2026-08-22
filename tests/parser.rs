@@ -2,7 +2,7 @@ use ash::{
     lexer::{TokenKind, lex},
     parser::{
         Event, NodeKind, ParseContext, ParseReason, ProjectionError, ResourceFailure,
-        STRUCTURAL_DEPTH_LIMIT, SynchronizationBoundary, parse, project,
+        STRUCTURAL_DEPTH_LIMIT, SYNTAX_WORK_LIMIT, SynchronizationBoundary, parse, project,
     },
     source::{ByteRange, SourceFile},
     surface::{
@@ -1391,5 +1391,49 @@ fn far_over_budget_operator_input_has_linear_bounded_construction() {
     assert!(
         tree.events().len() <= tree.tokens().len() + 4 * STRUCTURAL_DEPTH_LIMIT + 16,
         "event construction must remain token-linear after the bounded prefix"
+    );
+}
+
+#[test]
+fn cumulative_syntax_work_stops_before_constructing_an_oversized_tree() {
+    const WIDTH: usize = 110_000;
+    let mut text = String::with_capacity(WIDTH * 5 + 32);
+    text.push_str("match (");
+    for index in 0..WIDTH {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push('0');
+    }
+    text.push_str(") {\n(");
+    for index in 0..WIDTH {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push('_');
+    }
+    text.push_str(") => 0\n}\n");
+    let source =
+        SourceFile::new("syntax-work-limit.ash", text).expect("the syntax work fixture should fit");
+
+    let tree = parse(lex(&source).expect("the syntax work fixture should lex"));
+
+    assert_eq!(
+        tree.resource_failure(),
+        Some(ResourceFailure::SyntaxWork {
+            limit: SYNTAX_WORK_LIMIT
+        })
+    );
+    assert!(tree.root().is_none());
+    assert!(tree.events().is_empty());
+    assert!(tree.lexical_diagnostics().is_empty());
+    assert!(tree.parse_diagnostics().is_empty());
+    assert_eq!(
+        project(&source, &tree),
+        Err(ProjectionError::ResourceLimit(
+            ResourceFailure::SyntaxWork {
+                limit: SYNTAX_WORK_LIMIT
+            }
+        ))
     );
 }
