@@ -359,6 +359,55 @@ fn nominal_mismatches_render_source_declaration_spellings() {
 }
 
 #[test]
+fn checked_match_arms_retain_the_definition_result_cause() {
+    let cases = [
+        (
+            "true => fn(value) {\nfalse\n}\nfalse => fn(value) {\nvalue\n}",
+            "bad-first-match-arm.ash",
+        ),
+        (
+            "true => fn(value) {\nvalue\n}\nfalse => fn(value) {\nfalse\n}",
+            "bad-later-match-arm.ash",
+        ),
+    ];
+
+    for (arms, name) in cases {
+        let text = format!(
+            "fn choose(flag : Bool) -> Int -> Int {{\nmatch flag {{\n{arms}\n}}\n}}\n\nchoose true 0\n"
+        );
+        let bad_body = text
+            .find("fn(value) {\nfalse\n}")
+            .expect("bad anonymous-function body")
+            + "fn(value) {\n".len();
+        let declared_result =
+            text.find("-> Int -> Int").expect("declared result") + "-> Int -> ".len();
+        let error = run_source(source(name, &text))
+            .expect_err("a Boolean arm result should violate the declared function result");
+        let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+            panic!("checked match arm should retain a source diagnostic")
+        };
+
+        assert_eq!(diagnostic.reason, TypeReason::DefinitionResult);
+        assert_eq!(diagnostic.primary.span().range().start(), offset(bad_body));
+        assert_eq!(
+            diagnostic.primary.span().range().end(),
+            offset(bad_body + "false".len())
+        );
+        assert_eq!(diagnostic.expected.as_deref(), Some("Int"));
+        assert_eq!(diagnostic.found.as_deref(), Some("Bool"));
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(
+            diagnostic.related[0].span().range().start(),
+            offset(declared_result)
+        );
+        assert_eq!(
+            diagnostic.related[0].span().range().end(),
+            offset(declared_result + "Int".len())
+        );
+    }
+}
+
+#[test]
 fn unguarded_recursive_use_retains_the_transporting_expression_span() {
     let text = "type Stream =\nNext(Int, Stream)\n\nfn identity(value : Stream) -> Stream {\nvalue\n}\n\n{\nlet rec stream : Stream = Next(1, identity stream)\nstream\n}\n";
     let source = source("unguarded-recursion.ash", text);

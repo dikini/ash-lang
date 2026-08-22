@@ -976,7 +976,11 @@ mod tests {
             literal::BooleanNode, literal::IntegerNode, literal::UnitNode,
             primitive::PrimitiveNode, validate, variable::VariableNode,
         },
+        elaborate::Elaborator,
         integer::Integer,
+        lexer::lex,
+        parser::{parse, project},
+        resolve::resolve,
         source::{ByteRange, Origin, SourceFile},
         types::Type,
     };
@@ -1281,6 +1285,112 @@ mod tests {
             ),
             Err(RuntimeFailure::ImpossibleMatch)
         ));
+    }
+
+    #[test]
+    fn recursive_data_initializers_store_each_slot_before_entering_the_next() {
+        let source = SourceFile::new(
+            "recursive-data-order.ash",
+            "type Flag =\nFirst\n| Second\n\n{\nlet rec first : Flag = First\nand second : Flag = Second\nfirst\n}\n",
+        )
+        .expect("test source");
+        let tree = parse(lex(&source).expect("source should lex"));
+        let surface = project(&source, &tree).expect("source should project");
+        let resolved = resolve(&surface).expect("source should resolve");
+        let mut elaborator = Elaborator::for_program(&resolved).expect("reserve binders");
+        let typed = elaborator
+            .synthesize_program(&resolved)
+            .expect("source should elaborate");
+        let validated = validate(
+            elaborator.finish(typed.node).expect("Core should finish"),
+            &[&source],
+        )
+        .expect("Core should validate");
+        let program = validated.shared();
+        let root = program.node(program.root()).expect("recursive root");
+        let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &root.kind else {
+            panic!("block should lower to one recursive group")
+        };
+        let [first, second] = group.members() else {
+            panic!("fixture should have two recursive data members")
+        };
+
+        let mut heap = Vec::new();
+        let transition = enter_recursive_binding(&program, group, Environment::new(), &mut heap)
+            .expect("recursive entry should allocate both slots");
+        let Transition {
+            control: Control::Evaluate(first_initializer, recursive_environment),
+            frame: Some(first_frame),
+        } = transition
+        else {
+            panic!("recursive entry should suspend on the first initializer")
+        };
+        assert_eq!(first_initializer, first.initializer());
+        assert!(matches!(
+            heap.as_slice(),
+            [HeapCell::Uninitialized, HeapCell::Uninitialized]
+        ));
+        assert!(matches!(
+            recursive_environment.lookup(first.binder().id(), &program),
+            Some(Value::Location(0))
+        ));
+        assert!(matches!(
+            recursive_environment.lookup(second.binder().id(), &program),
+            Some(Value::Location(1))
+        ));
+
+        let first_value = dispatch_entry(
+            &program,
+            first_initializer,
+            recursive_environment,
+            &mut heap,
+        )
+        .expect("first initializer should enter");
+        let Transition {
+            control: Control::Return(first_value),
+            frame: None,
+        } = first_value
+        else {
+            panic!("nullary constructor should return its allocated location")
+        };
+        let transition = dispatch_return(first_frame, first_value, &mut heap)
+            .expect("first result should store its alias");
+        let Transition {
+            control: Control::Evaluate(second_initializer, recursive_environment),
+            frame: Some(second_frame),
+        } = transition
+        else {
+            panic!("first store should suspend on the second initializer")
+        };
+        assert_eq!(second_initializer, second.initializer());
+        assert!(matches!(heap[0], HeapCell::Alias(2)));
+        assert!(matches!(heap[1], HeapCell::Uninitialized));
+
+        let second_value = dispatch_entry(
+            &program,
+            second_initializer,
+            recursive_environment,
+            &mut heap,
+        )
+        .expect("second initializer should enter");
+        let Transition {
+            control: Control::Return(second_value),
+            frame: None,
+        } = second_value
+        else {
+            panic!("nullary constructor should return its allocated location")
+        };
+        let transition = dispatch_return(second_frame, second_value, &mut heap)
+            .expect("second result should store its alias");
+        assert!(matches!(
+            transition,
+            Transition {
+                control: Control::Evaluate(node, _),
+                frame: None,
+            } if node == group.body()
+        ));
+        assert!(matches!(heap[0], HeapCell::Alias(2)));
+        assert!(matches!(heap[1], HeapCell::Alias(3)));
     }
 
     #[test]
