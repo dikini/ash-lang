@@ -49,8 +49,10 @@ and do not measure semantic difficulty.
 - The retained elaborator, Core arena, independent validator, transforms, and
   evaluator machine add tuples, constructors, typed patterns, structured
   matches, and guarded recursive data without a driver-level syntax switch.
-- `Observation` and `Value` add one heap-backed result boundary. Scalar and
-  closure observations retain their representations.
+- `Evaluation` freezes and retains one completed heap. `Observation` takes the
+  same shared heap, and a structural `Value::Data` shares it with its root.
+  Scalar and closure results remain ordinary visible values while their result
+  owner retains any locations reachable through a captured environment.
 
 The exact audit below found 234 occurrences in production files at the
 checkpoint. It locates declarations and consumers; it is not an edit count.
@@ -128,7 +130,11 @@ Constructor-guarded recursion changes group initialization. Function templates
 alone cannot represent it: all member slots must exist before initialization,
 data initializers must run in source order, and completed slots alias their
 constructed roots. Observation must retain the evaluation heap because a
-cyclic value cannot be copied into an acyclic host enum.
+cyclic value cannot be copied into an acyclic host enum. The retained
+`returned_closure_retains_the_heap_for_captured_structural_values` and
+`returned_closure_observation_retains_its_captured_structural_heap` regressions
+also prove that a closure result cannot discard a heap referenced from its
+captured environment.
 
 ## Maintenance mutations
 
@@ -197,9 +203,9 @@ first-stratum invariants.
 | File-wide identities, namespaces, recursive references, pattern scope, shadowing, and restoration | `data_and_pattern_resolution_allocates_file_wide_identities_and_pattern_binders`, `data_namespaces_report_stable_resolution_reasons`, `match_arm_pattern_scope_does_not_leak_to_later_arms`, `nominal_declarations_are_file_wide_recursive_and_distinct`, and `failed_nested_and_recursive_resolution_restore_the_scope_stack` |
 | Nominal and tuple typing, constructor values, function domains, pattern typing, coverage, irrefutability, clause arity, guarded recursion, contextual matches, and bounded usefulness | `nominal_identity_and_tuple_structure_share_one_type_equality_rule`, `contextually_typed_matches_check_every_anonymous_function_arm`, `a_wide_constructor_set_has_practical_exhaustive_coverage`, `an_over_budget_case_group_reports_an_internal_resource_failure`, `usefulness_charges_every_pattern_cell_while_shaping`, and the typing and coverage cases in `data_and_adts` |
 | Registry, identity, source order, constructor, pattern, scope, coverage, provenance, handle, reachability, resource, ownership-cycle, and safe-destruction validation | `rejects_malformed_data_registries_and_constructor_annotations`, `rejects_registry_identity_order_spelling_and_source_forgery`, `rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack`, `rejects_missing_and_redundant_structured_match_arms`, `validates_a_deep_guarded_initializer_on_a_small_stack`, and the existing malformed-Core cases in `core_validation` |
-| Strict order, capture, mixed groups, finite and cyclic data, rendering, transition ownership, match selection, runtime failures, explicit stacks, and destruction | `constructor_tuple_payloads_enter_elements_strictly_left_to_right`, `match_trace_enters_the_scrutinee_once_and_only_the_selected_body`, `recursive_data_initializers_store_each_slot_before_entering_the_next`, `every_core_feature_has_one_named_entry_owner_and_explicit_return_owners`, `mixed_recursive_groups_support_functions_and_guarded_data`, `rendering_repeats_shared_values_and_marks_only_active_cycles`, `defensive_transition_failures_remain_structured`, and `ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack` |
+| Strict order, capture, mixed groups, finite and cyclic data, rendering, result-heap ownership, transition ownership, match selection, runtime failures, explicit stacks, and destruction | `constructor_tuple_payloads_enter_elements_strictly_left_to_right`, `returned_closure_retains_the_heap_for_captured_structural_values`, `returned_closure_observation_retains_its_captured_structural_heap`, `match_trace_enters_the_scrutinee_once_and_only_the_selected_body`, `recursive_data_initializers_store_each_slot_before_entering_the_next`, `every_core_feature_has_one_named_entry_owner_and_explicit_return_owners`, `mixed_recursive_groups_support_functions_and_guarded_data`, `rendering_repeats_shared_values_and_marks_only_active_cycles`, `defensive_transition_failures_remain_structured`, and `ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack` |
 | Transform validation and differential evaluation | `shared_pipeline_elaborates_and_validates_finite_data_core`, which independently validates and evaluates identity and literal-folding results, plus the existing transform suite in `semantics` |
-| Executable specification, tool behavior, structured diagnostics, and provenance | the CP-0003 cases in `spec_examples`, including `static_semantics_contextual_match_checks_function_arms`, `checked_match_arms_retain_the_definition_result_cause`, `data_resolution_diagnostics_retain_names_and_binder_sites`, `coverage_diagnostics_retain_arm_spans_and_concrete_witnesses`, `nominal_mismatches_render_source_declaration_spellings`, `unguarded_recursive_use_retains_the_transporting_expression_span`, and `provenance` |
+| Executable specification, tool behavior, structured diagnostics, and provenance | the CP-0003 cases in `spec_examples`, including `static_semantics_contextual_match_checks_function_arms`, `static_semantics_operational_tuple_pattern_is_executable`, `checked_match_arms_retain_the_definition_result_cause`, `data_resolution_diagnostics_retain_names_and_binder_sites`, `coverage_diagnostics_retain_arm_spans_and_concrete_witnesses`, `nominal_mismatches_render_source_declaration_spellings`, `unguarded_recursive_use_retains_the_transporting_expression_span`, and `provenance` |
 
 The parser rejection corpus covers integer, record, guarded, or-pattern, and
 other excluded pattern syntax. The type grammar and registry tests admit no

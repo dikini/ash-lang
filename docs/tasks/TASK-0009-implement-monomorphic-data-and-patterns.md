@@ -75,6 +75,12 @@ retained integration evidence.
   so the formal environment extension retains the identities used by lookup.
   Checkpoint `a141d5c` directly tests contextual diagnostic-cause propagation
   and each source-ordered initializer-entry and alias-storage continuation.
+- Review checkpoint `5eb0cdb` retains the completed evaluation heap for scalar,
+  structural, and closure results and transfers the same shared heap into
+  pipeline observations. It adds direct closure-capture ownership regressions,
+  gives operational globals the accepted pattern and singleton-exhaustiveness
+  premises, and removes obsolete function-only recursion and binder-only
+  equation wording from normative and Rust documentation.
 - Fresh post-review `cargo test --all-targets` and `cargo xtask verify` runs
   pass, including the 10,000-member small-stack cycle and all new depth and
   resource regressions. Changed Markdown passes with only the project-approved
