@@ -85,6 +85,14 @@ retained integration evidence.
   scan with direct lookup at the constructor identity index. A focused unit
   test fixes the indexed invariant, and a 10,000-constructor full-validation
   regression completes in 0.06 seconds on the retained evidence environment.
+- Review checkpoint `c25dac3` removes obsolete public parser reasons and text
+  that still described tuples, matches, multiple parameters, and multiple
+  equation patterns as unavailable. An exhaustive public-reason regression
+  keeps that diagnostic contract aligned with the retained grammar.
+- Review checkpoint `8085a1f` charges copied tuple types and specialized
+  pattern, type, state, and witness cells before allocation. Shared immutable
+  usefulness states replace complete state clones, and a 100,000-field
+  full-source tuple regression reaches structured coverage resource exhaustion.
 - Fresh post-review `cargo test --all-targets` and `cargo xtask verify` runs
   pass, including the 10,000-member small-stack cycle and all new depth and
   resource regressions. Changed Markdown passes with only the project-approved

@@ -7,7 +7,7 @@ define Ash semantics. The normative specification owns the merged language.
 
 ## Scope and environment
 
-The measurement covers `4d5ce64...cff6fb5` in the
+The measurement covers `4d5ce64...8085a1f` in the
 `feature/data-and-adts` worktree. Commit `8c1c6af` is the first checkpoint with
 the candidate parallel pipeline removed. Commit `79af325` closes the review
 findings around admitted depth, registry authentication and destruction,
@@ -24,18 +24,22 @@ and the source-ordered initializer-entry and alias-storage transitions. Commit
 `5eb0cdb` retains completed heaps for closure results and aligns operational
 pattern and recursion documentation. Commit `cff6fb5` makes reverse constructor
 ownership validation use the constructor identity index and exercises a
-10,000-constructor registry.
+10,000-constructor registry. Commit `c25dac3` removes parser reasons that
+contradicted the now-admitted tuple, match, and multi-pattern syntax. Commit
+`8085a1f` charges wide tuple types and every specialized pattern, type, state,
+and witness cell before materialization while sharing immutable states instead
+of cloning them.
 
 | Property | Observation |
 | --- | --- |
 | Baseline | recursive-definition merge `4d5ce64` |
-| Retained-pipeline checkpoint | unsigned commit `cff6fb5` |
+| Retained-pipeline checkpoint | unsigned commit `8085a1f` |
 | Rust | `rustc 1.97.1 (8bab26f4f 2026-07-14)` |
 | Cargo | `cargo 1.97.1 (c980f4866 2026-06-30)` |
 | Host | Linux `x86_64` |
 
-At the evidence checkpoint, the production diff under `src/` contains 6,211
-added and 679 deleted lines in 24 files. These counts exclude integration tests
+At the evidence checkpoint, the production diff under `src/` contains 6,427
+added and 696 deleted lines in 24 files. These counts exclude integration tests
 and do not measure semantic difficulty.
 
 ## Changed composition points
@@ -58,7 +62,7 @@ and do not measure semantic difficulty.
   Scalar and closure results remain ordinary visible values while their result
   owner retains any locations reachable through a captured environment.
 
-The exact audit below found 239 occurrences in production files at the
+The exact audit below found 242 occurrences in production files at the
 checkpoint. It locates declarations and consumers; it is not an edit count.
 
 ```text
@@ -102,7 +106,13 @@ constructor cell before scheduling its children, so repeated conversion of
 earlier wide rows cannot run outside that budget. A direct 100-arm by 200-field
 tuple reproduction reached the resource failure at the one-million-work limit
 in 20.11 seconds with 77,924 KiB maximum resident memory on the environment
-above. Registry lookup indexes keep identity lookup independent of declaration
+above. Root and specialized states charge every copied pattern and type cell
+before allocation. States shared by the active set, memo table, choices, and
+work frames use one immutable allocation rather than cloning complete matrices.
+The full-source 100,000-field tuple regression reaches the same structured
+resource failure in 1.47 seconds with 214,144 KiB maximum resident memory; that
+measurement includes its lexer, parser, resolved tree, and partially built
+Core. Registry lookup indexes keep identity lookup independent of declaration
 width. Core registry closure validation also checks reverse constructor
 ownership at the constructor identity's source-order index rather than scanning
 the owning declaration. The 10,000-constructor
@@ -207,9 +217,9 @@ first-stratum invariants.
 
 | Evidence family | Primary retained tests |
 | --- | --- |
-| Grammar, recovery, token coverage, spans, projection refusal, and admitted depth | `data_and_pattern_forms_build_one_token_complete_concrete_tree`, `data_and_pattern_recovery_stays_balanced_and_synchronizes_at_the_arm_line`, `projects_data_declarations_tuples_matches_and_pattern_vectors`, `structural_depth_budget_bounds_nested_constructor_patterns`, `structural_depth_budget_bounds_nested_matches`, `admitted_nested_patterns_complete_the_full_pipeline_on_a_small_stack`, and `admitted_type_depth_survives_synthesized_tuple_and_function_wrappers` |
+| Grammar, recovery, token coverage, spans, projection refusal, and admitted depth | `data_and_pattern_forms_build_one_token_complete_concrete_tree`, `data_and_pattern_recovery_stays_balanced_and_synchronizes_at_the_arm_line`, `projects_data_declarations_tuples_matches_and_pattern_vectors`, `public_parse_reasons_describe_only_retained_diagnostics`, `structural_depth_budget_bounds_nested_constructor_patterns`, `structural_depth_budget_bounds_nested_matches`, `admitted_nested_patterns_complete_the_full_pipeline_on_a_small_stack`, and `admitted_type_depth_survives_synthesized_tuple_and_function_wrappers` |
 | File-wide identities, namespaces, recursive references, pattern scope, shadowing, and restoration | `data_and_pattern_resolution_allocates_file_wide_identities_and_pattern_binders`, `data_namespaces_report_stable_resolution_reasons`, `match_arm_pattern_scope_does_not_leak_to_later_arms`, `nominal_declarations_are_file_wide_recursive_and_distinct`, and `failed_nested_and_recursive_resolution_restore_the_scope_stack` |
-| Nominal and tuple typing, constructor values, function domains, pattern typing, coverage, irrefutability, clause arity, guarded recursion, contextual matches, and bounded usefulness | `nominal_identity_and_tuple_structure_share_one_type_equality_rule`, `contextually_typed_matches_check_every_anonymous_function_arm`, `a_wide_constructor_set_has_practical_exhaustive_coverage`, `an_over_budget_case_group_reports_an_internal_resource_failure`, `usefulness_charges_every_pattern_cell_while_shaping`, and the typing and coverage cases in `data_and_adts` |
+| Nominal and tuple typing, constructor values, function domains, pattern typing, coverage, irrefutability, clause arity, guarded recursion, contextual matches, and bounded usefulness | `nominal_identity_and_tuple_structure_share_one_type_equality_rule`, `contextually_typed_matches_check_every_anonymous_function_arm`, `a_wide_constructor_set_has_practical_exhaustive_coverage`, `an_over_budget_case_group_reports_an_internal_resource_failure`, `a_wide_tuple_case_group_charges_type_and_specialization_cells`, `usefulness_charges_every_pattern_cell_while_shaping`, `usefulness_charges_tuple_type_cells_before_materializing_the_root_state`, and the typing and coverage cases in `data_and_adts` |
 | Registry, identity, source order, constructor, pattern, scope, coverage, provenance, handle, reachability, resource, ownership-cycle, and safe-destruction validation | `rejects_malformed_data_registries_and_constructor_annotations`, `rejects_registry_identity_order_spelling_and_source_forgery`, `validates_ten_thousand_constructor_owner_links_without_pairwise_scanning`, `rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack`, `rejects_missing_and_redundant_structured_match_arms`, `validates_a_deep_guarded_initializer_on_a_small_stack`, and the existing malformed-Core cases in `core_validation` |
 | Strict order, capture, mixed groups, finite and cyclic data, rendering, result-heap ownership, transition ownership, match selection, runtime failures, explicit stacks, and destruction | `constructor_tuple_payloads_enter_elements_strictly_left_to_right`, `returned_closure_retains_the_heap_for_captured_structural_values`, `returned_closure_observation_retains_its_captured_structural_heap`, `match_trace_enters_the_scrutinee_once_and_only_the_selected_body`, `recursive_data_initializers_store_each_slot_before_entering_the_next`, `every_core_feature_has_one_named_entry_owner_and_explicit_return_owners`, `mixed_recursive_groups_support_functions_and_guarded_data`, `rendering_repeats_shared_values_and_marks_only_active_cycles`, `defensive_transition_failures_remain_structured`, and `ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack` |
 | Transform validation and differential evaluation | `shared_pipeline_elaborates_and_validates_finite_data_core`, which independently validates and evaluates identity and literal-folding results, plus the existing transform suite in `semantics` |
