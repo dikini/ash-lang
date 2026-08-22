@@ -205,14 +205,13 @@ impl<'program, 'source> Validator<'program, 'source> {
             .nominals()
             .first()
             .map(|nominal| nominal.origin.primary_span().source());
-        if let (Some(registry_source), Ok(root)) = (registry_source, self.node(self.program.root)) {
-            if root
+        if let (Some(registry_source), Ok(root)) = (registry_source, self.node(self.program.root))
+            && root
                 .origin
                 .as_ref()
                 .is_some_and(|origin| origin.primary_span().source() != registry_source)
-            {
-                return Err(ValidationError::new(ValidationReason::Registry, None));
-            }
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
         }
         let mut previous_nominal_end = None;
         for (index, nominal) in registry.nominals().iter().enumerate() {

@@ -99,7 +99,6 @@ enum Frame {
 }
 
 /// Returns a concrete witness when `candidate` is useful against `matrix`.
-#[must_use]
 pub fn usefulness(
     matrix: &[Vec<CorePattern>],
     candidate: &[CorePattern],
@@ -135,7 +134,6 @@ pub fn usefulness_with_budget(
 }
 
 /// Low-level witness query that does not require synthesizing source origins.
-#[must_use]
 pub fn missing_witness_for_types(
     matrix: &[Vec<CorePattern>],
     types: &[Type],
@@ -384,44 +382,6 @@ fn choices(
     }])
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn usefulness_reports_state_budget_exhaustion() {
-        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
-        assert_eq!(
-            usefulness_shapes(
-                &[],
-                &[WitnessPattern::Wildcard],
-                &[Type::Int],
-                &registry,
-                0,
-                &mut UsefulnessBudget::default(),
-            ),
-            Err(UsefulnessError::StateLimit)
-        );
-    }
-
-    #[test]
-    fn usefulness_reports_shared_work_budget_exhaustion() {
-        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
-        let mut budget = UsefulnessBudget { remaining: 0 };
-        assert_eq!(
-            usefulness_shapes(
-                &[],
-                &[WitnessPattern::Wildcard],
-                &[Type::Int],
-                &registry,
-                USEFULNESS_STATE_LIMIT,
-                &mut budget,
-            ),
-            Err(UsefulnessError::WorkLimit)
-        );
-    }
-}
-
 fn rebuild_witness(mut witness: Vec<WitnessPattern>, rebuild: Rebuild) -> Vec<WitnessPattern> {
     match rebuild {
         Rebuild::Head {
@@ -561,5 +521,43 @@ fn display_pattern(pattern: &WitnessPattern, registry: &ResolvedRegistry) -> Str
                 |payload| format!("{name}({})", display_pattern(payload, registry)),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usefulness_reports_state_budget_exhaustion() {
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        assert_eq!(
+            usefulness_shapes(
+                &[],
+                &[WitnessPattern::Wildcard],
+                &[Type::Int],
+                &registry,
+                0,
+                &mut UsefulnessBudget::default(),
+            ),
+            Err(UsefulnessError::StateLimit)
+        );
+    }
+
+    #[test]
+    fn usefulness_reports_shared_work_budget_exhaustion() {
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        let mut budget = UsefulnessBudget { remaining: 0 };
+        assert_eq!(
+            usefulness_shapes(
+                &[],
+                &[WitnessPattern::Wildcard],
+                &[Type::Int],
+                &registry,
+                USEFULNESS_STATE_LIMIT,
+                &mut budget,
+            ),
+            Err(UsefulnessError::WorkLimit)
+        );
     }
 }

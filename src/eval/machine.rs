@@ -1100,6 +1100,33 @@ mod tests {
             Environment,
             &mut Vec<HeapCell>,
         ) -> Result<Transition, RuntimeFailure>;
+        type EnterConstructor = fn(
+            &Arc<PureProgram>,
+            crate::core::data::ConstructorNode,
+            &mut Vec<HeapCell>,
+        ) -> Result<Transition, RuntimeFailure>;
+        type ReturnTuple = fn(
+            Box<[NodeId]>,
+            usize,
+            Vec<Value>,
+            Environment,
+            Value,
+            &mut Vec<HeapCell>,
+        ) -> Result<Transition, RuntimeFailure>;
+        type ReturnMatch = fn(
+            Box<[CoreMatchArm]>,
+            Environment,
+            Value,
+            &[HeapCell],
+        ) -> Result<Transition, RuntimeFailure>;
+        type ReturnRecursiveInitialization = fn(
+            Box<[(Location, NodeId)]>,
+            usize,
+            NodeId,
+            Environment,
+            Value,
+            &mut [HeapCell],
+        ) -> Result<Transition, RuntimeFailure>;
 
         let _: fn(&IntegerNode) -> Transition = enter_integer;
         let _: fn(BooleanNode) -> Transition = enter_boolean;
@@ -1110,11 +1137,7 @@ mod tests {
             Environment,
             crate::source::Origin,
         ) -> Transition = enter_function;
-        let _: fn(
-            &Arc<PureProgram>,
-            crate::core::data::ConstructorNode,
-            &mut Vec<HeapCell>,
-        ) -> Result<Transition, RuntimeFailure> = enter_constructor;
+        let _: EnterConstructor = enter_constructor;
         let _: fn(
             &Arc<PureProgram>,
             VariableNode,
@@ -1138,28 +1161,9 @@ mod tests {
             return_application_function;
         let _: fn(Value, Value, &mut Vec<HeapCell>) -> Result<Transition, RuntimeFailure> =
             return_application_argument;
-        let _: fn(
-            Box<[NodeId]>,
-            usize,
-            Vec<Value>,
-            Environment,
-            Value,
-            &mut Vec<HeapCell>,
-        ) -> Result<Transition, RuntimeFailure> = return_tuple;
-        let _: fn(
-            Box<[CoreMatchArm]>,
-            Environment,
-            Value,
-            &[HeapCell],
-        ) -> Result<Transition, RuntimeFailure> = return_match;
-        let _: fn(
-            Box<[(Location, NodeId)]>,
-            usize,
-            NodeId,
-            Environment,
-            Value,
-            &mut [HeapCell],
-        ) -> Result<Transition, RuntimeFailure> = return_recursive_initialization;
+        let _: ReturnTuple = return_tuple;
+        let _: ReturnMatch = return_match;
+        let _: ReturnRecursiveInitialization = return_recursive_initialization;
 
         assert_eq!(TRANSITION_OWNERSHIP.len(), 12);
         assert_eq!(
