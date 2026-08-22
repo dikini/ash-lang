@@ -1,9 +1,10 @@
 # Data and Pattern Integration Evidence
 
-This report records implementation evidence for accepted CP-0003 and compares
-it with the informative findings in [DN-0007](../../DN-0007-data-and-pattern-typing.md)
-and [DN-0019](../../DN-0019-primitive-feature-composition.md). It does not
-define Ash semantics. The normative specification owns the merged language.
+This report records implementation evidence for the monomorphic data-and-pattern
+increment and compares it with the informative findings in
+[DN-0007](../../DN-0007-data-and-pattern-typing.md) and
+[DN-0019](../../DN-0019-primitive-feature-composition.md). It does not define
+Ash semantics. The normative specification owns the merged language.
 
 ## Scope and environment
 
@@ -228,7 +229,7 @@ DN-0007's central split transferred: tuples are structural, nominal sums use
 declaration identity, constructors are ordinary values, patterns check against
 expected types, local bindings require irrefutability, and matches and equations
 share coverage. Records, polymorphic constructors, and access control did not
-transfer because CP-0003 excludes them.
+transfer because the implemented increment excludes them.
 
 DN-0019's simplification rule also transferred. Ordinary application carries
 payload constructors and higher-order construction. One typed pattern and
@@ -242,7 +243,7 @@ preallocation and initialization rather than function templates alone.
 
 ## Requirement audit
 
-The retained tests assign each CP-0003 evidence family to a named owner. This
+The retained tests assign each increment evidence family to a named owner. This
 table records the primary owners; the complete suites also retain the earlier
 first-stratum invariants.
 
@@ -254,7 +255,7 @@ first-stratum invariants.
 | Registry, identity, source order, constructor, pattern, scope, coverage, provenance, handle, reachability, resource, ownership-cycle, and safe-destruction validation | `rejects_malformed_data_registries_and_constructor_annotations`, `rejects_registry_identity_order_spelling_and_source_forgery`, `validates_ten_thousand_constructor_owner_links_without_pairwise_scanning`, `rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack`, `rejects_missing_and_redundant_structured_match_arms`, `validates_a_deep_guarded_initializer_on_a_small_stack`, `oversized_unchecked_match_maps_coverage_exhaustion_to_resource`, and the existing malformed-Core cases in `core_validation` |
 | Strict order, capture, mixed groups, finite and cyclic data, rendering, result-heap ownership, transition ownership, match selection, runtime failures, explicit stacks, and destruction | `constructor_tuple_payloads_enter_elements_strictly_left_to_right`, `returned_closure_retains_the_heap_for_captured_structural_values`, `returned_closure_observation_retains_its_captured_structural_heap`, `match_trace_enters_the_scrutinee_once_and_only_the_selected_body`, `recursive_data_initializers_store_each_slot_before_entering_the_next`, `every_core_feature_has_one_named_entry_owner_and_explicit_return_owners`, `mixed_recursive_groups_support_functions_and_guarded_data`, `rendering_repeats_shared_values_and_marks_only_active_cycles`, `defensive_transition_failures_remain_structured`, and `ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack` |
 | Transform validation and differential evaluation | `shared_pipeline_elaborates_and_validates_finite_data_core`, which independently validates and evaluates identity and literal-folding results, plus the existing transform suite in `semantics` |
-| Executable specification, tool behavior, structured diagnostics, and provenance | the CP-0003 cases in `spec_examples`, including `static_semantics_contextual_match_checks_function_arms`, `static_semantics_operational_tuple_pattern_is_executable`, `checked_match_arms_retain_the_definition_result_cause`, `data_resolution_diagnostics_retain_names_and_binder_sites`, `coverage_diagnostics_retain_arm_spans_and_concrete_witnesses`, `nominal_mismatches_render_source_declaration_spellings`, `unguarded_recursive_use_retains_the_transporting_expression_span`, and `provenance` |
+| Executable specification, tool behavior, structured diagnostics, and provenance | the data-and-pattern cases in `spec_examples`, including `static_semantics_contextual_match_checks_function_arms`, `static_semantics_operational_tuple_pattern_is_executable`, `checked_match_arms_retain_the_definition_result_cause`, `data_resolution_diagnostics_retain_names_and_binder_sites`, `coverage_diagnostics_retain_arm_spans_and_concrete_witnesses`, `nominal_mismatches_render_source_declaration_spellings`, `unguarded_recursive_use_retains_the_transporting_expression_span`, and `provenance` |
 
 The parser rejection corpus covers integer, record, guarded, or-pattern, and
 other excluded pattern syntax. The type grammar and registry tests admit no
