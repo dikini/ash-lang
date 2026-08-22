@@ -9,6 +9,7 @@ mod project;
 use std::fmt;
 use std::ops::Deref;
 
+pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
 pub use project::{ProjectionError, project};
@@ -17,6 +18,7 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     lexer::{Lexed, TokenKind},
     source::Span,
+    syntax_resource::SyntaxBudget,
 };
 
 /// Conservative, replaceable protection for source structural nesting.
@@ -28,21 +30,18 @@ use crate::{
 /// later fully iterative representations may replace it.
 pub const STRUCTURAL_DEPTH_LIMIT: usize = 128;
 
-/// A non-syntactic implementation resource failure.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ResourceFailure {
-    /// Constructing another nested syntax layer would exceed the safe budget.
-    StructuralDepth {
-        /// The active implementation budget.
-        limit: usize,
-    },
-}
+pub(super) const PATTERN_STRUCTURAL_WEIGHT: usize = 8;
+pub(super) const MATCH_STRUCTURAL_WEIGHT: usize = 32;
 
 /// The grammar role of one concrete node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeKind {
     /// A complete source file.
     Program,
+    /// A nominal type declaration.
+    TypeDeclaration,
+    /// One constructor declaration under a nominal type.
+    ConstructorDeclaration,
     /// An equational global definition.
     EquationalGlobal,
     /// An external name and type interface.
@@ -63,6 +62,10 @@ pub enum NodeKind {
     RecursiveBindingMember,
     /// An anonymous function expression.
     FunctionExpression,
+    /// A structured match expression.
+    MatchExpression,
+    /// One line-delimited match arm.
+    MatchArm,
     /// The non-associative equality layer.
     EqualityExpression,
     /// The additive layer.
@@ -75,16 +78,34 @@ pub enum NodeKind {
     PrimaryExpression,
     /// A grouped expression.
     ParenthesizedExpression,
+    /// A structural tuple expression.
+    TupleExpression,
+    /// A typed or untyped binding pattern.
+    Pattern,
+    /// A parenthesized structural tuple pattern.
+    TuplePattern,
+    /// A nominal constructor pattern.
+    ConstructorPattern,
+    /// A wildcard pattern.
+    WildcardPattern,
+    /// A Boolean pattern.
+    BooleanPattern,
+    /// The unit pattern.
+    UnitPattern,
     /// A binder-only source form.
     Binder,
     /// A binder with a type annotation.
     TypedBinder,
+    /// A pattern with a type annotation.
+    TypedPattern,
     /// A right-associated type.
     Type,
     /// An atomic type.
     AtomicType,
     /// A grouped type.
     ParenthesizedType,
+    /// A structural tuple type.
+    TupleType,
     /// Rejected syntax retained until projection fails.
     Error,
 }
@@ -100,6 +121,8 @@ pub enum ExpectedForm {
     Identifier,
     /// A source type.
     Type,
+    /// A source pattern.
+    Pattern,
     /// `(`.
     LeftParen,
     /// `)`.
@@ -114,6 +137,8 @@ pub enum ExpectedForm {
     Equal,
     /// `->`.
     Arrow,
+    /// `=>`.
+    FatArrow,
     /// A logical line boundary.
     LineEnd,
     /// End of input.
@@ -133,14 +158,6 @@ pub enum ParseReason {
     UnclosedGroup,
     /// Equality was repeated despite being non-associative.
     RepeatedEquality,
-    /// Tuple syntax is excluded from this increment.
-    TupleSyntax,
-    /// Match syntax is excluded from this increment.
-    MatchSyntax,
-    /// A function header contains more than one parameter.
-    MultipleParameters,
-    /// An equation contains more than one binder.
-    MultipleBinders,
     /// A polymorphic header is excluded from this increment.
     PolymorphicHeader,
     /// A recursive delimiter is not followed by a member.
@@ -220,10 +237,6 @@ impl fmt::Display for ParseReason {
             Self::ExpectedOperand => "parse.expected-operand",
             Self::UnclosedGroup => "parse.unclosed-group",
             Self::RepeatedEquality => "parse.repeated-equality",
-            Self::TupleSyntax => "parse.tuple-syntax",
-            Self::MatchSyntax => "parse.match-syntax",
-            Self::MultipleParameters => "parse.multiple-parameters",
-            Self::MultipleBinders => "parse.multiple-binders",
             Self::PolymorphicHeader => "parse.polymorphic-header",
             Self::ExpectedRecursiveMember => "parse.expected-recursive-member",
             Self::UnexpectedAnd => "parse.unexpected-and",
@@ -236,22 +249,42 @@ impl fmt::Display for ParseReason {
 /// Parses one complete lexer result into an error-bearing concrete tree.
 #[must_use]
 pub fn parse(lexed: Lexed) -> ConcreteTree {
-    let (events, diagnostics, resource_failure) = {
+    let (tokens, lexical_diagnostics, syntax_budget, lexical_resource_failure) = lexed.into_parts();
+    if let Some(resource_failure) = lexical_resource_failure {
+        return cst::resource_limited(tokens, lexical_diagnostics, Vec::new(), resource_failure);
+    }
+
+    let (events, diagnostics, resource_failure, syntax_work_exhausted) = {
         let mut parser = Parser {
-            tokens: &lexed.tokens,
+            tokens: &tokens,
             position: 0,
             events: Vec::new(),
             diagnostics: Vec::new(),
             pending_recoveries: Vec::new(),
             nesting_depth: 0,
             resource_failure: None,
+            syntax_budget,
+            syntax_work_exhausted: false,
         };
         grammar::program(&mut parser);
-        (parser.events, parser.diagnostics, parser.resource_failure)
+        (
+            parser.events,
+            parser.diagnostics,
+            parser.resource_failure,
+            parser.syntax_work_exhausted,
+        )
     };
+    if syntax_work_exhausted {
+        return cst::resource_limited(
+            tokens,
+            lexical_diagnostics,
+            diagnostics,
+            resource_failure.expect("syntax exhaustion records its resource failure"),
+        );
+    }
     cst::build(
-        lexed.tokens,
-        lexed.diagnostics,
+        tokens,
+        lexical_diagnostics,
         diagnostics,
         events,
         resource_failure,
@@ -266,15 +299,17 @@ pub(crate) struct Parser<'tokens> {
     pending_recoveries: Vec<usize>,
     nesting_depth: usize,
     resource_failure: Option<ResourceFailure>,
+    syntax_budget: SyntaxBudget,
+    syntax_work_exhausted: bool,
 }
 
 impl Parser<'_> {
     fn start(&mut self, kind: NodeKind) {
-        self.events.push(Event::Start(kind));
+        let _ = self.retain_event(Event::Start(kind));
     }
 
     fn finish(&mut self) {
-        self.events.push(Event::Finish);
+        let _ = self.retain_event(Event::Finish);
     }
 
     fn event_position(&self) -> usize {
@@ -283,6 +318,9 @@ impl Parser<'_> {
 
     fn insert_start(&mut self, position: usize, kind: NodeKind) -> bool {
         if position > self.events.len() {
+            return false;
+        }
+        if !self.charge_event() {
             return false;
         }
         self.events.insert(position, Event::Start(kind));
@@ -309,9 +347,9 @@ impl Parser<'_> {
         if self.position >= self.tokens.len() {
             return false;
         }
-        self.events.push(Event::Token(self.position));
+        let retained = self.retain_event(Event::Token(self.position));
         self.position += 1;
-        true
+        retained
     }
 
     fn expect(&mut self, kind: &TokenKind, expected: ExpectedForm) -> bool {
@@ -330,7 +368,7 @@ impl Parser<'_> {
             return;
         }
         let Some(at) = self.current_span() else {
-            self.events.push(Event::Error(reason));
+            let _ = self.retain_event(Event::Error(reason));
             return;
         };
         let _ = self.report_at(reason, expected, at, None);
@@ -347,8 +385,11 @@ impl Parser<'_> {
             return None;
         }
         let at = self.current_span().unwrap_or(primary);
-        self.events.push(Event::Error(reason));
-        self.events.push(Event::Missing { expected, at });
+        if !self.retain_event(Event::Error(reason))
+            || !self.retain_event(Event::Missing { expected, at })
+        {
+            return None;
+        }
         let mut diagnostic =
             Diagnostic::new(reason, SourceLabel::new(primary, primary_message(reason)));
         if let Some(related) = related {
@@ -368,7 +409,9 @@ impl Parser<'_> {
         if self.resource_failure.is_some() {
             return;
         }
-        self.events.push(Event::Error(reason));
+        if !self.retain_event(Event::Error(reason)) {
+            return;
+        }
         let Some(at) = self.current_span() else {
             return;
         };
@@ -463,16 +506,28 @@ impl Parser<'_> {
     }
 
     fn enter_structure(&mut self) -> bool {
-        if self.nesting_depth >= STRUCTURAL_DEPTH_LIMIT {
+        self.enter_structures(1)
+    }
+
+    fn enter_structures(&mut self, weight: usize) -> bool {
+        let Some(depth) = self.nesting_depth.checked_add(weight) else {
+            self.fail_structural_depth();
+            return false;
+        };
+        if depth > STRUCTURAL_DEPTH_LIMIT {
             self.fail_structural_depth();
             return false;
         }
-        self.nesting_depth += 1;
+        self.nesting_depth = depth;
         true
     }
 
     fn leave_structure(&mut self) {
         self.nesting_depth = self.nesting_depth.saturating_sub(1);
+    }
+
+    fn leave_structures(&mut self, weight: usize) {
+        self.nesting_depth = self.nesting_depth.saturating_sub(weight);
     }
 
     fn permits_expression_depth(&mut self, expression_depth: usize) -> bool {
@@ -494,6 +549,26 @@ impl Parser<'_> {
                 limit: STRUCTURAL_DEPTH_LIMIT,
             });
     }
+
+    fn retain_event(&mut self, event: Event) -> bool {
+        if !self.charge_event() {
+            return false;
+        }
+        self.events.push(event);
+        true
+    }
+
+    fn charge_event(&mut self) -> bool {
+        if self.syntax_work_exhausted {
+            return false;
+        }
+        if let Err(resource_failure) = self.syntax_budget.charge() {
+            self.resource_failure.get_or_insert(resource_failure);
+            self.syntax_work_exhausted = true;
+            return false;
+        }
+        true
+    }
 }
 
 const fn synchronization_message(boundary: SynchronizationBoundary) -> &'static str {
@@ -514,6 +589,8 @@ fn same_variant(left: &TokenKind, right: &TokenKind) -> bool {
 fn token_name(kind: &TokenKind) -> &'static str {
     match kind {
         TokenKind::Identifier(_) => "identifier",
+        TokenKind::UpperIdentifier(_) => "uppercase identifier",
+        TokenKind::Wildcard => "_",
         TokenKind::Integer(_) => "integer",
         TokenKind::True => "true",
         TokenKind::False => "false",
@@ -521,6 +598,8 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Let => "let",
         TokenKind::Rec => "rec",
         TokenKind::And => "and",
+        TokenKind::Type => "type",
+        TokenKind::Match => "match",
         TokenKind::IntType => "Int",
         TokenKind::BoolType => "Bool",
         TokenKind::UnitType => "Unit",
@@ -534,6 +613,8 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Plus => "+",
         TokenKind::Star => "*",
         TokenKind::Arrow => "->",
+        TokenKind::FatArrow => "=>",
+        TokenKind::Pipe => "|",
         TokenKind::Comma => ",",
         TokenKind::Semicolon => ";",
         TokenKind::LineEnd => "line end",
@@ -548,10 +629,6 @@ const fn primary_message(reason: ParseReason) -> &'static str {
         ParseReason::ExpectedOperand => "the operator requires a right operand",
         ParseReason::UnclosedGroup => "the opening parenthesis is not closed",
         ParseReason::RepeatedEquality => "equality is non-associative",
-        ParseReason::TupleSyntax => "tuple syntax is not available in Mini-Ash",
-        ParseReason::MatchSyntax => "match syntax is not available in Mini-Ash",
-        ParseReason::MultipleParameters => "Mini-Ash functions have one parameter",
-        ParseReason::MultipleBinders => "Mini-Ash equations have one binder",
         ParseReason::PolymorphicHeader => "polymorphic headers are not available in Mini-Ash",
         ParseReason::ExpectedRecursiveMember => {
             "the recursive delimiter requires another binding member"
@@ -568,6 +645,7 @@ const fn expected_name(expected: ExpectedForm) -> &'static str {
         ExpectedForm::Operand => "an operand",
         ExpectedForm::Identifier => "an identifier",
         ExpectedForm::Type => "a type",
+        ExpectedForm::Pattern => "a pattern",
         ExpectedForm::LeftParen => "(",
         ExpectedForm::RightParen => ")",
         ExpectedForm::LeftBrace => "{",
@@ -575,6 +653,7 @@ const fn expected_name(expected: ExpectedForm) -> &'static str {
         ExpectedForm::Colon => ":",
         ExpectedForm::Equal => "=",
         ExpectedForm::Arrow => "->",
+        ExpectedForm::FatArrow => "=>",
         ExpectedForm::LineEnd => "a logical line end",
         ExpectedForm::EndOfFile => "end of input",
     }

@@ -10,6 +10,7 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     integer::Integer,
     source::{ByteRange, SourceError, SourceFile, Span},
+    syntax_resource::{ResourceFailure, SyntaxBudget},
 };
 
 /// A lexical failure retained independently from its eventual rendering.
@@ -87,6 +88,32 @@ pub struct Lexed {
     pub tokens: Vec<Token>,
     /// Lexical errors encountered while making progress through the source.
     pub diagnostics: Vec<Diagnostic<LexReason>>,
+    syntax_budget: SyntaxBudget,
+    resource_failure: Option<ResourceFailure>,
+}
+
+impl Lexed {
+    /// Returns a non-syntactic implementation resource failure, if any.
+    #[must_use]
+    pub const fn resource_failure(&self) -> Option<ResourceFailure> {
+        self.resource_failure
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Vec<Token>,
+        Vec<Diagnostic<LexReason>>,
+        SyntaxBudget,
+        Option<ResourceFailure>,
+    ) {
+        (
+            self.tokens,
+            self.diagnostics,
+            self.syntax_budget,
+            self.resource_failure,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,6 +143,20 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
     let mut diagnostics = Vec::new();
     let mut contexts = vec![DelimiterContext::File];
     let mut logical_line_has_token = false;
+    let mut syntax_budget = SyntaxBudget::default();
+
+    macro_rules! charge_syntax {
+        () => {
+            if let Err(resource_failure) = syntax_budget.charge() {
+                return Ok(Lexed {
+                    tokens,
+                    diagnostics,
+                    syntax_budget,
+                    resource_failure: Some(resource_failure),
+                });
+            }
+        };
+    }
 
     while offset < bytes.len() {
         let start = offset;
@@ -130,6 +171,7 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
                 .last()
                 .is_some_and(|context| context.emits_line_end());
             if emits_line_end && logical_line_has_token {
+                charge_syntax!();
                 tokens.push(Token {
                     kind: TokenKind::LineEnd,
                     span: checked_span(source, start, offset)?,
@@ -138,6 +180,15 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
             }
             continue;
         }
+
+        if matches!(bytes[offset], b' ' | b'\t') {
+            offset += 1;
+            continue;
+        }
+
+        // Charge the lexical output before any token payload or diagnostic is
+        // retained. Every remaining branch emits exactly one such output.
+        charge_syntax!();
 
         if bytes[offset] == b'\r' {
             offset += 1;
@@ -204,10 +255,6 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
         }
 
         let kind = match bytes[offset] {
-            b' ' | b'\t' => {
-                offset += 1;
-                continue;
-            }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                 offset = scan_identifier_like(text, start);
                 let word = &text[start..offset];
@@ -250,10 +297,15 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
             b'+' => single(&mut offset, TokenKind::Plus),
             b'*' => single(&mut offset, TokenKind::Star),
             b',' => single(&mut offset, TokenKind::Comma),
+            b'|' => single(&mut offset, TokenKind::Pipe),
             b';' => single(&mut offset, TokenKind::Semicolon),
             b'=' if bytes.get(offset + 1) == Some(&b'=') => {
                 offset += 2;
                 TokenKind::EqualEqual
+            }
+            b'=' if bytes.get(offset + 1) == Some(&b'>') => {
+                offset += 2;
+                TokenKind::FatArrow
             }
             b'=' => single(&mut offset, TokenKind::Equal),
             b'-' if bytes.get(offset + 1) == Some(&b'>') => {
@@ -296,6 +348,7 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
         });
     }
 
+    charge_syntax!();
     tokens.push(Token {
         kind: TokenKind::EndOfFile,
         span: checked_span(source, offset, offset)?,
@@ -304,6 +357,8 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
     Ok(Lexed {
         tokens,
         diagnostics,
+        syntax_budget,
+        resource_failure: None,
     })
 }
 
@@ -374,16 +429,20 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "let" => Some(TokenKind::Let),
         "rec" => Some(TokenKind::Rec),
         "and" => Some(TokenKind::And),
+        "type" => Some(TokenKind::Type),
+        "match" => Some(TokenKind::Match),
+        "_" => Some(TokenKind::Wildcard),
         "Int" => Some(TokenKind::IntType),
         "Bool" => Some(TokenKind::BoolType),
         "Unit" => Some(TokenKind::UnitType),
         _ => None,
     };
-    reserved.or_else(|| {
-        word.as_bytes()
-            .first()
-            .filter(|first| first.is_ascii_lowercase() || **first == b'_')
-            .map(|_| TokenKind::Identifier(word.into()))
+    reserved.or_else(|| match word.as_bytes().first() {
+        Some(first) if first.is_ascii_lowercase() || *first == b'_' => {
+            Some(TokenKind::Identifier(word.into()))
+        }
+        Some(first) if first.is_ascii_uppercase() => Some(TokenKind::UpperIdentifier(word.into())),
+        _ => None,
     })
 }
 

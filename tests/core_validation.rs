@@ -1,12 +1,477 @@
 use ash::{
     core::{
-        BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, Primitive, PureComputation,
-        PureExprKind, PureValue, ValidationReason, validate,
+        BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
+        CorePatternKind, Primitive, PureComputation, PureExprKind, PureValue, ValidationReason,
+        validate,
     },
     integer::Integer,
+    resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry},
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
-    types::Type,
+    types::{ConstructorId, NominalTypeId, Type, same_type},
 };
+use std::sync::Arc;
+
+#[test]
+fn validates_registry_tuples_constructors_and_structured_matches() {
+    let file = source("data core");
+    let origin = whole_origin(&file);
+    let nominal_origin = range_origin(&file, 0, 9);
+    let constructor_origin = range_origin(&file, 5, 9);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let empty = ConstructorId::new(nominal, 0);
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "Choice".into(),
+            constructors: vec![empty].into_boxed_slice(),
+            origin: nominal_origin,
+        }],
+        vec![ResolvedConstructor {
+            id: empty,
+            owner: nominal,
+            spelling: "Empty".into(),
+            payload: None,
+            origin: constructor_origin,
+        }],
+    ));
+    let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+    let constructor = builder
+        .constructor(empty, Type::Nominal(nominal), origin.clone())
+        .expect("constructor node");
+    let arm = CoreMatchArm::new(
+        CorePattern::new(
+            Type::Nominal(nominal),
+            origin.clone(),
+            CorePatternKind::Constructor {
+                constructor: empty,
+                payload: None,
+            },
+        ),
+        constructor,
+        origin.clone(),
+    );
+    let root = builder
+        .match_expression(constructor, vec![arm], Type::Nominal(nominal), origin)
+        .expect("match node");
+
+    let program = validate(builder.finish(root).expect("root"), &[&file])
+        .expect("well-formed data Core should validate");
+    assert!(Arc::ptr_eq(program.registry(), &registry));
+}
+
+#[test]
+fn rejects_malformed_data_registries_and_constructor_annotations() {
+    let file = source("malformed data core");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let empty_registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "Empty".into(),
+            constructors: Box::new([]),
+            origin: origin.clone(),
+        }],
+        Vec::new(),
+    ));
+    let mut builder = CoreBuilder::with_registry(empty_registry);
+    let root = builder.unit(Type::Unit, origin.clone()).expect("unit");
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("empty nominal declaration");
+    assert_eq!(error.reason(), ValidationReason::Registry);
+
+    let constructor = ConstructorId::new(nominal, 0);
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "One".into(),
+            constructors: vec![constructor].into_boxed_slice(),
+            origin: origin.clone(),
+        }],
+        vec![ResolvedConstructor {
+            id: constructor,
+            owner: nominal,
+            spelling: "One".into(),
+            payload: None,
+            origin: origin.clone(),
+        }],
+    ));
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder
+        .constructor(constructor, Type::Int, origin)
+        .expect("unchecked wrong annotation");
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("constructor type disagreement");
+    assert_eq!(error.reason(), ValidationReason::NodeType);
+}
+
+#[test]
+fn validates_ten_thousand_constructor_owner_links_without_pairwise_scanning() {
+    const WIDTH: u32 = 10_000;
+    let file = source(&"x".repeat(WIDTH as usize + 1));
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let ids = (0..WIDTH)
+        .map(|index| ConstructorId::new(nominal, index))
+        .collect::<Vec<_>>();
+    let constructors = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| ResolvedConstructor {
+            id: *id,
+            owner: nominal,
+            spelling: format!("C{index}"),
+            payload: None,
+            origin: range_origin(
+                &file,
+                u32::try_from(index + 1).expect("test index should fit"),
+                u32::try_from(index + 2).expect("test index should fit"),
+            ),
+        })
+        .collect();
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "Wide".into(),
+            constructors: ids.into_boxed_slice(),
+            origin: whole_origin(&file),
+        }],
+        constructors,
+    ));
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder
+        .unit(Type::Unit, whole_origin(&file))
+        .expect("unit root");
+
+    validate(builder.finish(root).expect("root"), &[&file])
+        .expect("wide registry should validate with indexed ownership checks");
+}
+
+#[test]
+fn rejects_registry_identity_order_spelling_and_source_forgery() {
+    let file = source("registry root");
+    let foreign = source("foreign registry origin");
+    let origin = whole_origin(&file);
+    let foreign_origin = whole_origin(&foreign);
+    let reject = |registry: ResolvedRegistry| {
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder.unit(Type::Unit, origin.clone()).expect("unit root");
+        let error = validate(builder.finish(root).expect("root"), &[&file, &foreign])
+            .expect_err("malformed registry must fail");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+    };
+
+    let skipped = NominalTypeId::new(file.id(), 7);
+    let skipped_constructor = ConstructorId::new(skipped, 0);
+    reject(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: skipped,
+            spelling: "Skipped".into(),
+            constructors: vec![skipped_constructor].into_boxed_slice(),
+            origin: origin.clone(),
+        }],
+        vec![ResolvedConstructor {
+            id: skipped_constructor,
+            owner: skipped,
+            spelling: "Make".into(),
+            payload: None,
+            origin: origin.clone(),
+        }],
+    ));
+
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let first = ConstructorId::new(nominal, 0);
+    let second = ConstructorId::new(nominal, 1);
+    let nominal_entry = ResolvedNominalType {
+        id: nominal,
+        spelling: "Choice".into(),
+        constructors: vec![first, second].into_boxed_slice(),
+        origin: origin.clone(),
+    };
+    let constructor = |id, spelling: &str, constructor_origin: Origin| ResolvedConstructor {
+        id,
+        owner: nominal,
+        spelling: spelling.into(),
+        payload: None,
+        origin: constructor_origin,
+    };
+    reject(ResolvedRegistry::new(
+        vec![nominal_entry.clone()],
+        vec![
+            constructor(second, "Second", origin.clone()),
+            constructor(first, "First", origin.clone()),
+        ],
+    ));
+    reject(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            spelling: "lowercase".into(),
+            ..nominal_entry.clone()
+        }],
+        vec![
+            constructor(first, "First", origin.clone()),
+            constructor(second, "Second", origin.clone()),
+        ],
+    ));
+    reject(ResolvedRegistry::new(
+        vec![nominal_entry],
+        vec![
+            constructor(first, "First", foreign_origin),
+            constructor(second, "Second", origin.clone()),
+        ],
+    ));
+
+    let first_nominal = NominalTypeId::new(file.id(), 0);
+    let second_nominal = NominalTypeId::new(file.id(), 1);
+    let first_constructor = ConstructorId::new(first_nominal, 0);
+    let second_constructor = ConstructorId::new(second_nominal, 0);
+    reject(ResolvedRegistry::new(
+        vec![
+            ResolvedNominalType {
+                id: first_nominal,
+                spelling: "FirstType".into(),
+                constructors: vec![first_constructor].into_boxed_slice(),
+                origin: range_origin(&file, 6, 7),
+            },
+            ResolvedNominalType {
+                id: second_nominal,
+                spelling: "SecondType".into(),
+                constructors: vec![second_constructor].into_boxed_slice(),
+                origin: range_origin(&file, 0, 1),
+            },
+        ],
+        vec![
+            ResolvedConstructor {
+                id: first_constructor,
+                owner: first_nominal,
+                spelling: "FirstMake".into(),
+                payload: None,
+                origin: range_origin(&file, 7, 8),
+            },
+            ResolvedConstructor {
+                id: second_constructor,
+                owner: second_nominal,
+                spelling: "SecondMake".into(),
+                payload: None,
+                origin: range_origin(&file, 1, 2),
+            },
+        ],
+    ));
+}
+
+#[test]
+fn rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let file = source("registry payload bounds");
+                let nominal = NominalTypeId::new(file.id(), 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                let nominal_origin = whole_origin(&file);
+                let constructor_origin = range_origin(&file, 9, 16);
+
+                let mut deep_type = Type::Int;
+                for _ in 0..50_000 {
+                    deep_type = Type::Function(Box::new(Type::Int), Box::new(deep_type));
+                }
+                let registry = Arc::new(ResolvedRegistry::new(
+                    vec![ResolvedNominalType {
+                        id: nominal,
+                        spelling: "Bounded".into(),
+                        constructors: vec![constructor].into_boxed_slice(),
+                        origin: nominal_origin.clone(),
+                    }],
+                    vec![ResolvedConstructor {
+                        id: constructor,
+                        owner: nominal,
+                        spelling: "Make".into(),
+                        payload: Some(deep_type),
+                        origin: constructor_origin.clone(),
+                    }],
+                ));
+                let mut builder = CoreBuilder::with_registry(registry);
+                let root = builder
+                    .unit(Type::Unit, whole_origin(&file))
+                    .expect("unit root");
+                let error = validate(builder.finish(root).expect("root"), &[&file])
+                    .expect_err("overdeep registry type");
+                assert_eq!(error.reason(), ValidationReason::Registry);
+
+                let mut deep_origin = nominal_origin;
+                for _ in 0..50_000 {
+                    deep_origin = Origin::Generated {
+                        cause: Box::new(deep_origin),
+                        reason: GeneratedReason::TypeChecking,
+                    };
+                }
+                let registry = Arc::new(ResolvedRegistry::new(
+                    vec![ResolvedNominalType {
+                        id: nominal,
+                        spelling: "Bounded".into(),
+                        constructors: vec![constructor].into_boxed_slice(),
+                        origin: deep_origin,
+                    }],
+                    vec![ResolvedConstructor {
+                        id: constructor,
+                        owner: nominal,
+                        spelling: "Make".into(),
+                        payload: None,
+                        origin: constructor_origin,
+                    }],
+                ));
+                let mut builder = CoreBuilder::with_registry(registry);
+                let root = builder
+                    .unit(Type::Unit, whole_origin(&file))
+                    .expect("unit root");
+                let error = validate(builder.finish(root).expect("root"), &[&file])
+                    .expect_err("overdeep registry origin");
+                assert_eq!(error.reason(), ValidationReason::Registry);
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("registry rejection and destruction must fit the small stack");
+    });
+}
+
+#[test]
+fn rejects_missing_and_redundant_structured_match_arms() {
+    let file = source("coverage core");
+    let origin = whole_origin(&file);
+    let mut missing = CoreBuilder::new();
+    let scrutinee = missing
+        .boolean(true, Type::Bool, origin.clone())
+        .expect("scrutinee");
+    let body = missing
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("body");
+    let arm = CoreMatchArm::new(
+        CorePattern::new(Type::Bool, origin.clone(), CorePatternKind::Boolean(true)),
+        body,
+        origin.clone(),
+    );
+    let root = missing
+        .match_expression(scrutinee, vec![arm], Type::Int, origin.clone())
+        .expect("unchecked match");
+    let error =
+        validate(missing.finish(root).expect("root"), &[&file]).expect_err("missing false witness");
+    assert_eq!(error.reason(), ValidationReason::Coverage);
+
+    let mut redundant = CoreBuilder::new();
+    let scrutinee = redundant
+        .boolean(true, Type::Bool, origin.clone())
+        .expect("scrutinee");
+    let first = redundant
+        .integer(integer("1"), Type::Int, origin.clone())
+        .expect("first body");
+    let second = redundant
+        .integer(integer("2"), Type::Int, origin.clone())
+        .expect("second body");
+    let wildcard = || CorePattern::new(Type::Bool, origin.clone(), CorePatternKind::Wildcard);
+    let root = redundant
+        .match_expression(
+            scrutinee,
+            vec![
+                CoreMatchArm::new(wildcard(), first, origin.clone()),
+                CoreMatchArm::new(wildcard(), second, origin.clone()),
+            ],
+            Type::Int,
+            origin,
+        )
+        .expect("unchecked redundant match");
+    let error =
+        validate(redundant.finish(root).expect("root"), &[&file]).expect_err("redundant wildcard");
+    assert_eq!(error.reason(), ValidationReason::Coverage);
+}
+
+#[test]
+fn oversized_unchecked_match_maps_coverage_exhaustion_to_resource() {
+    const WIDTH: u32 = 800;
+    let file = source(&"x".repeat(WIDTH as usize + 1));
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructors = (0..WIDTH)
+        .map(|index| ConstructorId::new(nominal, index))
+        .collect::<Vec<_>>();
+    let constructor_entries = constructors
+        .iter()
+        .enumerate()
+        .map(|(index, id)| ResolvedConstructor {
+            id: *id,
+            owner: nominal,
+            spelling: format!("C{index}"),
+            payload: None,
+            origin: range_origin(
+                &file,
+                u32::try_from(index + 1).expect("test index should fit"),
+                u32::try_from(index + 2).expect("test index should fit"),
+            ),
+        })
+        .collect();
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "TooWide".into(),
+            constructors: constructors.clone().into_boxed_slice(),
+            origin: origin.clone(),
+        }],
+        constructor_entries,
+    ));
+    let mut builder = CoreBuilder::with_registry(registry);
+    let scrutinee = builder
+        .constructor(constructors[0], Type::Nominal(nominal), origin.clone())
+        .expect("constructor scrutinee");
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("shared arm body");
+    let arms = constructors
+        .into_iter()
+        .map(|constructor| {
+            CoreMatchArm::new(
+                CorePattern::new(
+                    Type::Nominal(nominal),
+                    origin.clone(),
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload: None,
+                    },
+                ),
+                body,
+                origin.clone(),
+            )
+        })
+        .collect();
+    let root = builder
+        .match_expression(scrutinee, arms, Type::Unit, origin)
+        .expect("unchecked oversized match");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("coverage budget exhaustion must reject unchecked Core");
+    assert_eq!(error.reason(), ValidationReason::Resource);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn nominal_identity_and_tuple_structure_share_one_type_equality_rule() {
+    let first_source = source("first nominal source");
+    let second_source = source("second nominal source");
+    let first = NominalTypeId::new(first_source.id(), 0);
+    let same = NominalTypeId::new(first_source.id(), 0);
+    let other_declaration = NominalTypeId::new(first_source.id(), 1);
+    let other_source = NominalTypeId::new(second_source.id(), 0);
+
+    assert!(same_type(&Type::Nominal(first), &Type::Nominal(same)));
+    assert!(!same_type(
+        &Type::Nominal(first),
+        &Type::Nominal(other_declaration)
+    ));
+    assert!(!same_type(
+        &Type::Nominal(first),
+        &Type::Nominal(other_source)
+    ));
+
+    let left = Type::Tuple(vec![Type::Int, Type::Nominal(first)].into_boxed_slice());
+    let right = Type::Tuple(vec![Type::Int, Type::Nominal(same)].into_boxed_slice());
+    assert!(same_type(&left, &right));
+    assert_eq!(left.to_string(), format!("(Int, {})", Type::Nominal(first)));
+}
 
 #[test]
 fn structural_types_render_with_unambiguous_function_association() {
@@ -37,6 +502,14 @@ fn whole_origin(source: &SourceFile) -> Origin {
     Origin::Source(
         source
             .span(range)
+            .expect("test range should belong to source"),
+    )
+}
+
+fn range_origin(source: &SourceFile, start: u32, end: u32) -> Origin {
+    Origin::Source(
+        source
+            .span(ByteRange::new(start, end).expect("ordered test range"))
             .expect("test range should belong to source"),
     )
 }
@@ -100,6 +573,64 @@ fn validates_a_recursive_function_binding_group() {
 
     assert_eq!(validated.root(), root);
     assert_eq!(validated.node(root).expect("group root").ty, Type::Int);
+}
+
+#[test]
+fn validates_a_deep_guarded_initializer_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let file = source("deep guarded core");
+                let origin = whole_origin(&file);
+                let nominal_origin = range_origin(&file, 0, 17);
+                let constructor_origin = range_origin(&file, 6, 13);
+                let nominal = NominalTypeId::new(file.id(), 0);
+                let step = ConstructorId::new(nominal, 0);
+                let registry = Arc::new(ResolvedRegistry::new(
+                    vec![ResolvedNominalType {
+                        id: nominal,
+                        spelling: "Chain".into(),
+                        constructors: vec![step].into_boxed_slice(),
+                        origin: nominal_origin,
+                    }],
+                    vec![ResolvedConstructor {
+                        id: step,
+                        owner: nominal,
+                        spelling: "Step".into(),
+                        payload: Some(Type::Nominal(nominal)),
+                        origin: constructor_origin,
+                    }],
+                ));
+                let chain = Type::Nominal(nominal);
+                let constructor_type =
+                    Type::Function(Box::new(chain.clone()), Box::new(chain.clone()));
+                let mut builder = CoreBuilder::with_registry(registry);
+                let member = builder
+                    .binder(chain.clone(), origin.clone())
+                    .expect("recursive binder");
+                let occurrence = builder
+                    .variable(member.id(), chain.clone(), origin.clone())
+                    .expect("recursive occurrence");
+                let constructor = builder
+                    .constructor(step, constructor_type, origin.clone())
+                    .expect("constructor function");
+                let mut initializer = occurrence;
+                for _ in 0..10_000 {
+                    initializer = builder
+                        .application(constructor, initializer, chain.clone(), origin.clone())
+                        .expect("guarded constructor application");
+                }
+                let root = builder
+                    .recursive_binding(vec![(member, initializer)], occurrence, chain, origin)
+                    .expect("recursive group");
+                validate(builder.finish(root).expect("root"), &[&file])
+                    .expect("deep guarded Core must validate");
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("guarded validation must fit the small stack");
+    });
 }
 
 #[test]

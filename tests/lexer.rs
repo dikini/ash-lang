@@ -1,5 +1,6 @@
 use ash::{
     lexer::{LexReason, Token, TokenKind, lex},
+    parser::{ResourceFailure, SYNTAX_WORK_LIMIT},
     source::SourceFile,
 };
 
@@ -25,6 +26,30 @@ fn recognizes_recursion_reserved_words() {
             TokenKind::And,
             TokenKind::Identifier("record".into()),
             TokenKind::Identifier("android".into()),
+            TokenKind::EndOfFile,
+        ]
+    );
+}
+
+#[test]
+fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
+    let source = SourceFile::new(
+        "data-pattern-tokens.ash",
+        "type match _ Tree Leaf _tail | =>",
+    )
+    .expect("the token source should fit");
+
+    assert_eq!(
+        token_kinds(&source),
+        vec![
+            TokenKind::Type,
+            TokenKind::Match,
+            TokenKind::Wildcard,
+            TokenKind::UpperIdentifier("Tree".into()),
+            TokenKind::UpperIdentifier("Leaf".into()),
+            TokenKind::Identifier("_tail".into()),
+            TokenKind::Pipe,
+            TokenKind::FatArrow,
             TokenKind::EndOfFile,
         ]
     );
@@ -218,7 +243,6 @@ fn reports_each_excluded_lexical_form_with_its_exact_span() {
         ("/* no */", LexReason::Comment, 8),
         ("-123", LexReason::NegativeLiteral, 4),
         ("01", LexReason::InvalidIntegerLiteral, 2),
-        ("UPPER", LexReason::InvalidIdentifier, 5),
         ("@", LexReason::UnknownCharacter, 1),
         ("😀", LexReason::UnknownCharacter, 4),
     ];
@@ -494,4 +518,25 @@ fn adjacent_integer_and_identifier_tokens_split_at_the_normative_boundaries() {
     assert_range(&lexed.tokens[0], 0, 1);
     assert_range(&lexed.tokens[1], 1, 3);
     assert_range(&lexed.tokens[2], 3, 3);
+}
+
+#[test]
+fn syntax_work_budget_stops_token_retention_before_the_next_allocation() {
+    let source = SourceFile::new("token-work-limit.ash", ",".repeat(SYNTAX_WORK_LIMIT + 1))
+        .expect("the token work fixture should fit");
+
+    let lexed = lex(&source).expect("resource exhaustion preserves source invariants");
+
+    assert_eq!(
+        lexed.resource_failure(),
+        Some(ResourceFailure::SyntaxWork {
+            limit: SYNTAX_WORK_LIMIT
+        })
+    );
+    assert_eq!(lexed.tokens.len(), SYNTAX_WORK_LIMIT);
+    assert!(lexed.diagnostics.is_empty());
+    assert!(!matches!(
+        lexed.tokens.last().map(|token| &token.kind),
+        Some(TokenKind::EndOfFile)
+    ));
 }

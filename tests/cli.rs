@@ -162,7 +162,7 @@ fn recursive_source_rejections_use_stable_cli_categories() {
         ),
         (
             b"{\nlet rec value : Int = 1\nvalue\n}\n".as_slice(),
-            "recursion.unsafe-initializer",
+            "recursion.unsafe-root",
         ),
     ] {
         let source = TempFile::write(text);

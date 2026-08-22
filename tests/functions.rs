@@ -13,7 +13,7 @@ use ash::{
     lexer::lex,
     parser::{parse, project},
     resolve::resolve,
-    resolved::{ResolvedDefinitionKind, ResolvedExprKind, ResolvedProgram},
+    resolved::{ResolvedDefinitionKind, ResolvedExprKind, ResolvedPatternKind, ResolvedProgram},
     source::{GeneratedReason, SourceFile},
     types::Type,
 };
@@ -91,7 +91,10 @@ fn anonymous_function_checks_only_with_a_structural_function_context() {
     let ResolvedExprKind::Function(surface_function) = &program.result.kind else {
         panic!("expected resolved anonymous function");
     };
-    assert_eq!(function.parameter().id(), surface_function.parameter.id);
+    let ResolvedPatternKind::Binder(surface_parameter) = &surface_function.pattern.kind else {
+        panic!("expected binder parameter");
+    };
+    assert_eq!(function.parameter().id(), surface_parameter.id);
     assert_eq!(function.parameter().ty(), &Type::Int);
     assert_eq!(
         root.origin.generated_reason(),
@@ -174,12 +177,12 @@ fn application_argument_mismatch_relates_the_argument_to_the_global_domain_annot
     assert_eq!(diagnostic.reason, TypeReason::Argument);
     assert_eq!(diagnostic.primary.span(), application.argument.span);
     assert!(diagnostic.related.iter().any(|label| {
-        let ash::surface::SurfaceTypeKind::Function(function) =
-            &definition.interface.annotation.kind
-        else {
-            return false;
-        };
-        label.span() == function.domain.span
+        definition
+            .interface
+            .annotation
+            .provenance
+            .function_parts()
+            .is_some_and(|(domain, _)| domain.span() == Some(label.span()))
     }));
     assert_eq!(diagnostic.expected.as_deref(), Some("Int"));
     assert_eq!(diagnostic.found.as_deref(), Some("Bool"));
@@ -195,13 +198,15 @@ fn equational_returned_function_argument_uses_the_inner_domain_provenance() {
     let ResolvedDefinitionKind::Equational(definition) = &program.definitions[0].kind else {
         panic!("expected an equational definition");
     };
-    let ash::surface::SurfaceTypeKind::Function(interface) = &definition.interface.annotation.kind
-    else {
-        panic!("expected an outer function type");
-    };
-    let ash::surface::SurfaceTypeKind::Function(returned) = &interface.codomain.kind else {
-        panic!("expected a returned function type");
-    };
+    let (outer_domain, returned) = definition
+        .interface
+        .annotation
+        .provenance
+        .function_parts()
+        .expect("expected an outer function type");
+    let (returned_domain, _) = returned
+        .function_parts()
+        .expect("expected a returned function type");
 
     let error = run_source(source).expect_err("Bool does not match the returned Int domain");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
@@ -214,13 +219,13 @@ fn equational_returned_function_argument_uses_the_inner_domain_provenance() {
         diagnostic
             .related
             .iter()
-            .any(|label| label.span() == returned.domain.span)
+            .any(|label| Some(label.span()) == returned_domain.span())
     );
     assert!(
         !diagnostic
             .related
             .iter()
-            .any(|label| label.span() == interface.domain.span)
+            .any(|label| Some(label.span()) == outer_domain.span())
     );
 }
 
@@ -233,10 +238,12 @@ fn operational_returned_function_argument_uses_the_inner_domain_provenance() {
     let ResolvedDefinitionKind::InlineOperational(definition) = &program.definitions[0].kind else {
         panic!("expected an operational definition");
     };
-    let ash::surface::SurfaceTypeKind::Function(returned) = &definition.header.result_type.kind
-    else {
-        panic!("expected a returned function type");
-    };
+    let (returned_domain, _) = definition
+        .header
+        .result_type
+        .provenance
+        .function_parts()
+        .expect("expected a returned function type");
 
     let error = run_source(source).expect_err("Bool does not match the returned Int domain");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
@@ -249,13 +256,13 @@ fn operational_returned_function_argument_uses_the_inner_domain_provenance() {
         diagnostic
             .related
             .iter()
-            .any(|label| label.span() == returned.domain.span)
+            .any(|label| Some(label.span()) == returned_domain.span())
     );
     assert!(
         !diagnostic
             .related
             .iter()
-            .any(|label| { label.span() == definition.header.parameter.annotation.span })
+            .any(|label| { label.span() == definition.header.parameters[0].annotation.span })
     );
 }
 
@@ -354,22 +361,24 @@ fn definition_result_mismatch_relates_the_body_to_the_declared_codomain() {
     let ResolvedDefinitionKind::Equational(definition) = &program.definitions[0].kind else {
         panic!("expected an equational definition");
     };
-    let ash::surface::SurfaceTypeKind::Function(interface) = &definition.interface.annotation.kind
-    else {
-        panic!("expected a function interface");
-    };
+    let (_, codomain) = definition
+        .interface
+        .annotation
+        .provenance
+        .function_parts()
+        .expect("expected a function interface");
 
     let error = run_source(source).expect_err("the declared Bool result should reject Int");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("expected a source type diagnostic");
     };
     assert_eq!(diagnostic.reason, TypeReason::DefinitionResult);
-    assert_eq!(diagnostic.primary.span(), definition.equation.body.span);
+    assert_eq!(diagnostic.primary.span(), definition.equations[0].body.span);
     assert!(
         diagnostic
             .related
             .iter()
-            .any(|label| label.span() == interface.codomain.span)
+            .any(|label| Some(label.span()) == codomain.span())
     );
     assert_eq!(diagnostic.expected.as_deref(), Some("Bool"));
     assert_eq!(diagnostic.found.as_deref(), Some("Int"));
@@ -397,7 +406,7 @@ fn equational_interface_must_expose_one_function_domain() {
         diagnostic
             .related
             .iter()
-            .any(|label| { label.span() == definition.equation.name.origin.primary_span() })
+            .any(|label| { label.span() == definition.equations[0].name.origin.primary_span() })
     );
     assert_eq!(diagnostic.expected.as_deref(), Some("function"));
     assert_eq!(diagnostic.found.as_deref(), Some("Int"));

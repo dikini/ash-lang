@@ -10,7 +10,11 @@ use crate::{
 /// Renders one successful observation with its required trailing newline.
 #[must_use]
 pub fn observation(observation: &Observation) -> String {
-    format!("{} : {}\n", observation.value, observation.ty)
+    format!(
+        "{} : {}\n",
+        observation.value_display(),
+        observation.type_display()
+    )
 }
 
 /// Renders one file or pipeline failure with its required trailing newline.
@@ -72,6 +76,9 @@ fn resource_failure(failure: ResourceFailure) -> String {
     match failure {
         ResourceFailure::StructuralDepth { limit } => {
             format!("internal.resource.structural-depth\nlimit {limit}")
+        }
+        ResourceFailure::SyntaxWork { limit } => {
+            format!("internal.resource.syntax-work\nlimit {limit}")
         }
     }
 }

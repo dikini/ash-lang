@@ -212,6 +212,23 @@ pub(crate) fn build(
     }
 }
 
+pub(crate) fn resource_limited(
+    tokens: Vec<Token>,
+    lexical_diagnostics: Vec<Diagnostic<LexReason>>,
+    parse_diagnostics: Vec<ParseDiagnostic>,
+    resource_failure: ResourceFailure,
+) -> ConcreteTree {
+    ConcreteTree {
+        root: None,
+        tokens,
+        events: Vec::new(),
+        lexical_diagnostics,
+        parse_diagnostics,
+        malformed: None,
+        resource_failure: Some(resource_failure),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{lexer::lex, source::SourceFile};

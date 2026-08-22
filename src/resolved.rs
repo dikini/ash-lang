@@ -1,9 +1,11 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
+use std::{collections::HashMap, sync::Arc};
+
 use crate::{
     integer::Integer,
     source::{Origin, Span},
-    surface::SurfaceType,
+    types::{ConstructorId, NominalTypeId, Type},
 };
 
 /// Identifies one binding within a resolved program.
@@ -47,12 +49,292 @@ pub struct ResolvedOccurrence {
 /// One resolved Mini-Ash source file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedProgram {
+    /// Immutable nominal and constructor registry.
+    pub registry: Arc<ResolvedRegistry>,
     /// Resolved global definitions in source order.
     pub definitions: Vec<ResolvedDefinition>,
     /// Required final result expression.
     pub result: ResolvedExpr,
     /// Complete accepted source span.
     pub span: Span,
+}
+
+/// Immutable resolved metadata for one source file.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ResolvedRegistry {
+    nominals: Box<[ResolvedNominalType]>,
+    constructors: Box<[ResolvedConstructor]>,
+    nominal_positions: HashMap<NominalTypeId, usize>,
+    constructor_positions: HashMap<ConstructorId, usize>,
+}
+
+impl ResolvedRegistry {
+    /// Constructs one closed registry after two-pass resolution.
+    #[must_use]
+    pub fn new(nominals: Vec<ResolvedNominalType>, constructors: Vec<ResolvedConstructor>) -> Self {
+        let nominal_positions = nominals
+            .iter()
+            .enumerate()
+            .map(|(index, nominal)| (nominal.id, index))
+            .collect();
+        let constructor_positions = constructors
+            .iter()
+            .enumerate()
+            .map(|(index, constructor)| (constructor.id, index))
+            .collect();
+        Self {
+            nominals: nominals.into_boxed_slice(),
+            constructors: constructors.into_boxed_slice(),
+            nominal_positions,
+            constructor_positions,
+        }
+    }
+
+    /// Returns nominal declarations in source order.
+    #[must_use]
+    pub fn nominals(&self) -> &[ResolvedNominalType] {
+        &self.nominals
+    }
+
+    /// Returns constructors in file and declaration order.
+    #[must_use]
+    pub fn constructors(&self) -> &[ResolvedConstructor] {
+        &self.constructors
+    }
+
+    /// Looks up a nominal declaration by stable identity.
+    #[must_use]
+    pub fn nominal(&self, id: NominalTypeId) -> Option<&ResolvedNominalType> {
+        self.nominal_positions
+            .get(&id)
+            .and_then(|index| self.nominals.get(*index))
+            .filter(|nominal| nominal.id == id)
+    }
+
+    /// Looks up a constructor by stable identity.
+    #[must_use]
+    pub fn constructor(&self, id: ConstructorId) -> Option<&ResolvedConstructor> {
+        self.constructor_positions
+            .get(&id)
+            .and_then(|index| self.constructors.get(*index))
+            .filter(|constructor| constructor.id == id)
+    }
+
+    /// Renders a type with source declaration spellings for nominal identities.
+    #[must_use]
+    pub fn display_type(&self, ty: &Type) -> String {
+        enum Task<'a> {
+            Type(&'a Type),
+            Text(&'static str),
+        }
+
+        let mut output = String::new();
+        let mut work = vec![Task::Type(ty)];
+        while let Some(task) = work.pop() {
+            match task {
+                Task::Text(text) => output.push_str(text),
+                Task::Type(Type::Int) => output.push_str("Int"),
+                Task::Type(Type::Bool) => output.push_str("Bool"),
+                Task::Type(Type::Unit) => output.push_str("Unit"),
+                Task::Type(Type::Nominal(id)) => {
+                    if let Some(nominal) = self.nominal(*id) {
+                        output.push_str(&nominal.spelling);
+                    } else {
+                        output.push_str(&Type::Nominal(*id).to_string());
+                    }
+                }
+                Task::Type(Type::Tuple(elements)) => {
+                    output.push('(');
+                    work.push(Task::Text(")"));
+                    for (index, element) in elements.iter().enumerate().rev() {
+                        work.push(Task::Type(element));
+                        if index > 0 {
+                            work.push(Task::Text(", "));
+                        }
+                    }
+                }
+                Task::Type(Type::Function(domain, codomain)) => {
+                    work.push(Task::Type(codomain));
+                    work.push(Task::Text(" -> "));
+                    if matches!(domain.as_ref(), Type::Function(_, _)) {
+                        work.push(Task::Text(")"));
+                        work.push(Task::Type(domain));
+                        work.push(Task::Text("("));
+                    } else {
+                        work.push(Task::Type(domain));
+                    }
+                }
+            }
+        }
+        output
+    }
+
+    /// Destroys untrusted registry payloads without following host recursion.
+    pub(crate) fn discard_iteratively(self) {
+        let Self {
+            nominals,
+            constructors,
+            nominal_positions,
+            constructor_positions,
+        } = self;
+        drop(nominal_positions);
+        drop(constructor_positions);
+        for nominal in nominals.into_vec() {
+            discard_origin(nominal.origin);
+        }
+        for constructor in constructors.into_vec() {
+            if let Some(payload) = constructor.payload {
+                discard_type(payload);
+            }
+            discard_origin(constructor.origin);
+        }
+    }
+}
+
+fn discard_type(root: Type) {
+    let mut work = vec![root];
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Tuple(elements) => work.extend(elements.into_vec()),
+            Type::Function(domain, codomain) => {
+                work.push(*domain);
+                work.push(*codomain);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+        }
+    }
+}
+
+fn discard_origin(root: Origin) {
+    let mut current = root;
+    loop {
+        match current {
+            Origin::Source(_) => return,
+            Origin::Generated { cause, .. } => current = *cause,
+            Origin::Related { primary, .. } => current = *primary,
+        }
+    }
+}
+
+/// Resolved metadata for one nominal declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedNominalType {
+    /// Stable source-order identity.
+    pub id: NominalTypeId,
+    /// Exact declaration spelling.
+    pub spelling: String,
+    /// Constructor identities in declaration order.
+    pub constructors: Box<[ConstructorId]>,
+    /// Declaration provenance.
+    pub origin: Origin,
+}
+
+/// Resolved metadata for one constructor declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedConstructor {
+    /// Stable constructor identity.
+    pub id: ConstructorId,
+    /// Owning nominal identity.
+    pub owner: NominalTypeId,
+    /// Exact constructor spelling.
+    pub spelling: String,
+    /// Zero or one semantic payload type.
+    pub payload: Option<Type>,
+    /// Declaration provenance.
+    pub origin: Origin,
+}
+
+/// One fully resolved type occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedType {
+    /// Resolved structural or nominal type.
+    pub ty: Type,
+    /// Stack-safe provenance aligned with every structural type component.
+    pub provenance: ResolvedTypeProvenance,
+    /// Causal source provenance.
+    pub origin: Origin,
+    /// Complete source occurrence span.
+    pub span: Span,
+}
+
+/// Shareable arena-shaped provenance for one resolved type occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedTypeProvenance {
+    nodes: Arc<[ResolvedTypeProvenanceNode]>,
+    root: usize,
+}
+
+/// One node in a resolved type-provenance arena.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResolvedTypeProvenanceNode {
+    /// An atomic or nominal type occurrence.
+    Fact(Span),
+    /// A tuple occurrence and its element provenance roots.
+    Tuple { span: Span, elements: Box<[usize]> },
+    /// A function occurrence and its component provenance roots.
+    Function {
+        span: Span,
+        domain: usize,
+        codomain: usize,
+    },
+}
+
+impl ResolvedTypeProvenance {
+    /// Builds an admitted provenance arena from source-ordered nodes.
+    #[must_use]
+    pub(crate) fn new(nodes: Vec<ResolvedTypeProvenanceNode>, root: usize) -> Self {
+        Self {
+            nodes: nodes.into(),
+            root,
+        }
+    }
+
+    /// Returns the complete source span of this provenance view.
+    #[must_use]
+    pub fn span(&self) -> Option<Span> {
+        self.nodes.get(self.root).map(|node| match node {
+            ResolvedTypeProvenanceNode::Fact(span)
+            | ResolvedTypeProvenanceNode::Tuple { span, .. }
+            | ResolvedTypeProvenanceNode::Function { span, .. } => *span,
+        })
+    }
+
+    /// Returns views of a function domain and codomain.
+    #[must_use]
+    pub fn function_parts(&self) -> Option<(Self, Self)> {
+        let ResolvedTypeProvenanceNode::Function {
+            domain, codomain, ..
+        } = self.nodes.get(self.root)?
+        else {
+            return None;
+        };
+        Some((self.view(*domain)?, self.view(*codomain)?))
+    }
+
+    /// Returns tuple element views in source order.
+    #[must_use]
+    pub fn tuple_elements(&self) -> Option<Vec<Self>> {
+        let ResolvedTypeProvenanceNode::Tuple { elements, .. } = self.nodes.get(self.root)? else {
+            return None;
+        };
+        elements.iter().map(|root| self.view(*root)).collect()
+    }
+
+    fn view(&self, root: usize) -> Option<Self> {
+        self.nodes.get(root)?;
+        Some(Self {
+            nodes: Arc::clone(&self.nodes),
+            root,
+        })
+    }
+
+    pub(crate) fn nodes(&self) -> &[ResolvedTypeProvenanceNode] {
+        &self.nodes
+    }
+
+    pub(crate) const fn root(&self) -> usize {
+        self.root
+    }
 }
 
 /// One resolved global definition.
@@ -78,8 +360,8 @@ pub enum ResolvedDefinitionKind {
 pub struct ResolvedEquationalGlobal {
     /// Separately written external interface.
     pub interface: ResolvedExternalInterface,
-    /// Binder-only equation.
-    pub equation: ResolvedEquation,
+    /// Nonempty contiguous clause group.
+    pub equations: Vec<ResolvedEquation>,
 }
 
 /// A resolved external interface.
@@ -87,8 +369,8 @@ pub struct ResolvedEquationalGlobal {
 pub struct ResolvedExternalInterface {
     /// Global definition site.
     pub name: Binder,
-    /// Declared source type.
-    pub annotation: SurfaceType,
+    /// Declared resolved type.
+    pub annotation: ResolvedType,
     /// Complete interface span.
     pub span: Span,
 }
@@ -98,8 +380,8 @@ pub struct ResolvedExternalInterface {
 pub struct ResolvedEquation {
     /// Repeated global name in the equation head.
     pub name: ResolvedOccurrence,
-    /// Unary equation parameter.
-    pub binder: Binder,
+    /// Patterns consuming successive arrow domains.
+    pub patterns: Vec<ResolvedPattern>,
     /// Resolved equation body.
     pub body: ResolvedExpr,
     /// Complete equation span.
@@ -120,23 +402,56 @@ pub struct ResolvedInlineOperationalGlobal {
 pub struct ResolvedInlineOperationalHeader {
     /// Global definition site.
     pub name: Binder,
-    /// Typed unary parameter.
-    pub parameter: ResolvedTypedBinder,
+    /// Nonempty typed operational parameter vector.
+    pub parameters: Vec<ResolvedTypedPattern>,
     /// Declared result type.
-    pub result_type: SurfaceType,
+    pub result_type: ResolvedType,
     /// Complete header span, excluding the body.
     pub span: Span,
 }
 
-/// A resolved binder with a source type annotation.
+/// One resolved pattern with a resolved type annotation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedTypedBinder {
-    /// Resolved definition site.
-    pub binder: Binder,
-    /// Required source type.
-    pub annotation: SurfaceType,
-    /// Complete typed-binder span.
+pub struct ResolvedTypedPattern {
+    /// Resolved pattern.
+    pub pattern: ResolvedPattern,
+    /// Required resolved type.
+    pub annotation: ResolvedType,
+    /// Complete source span.
     pub span: Span,
+}
+
+/// One resolved pattern.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedPattern {
+    /// Resolved pattern payload.
+    pub kind: ResolvedPatternKind,
+    /// Complete pattern span.
+    pub span: Span,
+}
+
+/// The closed resolved pattern family.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResolvedPatternKind {
+    /// A stable binder definition.
+    Binder(Binder),
+    /// A nonbinding wildcard.
+    Wildcard,
+    /// A Boolean literal pattern.
+    Boolean(bool),
+    /// Unit.
+    Unit,
+    /// A structural tuple pattern.
+    Tuple(Vec<ResolvedPattern>),
+    /// A constructor identity and optional payload pattern.
+    Constructor {
+        /// Resolved constructor identity.
+        constructor: ConstructorId,
+        /// Original spelling and source provenance.
+        occurrence: ResolvedConstructorOccurrence,
+        /// Optional payload pattern.
+        payload: Option<Box<ResolvedPattern>>,
+    },
 }
 
 /// A resolved sequential block.
@@ -155,7 +470,7 @@ pub struct ResolvedBlock {
 pub enum ResolvedLocalDeclaration {
     /// A sequential nonrecursive binding.
     Binding(Box<ResolvedBinding>),
-    /// A simultaneous recursive function binding group.
+    /// A simultaneous recursive binding group.
     Recursive(ResolvedRecursiveGroup),
 }
 
@@ -176,7 +491,7 @@ pub struct ResolvedRecursiveMember {
     /// Introduced definition site.
     pub binder: Binder,
     /// Required declared monotype.
-    pub annotation: SurfaceType,
+    pub annotation: ResolvedType,
     /// Initializer resolved in the simultaneous group scope.
     pub initializer: ResolvedExpr,
     /// Complete member span.
@@ -186,10 +501,10 @@ pub struct ResolvedRecursiveMember {
 /// A resolved immutable local binding.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedBinding {
-    /// Introduced definition site.
-    pub binder: Binder,
+    /// Introduced irrefutable pattern.
+    pub pattern: ResolvedPattern,
     /// Optional source type annotation.
-    pub annotation: Option<SurfaceType>,
+    pub annotation: Option<ResolvedType>,
     /// Initializer resolved in the incoming scope.
     pub initializer: ResolvedExpr,
     /// Complete binding span.
@@ -216,6 +531,10 @@ pub enum ResolvedExprKind {
     Unit,
     /// A resolved name occurrence.
     Occurrence(ResolvedOccurrence),
+    /// A resolved constructor term occurrence.
+    Constructor(ResolvedConstructorOccurrence),
+    /// A strict structural tuple.
+    Tuple(Vec<ResolvedExpr>),
     /// Strict unary application.
     Apply(ResolvedApplicationExpr),
     /// Integer addition.
@@ -228,6 +547,39 @@ pub enum ResolvedExprKind {
     Block(ResolvedBlock),
     /// An anonymous unary function.
     Function(ResolvedFunctionExpr),
+    /// A structured match.
+    Match(ResolvedMatchExpr),
+}
+
+/// One resolved constructor occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedConstructorOccurrence {
+    /// Stable constructor identity.
+    pub constructor: ConstructorId,
+    /// Exact source spelling.
+    pub spelling: String,
+    /// Causal source provenance.
+    pub origin: Origin,
+}
+
+/// A resolved structured match.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedMatchExpr {
+    /// Resolved scrutinee.
+    pub scrutinee: Box<ResolvedExpr>,
+    /// Source-ordered arms.
+    pub arms: Vec<ResolvedMatchArm>,
+}
+
+/// One resolved match arm.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedMatchArm {
+    /// Resolved arm pattern.
+    pub pattern: ResolvedPattern,
+    /// Resolved arm body.
+    pub body: ResolvedExpr,
+    /// Complete arm span.
+    pub span: Span,
 }
 
 /// A resolved unary application.
@@ -253,8 +605,8 @@ pub struct ResolvedBinaryExpr {
 /// A resolved anonymous function expression.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedFunctionExpr {
-    /// Unary parameter definition site.
-    pub parameter: Binder,
+    /// Unary domain pattern.
+    pub pattern: ResolvedPattern,
     /// Resolved braced body.
     pub body: ResolvedBlock,
 }

@@ -5,11 +5,12 @@ use crate::{
     source::{ByteRange, SourceFile, Span},
     surface::{
         ApplicationExpr, BinaryExpr, EquationalGlobal, FunctionExpr, FunctionType,
-        InlineOperationalGlobal, SurfaceBinder, SurfaceBinding, SurfaceBlock, SurfaceDefinition,
-        SurfaceDefinitionKind, SurfaceEquation, SurfaceExpr, SurfaceExprKind,
-        SurfaceExternalInterface, SurfaceInlineOperationalHeader, SurfaceLocalDeclaration,
-        SurfaceName, SurfaceProgram, SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceType,
-        SurfaceTypeKind, SurfaceTypedBinder,
+        InlineOperationalGlobal, SurfaceBinder, SurfaceBinding, SurfaceBlock,
+        SurfaceConstructorDeclaration, SurfaceDefinition, SurfaceDefinitionKind, SurfaceEquation,
+        SurfaceExpr, SurfaceExprKind, SurfaceExternalInterface, SurfaceInlineOperationalHeader,
+        SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr, SurfaceName, SurfacePattern,
+        SurfacePatternKind, SurfaceProgram, SurfaceRecursiveGroup, SurfaceRecursiveMember,
+        SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypedPattern,
     },
 };
 
@@ -32,8 +33,8 @@ pub enum ProjectionError {
 ///
 /// # Errors
 ///
-/// Returns [`ProjectionError::ResourceLimit`] when parsing exceeded the
-/// replaceable implementation depth budget. Returns
+/// Returns [`ProjectionError::ResourceLimit`] when parsing exceeded a
+/// replaceable implementation resource budget. Returns
 /// [`ProjectionError::RecoveryNodesPresent`] whenever lexical or parse
 /// diagnostics, missing forms, or error events remain. Returns
 /// [`ProjectionError::MalformedTree`] for incomplete or inconsistent concrete
@@ -132,6 +133,17 @@ fn structural_weight(node: &ConcreteNode) -> usize {
         | NodeKind::ApplicationExpression
         | NodeKind::ParenthesizedExpression
         | NodeKind::ParenthesizedType => 1,
+        NodeKind::Pattern
+            if child_nodes(node).any(|child| {
+                matches!(
+                    child.kind,
+                    NodeKind::ConstructorPattern | NodeKind::TuplePattern | NodeKind::Pattern
+                )
+            }) =>
+        {
+            super::PATTERN_STRUCTURAL_WEIGHT
+        }
+        NodeKind::MatchExpression => super::MATCH_STRUCTURAL_WEIGHT,
         NodeKind::Type if child_nodes(node).any(|child| child.kind == NodeKind::Type) => 1,
         _ => 0,
     }
@@ -182,6 +194,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
     let mut shape = ShapeCursor::new(node, tokens);
     match node.kind {
         NodeKind::Program => {
+            while shape.peek_node_is(NodeKind::TypeDeclaration) {
+                shape.node(NodeKind::TypeDeclaration)?;
+                shape.token(&TokenKind::LineEnd)?;
+            }
             while shape.peek_node_is(NodeKind::EquationalGlobal)
                 || shape.peek_node_is(NodeKind::InlineOperationalGlobal)
             {
@@ -192,10 +208,38 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.optional_token(&TokenKind::LineEnd)?;
             shape.token(&TokenKind::EndOfFile)?;
         }
+        NodeKind::TypeDeclaration => {
+            shape.token(&TokenKind::Type)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            shape.token(&TokenKind::Equal)?;
+            shape.optional_token(&TokenKind::LineEnd)?;
+            shape.node(NodeKind::ConstructorDeclaration)?;
+            while shape.peek_token_is(&TokenKind::LineEnd) {
+                shape.token(&TokenKind::LineEnd)?;
+                shape.token(&TokenKind::Pipe)?;
+                shape.node(NodeKind::ConstructorDeclaration)?;
+            }
+        }
+        NodeKind::ConstructorDeclaration => {
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            if shape.peek_token_is(&TokenKind::LeftParen) {
+                shape.token(&TokenKind::LeftParen)?;
+                shape.node(NodeKind::Type)?;
+                while shape.peek_token_is(&TokenKind::Comma) {
+                    shape.token(&TokenKind::Comma)?;
+                    shape.node(NodeKind::Type)?;
+                }
+                shape.token(&TokenKind::RightParen)?;
+            }
+        }
         NodeKind::EquationalGlobal => {
             shape.node(NodeKind::ExternalInterface)?;
             shape.token(&TokenKind::LineEnd)?;
             shape.node(NodeKind::Equation)?;
+            while shape.peek_token_is(&TokenKind::LineEnd) {
+                shape.token(&TokenKind::LineEnd)?;
+                shape.node(NodeKind::Equation)?;
+            }
         }
         NodeKind::ExternalInterface => {
             shape.node(NodeKind::Binder)?;
@@ -204,7 +248,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         }
         NodeKind::Equation => {
             shape.node(NodeKind::Binder)?;
-            shape.node(NodeKind::Binder)?;
+            shape.node(NodeKind::Pattern)?;
+            while shape.peek_node_is(NodeKind::Pattern) {
+                shape.node(NodeKind::Pattern)?;
+            }
             shape.token(&TokenKind::Equal)?;
             shape.expression()?;
         }
@@ -216,7 +263,11 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::Fn)?;
             shape.node(NodeKind::Binder)?;
             shape.token(&TokenKind::LeftParen)?;
-            shape.node(NodeKind::TypedBinder)?;
+            shape.node(NodeKind::TypedPattern)?;
+            while shape.peek_token_is(&TokenKind::Comma) {
+                shape.token(&TokenKind::Comma)?;
+                shape.node(NodeKind::TypedPattern)?;
+            }
             shape.token(&TokenKind::RightParen)?;
             shape.token(&TokenKind::Arrow)?;
             shape.node(NodeKind::Type)?;
@@ -236,7 +287,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         }
         NodeKind::LocalBinding => {
             shape.token(&TokenKind::Let)?;
-            shape.node(NodeKind::Binder)?;
+            shape.node(NodeKind::Pattern)?;
             if shape.peek_token_is(&TokenKind::Colon) {
                 shape.token(&TokenKind::Colon)?;
                 shape.node(NodeKind::Type)?;
@@ -264,9 +315,32 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         NodeKind::FunctionExpression => {
             shape.token(&TokenKind::Fn)?;
             shape.token(&TokenKind::LeftParen)?;
-            shape.node(NodeKind::Binder)?;
+            shape.node(NodeKind::Pattern)?;
+            while shape.peek_token_is(&TokenKind::Comma) {
+                shape.token(&TokenKind::Comma)?;
+                shape.node(NodeKind::Pattern)?;
+            }
             shape.token(&TokenKind::RightParen)?;
             shape.node(NodeKind::Block)?;
+        }
+        NodeKind::MatchExpression => {
+            shape.token(&TokenKind::Match)?;
+            shape.expression()?;
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.token(&TokenKind::LineEnd)?;
+            shape.node(NodeKind::MatchArm)?;
+            while shape.peek_token_is(&TokenKind::LineEnd) {
+                shape.token(&TokenKind::LineEnd)?;
+                if shape.peek_node_is(NodeKind::MatchArm) {
+                    shape.node(NodeKind::MatchArm)?;
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
+        NodeKind::MatchArm => {
+            shape.node(NodeKind::Pattern)?;
+            shape.token(&TokenKind::FatArrow)?;
+            shape.expression()?;
         }
         NodeKind::EqualityExpression => shape.binary(&TokenKind::EqualEqual)?,
         NodeKind::AdditiveExpression => shape.binary(&TokenKind::Plus)?,
@@ -286,6 +360,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                             | TokenKind::True
                             | TokenKind::False
                             | TokenKind::Identifier(_)
+                            | TokenKind::UpperIdentifier(_)
                     )
                 })?;
             }
@@ -293,15 +368,77 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         NodeKind::ParenthesizedExpression => {
             shape.token(&TokenKind::LeftParen)?;
             if !shape.peek_token_is(&TokenKind::RightParen) {
-                shape.expression()?;
+                if shape.peek_node_is(NodeKind::TupleExpression) {
+                    shape.node(NodeKind::TupleExpression)?;
+                } else {
+                    shape.expression()?;
+                }
             }
             shape.token(&TokenKind::RightParen)?;
         }
+        NodeKind::TupleExpression => {
+            shape.expression()?;
+            shape.token(&TokenKind::Comma)?;
+            shape.expression()?;
+            while shape.peek_token_is(&TokenKind::Comma) {
+                shape.token(&TokenKind::Comma)?;
+                shape.expression()?;
+            }
+        }
+        NodeKind::Pattern => {
+            if shape.peek_token_is(&TokenKind::LeftParen) {
+                shape.token(&TokenKind::LeftParen)?;
+                if shape.peek_node_is(NodeKind::UnitPattern) {
+                    shape.node(NodeKind::UnitPattern)?;
+                } else if shape.peek_node_is(NodeKind::TuplePattern) {
+                    shape.node(NodeKind::TuplePattern)?;
+                    shape.token(&TokenKind::RightParen)?;
+                } else {
+                    shape.node(NodeKind::Pattern)?;
+                    shape.token(&TokenKind::RightParen)?;
+                }
+            } else {
+                shape.any_node()?;
+            }
+        }
+        NodeKind::TuplePattern => {
+            shape.node(NodeKind::Pattern)?;
+            shape.token(&TokenKind::Comma)?;
+            shape.node(NodeKind::Pattern)?;
+            while shape.peek_token_is(&TokenKind::Comma) {
+                shape.token(&TokenKind::Comma)?;
+                shape.node(NodeKind::Pattern)?;
+            }
+        }
+        NodeKind::ConstructorPattern => {
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            if shape.peek_token_is(&TokenKind::LeftParen) {
+                shape.token(&TokenKind::LeftParen)?;
+                if shape.peek_node_is(NodeKind::TuplePattern) {
+                    shape.node(NodeKind::TuplePattern)?;
+                } else {
+                    shape.node(NodeKind::Pattern)?;
+                }
+                shape.token(&TokenKind::RightParen)?;
+            } else if shape.peek_node_is(NodeKind::Pattern) {
+                shape.node(NodeKind::Pattern)?;
+            }
+        }
+        NodeKind::WildcardPattern => shape.token(&TokenKind::Wildcard)?,
+        NodeKind::BooleanPattern => {
+            shape.token_matching(|kind| matches!(kind, TokenKind::True | TokenKind::False))?
+        }
+        NodeKind::UnitPattern => shape.token(&TokenKind::RightParen)?,
         NodeKind::Binder => {
             shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?
         }
         NodeKind::TypedBinder => {
             shape.node(NodeKind::Binder)?;
+            shape.token(&TokenKind::Colon)?;
+            shape.node(NodeKind::Type)?;
+        }
+        NodeKind::TypedPattern => {
+            shape.node(NodeKind::Pattern)?;
             shape.token(&TokenKind::Colon)?;
             shape.node(NodeKind::Type)?;
         }
@@ -319,15 +456,31 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.token_matching(|kind| {
                     matches!(
                         kind,
-                        TokenKind::IntType | TokenKind::BoolType | TokenKind::UnitType
+                        TokenKind::IntType
+                            | TokenKind::BoolType
+                            | TokenKind::UnitType
+                            | TokenKind::UpperIdentifier(_)
                     )
                 })?;
             }
         }
         NodeKind::ParenthesizedType => {
             shape.token(&TokenKind::LeftParen)?;
-            shape.node(NodeKind::Type)?;
+            if shape.peek_node_is(NodeKind::TupleType) {
+                shape.node(NodeKind::TupleType)?;
+            } else {
+                shape.node(NodeKind::Type)?;
+            }
             shape.token(&TokenKind::RightParen)?;
+        }
+        NodeKind::TupleType => {
+            shape.node(NodeKind::Type)?;
+            shape.token(&TokenKind::Comma)?;
+            shape.node(NodeKind::Type)?;
+            while shape.peek_token_is(&TokenKind::Comma) {
+                shape.token(&TokenKind::Comma)?;
+                shape.node(NodeKind::Type)?;
+            }
         }
         NodeKind::Error => return malformed(InternalReason::UnexpectedShape),
     }
@@ -440,10 +593,14 @@ fn project_program(
     tokens: &[Token],
 ) -> Result<SurfaceProgram, ProjectionError> {
     require_kind(node, NodeKind::Program)?;
+    let mut type_declarations = Vec::new();
     let mut definitions = Vec::new();
     let mut result = None;
     for child in child_nodes(node) {
         match child.kind {
+            NodeKind::TypeDeclaration => {
+                type_declarations.push(project_type_declaration(source, child, tokens)?);
+            }
             NodeKind::EquationalGlobal | NodeKind::InlineOperationalGlobal => {
                 definitions.push(project_definition(source, child, tokens)?);
             }
@@ -461,8 +618,68 @@ fn project_program(
         InternalReason::UnexpectedShape,
     ))?;
     Ok(SurfaceProgram {
+        type_declarations,
         definitions,
         result,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_type_declaration(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceTypeDeclaration, ProjectionError> {
+    require_kind(node, NodeKind::TypeDeclaration)?;
+    let name_token = direct_tokens(node, tokens)
+        .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    let TokenKind::UpperIdentifier(name) = &name_token.kind else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let constructors = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::ConstructorDeclaration)
+        .map(|constructor| project_constructor_declaration(source, constructor, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    if constructors.is_empty() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(SurfaceTypeDeclaration {
+        name: SurfaceName {
+            text: name.clone(),
+            span: name_token.span,
+        },
+        constructors,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_constructor_declaration(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceConstructorDeclaration, ProjectionError> {
+    require_kind(node, NodeKind::ConstructorDeclaration)?;
+    let name_token = direct_tokens(node, tokens)
+        .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    let TokenKind::UpperIdentifier(name) = &name_token.kind else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let fields = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::Type)
+        .map(|field| project_type(source, field, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SurfaceConstructorDeclaration {
+        name: SurfaceName {
+            text: name.clone(),
+            span: name_token.span,
+        },
+        fields,
         span: node_span(source, node, tokens)?,
     })
 }
@@ -475,7 +692,6 @@ fn project_definition(
     let kind = match node.kind {
         NodeKind::EquationalGlobal => {
             let interface = only_child_of_kind(node, NodeKind::ExternalInterface)?;
-            let equation = only_child_of_kind(node, NodeKind::Equation)?;
             let interface_binder = only_child_of_kind(interface, NodeKind::Binder)?;
             let interface_name = project_binder(interface_binder, tokens)?.name;
             let interface_type = project_type(
@@ -483,40 +699,48 @@ fn project_definition(
                 only_child_of_kind(interface, NodeKind::Type)?,
                 tokens,
             )?;
-            let equation_name =
-                project_binder(child_of_kind_at(equation, NodeKind::Binder, 0, 2)?, tokens)?.name;
-            let binder =
-                project_binder(child_of_kind_at(equation, NodeKind::Binder, 1, 2)?, tokens)?;
-            let body = project_expression(source, expression_child(equation)?, tokens)?;
+            let equations = child_nodes(node)
+                .filter(|child| child.kind == NodeKind::Equation)
+                .map(|equation| {
+                    let name =
+                        project_binder(only_child_of_kind(equation, NodeKind::Binder)?, tokens)?
+                            .name;
+                    let patterns = child_nodes(equation)
+                        .filter(|child| child.kind == NodeKind::Pattern)
+                        .map(|pattern| project_pattern(source, pattern, tokens))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let body = project_expression(source, expression_child(equation)?, tokens)?;
+                    Ok(SurfaceEquation {
+                        name,
+                        patterns,
+                        body,
+                        span: node_span(source, equation, tokens)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, ProjectionError>>()?;
             SurfaceDefinitionKind::Equational(EquationalGlobal {
                 interface: SurfaceExternalInterface {
                     name: interface_name,
                     annotation: interface_type,
                     span: node_span(source, interface, tokens)?,
                 },
-                equation: SurfaceEquation {
-                    name: equation_name,
-                    binder,
-                    body,
-                    span: node_span(source, equation, tokens)?,
-                },
+                equations,
             })
         }
         NodeKind::InlineOperationalGlobal => {
             let header = only_child_of_kind(node, NodeKind::InlineOperationalHeader)?;
             let name = project_binder(only_child_of_kind(header, NodeKind::Binder)?, tokens)?.name;
-            let parameter = project_typed_binder(
-                source,
-                only_child_of_kind(header, NodeKind::TypedBinder)?,
-                tokens,
-            )?;
+            let parameters = child_nodes(header)
+                .filter(|child| child.kind == NodeKind::TypedPattern)
+                .map(|parameter| project_typed_pattern(source, parameter, tokens))
+                .collect::<Result<Vec<_>, _>>()?;
             let result_type =
                 project_type(source, only_child_of_kind(header, NodeKind::Type)?, tokens)?;
             let body = project_block(source, only_child_of_kind(node, NodeKind::Block)?, tokens)?;
             SurfaceDefinitionKind::InlineOperational(InlineOperationalGlobal {
                 header: SurfaceInlineOperationalHeader {
                     name,
-                    parameter,
+                    parameters,
                     result_type,
                     span: node_span(source, header, tokens)?,
                 },
@@ -545,8 +769,26 @@ fn project_expression(
                     schedule_block(source, node, tokens, &mut tasks)?;
                 }
                 NodeKind::FunctionExpression => {
-                    let parameter =
-                        project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
+                    let mut parameters = child_nodes(node)
+                        .filter(|child| child.kind == NodeKind::Pattern)
+                        .map(|pattern| project_pattern(source, pattern, tokens))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let parameter = if parameters.len() == 1 {
+                        parameters.pop().ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?
+                    } else {
+                        let first = parameters.first().ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                        let last = parameters.last().ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                        SurfacePattern {
+                            span: join_spans(source, first.span, last.span)?,
+                            kind: SurfacePatternKind::Tuple(parameters),
+                        }
+                    };
                     let body = only_child_of_kind(node, NodeKind::Block)?;
                     tasks.push(ExpressionTask::FinishFunction {
                         parameter,
@@ -580,6 +822,52 @@ fn project_expression(
                     tasks.push(ExpressionTask::FinishApplication);
                     tasks.push(ExpressionTask::Visit(argument));
                     tasks.push(ExpressionTask::Visit(function));
+                }
+                NodeKind::TupleExpression => {
+                    let elements = child_nodes(node)
+                        .filter(|child| is_expression_kind(child.kind))
+                        .collect::<Vec<_>>();
+                    if elements.len() < 2 {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
+                    tasks.push(ExpressionTask::FinishTuple {
+                        count: elements.len(),
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.extend(elements.into_iter().rev().map(ExpressionTask::Visit));
+                }
+                NodeKind::MatchExpression => {
+                    let scrutinee = expression_child(node)?;
+                    let arms = child_nodes(node)
+                        .filter(|child| child.kind == NodeKind::MatchArm)
+                        .map(|arm| {
+                            Ok((
+                                project_pattern(
+                                    source,
+                                    only_child_of_kind(arm, NodeKind::Pattern)?,
+                                    tokens,
+                                )?,
+                                expression_child(arm)?,
+                                node_span(source, arm, tokens)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, ProjectionError>>()?;
+                    if arms.is_empty() {
+                        return malformed(InternalReason::UnexpectedShape);
+                    }
+                    tasks.push(ExpressionTask::FinishMatch {
+                        arms: arms
+                            .iter()
+                            .map(|(pattern, _, span)| (pattern.clone(), *span))
+                            .collect(),
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.extend(
+                        arms.into_iter()
+                            .rev()
+                            .map(|(_, body, _)| ExpressionTask::Visit(body)),
+                    );
+                    tasks.push(ExpressionTask::Visit(scrutinee));
                 }
                 NodeKind::PrimaryExpression => {
                     if let Some(group) =
@@ -621,6 +909,57 @@ fn project_expression(
                     span,
                 });
             }
+            ExpressionTask::FinishTuple { count, span } => {
+                let split =
+                    projected
+                        .len()
+                        .checked_sub(count)
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                let elements = projected.split_off(split);
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Tuple(elements),
+                    span,
+                });
+            }
+            ExpressionTask::FinishMatch { arms, span } => {
+                let required = arms.len().saturating_add(1);
+                let split =
+                    projected
+                        .len()
+                        .checked_sub(required)
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                let mut expressions = projected.split_off(split).into_iter();
+                let scrutinee = expressions.next().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let projected_arms = arms
+                    .into_iter()
+                    .map(|(pattern, arm_span)| {
+                        let body = expressions.next().ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                        Ok(SurfaceMatchArm {
+                            pattern,
+                            body,
+                            span: arm_span,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ProjectionError>>()?;
+                if expressions.next().is_some() {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Match(SurfaceMatchExpr {
+                        scrutinee: Box::new(scrutinee),
+                        arms: projected_arms,
+                    }),
+                    span,
+                });
+            }
             ExpressionTask::FinishBlock { declarations, span } => {
                 let required = declarations
                     .iter()
@@ -643,12 +982,12 @@ fn project_expression(
                                 ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
                             )?;
                             projected_declarations.push(SurfaceLocalDeclaration::Binding(
-                                SurfaceBinding {
-                                    binder: binding.binder,
+                                Box::new(SurfaceBinding {
+                                    pattern: binding.pattern,
                                     annotation: binding.annotation,
                                     initializer,
                                     span: binding.span,
-                                },
+                                }),
                             ));
                         }
                         PendingLocalDeclaration::Recursive(group) => {
@@ -724,12 +1063,20 @@ enum ExpressionTask<'a> {
         operator_span: Span,
     },
     FinishApplication,
+    FinishTuple {
+        count: usize,
+        span: Span,
+    },
+    FinishMatch {
+        arms: Vec<(SurfacePattern, Span)>,
+        span: Span,
+    },
     FinishBlock {
         declarations: Vec<PendingLocalDeclaration>,
         span: Span,
     },
     FinishFunction {
-        parameter: SurfaceBinder,
+        parameter: SurfacePattern,
         span: Span,
     },
     ApplyGroupingSpan(Span),
@@ -750,7 +1097,7 @@ impl PendingLocalDeclaration {
 }
 
 struct PendingBinding {
-    binder: SurfaceBinder,
+    pattern: SurfacePattern,
     annotation: Option<SurfaceType>,
     span: Span,
 }
@@ -779,12 +1126,16 @@ fn schedule_block<'a>(
     let mut result = None;
     for child in child_nodes(node) {
         if child.kind == NodeKind::LocalBinding {
-            let binder = project_binder(only_child_of_kind(child, NodeKind::Binder)?, tokens)?;
+            let pattern = project_pattern(
+                source,
+                only_child_of_kind(child, NodeKind::Pattern)?,
+                tokens,
+            )?;
             let annotation = optional_child_of_kind(child, NodeKind::Type)?
                 .map(|annotation| project_type(source, annotation, tokens))
                 .transpose()?;
             declarations.push(PendingLocalDeclaration::Binding(PendingBinding {
-                binder,
+                pattern,
                 annotation,
                 span: node_span(source, child, tokens)?,
             }));
@@ -947,6 +1298,10 @@ fn project_primitive(
             text: text.clone(),
             span: token.span,
         }),
+        TokenKind::UpperIdentifier(text) => SurfaceExprKind::Name(SurfaceName {
+            text: text.clone(),
+            span: token.span,
+        }),
         _ => return malformed(InternalReason::UnexpectedShape),
     };
     Ok(SurfaceExpr {
@@ -983,18 +1338,90 @@ fn project_binder(node: &ConcreteNode, tokens: &[Token]) -> Result<SurfaceBinder
     })
 }
 
-fn project_typed_binder(
+fn project_typed_pattern(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &[Token],
-) -> Result<SurfaceTypedBinder, ProjectionError> {
-    let binder = project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
+) -> Result<SurfaceTypedPattern, ProjectionError> {
+    require_kind(node, NodeKind::TypedPattern)?;
+    let pattern = project_pattern(source, only_child_of_kind(node, NodeKind::Pattern)?, tokens)?;
     let annotation = project_type(source, only_child_of_kind(node, NodeKind::Type)?, tokens)?;
-    Ok(SurfaceTypedBinder {
-        binder,
+    Ok(SurfaceTypedPattern {
+        pattern,
         annotation,
         span: node_span(source, node, tokens)?,
     })
+}
+
+fn project_pattern(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfacePattern, ProjectionError> {
+    require_kind(node, NodeKind::Pattern)?;
+    let span = node_span(source, node, tokens)?;
+    let kind = if let Some(binder) = optional_child_of_kind(node, NodeKind::Binder)? {
+        SurfacePatternKind::Binder(project_binder(binder, tokens)?)
+    } else if optional_child_of_kind(node, NodeKind::WildcardPattern)?.is_some() {
+        SurfacePatternKind::Wildcard
+    } else if let Some(boolean) = optional_child_of_kind(node, NodeKind::BooleanPattern)? {
+        let token = only_direct_token(boolean, tokens)?;
+        SurfacePatternKind::Boolean(matches!(token.kind, TokenKind::True))
+    } else if optional_child_of_kind(node, NodeKind::UnitPattern)?.is_some() {
+        SurfacePatternKind::Unit
+    } else if let Some(tuple) = optional_child_of_kind(node, NodeKind::TuplePattern)? {
+        SurfacePatternKind::Tuple(project_pattern_children(source, tuple, tokens)?)
+    } else if let Some(constructor) = optional_child_of_kind(node, NodeKind::ConstructorPattern)? {
+        let name_token = direct_tokens(constructor, tokens)
+            .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        let TokenKind::UpperIdentifier(name) = &name_token.kind else {
+            return malformed(InternalReason::UnexpectedShape);
+        };
+        let payload = if let Some(tuple) =
+            optional_child_of_kind(constructor, NodeKind::TuplePattern)?
+        {
+            Some(Box::new(SurfacePattern {
+                kind: SurfacePatternKind::Tuple(project_pattern_children(source, tuple, tokens)?),
+                span: node_span(source, tuple, tokens)?,
+            }))
+        } else {
+            optional_child_of_kind(constructor, NodeKind::Pattern)?
+                .map(|payload| project_pattern(source, payload, tokens).map(Box::new))
+                .transpose()?
+        };
+        SurfacePatternKind::Constructor {
+            name: SurfaceName {
+                text: name.clone(),
+                span: name_token.span,
+            },
+            payload,
+        }
+    } else if let Some(inner) = optional_child_of_kind(node, NodeKind::Pattern)? {
+        let mut inner = project_pattern(source, inner, tokens)?;
+        inner.span = span;
+        return Ok(inner);
+    } else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    Ok(SurfacePattern { kind, span })
+}
+
+fn project_pattern_children(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<Vec<SurfacePattern>, ProjectionError> {
+    let patterns = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::Pattern)
+        .map(|pattern| project_pattern(source, pattern, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    if patterns.len() < 2 {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(patterns)
 }
 
 fn project_type(
@@ -1020,11 +1447,25 @@ fn project_type(
             TypeTask::VisitAtomic(node) => {
                 require_kind(node, NodeKind::AtomicType)?;
                 if let Some(group) = optional_child_of_kind(node, NodeKind::ParenthesizedType)? {
-                    let nested = only_child_of_kind(group, NodeKind::Type)?;
-                    tasks.push(TypeTask::ApplyGroupingSpan(node_span(
-                        source, group, tokens,
-                    )?));
-                    tasks.push(TypeTask::VisitType(nested));
+                    if let Some(tuple) = optional_child_of_kind(group, NodeKind::TupleType)? {
+                        let elements = child_nodes(tuple)
+                            .filter(|child| child.kind == NodeKind::Type)
+                            .collect::<Vec<_>>();
+                        if elements.len() < 2 {
+                            return malformed(InternalReason::UnexpectedShape);
+                        }
+                        tasks.push(TypeTask::FinishTuple {
+                            count: elements.len(),
+                            span: node_span(source, group, tokens)?,
+                        });
+                        tasks.extend(elements.into_iter().rev().map(TypeTask::VisitType));
+                    } else {
+                        let nested = only_child_of_kind(group, NodeKind::Type)?;
+                        tasks.push(TypeTask::ApplyGroupingSpan(node_span(
+                            source, group, tokens,
+                        )?));
+                        tasks.push(TypeTask::VisitType(nested));
+                    }
                 } else {
                     projected.push(project_atomic_primitive(node, tokens)?);
                 }
@@ -1041,6 +1482,20 @@ fn project_type(
                         domain: Box::new(domain),
                         codomain: Box::new(codomain),
                     }),
+                    span,
+                });
+            }
+            TypeTask::FinishTuple { count, span } => {
+                let split =
+                    projected
+                        .len()
+                        .checked_sub(count)
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                let elements = projected.split_off(split);
+                projected.push(SurfaceType {
+                    kind: SurfaceTypeKind::Tuple(elements),
                     span,
                 });
             }
@@ -1064,6 +1519,7 @@ enum TypeTask<'a> {
     VisitType(&'a ConcreteNode),
     VisitAtomic(&'a ConcreteNode),
     FinishFunction(Span),
+    FinishTuple { count: usize, span: Span },
     ApplyGroupingSpan(Span),
 }
 
@@ -1076,6 +1532,10 @@ fn project_atomic_primitive(
         TokenKind::IntType => SurfaceTypeKind::Int,
         TokenKind::BoolType => SurfaceTypeKind::Bool,
         TokenKind::UnitType => SurfaceTypeKind::Unit,
+        TokenKind::UpperIdentifier(ref text) => SurfaceTypeKind::Named(SurfaceName {
+            text: text.clone(),
+            span: token.span,
+        }),
         _ => return malformed(InternalReason::UnexpectedShape),
     };
     Ok(SurfaceType {
@@ -1157,6 +1617,8 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
         kind,
         NodeKind::Block
             | NodeKind::FunctionExpression
+            | NodeKind::MatchExpression
+            | NodeKind::TupleExpression
             | NodeKind::EqualityExpression
             | NodeKind::AdditiveExpression
             | NodeKind::MultiplicativeExpression
@@ -1295,17 +1757,17 @@ mod tests {
         let root = tree.root.as_mut().expect("the parser produced one root");
         let function = find_node_mut(root, NodeKind::FunctionExpression)
             .expect("the fixture contains a function expression");
-        let binder = function
+        let pattern = function
             .children
             .iter()
             .find_map(|child| match child {
-                ConcreteElement::Node(child) if child.kind == NodeKind::Binder => {
+                ConcreteElement::Node(child) if child.kind == NodeKind::Pattern => {
                     Some(child.clone())
                 }
                 _ => None,
             })
-            .expect("the function has a binder");
-        function.children.push(ConcreteElement::Node(binder));
+            .expect("the function has a pattern");
+        function.children.push(ConcreteElement::Node(pattern));
 
         assert_eq!(
             project(&source, &tree),

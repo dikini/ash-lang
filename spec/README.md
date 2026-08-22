@@ -7,8 +7,10 @@ describes exactly the implemented language and runtime behavior.
 
 Ash currently implements Mini-Ash, a single-file, monomorphic, pure-functional
 language. Every accepted file contains zero or more mutually visible global
-function definitions followed by one result expression. Blocks also support
-sequential bindings and explicit recursive function groups.
+nominal type declarations, zero or more mutually visible global function
+definitions, and one result expression. The language includes structural
+tuples, constructor values, typed patterns, exhaustive matches and equations,
+sequential bindings, and explicit constructor-guarded recursive groups.
 
 The specification is split by concern:
 

@@ -1,10 +1,10 @@
 //! Bounded transformations over independently validated pure Core.
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, sync::Arc};
 
 use super::{
-    BuildError, CoreBuilder, NodeId, Primitive, PureComputation, PureExprKind, PureValue,
-    UnvalidatedProgram, ValidatedProgram,
+    BuildError, CoreBuilder, CoreMatchArm, CorePattern, CorePatternKind, NodeId, Primitive,
+    PureComputation, PureExprKind, PureValue, UnvalidatedProgram, ValidatedProgram,
 };
 use crate::source::{GeneratedReason, Origin};
 
@@ -79,7 +79,7 @@ fn rebuild(
     fold_literal_primitives: bool,
 ) -> Result<UnvalidatedProgram, TransformError> {
     let order = postorder(program, fold_literal_primitives)?;
-    let mut builder = CoreBuilder::new();
+    let mut builder = CoreBuilder::with_registry(Arc::clone(program.registry()));
     let mut binders = Vec::new();
     for id in &order {
         let expression = program
@@ -95,12 +95,24 @@ fn rebuild(
             PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
                 binders.extend(group.members().iter().map(|member| member.binder().id()));
             }
+            PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                for arm in match_node.arms() {
+                    let mut pattern_binders = Vec::new();
+                    arm.pattern().binders(&mut pattern_binders);
+                    binders.extend(pattern_binders.into_iter().map(|binder| binder.id()));
+                }
+            }
             PureExprKind::Value(
-                PureValue::Integer(_) | PureValue::Boolean(_) | PureValue::Unit(_),
+                PureValue::Integer(_)
+                | PureValue::Boolean(_)
+                | PureValue::Unit(_)
+                | PureValue::Constructor(_),
             )
             | PureExprKind::Variable(_)
             | PureExprKind::Computation(
-                PureComputation::Apply(_) | PureComputation::Primitive(_),
+                PureComputation::Apply(_)
+                | PureComputation::Primitive(_)
+                | PureComputation::Tuple(_),
             ) => {}
         }
     }
@@ -167,6 +179,13 @@ fn rebuild_node(
             .map_err(TransformError::from),
         PureExprKind::Value(PureValue::Unit(_)) => builder
             .unit(expression.ty.clone(), expression.origin.clone())
+            .map_err(TransformError::from),
+        PureExprKind::Value(PureValue::Constructor(node)) => builder
+            .constructor(
+                node.constructor(),
+                expression.ty.clone(),
+                expression.origin.clone(),
+            )
             .map_err(TransformError::from),
         PureExprKind::Value(PureValue::Function(node)) => {
             let parameter = builder.resolved_binder(
@@ -242,6 +261,132 @@ fn rebuild_node(
                 expression.origin.clone(),
             )
             .map_err(TransformError::from),
+        PureExprKind::Computation(PureComputation::Tuple(node)) => builder
+            .tuple(
+                node.elements()
+                    .iter()
+                    .map(|element| remap(remapped, *element))
+                    .collect::<Result<Vec<_>, _>>()?,
+                expression.ty.clone(),
+                expression.origin.clone(),
+            )
+            .map_err(TransformError::from),
+        PureExprKind::Computation(PureComputation::Match(node)) => {
+            let arms = node
+                .arms()
+                .iter()
+                .map(|arm| {
+                    Ok(CoreMatchArm::new(
+                        rebuild_pattern(builder, arm.pattern())?,
+                        remap(remapped, arm.body())?,
+                        arm.origin().clone(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, TransformError>>()?;
+            builder
+                .match_expression(
+                    remap(remapped, node.scrutinee())?,
+                    arms,
+                    expression.ty.clone(),
+                    expression.origin.clone(),
+                )
+                .map_err(TransformError::from)
+        }
+    }
+}
+
+fn rebuild_pattern(
+    builder: &mut CoreBuilder,
+    pattern: &CorePattern,
+) -> Result<CorePattern, TransformError> {
+    enum Task<'a> {
+        Visit(&'a CorePattern),
+        FinishTuple(&'a CorePattern, usize),
+        FinishConstructor(&'a CorePattern, crate::types::ConstructorId, bool),
+    }
+
+    let mut work = vec![Task::Visit(pattern)];
+    let mut rebuilt = Vec::new();
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Visit(pattern) => match &pattern.kind {
+                CorePatternKind::Binder(binder) => rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Binder(builder.resolved_binder(
+                        binder.id(),
+                        binder.ty().clone(),
+                        binder.origin().clone(),
+                    )?),
+                )),
+                CorePatternKind::Wildcard => rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Wildcard,
+                )),
+                CorePatternKind::Boolean(value) => rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Boolean(*value),
+                )),
+                CorePatternKind::Unit => rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Unit,
+                )),
+                CorePatternKind::Tuple(elements) => {
+                    work.push(Task::FinishTuple(pattern, elements.len()));
+                    work.extend(elements.iter().rev().map(Task::Visit));
+                }
+                CorePatternKind::Constructor {
+                    constructor,
+                    payload,
+                } => {
+                    work.push(Task::FinishConstructor(
+                        pattern,
+                        *constructor,
+                        payload.is_some(),
+                    ));
+                    if let Some(payload) = payload.as_deref() {
+                        work.push(Task::Visit(payload));
+                    }
+                }
+            },
+            Task::FinishTuple(pattern, count) => {
+                if rebuilt.len() < count {
+                    return Err(TransformError::InvalidValidatedInput);
+                }
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Tuple(elements.into_boxed_slice()),
+                ));
+            }
+            Task::FinishConstructor(pattern, constructor, has_payload) => {
+                let payload = if has_payload {
+                    Some(Box::new(
+                        rebuilt.pop().ok_or(TransformError::InvalidValidatedInput)?,
+                    ))
+                } else {
+                    None
+                };
+                rebuilt.push(CorePattern::new(
+                    pattern.ty.clone(),
+                    pattern.origin.clone(),
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    },
+                ));
+            }
+        }
+    }
+    let result = rebuilt.pop().ok_or(TransformError::InvalidValidatedInput)?;
+    if rebuilt.is_empty() {
+        Ok(result)
+    } else {
+        Err(TransformError::InvalidValidatedInput)
     }
 }
 

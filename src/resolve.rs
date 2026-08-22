@@ -1,22 +1,27 @@
 //! Lexical name resolution for recovery-free surface syntax.
 
-use std::{collections::HashMap, fmt, ops::Deref};
+use std::{collections::HashMap, fmt, ops::Deref, sync::Arc};
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     resolved::{
         Binder, BinderId, ResolvedApplicationExpr, ResolvedBinaryExpr, ResolvedBinding,
-        ResolvedBlock, ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation,
-        ResolvedEquationalGlobal, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
-        ResolvedFunctionExpr, ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
-        ResolvedLocalDeclaration, ResolvedOccurrence, ResolvedProgram, ResolvedRecursiveGroup,
-        ResolvedRecursiveMember, ResolvedTypedBinder,
+        ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
+        ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal, ResolvedExpr,
+        ResolvedExprKind, ResolvedExternalInterface, ResolvedFunctionExpr,
+        ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader, ResolvedLocalDeclaration,
+        ResolvedMatchArm, ResolvedMatchExpr, ResolvedNominalType, ResolvedOccurrence,
+        ResolvedPattern, ResolvedPatternKind, ResolvedProgram, ResolvedRecursiveGroup,
+        ResolvedRecursiveMember, ResolvedRegistry, ResolvedType, ResolvedTypeProvenance,
+        ResolvedTypeProvenanceNode, ResolvedTypedPattern,
     },
     source::Origin,
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr,
-        SurfaceExprKind, SurfaceLocalDeclaration, SurfaceProgram, SurfaceRecursiveGroup,
+        SurfaceExprKind, SurfaceLocalDeclaration, SurfacePattern, SurfacePatternKind,
+        SurfaceProgram, SurfaceRecursiveGroup, SurfaceType, SurfaceTypeKind,
     },
+    types::{ConstructorId, NominalTypeId, Type},
 };
 
 /// The semantic reason that prevented name resolution.
@@ -28,6 +33,16 @@ pub enum ResolveReason {
     EquationNameMismatch,
     /// A file contains a second global with the same spelling.
     DuplicateGlobal,
+    /// A file contains a second nominal type spelling.
+    DuplicateType,
+    /// A file contains a second constructor spelling.
+    DuplicateConstructor,
+    /// A source type occurrence names no declaration.
+    UnknownType,
+    /// An uppercase term or pattern names no constructor.
+    UnknownConstructor,
+    /// One pattern vector binds the same spelling more than once.
+    DuplicatePatternBinder,
     /// A recursive group contains a second member with the same spelling.
     DuplicateRecursiveMember,
     /// The resolver cannot assign another distinct binder identity.
@@ -42,6 +57,11 @@ impl fmt::Display for ResolveReason {
             Self::UnknownName => "resolve.unknown-name",
             Self::EquationNameMismatch => "resolve.equation-name-mismatch",
             Self::DuplicateGlobal => "resolve.duplicate-global",
+            Self::DuplicateType => "resolve.duplicate-type",
+            Self::DuplicateConstructor => "resolve.duplicate-constructor",
+            Self::UnknownType => "resolve.unknown-type",
+            Self::UnknownConstructor => "resolve.unknown-constructor",
+            Self::DuplicatePatternBinder => "pattern.duplicate-binder",
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
             Self::BinderIdExhausted => "resolve.binder-id-exhausted",
             Self::InternalState => "resolve.internal-state",
@@ -104,6 +124,8 @@ struct Resolver {
     next_binder: u32,
     scopes: Vec<HashMap<String, Binder>>,
     globals: HashMap<String, GlobalFact>,
+    type_names: HashMap<String, NominalTypeId>,
+    constructor_names: HashMap<String, ConstructorId>,
 }
 
 struct GlobalFact {
@@ -117,6 +139,8 @@ impl Resolver {
             next_binder: 0,
             scopes: vec![HashMap::new()],
             globals: HashMap::new(),
+            type_names: HashMap::new(),
+            constructor_names: HashMap::new(),
         }
     }
 
@@ -124,29 +148,39 @@ impl Resolver {
         mut self,
         program: &SurfaceProgram,
     ) -> Result<ResolvedProgram, ResolveError> {
+        let registry = self.resolve_registry(program)?;
         let mut global_binders = Vec::with_capacity(program.definitions.len());
         for definition in &program.definitions {
             let (global_name, global_name_span) = match &definition.kind {
                 SurfaceDefinitionKind::Equational(equational) => {
-                    if equational.interface.name.text != equational.equation.name.text {
-                        let mut diagnostic = Diagnostic::new(
-                            ResolveReason::EquationNameMismatch,
-                            SourceLabel::new(
-                                equational.equation.name.span,
-                                "this equation name does not match its interface",
-                            ),
-                        );
-                        diagnostic.related.push(SourceLabel::new(
-                            equational.interface.name.span,
-                            "the external interface declares this name",
+                    if equational.equations.is_empty() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            definition.span,
+                            "the equational definition has no clause",
                         ));
-                        diagnostic.expected = Some(equational.interface.name.text.clone());
-                        diagnostic.found = Some(equational.equation.name.text.clone());
-                        diagnostic.help = Some(format!(
-                            "rename the equation head to `{}`",
-                            equational.interface.name.text
-                        ));
-                        return Err(diagnostic.into());
+                    }
+                    for equation in &equational.equations {
+                        if equational.interface.name.text != equation.name.text {
+                            let mut diagnostic = Diagnostic::new(
+                                ResolveReason::EquationNameMismatch,
+                                SourceLabel::new(
+                                    equation.name.span,
+                                    "this equation name does not match its interface",
+                                ),
+                            );
+                            diagnostic.related.push(SourceLabel::new(
+                                equational.interface.name.span,
+                                "the external interface declares this name",
+                            ));
+                            diagnostic.expected = Some(equational.interface.name.text.clone());
+                            diagnostic.found = Some(equation.name.text.clone());
+                            diagnostic.help = Some(format!(
+                                "rename the equation head to `{}`",
+                                equational.interface.name.text
+                            ));
+                            return Err(diagnostic.into());
+                        }
                     }
                     (
                         equational.interface.name.text.as_str(),
@@ -196,52 +230,78 @@ impl Resolver {
         for (definition, global) in program.definitions.iter().zip(global_binders) {
             let kind = match &definition.kind {
                 SurfaceDefinitionKind::Equational(equational) => {
-                    let parameter = self.allocate_binder(
-                        &equational.equation.binder.name.text,
-                        equational.equation.binder.name.span,
-                    )?;
-                    let scope_checkpoint = self.scopes.len();
-                    self.push_binder_scope(&parameter);
-                    let resolved_body = self.resolve_expr(&equational.equation.body);
-                    self.scopes.truncate(scope_checkpoint);
-                    let body = resolved_body?;
+                    let annotation = self.resolve_type(&equational.interface.annotation)?;
+                    let mut equations = Vec::with_capacity(equational.equations.len());
+                    for equation in &equational.equations {
+                        let scope_checkpoint = self.scopes.len();
+                        let (patterns, binders) =
+                            self.resolve_pattern_vector(&equation.patterns)?;
+                        self.push_binder_scope_many(&binders);
+                        let resolved_body = self.resolve_expr(&equation.body);
+                        self.scopes.truncate(scope_checkpoint);
+                        equations.push(ResolvedEquation {
+                            name: ResolvedOccurrence {
+                                binder: global.id,
+                                spelling: equation.name.text.clone(),
+                                origin: Origin::Source(equation.name.span),
+                            },
+                            patterns,
+                            body: resolved_body?,
+                            span: equation.span,
+                        });
+                    }
+                    if equations.is_empty() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            definition.span,
+                            "the resolver produced no equation",
+                        ));
+                    }
                     ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
                         interface: ResolvedExternalInterface {
                             name: global.clone(),
-                            annotation: equational.interface.annotation.clone(),
+                            annotation,
                             span: equational.interface.span,
                         },
-                        equation: ResolvedEquation {
-                            name: ResolvedOccurrence {
-                                binder: global.id,
-                                spelling: equational.equation.name.text.clone(),
-                                origin: Origin::Source(equational.equation.name.span),
-                            },
-                            binder: parameter,
-                            body,
-                            span: equational.equation.span,
-                        },
+                        equations,
                     })
                 }
                 SurfaceDefinitionKind::InlineOperational(operational) => {
-                    let parameter = self.allocate_binder(
-                        &operational.header.parameter.binder.name.text,
-                        operational.header.parameter.binder.name.span,
-                    )?;
+                    let surface_patterns = operational
+                        .header
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.pattern.clone())
+                        .collect::<Vec<_>>();
+                    let (patterns, binders) = self.resolve_pattern_vector(&surface_patterns)?;
                     let scope_checkpoint = self.scopes.len();
-                    self.push_binder_scope(&parameter);
+                    self.push_binder_scope_many(&binders);
                     let resolved_body = self.resolve_block(&operational.body);
                     self.scopes.truncate(scope_checkpoint);
                     let body = resolved_body?;
+                    let parameters = patterns
+                        .into_iter()
+                        .zip(&operational.header.parameters)
+                        .map(|(pattern, parameter)| {
+                            Ok(ResolvedTypedPattern {
+                                pattern,
+                                annotation: self.resolve_type(&parameter.annotation)?,
+                                span: parameter.span,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    if parameters.is_empty() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            operational.header.span,
+                            "the resolver produced no operational parameter",
+                        ));
+                    }
                     ResolvedDefinitionKind::InlineOperational(ResolvedInlineOperationalGlobal {
                         header: ResolvedInlineOperationalHeader {
                             name: global.clone(),
-                            parameter: ResolvedTypedBinder {
-                                binder: parameter,
-                                annotation: operational.header.parameter.annotation.clone(),
-                                span: operational.header.parameter.span,
-                            },
-                            result_type: operational.header.result_type.clone(),
+                            parameters,
+                            result_type: self.resolve_type(&operational.header.result_type)?,
                             span: operational.header.span,
                         },
                         body,
@@ -256,15 +316,336 @@ impl Resolver {
 
         let result = self.resolve_expr(&program.result)?;
         Ok(ResolvedProgram {
+            registry,
             definitions,
             result,
             span: program.span,
         })
     }
 
-    fn push_binder_scope(&mut self, binder: &Binder) {
-        self.scopes
-            .push(HashMap::from([(binder.spelling.clone(), binder.clone())]));
+    fn resolve_registry(
+        &mut self,
+        program: &SurfaceProgram,
+    ) -> Result<Arc<ResolvedRegistry>, ResolveError> {
+        let mut first_types = HashMap::new();
+        let mut nominal_ids = Vec::with_capacity(program.type_declarations.len());
+        for (index, declaration) in program.type_declarations.iter().enumerate() {
+            if let Some(first) =
+                first_types.insert(declaration.name.text.as_str(), declaration.name.span)
+            {
+                let mut diagnostic = Diagnostic::new(
+                    ResolveReason::DuplicateType,
+                    SourceLabel::new(
+                        declaration.name.span,
+                        "this nominal type name is already defined",
+                    ),
+                );
+                diagnostic
+                    .related
+                    .push(SourceLabel::new(first, "the first nominal type is here"));
+                return Err(diagnostic.into());
+            }
+            let index = u32::try_from(index).map_err(|_| {
+                error(
+                    ResolveReason::InternalState,
+                    declaration.span,
+                    "the file contains too many type declarations",
+                )
+            })?;
+            let id = NominalTypeId::new(declaration.span.source(), index);
+            self.type_names.insert(declaration.name.text.clone(), id);
+            nominal_ids.push(id);
+        }
+
+        let mut first_constructors = HashMap::new();
+        let mut constructor_ids = Vec::with_capacity(program.type_declarations.len());
+        for (declaration, owner) in program.type_declarations.iter().zip(&nominal_ids) {
+            let mut owned = Vec::with_capacity(declaration.constructors.len());
+            for (index, constructor) in declaration.constructors.iter().enumerate() {
+                if let Some(first) =
+                    first_constructors.insert(constructor.name.text.as_str(), constructor.name.span)
+                {
+                    let mut diagnostic = Diagnostic::new(
+                        ResolveReason::DuplicateConstructor,
+                        SourceLabel::new(
+                            constructor.name.span,
+                            "this constructor name is already defined",
+                        ),
+                    );
+                    diagnostic
+                        .related
+                        .push(SourceLabel::new(first, "the first constructor is here"));
+                    return Err(diagnostic.into());
+                }
+                let index = u32::try_from(index).map_err(|_| {
+                    error(
+                        ResolveReason::InternalState,
+                        constructor.span,
+                        "the declaration contains too many constructors",
+                    )
+                })?;
+                let id = ConstructorId::new(*owner, index);
+                self.constructor_names
+                    .insert(constructor.name.text.clone(), id);
+                owned.push(id);
+            }
+            constructor_ids.push(owned);
+        }
+
+        let nominals = program
+            .type_declarations
+            .iter()
+            .zip(&nominal_ids)
+            .zip(&constructor_ids)
+            .map(|((declaration, id), constructors)| ResolvedNominalType {
+                id: *id,
+                spelling: declaration.name.text.clone(),
+                constructors: constructors.clone().into_boxed_slice(),
+                origin: Origin::Source(declaration.span),
+            })
+            .collect::<Vec<_>>();
+        let mut constructors = Vec::new();
+        for ((declaration, owner), ids) in program
+            .type_declarations
+            .iter()
+            .zip(&nominal_ids)
+            .zip(&constructor_ids)
+        {
+            for (constructor, id) in declaration.constructors.iter().zip(ids) {
+                let payload = match constructor.fields.as_slice() {
+                    [] => None,
+                    [field] => Some(self.resolve_type(field)?.ty),
+                    fields => Some(Type::Tuple(
+                        fields
+                            .iter()
+                            .map(|field| self.resolve_type(field).map(|resolved| resolved.ty))
+                            .collect::<Result<Vec<_>, _>>()?
+                            .into_boxed_slice(),
+                    )),
+                };
+                constructors.push(ResolvedConstructor {
+                    id: *id,
+                    owner: *owner,
+                    spelling: constructor.name.text.clone(),
+                    payload,
+                    origin: Origin::Source(constructor.span),
+                });
+            }
+        }
+        Ok(Arc::new(ResolvedRegistry::new(nominals, constructors)))
+    }
+
+    fn push_binder_scope_many(&mut self, binders: &[Binder]) {
+        self.scopes.push(
+            binders
+                .iter()
+                .map(|binder| (binder.spelling.clone(), binder.clone()))
+                .collect(),
+        );
+    }
+
+    fn resolve_type(&self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
+        enum Task<'a> {
+            Visit(&'a SurfaceType),
+            Tuple(usize, crate::source::Span),
+            Function(crate::source::Span),
+        }
+        let mut tasks = vec![Task::Visit(surface)];
+        let mut completed = Vec::new();
+        let mut provenance = Vec::new();
+        while let Some(task) = tasks.pop() {
+            match task {
+                Task::Visit(current) => match &current.kind {
+                    SurfaceTypeKind::Int => {
+                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                        completed.push((Type::Int, provenance.len() - 1));
+                    }
+                    SurfaceTypeKind::Bool => {
+                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                        completed.push((Type::Bool, provenance.len() - 1));
+                    }
+                    SurfaceTypeKind::Unit => {
+                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                        completed.push((Type::Unit, provenance.len() - 1));
+                    }
+                    SurfaceTypeKind::Named(name) => {
+                        let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
+                            let mut diagnostic = Diagnostic::new(
+                                ResolveReason::UnknownType,
+                                SourceLabel::new(name.span, "this nominal type is not declared"),
+                            );
+                            diagnostic.found = Some(name.text.clone());
+                            ResolveError::from(diagnostic)
+                        })?;
+                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                        completed.push((Type::Nominal(id), provenance.len() - 1));
+                    }
+                    SurfaceTypeKind::Tuple(elements) => {
+                        tasks.push(Task::Tuple(elements.len(), current.span));
+                        tasks.extend(elements.iter().rev().map(Task::Visit));
+                    }
+                    SurfaceTypeKind::Function(function) => {
+                        tasks.push(Task::Function(current.span));
+                        tasks.push(Task::Visit(&function.codomain));
+                        tasks.push(Task::Visit(&function.domain));
+                    }
+                },
+                Task::Tuple(count, span) => {
+                    let split = completed.len().checked_sub(count).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the resolver lost a tuple type element",
+                        )
+                    })?;
+                    let elements = completed.split_off(split);
+                    let roots = elements
+                        .iter()
+                        .map(|(_, root)| *root)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
+                    provenance.push(ResolvedTypeProvenanceNode::Tuple {
+                        span,
+                        elements: roots,
+                    });
+                    completed.push((
+                        Type::Tuple(
+                            elements
+                                .into_iter()
+                                .map(|(ty, _)| ty)
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        ),
+                        provenance.len() - 1,
+                    ));
+                }
+                Task::Function(span) => {
+                    let (codomain, codomain_root) = completed.pop().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the resolver lost a function codomain",
+                        )
+                    })?;
+                    let (domain, domain_root) = completed.pop().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the resolver lost a function domain",
+                        )
+                    })?;
+                    provenance.push(ResolvedTypeProvenanceNode::Function {
+                        span,
+                        domain: domain_root,
+                        codomain: codomain_root,
+                    });
+                    completed.push((
+                        Type::Function(Box::new(domain), Box::new(codomain)),
+                        provenance.len() - 1,
+                    ));
+                }
+            }
+        }
+        if completed.len() != 1 {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface.span,
+                "the resolver retained incomplete type state",
+            ));
+        }
+        let (ty, root) = completed.pop().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                surface.span,
+                "the resolver produced no type",
+            )
+        })?;
+        Ok(ResolvedType {
+            ty,
+            provenance: ResolvedTypeProvenance::new(provenance, root),
+            origin: Origin::Source(surface.span),
+            span: surface.span,
+        })
+    }
+
+    fn resolve_pattern_vector(
+        &mut self,
+        patterns: &[SurfacePattern],
+    ) -> Result<(Vec<ResolvedPattern>, Vec<Binder>), ResolveError> {
+        let mut seen = HashMap::new();
+        let mut binders = Vec::new();
+        let patterns = patterns
+            .iter()
+            .map(|pattern| self.resolve_pattern(pattern, &mut seen, &mut binders))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((patterns, binders))
+    }
+
+    fn resolve_pattern(
+        &mut self,
+        pattern: &SurfacePattern,
+        seen: &mut HashMap<String, crate::source::Span>,
+        binders: &mut Vec<Binder>,
+    ) -> Result<ResolvedPattern, ResolveError> {
+        let kind = match &pattern.kind {
+            SurfacePatternKind::Binder(surface) => {
+                if let Some(first) = seen.insert(surface.name.text.clone(), surface.name.span) {
+                    let mut diagnostic = Diagnostic::new(
+                        ResolveReason::DuplicatePatternBinder,
+                        SourceLabel::new(
+                            surface.name.span,
+                            "this pattern binder is already defined",
+                        ),
+                    );
+                    diagnostic
+                        .related
+                        .push(SourceLabel::new(first, "the first pattern binder is here"));
+                    return Err(diagnostic.into());
+                }
+                let binder = self.allocate_binder(&surface.name.text, surface.name.span)?;
+                binders.push(binder.clone());
+                ResolvedPatternKind::Binder(binder)
+            }
+            SurfacePatternKind::Wildcard => ResolvedPatternKind::Wildcard,
+            SurfacePatternKind::Boolean(value) => ResolvedPatternKind::Boolean(*value),
+            SurfacePatternKind::Unit => ResolvedPatternKind::Unit,
+            SurfacePatternKind::Tuple(elements) => ResolvedPatternKind::Tuple(
+                elements
+                    .iter()
+                    .map(|element| self.resolve_pattern(element, seen, binders))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            SurfacePatternKind::Constructor { name, payload } => {
+                let constructor =
+                    self.constructor_names
+                        .get(&name.text)
+                        .copied()
+                        .ok_or_else(|| {
+                            let mut diagnostic = Diagnostic::new(
+                                ResolveReason::UnknownConstructor,
+                                SourceLabel::new(name.span, "this constructor is not declared"),
+                            );
+                            diagnostic.found = Some(name.text.clone());
+                            ResolveError::from(diagnostic)
+                        })?;
+                ResolvedPatternKind::Constructor {
+                    constructor,
+                    occurrence: ResolvedConstructorOccurrence {
+                        constructor,
+                        spelling: name.text.clone(),
+                        origin: Origin::Source(name.span),
+                    },
+                    payload: payload
+                        .as_deref()
+                        .map(|payload| self.resolve_pattern(payload, seen, binders).map(Box::new))
+                        .transpose()?,
+                }
+            }
+        };
+        Ok(ResolvedPattern {
+            kind,
+            span: pattern.span,
+        })
     }
 
     fn resolve_block(&mut self, block: &SurfaceBlock) -> Result<ResolvedBlock, ResolveError> {
@@ -427,8 +808,20 @@ impl Resolver {
                             "the resolver lost a binding initializer",
                         ));
                     };
-                    let binder =
-                        self.allocate_binder(&binding.binder.name.text, binding.binder.name.span)?;
+                    let (mut patterns, binders) =
+                        self.resolve_pattern_vector(std::slice::from_ref(&binding.pattern))?;
+                    let pattern = patterns.pop().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            binding.pattern.span,
+                            "the resolver produced no binding pattern",
+                        )
+                    })?;
+                    let annotation = binding
+                        .annotation
+                        .as_ref()
+                        .map(|annotation| self.resolve_type(annotation))
+                        .transpose()?;
                     let Some(scope) = self.scopes.last_mut() else {
                         return Err(error(
                             ResolveReason::InternalState,
@@ -436,11 +829,13 @@ impl Resolver {
                             "the resolver lost the current lexical scope",
                         ));
                     };
-                    scope.insert(binder.spelling.clone(), binder.clone());
+                    for binder in binders {
+                        scope.insert(binder.spelling.clone(), binder);
+                    }
                     declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
                         ResolvedBinding {
-                            binder,
-                            annotation: binding.annotation.clone(),
+                            pattern,
+                            annotation,
                             initializer,
                             span: binding.span,
                         },
@@ -463,14 +858,16 @@ impl Resolver {
                         .iter()
                         .zip(binders)
                         .zip(initializers)
-                        .map(|((member, binder), initializer)| ResolvedRecursiveMember {
-                            introducer_span: member.introducer_span,
-                            binder,
-                            annotation: member.annotation.clone(),
-                            initializer,
-                            span: member.span,
+                        .map(|((member, binder), initializer)| {
+                            Ok(ResolvedRecursiveMember {
+                                introducer_span: member.introducer_span,
+                                binder,
+                                annotation: self.resolve_type(&member.annotation)?,
+                                initializer,
+                                span: member.span,
+                            })
                         })
-                        .collect();
+                        .collect::<Result<Vec<_>, ResolveError>>()?;
                     declarations.push(ResolvedLocalDeclaration::Recursive(
                         ResolvedRecursiveGroup {
                             members,
@@ -509,7 +906,7 @@ impl Resolver {
                     });
                 }
                 ResolveTask::FinishFunction {
-                    parameter,
+                    parameter: pattern,
                     scope_checkpoint,
                     span,
                 } => {
@@ -529,7 +926,21 @@ impl Resolver {
                     };
                     self.scopes.truncate(scope_checkpoint);
                     expressions.push(ResolvedExpr {
-                        kind: ResolvedExprKind::Function(ResolvedFunctionExpr { parameter, body }),
+                        kind: ResolvedExprKind::Function(ResolvedFunctionExpr { pattern, body }),
+                        span,
+                    });
+                }
+                ResolveTask::FinishTuple { count, span } => {
+                    let split = expressions.len().checked_sub(count).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "the resolver lost a tuple element",
+                        )
+                    })?;
+                    let elements = expressions.split_off(split);
+                    expressions.push(ResolvedExpr {
+                        kind: ResolvedExprKind::Tuple(elements),
                         span,
                     });
                 }
@@ -577,22 +988,43 @@ impl Resolver {
                     .scopes
                     .iter()
                     .rev()
-                    .find_map(|scope| scope.get(&name.text))
-                    .ok_or_else(|| {
-                        error(
-                            ResolveReason::UnknownName,
-                            name.span,
-                            "this name is not in scope",
-                        )
-                    })?;
-                expressions.push(ResolvedExpr {
-                    kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                        binder: binder.id,
-                        spelling: name.text.clone(),
-                        origin: Origin::Source(name.span),
-                    }),
-                    span: expression.span,
-                });
+                    .find_map(|scope| scope.get(&name.text));
+                if let Some(binder) = binder {
+                    expressions.push(ResolvedExpr {
+                        kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                            binder: binder.id,
+                            spelling: name.text.clone(),
+                            origin: Origin::Source(name.span),
+                        }),
+                        span: expression.span,
+                    });
+                } else if let Some(constructor) = self.constructor_names.get(&name.text).copied() {
+                    expressions.push(ResolvedExpr {
+                        kind: ResolvedExprKind::Constructor(ResolvedConstructorOccurrence {
+                            constructor,
+                            spelling: name.text.clone(),
+                            origin: Origin::Source(name.span),
+                        }),
+                        span: expression.span,
+                    });
+                } else {
+                    return Err(
+                        if name.text.chars().next().is_some_and(char::is_uppercase) {
+                            let mut diagnostic = Diagnostic::new(
+                                ResolveReason::UnknownConstructor,
+                                SourceLabel::new(name.span, "this constructor is not declared"),
+                            );
+                            diagnostic.found = Some(name.text.clone());
+                            ResolveError::from(diagnostic)
+                        } else {
+                            error(
+                                ResolveReason::UnknownName,
+                                name.span,
+                                "this name is not in scope",
+                            )
+                        },
+                    );
+                }
             }
             SurfaceExprKind::Apply(application) => {
                 tasks.push(ResolveTask::FinishApplication {
@@ -612,16 +1044,61 @@ impl Resolver {
             }
             SurfaceExprKind::Block(block) => tasks.push(ResolveTask::VisitBlock(block)),
             SurfaceExprKind::Function(function) => {
-                let parameter = self
-                    .allocate_binder(&function.parameter.name.text, function.parameter.name.span)?;
+                let (mut patterns, binders) =
+                    self.resolve_pattern_vector(std::slice::from_ref(&function.parameter))?;
+                let parameter = patterns.pop().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        function.parameter.span,
+                        "the resolver produced no function pattern",
+                    )
+                })?;
                 let scope_checkpoint = self.scopes.len();
-                self.push_binder_scope(&parameter);
+                self.push_binder_scope_many(&binders);
                 tasks.push(ResolveTask::FinishFunction {
                     parameter,
                     scope_checkpoint,
                     span: expression.span,
                 });
                 tasks.push(ResolveTask::VisitBlock(&function.body));
+            }
+            SurfaceExprKind::Tuple(elements) => {
+                tasks.push(ResolveTask::FinishTuple {
+                    count: elements.len(),
+                    span: expression.span,
+                });
+                tasks.extend(elements.iter().rev().map(ResolveTask::VisitExpr));
+            }
+            SurfaceExprKind::Match(match_expression) => {
+                let scrutinee = self.resolve_expr(&match_expression.scrutinee)?;
+                let mut arms = Vec::with_capacity(match_expression.arms.len());
+                for arm in &match_expression.arms {
+                    let scope_checkpoint = self.scopes.len();
+                    let (mut patterns, binders) =
+                        self.resolve_pattern_vector(std::slice::from_ref(&arm.pattern))?;
+                    let pattern = patterns.pop().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            arm.span,
+                            "the resolver produced no match pattern",
+                        )
+                    })?;
+                    self.push_binder_scope_many(&binders);
+                    let body = self.resolve_expr(&arm.body);
+                    self.scopes.truncate(scope_checkpoint);
+                    arms.push(ResolvedMatchArm {
+                        pattern,
+                        body: body?,
+                        span: arm.span,
+                    });
+                }
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Match(ResolvedMatchExpr {
+                        scrutinee: Box::new(scrutinee),
+                        arms,
+                    }),
+                    span: expression.span,
+                });
             }
         }
         Ok(())
@@ -651,8 +1128,12 @@ enum ResolveTask<'a> {
         span: crate::source::Span,
     },
     FinishFunction {
-        parameter: Binder,
+        parameter: ResolvedPattern,
         scope_checkpoint: usize,
+        span: crate::source::Span,
+    },
+    FinishTuple {
+        count: usize,
         span: crate::source::Span,
     },
 }
@@ -666,7 +1147,8 @@ impl ResolveTask<'_> {
             Self::FinishApplication { span }
             | Self::FinishBinary { span, .. }
             | Self::FinishBlock { span, .. }
-            | Self::FinishFunction { span, .. } => *span,
+            | Self::FinishFunction { span, .. }
+            | Self::FinishTuple { span, .. } => *span,
             Self::FinishBinding(binding) => binding.span,
             Self::FinishRecursiveGroup { group, .. } => group.span,
         }

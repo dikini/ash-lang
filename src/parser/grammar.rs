@@ -14,6 +14,7 @@ pub(super) enum GlobalDefinitionForm {
 pub(super) enum ExpressionPrefixForm {
     Block,
     Function,
+    Match,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,6 +22,7 @@ pub(super) enum PrimaryForm {
     Integer,
     Boolean,
     Identifier,
+    UpperIdentifier,
     Parenthesized,
 }
 
@@ -29,11 +31,18 @@ pub(super) enum AtomicTypeForm {
     Int,
     Bool,
     Unit,
+    Nominal,
     Parenthesized,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PatternForm {}
+pub(super) enum PatternForm {
+    Binder,
+    Wildcard,
+    Boolean,
+    Constructor,
+    Parenthesized,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum OperatorToken {
@@ -115,12 +124,17 @@ const MINI_ASH_DIALECT: ParserDialect = ParserDialect {
         GlobalDefinitionForm::Equational,
         GlobalDefinitionForm::InlineOperational,
     ],
-    expression_prefixes: &[ExpressionPrefixForm::Block, ExpressionPrefixForm::Function],
+    expression_prefixes: &[
+        ExpressionPrefixForm::Block,
+        ExpressionPrefixForm::Function,
+        ExpressionPrefixForm::Match,
+    ],
     expression: ExpressionDialect {
         primary_forms: &[
             PrimaryForm::Integer,
             PrimaryForm::Boolean,
             PrimaryForm::Identifier,
+            PrimaryForm::UpperIdentifier,
             PrimaryForm::Parenthesized,
         ],
         infix: &[
@@ -149,11 +163,18 @@ const MINI_ASH_DIALECT: ParserDialect = ParserDialect {
             result: NodeKind::ApplicationExpression,
         },
     },
-    pattern_forms: &[],
+    pattern_forms: &[
+        PatternForm::Binder,
+        PatternForm::Wildcard,
+        PatternForm::Boolean,
+        PatternForm::Constructor,
+        PatternForm::Parenthesized,
+    ],
     atomic_types: &[
         AtomicTypeForm::Int,
         AtomicTypeForm::Bool,
         AtomicTypeForm::Unit,
+        AtomicTypeForm::Nominal,
         AtomicTypeForm::Parenthesized,
     ],
 };
@@ -165,6 +186,12 @@ pub(super) const fn selected_dialect() -> &'static ParserDialect {
 pub(super) fn program(parser: &mut Parser<'_>) {
     parser.start(NodeKind::Program);
     let mut preceding_global_end = None;
+    while parser.at(&TokenKind::Type) {
+        type_declaration(parser);
+        if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
+            break;
+        }
+    }
     while starts_global(parser) {
         let global_start = parser.current_span();
         let diagnostics_before = parser.diagnostic_count();
@@ -207,6 +234,55 @@ pub(super) fn program(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
+fn type_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::TypeDeclaration);
+    let _ = parser.bump();
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
+    if parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+    }
+    constructor_declaration(parser);
+    while parser.at(&TokenKind::LineEnd)
+        && parser
+            .nth(1)
+            .is_some_and(|kind| matches!(kind, TokenKind::Pipe))
+    {
+        let _ = parser.bump();
+        let _ = parser.bump();
+        constructor_declaration(parser);
+    }
+    parser.finish();
+}
+
+fn constructor_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ConstructorDeclaration);
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    if parser.at(&TokenKind::LeftParen) {
+        let opening = parser.current_span();
+        let _ = parser.bump();
+        type_expression(parser);
+        while parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            type_expression(parser);
+        }
+        if parser.at(&TokenKind::RightParen) {
+            let _ = parser.bump();
+        } else {
+            expression::report_unclosed_group(parser, opening);
+        }
+    }
+    parser.finish();
+}
+
 fn starts_global(parser: &Parser<'_>) -> bool {
     global_definition_form(parser).is_some()
 }
@@ -239,26 +315,63 @@ fn global_definition_form(parser: &Parser<'_>) -> Option<GlobalDefinitionForm> {
 fn equational_global(parser: &mut Parser<'_>) {
     parser.start(NodeKind::EquationalGlobal);
     parser.start(NodeKind::ExternalInterface);
+    let name = match parser.current() {
+        Some(TokenKind::Identifier(name)) => Some(name.clone()),
+        _ => None,
+    };
     binder(parser);
     let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
     type_expression(parser);
     parser.finish();
     let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
 
+    equation(parser);
+    while parser.at(&TokenKind::LineEnd)
+        && name
+            .as_deref()
+            .is_some_and(|name| looks_like_equation(parser, name))
+    {
+        let _ = parser.bump();
+        equation(parser);
+    }
+    parser.finish();
+}
+
+fn looks_like_equation(parser: &Parser<'_>, expected: &str) -> bool {
+    if !matches!(
+        parser.nth(1),
+        Some(TokenKind::Identifier(actual)) if actual == expected
+    ) {
+        return false;
+    }
+    let mut offset = 2;
+    let mut depth = 0_u32;
+    loop {
+        match parser.nth(offset) {
+            Some(TokenKind::LeftParen) => depth = depth.saturating_add(1),
+            Some(TokenKind::RightParen) if depth > 0 => depth -= 1,
+            Some(TokenKind::Equal) if depth == 0 => return true,
+            Some(TokenKind::LineEnd | TokenKind::EndOfFile) if depth == 0 => return false,
+            Some(_) => {}
+            None => return false,
+        }
+        offset = offset.saturating_add(1);
+    }
+}
+
+fn equation(parser: &mut Parser<'_>) {
     parser.start(NodeKind::Equation);
     binder(parser);
-    binder(parser);
-    if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
-        parser.error_at_current(ParseReason::MultipleBinders);
-        while matches!(parser.current(), Some(TokenKind::Identifier(_))) {
-            let _ = parser.bump();
-        }
+    if !starts_pattern(parser) {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern);
+    }
+    while starts_pattern(parser) {
+        pattern(parser);
     }
     let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
     let recovery_start = parser.pending_recovery_count();
     expression(parser);
     resolve_line_or_eof(parser, recovery_start);
-    parser.finish();
     parser.finish();
 }
 
@@ -269,15 +382,10 @@ fn inline_operational_global(parser: &mut Parser<'_>) {
     binder(parser);
     reject_polymorphic_header(parser);
     let _ = parser.expect(&TokenKind::LeftParen, ExpectedForm::LeftParen);
-    typed_binder(parser);
-    if parser.at(&TokenKind::Comma) {
-        parser.error_at_current(ParseReason::MultipleParameters);
-        while !matches!(
-            parser.current(),
-            Some(TokenKind::RightParen | TokenKind::EndOfFile)
-        ) {
-            let _ = parser.bump();
-        }
+    typed_pattern(parser);
+    while parser.at(&TokenKind::Comma) {
+        let _ = parser.bump();
+        typed_pattern(parser);
     }
     let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
     let _ = parser.expect(&TokenKind::Arrow, ExpectedForm::Arrow);
@@ -288,13 +396,10 @@ fn inline_operational_global(parser: &mut Parser<'_>) {
 }
 
 pub(super) fn expression(parser: &mut Parser<'_>) {
-    if looks_like_match_expression(parser) {
-        rejected_match_expression(parser);
-        return;
-    }
     match expression_prefix_form(parser) {
         Some(ExpressionPrefixForm::Block) => block_expression(parser),
         Some(ExpressionPrefixForm::Function) => function_expression(parser),
+        Some(ExpressionPrefixForm::Match) => match_expression(parser),
         None => expression::operator_expression(parser),
     }
 }
@@ -307,56 +412,61 @@ fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
         .find(|form| match form {
             ExpressionPrefixForm::Block => parser.at(&TokenKind::LeftBrace),
             ExpressionPrefixForm::Function => parser.at(&TokenKind::Fn),
+            ExpressionPrefixForm::Match => parser.at(&TokenKind::Match),
         })
 }
 
-fn looks_like_match_expression(parser: &Parser<'_>) -> bool {
-    if !matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "match") {
-        return false;
+fn match_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::MatchExpression);
+    if !parser.enter_structures(super::MATCH_STRUCTURAL_WEIGHT) {
+        parser.consume_rest();
+        parser.finish();
+        return;
     }
-    let mut offset = 1;
-    let mut parenthesis_depth = 0_u32;
-    loop {
-        match parser.nth(offset) {
-            Some(TokenKind::LeftParen) => parenthesis_depth += 1,
-            Some(TokenKind::RightParen) if parenthesis_depth > 0 => parenthesis_depth -= 1,
-            Some(TokenKind::LeftBrace) if parenthesis_depth == 0 => return true,
-            Some(TokenKind::LineEnd | TokenKind::RightBrace | TokenKind::EndOfFile)
-                if parenthesis_depth == 0 =>
-            {
-                return false;
-            }
-            Some(_) => {}
-            None => return false,
+    let _ = parser.bump();
+    expression(parser);
+    let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    if matches!(
+        parser.current(),
+        Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        match_arm(parser);
+        if parser.at(&TokenKind::LineEnd) {
+            let _ = parser.bump();
+        } else {
+            break;
         }
-        offset += 1;
     }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.leave_structures(super::MATCH_STRUCTURAL_WEIGHT);
+    parser.finish();
 }
 
-fn rejected_match_expression(parser: &mut Parser<'_>) {
-    parser.start(NodeKind::Error);
-    parser.error_at_current(ParseReason::MatchSyntax);
-    let mut brace_depth = 0_u32;
-    loop {
-        match parser.current() {
-            Some(TokenKind::LeftBrace) => {
-                brace_depth += 1;
-                let _ = parser.bump();
-            }
-            Some(TokenKind::RightBrace) if brace_depth == 1 => {
-                let _ = parser.bump();
-                break;
-            }
-            Some(TokenKind::RightBrace) => {
-                brace_depth = brace_depth.saturating_sub(1);
-                let _ = parser.bump();
-            }
-            Some(TokenKind::EndOfFile) | None => break,
-            Some(_) => {
-                let _ = parser.bump();
-            }
-        }
+fn match_arm(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::MatchArm);
+    let recovery_start = parser.pending_recovery_count();
+    pattern(parser);
+    if parser.at(&TokenKind::FatArrow) {
+        let _ = parser.bump();
+    } else if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::FatArrow,
+            primary,
+            None,
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
     }
+    expression(parser);
+    resolve_line_or_eof(parser, recovery_start);
     parser.finish();
 }
 
@@ -494,7 +604,7 @@ fn rejected_stray_and(parser: &mut Parser<'_>) {
 fn local_binding(parser: &mut Parser<'_>) {
     parser.start(NodeKind::LocalBinding);
     let _ = parser.bump();
-    binder(parser);
+    pattern(parser);
     if parser.at(&TokenKind::Colon) {
         let _ = parser.bump();
         type_expression(parser);
@@ -526,15 +636,10 @@ fn function_expression(parser: &mut Parser<'_>) {
     }
     let _ = parser.bump();
     let _ = parser.expect(&TokenKind::LeftParen, ExpectedForm::LeftParen);
-    binder(parser);
-    if parser.at(&TokenKind::Comma) {
-        parser.error_at_current(ParseReason::MultipleParameters);
-        while !matches!(
-            parser.current(),
-            Some(TokenKind::RightParen | TokenKind::EndOfFile)
-        ) {
-            let _ = parser.bump();
-        }
+    pattern(parser);
+    while parser.at(&TokenKind::Comma) {
+        let _ = parser.bump();
+        pattern(parser);
     }
     let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
     block(parser);
@@ -556,7 +661,6 @@ fn reject_polymorphic_header(parser: &mut Parser<'_>) {
 }
 
 fn binder(parser: &mut Parser<'_>) {
-    debug_assert!(selected_dialect().pattern_forms.is_empty());
     parser.start(NodeKind::Binder);
     if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
         let _ = parser.bump();
@@ -566,9 +670,117 @@ fn binder(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
-fn typed_binder(parser: &mut Parser<'_>) {
-    parser.start(NodeKind::TypedBinder);
-    binder(parser);
+fn pattern(parser: &mut Parser<'_>) {
+    pattern_inner(parser, false);
+}
+
+fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
+    parser.start(NodeKind::Pattern);
+    let form = pattern_form(parser);
+    let owns_structure = matches!(
+        form,
+        Some(PatternForm::Constructor | PatternForm::Parenthesized)
+    );
+    if owns_structure && !parser.enter_structures(super::PATTERN_STRUCTURAL_WEIGHT) {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
+    match form {
+        Some(PatternForm::Binder) => binder(parser),
+        Some(PatternForm::Wildcard) => {
+            parser.start(NodeKind::WildcardPattern);
+            let _ = parser.bump();
+            parser.finish();
+        }
+        Some(PatternForm::Boolean) => {
+            parser.start(NodeKind::BooleanPattern);
+            let _ = parser.bump();
+            parser.finish();
+        }
+        Some(PatternForm::Constructor) => constructor_pattern(parser, allow_juxtaposed_payload),
+        Some(PatternForm::Parenthesized) => parenthesized_pattern(parser),
+        None => parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern),
+    }
+    if owns_structure {
+        parser.leave_structures(super::PATTERN_STRUCTURAL_WEIGHT);
+    }
+    parser.finish();
+}
+
+fn pattern_form(parser: &Parser<'_>) -> Option<PatternForm> {
+    selected_dialect()
+        .pattern_forms
+        .iter()
+        .copied()
+        .find(|form| {
+            matches!(
+                (form, parser.current()),
+                (PatternForm::Binder, Some(TokenKind::Identifier(_)))
+                    | (PatternForm::Wildcard, Some(TokenKind::Wildcard))
+                    | (
+                        PatternForm::Boolean,
+                        Some(TokenKind::True | TokenKind::False)
+                    )
+                    | (
+                        PatternForm::Constructor,
+                        Some(TokenKind::UpperIdentifier(_))
+                    )
+                    | (PatternForm::Parenthesized, Some(TokenKind::LeftParen))
+            )
+        })
+}
+
+fn starts_pattern(parser: &Parser<'_>) -> bool {
+    pattern_form(parser).is_some()
+}
+
+fn constructor_pattern(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
+    parser.start(NodeKind::ConstructorPattern);
+    let _ = parser.bump();
+    if parser.at(&TokenKind::LeftParen) {
+        let _ = parser.bump();
+        let tuple_start = parser.event_position();
+        pattern(parser);
+        if parser.at(&TokenKind::Comma) {
+            let _ = parser.insert_start(tuple_start, NodeKind::TuplePattern);
+            while parser.at(&TokenKind::Comma) {
+                let _ = parser.bump();
+                pattern(parser);
+            }
+            parser.finish();
+        }
+        let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+    } else if allow_juxtaposed_payload && starts_pattern(parser) {
+        pattern_inner(parser, true);
+    }
+    parser.finish();
+}
+
+fn parenthesized_pattern(parser: &mut Parser<'_>) {
+    let _ = parser.bump();
+    if parser.at(&TokenKind::RightParen) {
+        parser.start(NodeKind::UnitPattern);
+        let _ = parser.bump();
+        parser.finish();
+        return;
+    }
+    let tuple_start = parser.event_position();
+    pattern_inner(parser, true);
+    if parser.at(&TokenKind::Comma) {
+        let _ = parser.insert_start(tuple_start, NodeKind::TuplePattern);
+        while parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            pattern(parser);
+        }
+        parser.finish();
+    }
+    let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+}
+
+fn typed_pattern(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::TypedPattern);
+    pattern(parser);
     let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
     type_expression(parser);
     parser.finish();
@@ -592,7 +804,12 @@ fn type_expression(parser: &mut Parser<'_>) {
 fn atomic_type(parser: &mut Parser<'_>) {
     parser.start(NodeKind::AtomicType);
     match atomic_type_form(parser) {
-        Some(AtomicTypeForm::Int | AtomicTypeForm::Bool | AtomicTypeForm::Unit) => {
+        Some(
+            AtomicTypeForm::Int
+            | AtomicTypeForm::Bool
+            | AtomicTypeForm::Unit
+            | AtomicTypeForm::Nominal,
+        ) => {
             let _ = parser.bump();
         }
         Some(AtomicTypeForm::Parenthesized) => parenthesized_type(parser),
@@ -612,6 +829,7 @@ fn atomic_type_form(parser: &Parser<'_>) -> Option<AtomicTypeForm> {
                 (AtomicTypeForm::Int, Some(TokenKind::IntType))
                     | (AtomicTypeForm::Bool, Some(TokenKind::BoolType))
                     | (AtomicTypeForm::Unit, Some(TokenKind::UnitType))
+                    | (AtomicTypeForm::Nominal, Some(TokenKind::UpperIdentifier(_)))
                     | (AtomicTypeForm::Parenthesized, Some(TokenKind::LeftParen))
             )
         })
@@ -622,7 +840,16 @@ fn parenthesized_type(parser: &mut Parser<'_>) {
     let opening = parser.current_span();
     let _ = parser.bump();
     if parser.enter_structure() {
+        let tuple_start = parser.event_position();
         type_expression(parser);
+        if parser.at(&TokenKind::Comma) {
+            let _ = parser.insert_start(tuple_start, NodeKind::TupleType);
+            while parser.at(&TokenKind::Comma) {
+                let _ = parser.bump();
+                type_expression(parser);
+            }
+            parser.finish();
+        }
         parser.leave_structure();
     } else {
         parser.consume_rest();
@@ -670,6 +897,7 @@ mod tests {
         match form {
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Block) => "block parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Function) => "function parser",
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::Match) => "match parser",
             ShadowPrefixForm::Mock(node) => mock_nested_feature::parse(node),
         }
     }

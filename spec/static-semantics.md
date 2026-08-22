@@ -1,9 +1,13 @@
 # Static Semantics
 
-Mini-Ash has four structural type forms: `Int`, `Bool`, `Unit`, and a unary
-function type from a domain to a codomain. Surface `domain -> codomain` denotes
-that function type. Two types are equal exactly when their structures are
-equal.
+Mini-Ash has `Int`, `Bool`, `Unit`, structural tuples, nominal algebraic data
+types, and unary functions. A tuple contains at least two element types.
+Surface `domain -> codomain` denotes a function type.
+
+Type equality is one shared rule. `Int`, `Bool`, and `Unit` equal themselves;
+tuples and functions compare structurally; nominal types compare by stable
+declaration identity. Equal spelling or constructor shape does not make two
+nominal declarations equal.
 
 The typing environment `GAMMA` maps resolved binder identities to monotypes.
 The judgment `GAMMA |- expression ⇒ type` synthesizes a type, while
@@ -41,8 +45,38 @@ family primitive-typing:
 ```
 
 Here `n` ranges over integer literals, `b` over Boolean literals, and `x` over
-resolved occurrences. The equality premise in `T-Check-Inferred` is structural
-type equality.
+resolved occurrences. The equality premise in `T-Check-Inferred` uses the
+single type-equality rule above.
+
+## Tuples and constructors
+
+Tuple elements synthesize from left to right. A nullary constructor occurrence
+synthesizes its owner's nominal type. A payload constructor is an ordinary
+unary function from its one semantic payload to that owner. Multiple declared
+fields form one tuple payload.
+
+```sequent
+family data-typing:
+  T-Tuple :=
+    for each i, GAMMA |- element_i ⇒ type_i
+    n >= 2
+    ===>
+    GAMMA |- (element_1, ..., element_n) ⇒ Tuple(type_1, ..., type_n)
+
+  T-Nullary-Constructor :=
+    constructor : Constructor(owner, none)
+    ===>
+    GAMMA |- constructor ⇒ owner
+
+  T-Payload-Constructor :=
+    constructor : Constructor(owner, payload)
+    ===>
+    GAMMA |- constructor ⇒ Function(payload, owner)
+```
+
+The constructor premises consult the immutable registry produced by name
+resolution. Constructor application then follows `T-Apply`; it does not have a
+special call rule.
 
 ## Functions and application
 
@@ -53,9 +87,11 @@ checks the argument against its domain.
 ```sequent
 family function-typing:
   T-Function-Check :=
-    GAMMA, x : domain |- body ⇐ codomain
+    pattern ⇐ domain => bindings
+    exhaustive([pattern], domain)
+    GAMMA, bindings |- body ⇐ codomain
     ===>
-    GAMMA |- fn(x) { body } ⇐ Function(domain, codomain)
+    GAMMA |- fn(pattern) { body } ⇐ Function(domain, codomain)
 
   T-Apply :=
     GAMMA |- function ⇒ Function(domain, codomain)
@@ -66,14 +102,99 @@ family function-typing:
 
 An anonymous function in a position that must synthesize has no applicable
 rule and is rejected with `type.function-needs-context`. Mini-Ash does not infer
-a parameter type for that case.
+a parameter type for that case. The parameter position is a pattern. Two or
+more syntactic parameters form one tuple pattern and consume one tuple domain.
+Because an anonymous or operational function has no alternate clauses,
+`exhaustive([pattern], domain)` requires its singleton domain pattern to be
+irrefutable under the same usefulness analysis as a local binding. The
+`bindings` returned by pattern checking, rather than one distinguished binder,
+extend the function body environment.
+
+## Patterns, matches, and coverage
+
+The judgment `pattern ⇐ type => bindings` checks a pattern against an expected
+type and returns its typed binders. Wildcards return no binders. Boolean and
+unit patterns require their corresponding primitive types. Tuple patterns
+require equal tuple arity. A constructor pattern must belong to the expected
+nominal type and must agree with the constructor's payload shape. Pattern
+binders are pairwise distinct.
+
+A match synthesizes its scrutinee once, checks every arm pattern against that
+type, and gives the resulting bindings only to that arm body. All arm bodies
+have one type. The typed usefulness relation over closed nominal sums, tuples,
+`Bool`, `Unit`, binders, and wildcards must find each arm useful and must find
+no witness outside all arms. A useless arm is rejected with
+`coverage.redundant-case`; a remaining witness is reported with
+`coverage.non-exhaustive`.
+
+```sequent
+family match-typing:
+  T-Match-Synthesize :=
+    GAMMA |- scrutinee ⇒ input_type
+    for each i, pattern_i ⇐ input_type => bindings_i
+    for each i, useful(previous_patterns_i, pattern_i, input_type)
+    GAMMA, bindings_1 |- body_1 ⇒ result_type
+    for each i > 1, GAMMA, bindings_i |- body_i ⇐ result_type
+    exhaustive(all_patterns, input_type)
+    ===>
+    GAMMA |- match scrutinee { arms } ⇒ result_type
+
+  T-Match-Check :=
+    GAMMA |- scrutinee ⇒ input_type
+    for each i, pattern_i ⇐ input_type => bindings_i
+    for each i, useful(previous_patterns_i, pattern_i, input_type)
+    for each i, GAMMA, bindings_i |- body_i ⇐ expected_type
+    exhaustive(all_patterns, input_type)
+    ===>
+    GAMMA |- match scrutinee { arms } ⇐ expected_type
+```
+
+A match has at least one arm. `T-Match-Synthesize` obtains its result type from
+the first arm and checks every later arm against that type.
+`T-Match-Check` propagates a result type supplied by the surrounding context to
+every arm, including the first. This admits anonymous functions and other
+checking-only forms in all arms when their context supplies a type.
+
+The executable test
+`static_semantics_contextual_match_checks_function_arms` checks this propagation:
+
+```ash
+fn choose(flag : Bool) -> Int -> Int {
+    match flag {
+        true => fn(value) {
+            value + 1
+        }
+        false => fn(value) {
+            value * 2
+        }
+    }
+}
+
+choose true 41
+```
+
+The same usefulness relation checks equation groups. Each equation pattern
+consumes one arrow domain, so `f left right = body` checks against two nested
+arrows. All clauses have the same positive pattern count. The relation also
+defines local-pattern irrefutability: a local `let` pattern is admitted only
+when its singleton pattern set covers the initializer type.
+
+The executable test `static_semantics_irrefutable_tuple_binding_is_executable`
+checks local destructuring:
+
+```ash
+{
+    let (left, right) = (20, 22)
+    left + right
+}
+```
 
 ## Blocks
 
 Block bindings are checked from left to right. An annotated initializer checks
 against its annotation. An unannotated initializer must synthesize its binding
-type. The new binder is available only in the remainder. A block can synthesize
-from its result or check by passing an expected type to its result.
+type. The new pattern bindings are available only in the remainder. A block can
+synthesize from its result or check by passing an expected type to its result.
 
 ```sequent
 family block-typing:
@@ -84,15 +205,19 @@ family block-typing:
 
   T-Block-Let-Inferred :=
     GAMMA |- initializer ⇒ binding_type
-    GAMMA, x : binding_type |- { remainder } ⇒ result_type
+    pattern ⇐ binding_type => bindings
+    exhaustive([pattern], binding_type)
+    GAMMA, bindings |- { remainder } ⇒ result_type
     ===>
-    GAMMA |- { let x = initializer; remainder } ⇒ result_type
+    GAMMA |- { let pattern = initializer; remainder } ⇒ result_type
 
   T-Block-Let-Checked :=
     GAMMA |- initializer ⇐ binding_type
-    GAMMA, x : binding_type |- { remainder } ⇒ result_type
+    pattern ⇐ binding_type => bindings
+    exhaustive([pattern], binding_type)
+    GAMMA, bindings |- { remainder } ⇒ result_type
     ===>
-    GAMMA |- { let x : binding_type = initializer; remainder } ⇒ result_type
+    GAMMA |- { let pattern : binding_type = initializer; remainder } ⇒ result_type
 
   T-Block-Check-Result :=
     GAMMA |- result ⇐ expected_type
@@ -101,21 +226,27 @@ family block-typing:
 
   T-Block-Check-Let-Inferred :=
     GAMMA |- initializer ⇒ binding_type
-    GAMMA, x : binding_type |- { remainder } ⇐ expected_type
+    pattern ⇐ binding_type => bindings
+    exhaustive([pattern], binding_type)
+    GAMMA, bindings |- { remainder } ⇐ expected_type
     ===>
-    GAMMA |- { let x = initializer; remainder } ⇐ expected_type
+    GAMMA |- { let pattern = initializer; remainder } ⇐ expected_type
 
   T-Block-Check-Let-Annotated :=
     GAMMA |- initializer ⇐ binding_type
-    GAMMA, x : binding_type |- { remainder } ⇐ expected_type
+    pattern ⇐ binding_type => bindings
+    exhaustive([pattern], binding_type)
+    GAMMA, bindings |- { remainder } ⇐ expected_type
     ===>
-    GAMMA |- { let x : binding_type = initializer; remainder } ⇐ expected_type
+    GAMMA |- { let pattern : binding_type = initializer; remainder } ⇐ expected_type
 ```
 
 The first three rules synthesize a block type. The last three rules check a
-block, carrying the expected type through its bindings to the result. The
-checking rules overlap with `T-Check-Inferred` when the result synthesizes, but
-also admit a result that itself needs an expected type, such as an anonymous
+block, carrying the expected type through its bindings to the result. Every
+binding checks its complete pattern, requires that singleton pattern to cover
+the initializer type, and extends the remainder with all returned bindings.
+The checking rules overlap with `T-Check-Inferred` when the result synthesizes,
+but also admit a result that itself needs an expected type, such as an anonymous
 function. The semicolons in the binding conclusions separate semantic fields.
 They do not add semicolon punctuation to Ash source.
 
@@ -152,10 +283,16 @@ add 20 22
 ### Recursive block groups
 
 Let `GAMMA_R` map every member of one nonempty recursive group to its required
-declared monotype. The initialization-safety judgment `safe_rec` holds only for
-a direct anonymous function. All members enter the type environment before any
-initializer is checked, and the same environment applies to the block
-remainder.
+declared monotype. All members enter the type environment before any initializer
+is checked, and the same environment applies to the block remainder.
+
+The initialization-safety judgment admits a direct anonymous function. It also
+admits a data member when the initializer is rooted at a fully applied
+constructor of the declared nominal type. A recursive occurrence under that
+root may pass only through constructor or tuple construction, or occur in an
+anonymous function body where evaluation delays it. A subtree with no
+recursive occurrence may be any well-typed expression. An ordinary call,
+primitive, match, or block cannot force or transport a recursive occurrence.
 
 ```sequent
 family recursive-binding-typing:
@@ -176,11 +313,11 @@ family recursive-binding-typing:
     GAMMA |- { let rec group; remainder } ⇐ expected_type
 ```
 
-Here each `initializer_i` is the direct anonymous function assigned to `x_i`.
 The semicolon separates the recursive declaration from the semantic remainder;
-it is not Ash source punctuation. A non-function or computed-function
-initializer is rejected with `recursion.unsafe-initializer` before ordinary
-expression checking.
+it is not Ash source punctuation. A nominal initializer without the required
+constructor root is rejected with `recursion.unsafe-root`. A recursive
+occurrence that crosses a forcing form is rejected with
+`recursion.unguarded-use`.
 
 The executable test
 `static_semantics_rejects_unsafe_recursive_initialization` checks this rejected
@@ -229,23 +366,29 @@ true + 1
 
 ## Globals and programs
 
-An equational interface must expose one function domain and codomain. Its
-binder has the domain type while its body checks against the codomain. An
-inline operational header supplies those same two types directly. Either form
-contributes one explicit global function type. All global function types form
-`GAMMA_G` before any body is checked.
+An equational interface must expose at least as many arrow layers as each
+clause has patterns. The patterns receive those domains in order, and the body
+checks against the remaining codomain. An inline operational header supplies
+its domain and result directly. One typed parameter gives that domain; multiple
+typed parameters combine into one tuple domain. Either form contributes one
+explicit global function type. All global function types form `GAMMA_G` before
+any body is checked.
 
 ```sequent
 family global-and-program-typing:
   T-Equational-Global :=
-    GAMMA, parameter : domain |- body ⇐ codomain
+    patterns ⇐ domains => bindings
+    useful(previous_clauses, patterns, domains)
+    GAMMA, bindings |- body ⇐ codomain
     ===>
-    GAMMA |-definition name : Function(domain, codomain); name parameter = body ⇒ name : Function(domain, codomain)
+    GAMMA |-clause name patterns = body ⇐ Function(domains, codomain)
 
   T-Operational-Global :=
-    GAMMA, parameter : domain |- body ⇐ codomain
+    header_pattern ⇐ domain => bindings
+    exhaustive([header_pattern], domain)
+    GAMMA, bindings |- body ⇐ codomain
     ===>
-    GAMMA |-definition fn name(parameter : domain) -> codomain { body } ⇒ name : Function(domain, codomain)
+    GAMMA |-definition fn name(header_pattern : domain) -> codomain { body } ⇒ name : Function(domain, codomain)
 
   T-Recursive-Program :=
     GAMMA_G = { name_i : definition_type_i | 1 <= i <= n }
@@ -255,13 +398,30 @@ family global-and-program-typing:
     |-program definitions; result ⇒ result_type
 ```
 
-The definition judgments check parameters and bodies but do not determine
-global visibility. `T-Recursive-Program` establishes all global monotypes and
-synthesizes the file type from its required result expression. Semicolons in
-these judgments separate semantic fields and are not source punctuation.
-Resolution has already ensured global-name freshness and equational name
-agreement.
+The complete equational group must also be exhaustive under the shared
+coverage relation. The definition judgments check parameters and bodies but do
+not determine global visibility. `T-Recursive-Program` establishes all global
+monotypes and synthesizes the file type from its required result expression.
+Semicolons in these judgments separate semantic fields and are not source
+punctuation. Resolution has already ensured global-name freshness and
+equational name agreement. For `T-Operational-Global`, one typed source
+parameter is `header_pattern`; two or more typed source parameters normalize to
+one tuple `header_pattern` and one tuple `domain`. Pattern checking returns all
+body bindings, and singleton exhaustiveness requires the operational header to
+be irrefutable.
+
+The executable test `static_semantics_operational_tuple_pattern_is_executable`
+checks a destructuring operational parameter:
+
+```ash
+fn add((left, right) : (Int, Int)) -> Int {
+    left + right
+}
+
+add(20, 22)
+```
 
 There are no inference variables, generalization, polymorphism, overloading,
-subtyping, implicit conversions, recursive types, or polymorphic recursion in
-Mini-Ash.
+subtyping, implicit conversions, explicit structural recursive-type operators,
+or polymorphic recursion in Mini-Ash. Nominal declarations may refer to
+themselves and to other nominal declarations in the same file.

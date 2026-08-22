@@ -12,6 +12,7 @@ use std::{
 
 use super::{
     binding::BindingNode,
+    data::{ConstructorNode, CoreMatchArm, CorePattern, CorePatternKind, MatchNode, TupleNode},
     function::{ApplicationNode, FunctionNode},
     literal::{BooleanNode, IntegerNode, UnitNode},
     primitive::{Primitive, PrimitiveNode},
@@ -20,7 +21,7 @@ use super::{
 };
 use crate::{
     integer::Integer,
-    resolved::BinderId,
+    resolved::{BinderId, ResolvedRegistry},
     source::{GeneratedReason, Origin, Span},
     types::Type,
 };
@@ -37,8 +38,50 @@ impl MiniAshPureDialect {
 /// Maximum recursive Type or Origin wrappers admitted into Core storage.
 ///
 /// This is replaceable compiler resource behavior aligned with the current
-/// parser structural budget. It is not an Ash language-semantic limit.
-pub const CORE_PAYLOAD_DEPTH_LIMIT: usize = 128;
+/// parser structural budget plus the two wrappers that retained lowering may
+/// synthesize for tuple domains and constructor/function values. It is not an
+/// Ash language-semantic limit.
+pub const CORE_PAYLOAD_DEPTH_LIMIT: usize = 130;
+
+/// Maximum structured-pattern wrappers admitted into one Core pattern.
+pub const CORE_PATTERN_DEPTH_LIMIT: usize = 33;
+
+pub(super) fn type_depth_within_limit(root: &Type) -> bool {
+    let mut work = vec![(root, 0_usize)];
+    while let Some((ty, depth)) = work.pop() {
+        match ty {
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::Tuple(elements) => {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return false;
+                }
+                work.extend(elements.iter().map(|element| (element, child_depth)));
+            }
+            Type::Function(domain, codomain) => {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return false;
+                }
+                work.push((codomain, child_depth));
+                work.push((domain, child_depth));
+            }
+        }
+    }
+    true
+}
+
+pub(super) fn origin_depth_within_limit(root: &Origin) -> bool {
+    let mut current = root;
+    for _ in 0..=CORE_PAYLOAD_DEPTH_LIMIT {
+        match current {
+            Origin::Source(_) => return true,
+            Origin::Generated { cause, .. } => current = cause,
+            Origin::Related { primary, .. } => current = primary,
+        }
+    }
+    false
+}
 
 /// Identifies a node inside one Core arena.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -132,6 +175,7 @@ impl PureExprKind {
                 PureValue::Boolean(node) => fixed_child_count(node.children()),
                 PureValue::Unit(node) => fixed_child_count(node.children()),
                 PureValue::Function(node) => fixed_child_count(node.children()),
+                PureValue::Constructor(_) => 0,
             },
             Self::Variable(node) => fixed_child_count(node.children()),
             Self::Computation(computation) => match computation {
@@ -139,6 +183,8 @@ impl PureExprKind {
                 PureComputation::RecursiveBind(node) => node.child_count(),
                 PureComputation::Apply(node) => fixed_child_count(node.children()),
                 PureComputation::Primitive(node) => fixed_child_count(node.children()),
+                PureComputation::Tuple(node) => node.elements().len(),
+                PureComputation::Match(node) => node.arms().len() + 1,
             },
         }
     }
@@ -150,6 +196,7 @@ impl PureExprKind {
                 PureValue::Boolean(node) => fixed_child_at(node.children(), index),
                 PureValue::Unit(node) => fixed_child_at(node.children(), index),
                 PureValue::Function(node) => fixed_child_at(node.children(), index),
+                PureValue::Constructor(_) => None,
             },
             Self::Variable(node) => fixed_child_at(node.children(), index),
             Self::Computation(computation) => match computation {
@@ -157,6 +204,14 @@ impl PureExprKind {
                 PureComputation::RecursiveBind(node) => node.child_at(index),
                 PureComputation::Apply(node) => fixed_child_at(node.children(), index),
                 PureComputation::Primitive(node) => fixed_child_at(node.children(), index),
+                PureComputation::Tuple(node) => node.elements().get(index).copied(),
+                PureComputation::Match(node) => {
+                    if index == 0 {
+                        Some(node.scrutinee())
+                    } else {
+                        node.arms().get(index - 1).map(CoreMatchArm::body)
+                    }
+                }
             },
         }
     }
@@ -181,6 +236,8 @@ pub enum PureValue {
     Unit(UnitNode),
     /// A unary function value.
     Function(FunctionNode),
+    /// A nullary value or payload-constructor function.
+    Constructor(ConstructorNode),
 }
 
 /// The closed computation families in the pure Mini-Ash dialect.
@@ -188,12 +245,16 @@ pub enum PureValue {
 pub enum PureComputation {
     /// A sequential nonrecursive binding.
     Bind(BindingNode),
-    /// A simultaneous recursive function binding group.
+    /// A simultaneous recursive binding group.
     RecursiveBind(RecursiveBindingNode),
     /// A strict unary application.
     Apply(ApplicationNode),
     /// A primitive operation.
     Primitive(PrimitiveNode),
+    /// Strict tuple construction.
+    Tuple(TupleNode),
+    /// Structured first-match selection.
+    Match(MatchNode),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -217,6 +278,7 @@ pub(super) struct StoredNode {
 /// An unchecked Core arena which must cross [`super::validate()`] before use.
 #[derive(Debug)]
 pub struct UnvalidatedProgram {
+    pub(super) registry: Arc<ResolvedRegistry>,
     pub(super) arena: ArenaId,
     pub(super) nodes: Vec<StoredNode>,
     pub(super) root: NodeId,
@@ -225,14 +287,21 @@ pub struct UnvalidatedProgram {
 /// A pure Core arena whose graph, types, scope, dialect, and provenance hold.
 #[derive(Debug)]
 pub struct PureProgram {
+    registry: Arc<ResolvedRegistry>,
     arena: ArenaId,
     nodes: Box<[TypedExpr]>,
     root: NodeId,
 }
 
 impl PureProgram {
-    pub(super) fn new(arena: ArenaId, nodes: Vec<TypedExpr>, root: NodeId) -> Self {
+    pub(super) fn new(
+        registry: Arc<ResolvedRegistry>,
+        arena: ArenaId,
+        nodes: Vec<TypedExpr>,
+        root: NodeId,
+    ) -> Self {
         Self {
+            registry,
             arena,
             nodes: nodes.into_boxed_slice(),
             root,
@@ -260,6 +329,12 @@ impl PureProgram {
     #[must_use]
     pub const fn node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Returns the immutable nominal and constructor registry.
+    #[must_use]
+    pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
+        &self.registry
     }
 }
 
@@ -294,6 +369,12 @@ impl ValidatedProgram {
     pub fn node_count(&self) -> usize {
         self.0.node_count()
     }
+
+    /// Returns the immutable nominal and constructor registry.
+    #[must_use]
+    pub fn registry(&self) -> &Arc<ResolvedRegistry> {
+        self.0.registry()
+    }
 }
 
 /// Why unchecked Core construction could not be represented.
@@ -319,6 +400,8 @@ pub enum BuildError {
     TypeDepthExceeded,
     /// An Origin contains more recursive wrappers than Core currently admits.
     OriginDepthExceeded,
+    /// A structured pattern contains more wrappers than Core currently admits.
+    PatternDepthExceeded,
     /// Iterative payload rebuilding found inconsistent internal state.
     InvalidPayload,
     /// The requested root does not belong to this arena.
@@ -346,6 +429,7 @@ impl fmt::Display for BuildError {
             Self::ForeignBinder => "core binder capability belongs to another arena",
             Self::TypeDepthExceeded => "core type structural depth is exceeded",
             Self::OriginDepthExceeded => "core origin structural depth is exceeded",
+            Self::PatternDepthExceeded => "core pattern structural depth is exceeded",
             Self::InvalidPayload => "core payload admission state is inconsistent",
             Self::InvalidNodeId => "core node identity does not belong to the arena",
         })
@@ -358,6 +442,7 @@ impl Error for BuildError {}
 #[derive(Debug, Default)]
 #[must_use]
 pub struct CoreBuilder {
+    registry: Arc<ResolvedRegistry>,
     arena: Option<ArenaId>,
     nodes: Vec<StoredNode>,
     next_binder: u32,
@@ -371,6 +456,7 @@ impl CoreBuilder {
     /// Starts an empty Core arena.
     pub fn new() -> Self {
         Self {
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
             arena: None,
             nodes: Vec::new(),
             next_binder: 0,
@@ -378,6 +464,14 @@ impl CoreBuilder {
             materialized_resolved: HashSet::new(),
             generated_binders: HashSet::new(),
             binder_phase_started: false,
+        }
+    }
+
+    /// Starts an empty arena carrying an immutable resolved data registry.
+    pub fn with_registry(registry: Arc<ResolvedRegistry>) -> Self {
+        Self {
+            registry,
+            ..Self::new()
         }
     }
 
@@ -488,6 +582,50 @@ impl CoreBuilder {
         self.push(ty, origin, PureExprKind::Value(PureValue::Unit(UnitNode)))
     }
 
+    /// Adds an unchecked constructor occurrence.
+    pub fn constructor(
+        &mut self,
+        constructor: crate::types::ConstructorId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Value(PureValue::Constructor(ConstructorNode::new(constructor))),
+        )
+    }
+
+    /// Adds strict tuple construction with an unchecked result annotation.
+    pub fn tuple(
+        &mut self,
+        elements: Vec<NodeId>,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::Tuple(TupleNode::new(elements))),
+        )
+    }
+
+    /// Adds a structured match with unchecked pattern and branch invariants.
+    pub fn match_expression(
+        &mut self,
+        scrutinee: NodeId,
+        arms: Vec<CoreMatchArm>,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        let arms = admit_match_arms(arms)?;
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::Match(MatchNode::new(scrutinee, arms))),
+        )
+    }
+
     /// Adds a variable occurrence with an unchecked result annotation.
     pub fn variable(
         &mut self,
@@ -561,11 +699,11 @@ impl CoreBuilder {
         )
     }
 
-    /// Adds a simultaneous recursive function group with unchecked invariants.
+    /// Adds a simultaneous recursive binding group with unchecked invariants.
     ///
     /// Payload admission precedes binder-capability checks. The independent
-    /// validator owns nonemptiness, function-initializer, type, scope, and
-    /// provenance invariants.
+    /// validator owns nonemptiness, function-or-guarded-data initializer,
+    /// type, scope, and provenance invariants.
     ///
     /// # Errors
     ///
@@ -689,6 +827,7 @@ impl CoreBuilder {
             return Err(BuildError::InvalidNodeId);
         }
         Ok(UnvalidatedProgram {
+            registry: self.registry,
             arena,
             nodes: self.nodes,
             root,
@@ -741,6 +880,220 @@ impl CoreBuilder {
     }
 }
 
+enum PatternAdmissionTask {
+    Visit(CorePattern, usize),
+    FinishTuple {
+        ty: Type,
+        origin: Origin,
+        count: usize,
+    },
+    FinishConstructor {
+        ty: Type,
+        origin: Origin,
+        constructor: crate::types::ConstructorId,
+        has_payload: bool,
+    },
+}
+
+enum PatternToken {
+    Binder(Type, Origin, TypedBinder),
+    Wildcard(Type, Origin),
+    Boolean(Type, Origin, bool),
+    Unit(Type, Origin),
+    Tuple(Type, Origin, usize),
+    Constructor(Type, Origin, crate::types::ConstructorId, bool),
+}
+
+fn admit_match_arms(arms: Vec<CoreMatchArm>) -> Result<Vec<CoreMatchArm>, BuildError> {
+    let mut admitted = Vec::with_capacity(arms.len());
+    let mut first_error = None;
+    for arm in arms {
+        let (pattern, body, origin) = arm.into_parts();
+        let pattern = admit_pattern(pattern);
+        let origin = admit_origin(origin);
+        match (pattern, origin) {
+            (Ok(pattern), Ok(origin)) if first_error.is_none() => {
+                admitted.push(CoreMatchArm::new(pattern, body, origin));
+            }
+            (Err(error), _) | (_, Err(error)) => {
+                first_error.get_or_insert(error);
+            }
+            (Ok(_), Ok(_)) => {}
+        }
+    }
+    first_error.map_or(Ok(admitted), Err)
+}
+
+fn admit_pattern(pattern: CorePattern) -> Result<CorePattern, BuildError> {
+    let mut work = vec![PatternAdmissionTask::Visit(pattern, 0)];
+    let mut tokens = Vec::new();
+    let mut first_error = None;
+    while let Some(task) = work.pop() {
+        match task {
+            PatternAdmissionTask::Visit(pattern, depth) => {
+                let CorePattern { ty, origin, kind } = pattern;
+                if depth > CORE_PATTERN_DEPTH_LIMIT {
+                    first_error.get_or_insert(BuildError::PatternDepthExceeded);
+                }
+                let payloads = admit_payloads(ty, origin);
+                match kind {
+                    CorePatternKind::Binder(binder) => match payloads {
+                        Ok((ty, origin)) if first_error.is_none() => {
+                            tokens.push(PatternToken::Binder(ty, origin, binder));
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                    },
+                    CorePatternKind::Wildcard => {
+                        push_pattern_leaf(payloads, &mut first_error, &mut tokens, |ty, origin| {
+                            PatternToken::Wildcard(ty, origin)
+                        })
+                    }
+                    CorePatternKind::Boolean(value) => {
+                        push_pattern_leaf(payloads, &mut first_error, &mut tokens, |ty, origin| {
+                            PatternToken::Boolean(ty, origin, value)
+                        })
+                    }
+                    CorePatternKind::Unit => {
+                        push_pattern_leaf(payloads, &mut first_error, &mut tokens, |ty, origin| {
+                            PatternToken::Unit(ty, origin)
+                        })
+                    }
+                    CorePatternKind::Tuple(elements) => {
+                        if let Ok((ty, origin)) = payloads {
+                            let count = elements.len();
+                            if first_error.is_none() {
+                                work.push(PatternAdmissionTask::FinishTuple { ty, origin, count });
+                            }
+                            for element in elements.into_vec().into_iter().rev() {
+                                work.push(PatternAdmissionTask::Visit(
+                                    element,
+                                    depth.saturating_add(1),
+                                ));
+                            }
+                        } else if let Err(error) = payloads {
+                            first_error.get_or_insert(error);
+                            for element in elements.into_vec().into_iter().rev() {
+                                work.push(PatternAdmissionTask::Visit(
+                                    element,
+                                    depth.saturating_add(1),
+                                ));
+                            }
+                        }
+                    }
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    } => {
+                        let has_payload = payload.is_some();
+                        if let Ok((ty, origin)) = payloads {
+                            if first_error.is_none() {
+                                work.push(PatternAdmissionTask::FinishConstructor {
+                                    ty,
+                                    origin,
+                                    constructor,
+                                    has_payload,
+                                });
+                            }
+                        } else if let Err(error) = payloads {
+                            first_error.get_or_insert(error);
+                        }
+                        if let Some(payload) = payload {
+                            work.push(PatternAdmissionTask::Visit(
+                                *payload,
+                                depth.saturating_add(1),
+                            ));
+                        }
+                    }
+                }
+            }
+            PatternAdmissionTask::FinishTuple { ty, origin, count } => {
+                tokens.push(PatternToken::Tuple(ty, origin, count));
+            }
+            PatternAdmissionTask::FinishConstructor {
+                ty,
+                origin,
+                constructor,
+                has_payload,
+            } => tokens.push(PatternToken::Constructor(
+                ty,
+                origin,
+                constructor,
+                has_payload,
+            )),
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+
+    let mut rebuilt = Vec::new();
+    for token in tokens {
+        let pattern = match token {
+            PatternToken::Binder(ty, origin, binder) => {
+                CorePattern::new(ty, origin, CorePatternKind::Binder(binder))
+            }
+            PatternToken::Wildcard(ty, origin) => {
+                CorePattern::new(ty, origin, CorePatternKind::Wildcard)
+            }
+            PatternToken::Boolean(ty, origin, value) => {
+                CorePattern::new(ty, origin, CorePatternKind::Boolean(value))
+            }
+            PatternToken::Unit(ty, origin) => CorePattern::new(ty, origin, CorePatternKind::Unit),
+            PatternToken::Tuple(ty, origin, count) => {
+                if rebuilt.len() < count {
+                    return Err(BuildError::InvalidPayload);
+                }
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                CorePattern::new(
+                    ty,
+                    origin,
+                    CorePatternKind::Tuple(elements.into_boxed_slice()),
+                )
+            }
+            PatternToken::Constructor(ty, origin, constructor, has_payload) => {
+                let payload = if has_payload {
+                    Some(Box::new(rebuilt.pop().ok_or(BuildError::InvalidPayload)?))
+                } else {
+                    None
+                };
+                CorePattern::new(
+                    ty,
+                    origin,
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    },
+                )
+            }
+        };
+        rebuilt.push(pattern);
+    }
+    let result = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
+    if rebuilt.is_empty() {
+        Ok(result)
+    } else {
+        Err(BuildError::InvalidPayload)
+    }
+}
+
+fn push_pattern_leaf(
+    payloads: Result<(Type, Origin), BuildError>,
+    first_error: &mut Option<BuildError>,
+    tokens: &mut Vec<PatternToken>,
+    token: impl FnOnce(Type, Origin) -> PatternToken,
+) {
+    match payloads {
+        Ok((ty, origin)) if first_error.is_none() => tokens.push(token(ty, origin)),
+        Ok(_) => {}
+        Err(error) => {
+            first_error.get_or_insert(error);
+        }
+    }
+}
+
 fn admit_payloads(ty: Type, origin: Origin) -> Result<(Type, Origin), BuildError> {
     let admitted_type = admit_type(ty);
     let admitted_origin = admit_origin(origin);
@@ -754,12 +1107,15 @@ fn admit_payloads(ty: Type, origin: Origin) -> Result<(Type, Origin), BuildError
 enum TypeAdmissionTask {
     Visit(Type, usize),
     FinishFunction,
+    FinishTuple(usize),
 }
 
 enum TypeToken {
     Int,
     Bool,
     Unit,
+    Nominal(crate::types::NominalTypeId),
+    Tuple(usize),
     Function,
 }
 
@@ -772,6 +1128,18 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
             TypeAdmissionTask::Visit(Type::Int, _) => tokens.push(TypeToken::Int),
             TypeAdmissionTask::Visit(Type::Bool, _) => tokens.push(TypeToken::Bool),
             TypeAdmissionTask::Visit(Type::Unit, _) => tokens.push(TypeToken::Unit),
+            TypeAdmissionTask::Visit(Type::Nominal(identity), _) => {
+                tokens.push(TypeToken::Nominal(identity));
+            }
+            TypeAdmissionTask::Visit(Type::Tuple(elements), depth) => {
+                let child_depth = depth.saturating_add(1);
+                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                let count = elements.len();
+                work.push(TypeAdmissionTask::FinishTuple(count));
+                for element in elements.into_vec().into_iter().rev() {
+                    work.push(TypeAdmissionTask::Visit(element, child_depth));
+                }
+            }
             TypeAdmissionTask::Visit(Type::Function(domain, codomain), depth) => {
                 let child_depth = depth.saturating_add(1);
                 exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
@@ -780,6 +1148,7 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
                 work.push(TypeAdmissionTask::Visit(*domain, child_depth));
             }
             TypeAdmissionTask::FinishFunction => tokens.push(TypeToken::Function),
+            TypeAdmissionTask::FinishTuple(count) => tokens.push(TypeToken::Tuple(count)),
         }
     }
     if exceeded {
@@ -792,6 +1161,14 @@ fn admit_type(ty: Type) -> Result<Type, BuildError> {
             TypeToken::Int => rebuilt.push(Type::Int),
             TypeToken::Bool => rebuilt.push(Type::Bool),
             TypeToken::Unit => rebuilt.push(Type::Unit),
+            TypeToken::Nominal(identity) => rebuilt.push(Type::Nominal(identity)),
+            TypeToken::Tuple(count) => {
+                if rebuilt.len() < count {
+                    return Err(BuildError::InvalidPayload);
+                }
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+            }
             TypeToken::Function => {
                 let Some(codomain) = rebuilt.pop() else {
                     return Err(BuildError::InvalidPayload);
@@ -934,6 +1311,63 @@ mod tests {
             };
         }
         origin
+    }
+
+    fn nested_pattern(source: &SourceFile, depth: usize) -> CorePattern {
+        let origin = generated_origin(source, 0);
+        let mut pattern = CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard);
+        for _ in 0..depth {
+            pattern = CorePattern::new(
+                Type::Unit,
+                origin.clone(),
+                CorePatternKind::Tuple(vec![pattern].into_boxed_slice()),
+            );
+        }
+        pattern
+    }
+
+    #[test]
+    fn pattern_payload_limit_rejects_deep_core_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("core-pattern-boundary".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("pattern.ash", "()").expect("test source");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let value = builder.unit(Type::Unit, origin.clone()).expect("unit node");
+                let before = builder.nodes.len();
+                assert_eq!(
+                    builder.match_expression(
+                        value,
+                        vec![CoreMatchArm::new(
+                            nested_pattern(&source, 50_000),
+                            value,
+                            origin.clone(),
+                        )],
+                        Type::Unit,
+                        origin.clone(),
+                    ),
+                    Err(BuildError::PatternDepthExceeded)
+                );
+                assert_eq!(builder.nodes.len(), before);
+
+                builder
+                    .match_expression(
+                        value,
+                        vec![CoreMatchArm::new(
+                            nested_pattern(&source, CORE_PATTERN_DEPTH_LIMIT),
+                            value,
+                            origin.clone(),
+                        )],
+                        Type::Unit,
+                        origin,
+                    )
+                    .expect("the exact pattern boundary is admitted");
+            })
+            .expect("pattern admission thread should start")
+            .join()
+            .expect("pattern admission should fit the small stack");
     }
 
     #[test]

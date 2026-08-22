@@ -6,10 +6,18 @@ use ash::{
     parser::{parse, project},
     resolve::resolve,
     resolved::{
-        ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedProgram,
+        Binder, ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration,
+        ResolvedPattern, ResolvedPatternKind, ResolvedProgram,
     },
     source::{GeneratedReason, Origin, SourceFile, Span},
 };
+
+fn pattern_binder(pattern: &ResolvedPattern) -> &Binder {
+    let ResolvedPatternKind::Binder(binder) = &pattern.kind else {
+        panic!("expected binder pattern")
+    };
+    binder
+}
 
 fn resolved(source: &SourceFile) -> ResolvedProgram {
     let lexed = lex(source).expect("test source should lex");
@@ -97,7 +105,9 @@ fn recursive_group_retains_group_member_function_and_occurrence_causes() {
     };
     assert_eq!(
         function_node.parameter().origin().primary_span(),
-        source_function.parameter.origin.primary_span()
+        pattern_binder(&source_function.pattern)
+            .origin
+            .primary_span()
     );
     let body = core.node(function_node.body()).expect("recursive body");
     assert_eq!(body.origin.primary_span(), source_function.body.result.span);
@@ -138,11 +148,16 @@ fn successful_definition_checks_retain_the_body_and_declared_result_origins() {
         match &program.definitions[0].kind {
             ResolvedDefinitionKind::Equational(definition) => assert_check_origin(
                 &body.origin,
-                definition.equation.body.span,
-                match &definition.interface.annotation.kind {
-                    ash::surface::SurfaceTypeKind::Function(function) => function.codomain.span,
-                    _ => panic!("expected function annotation"),
-                },
+                definition.equations[0].body.span,
+                definition
+                    .interface
+                    .annotation
+                    .provenance
+                    .function_parts()
+                    .expect("expected function annotation")
+                    .1
+                    .span()
+                    .expect("expected codomain provenance"),
             ),
             ResolvedDefinitionKind::InlineOperational(definition) => assert_check_origin(
                 &body.origin,
@@ -204,18 +219,20 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
                     global.members()[0].binder().origin().primary_span(),
                     equational.interface.name.origin.primary_span()
                 );
-                assert_eq!(function.origin.primary_span(), equational.equation.span);
+                assert_eq!(function.origin.primary_span(), equational.equations[0].span);
                 for expected in [
                     definition.span,
                     equational.interface.span,
                     equational.interface.annotation.span,
-                    equational.equation.body.span,
+                    equational.equations[0].body.span,
                 ] {
                     assert!(function.origin.related_spans().contains(&expected));
                 }
                 assert_eq!(
                     function_node.parameter().origin().primary_span(),
-                    equational.equation.binder.origin.primary_span()
+                    pattern_binder(&equational.equations[0].patterns[0])
+                        .origin
+                        .primary_span()
                 );
             }
             ResolvedDefinitionKind::InlineOperational(operational) => {
@@ -230,7 +247,7 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
                 assert_eq!(function.origin.primary_span(), definition.span);
                 for expected in [
                     operational.header.span,
-                    operational.header.parameter.annotation.span,
+                    operational.header.parameters[0].annotation.span,
                     operational.header.result_type.span,
                     operational.body.span,
                 ] {
@@ -238,7 +255,9 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
                 }
                 assert_eq!(
                     function_node.parameter().origin().primary_span(),
-                    operational.header.parameter.binder.origin.primary_span()
+                    pattern_binder(&operational.header.parameters[0].pattern)
+                        .origin
+                        .primary_span()
                 );
             }
         }
@@ -285,14 +304,15 @@ fn t001_and_t004_diagnostics_keep_their_source_cause_spans() {
     assert_eq!(diagnostic.reason, TypeReason::DefinitionResult);
     assert_eq!(
         diagnostic.primary.span(),
-        t001_definition.equation.body.span
+        t001_definition.equations[0].body.span
     );
-    let ash::surface::SurfaceTypeKind::Function(function_type) =
-        &t001_definition.interface.annotation.kind
-    else {
-        panic!("expected function annotation")
-    };
-    assert_eq!(diagnostic.related[0].span(), function_type.codomain.span);
+    let (_, codomain) = t001_definition
+        .interface
+        .annotation
+        .provenance
+        .function_parts()
+        .expect("expected function annotation");
+    assert_eq!(diagnostic.related[0].span(), codomain.span().unwrap());
 
     let t004_source = SourceFile::new(
         "t004.ash",
@@ -312,12 +332,13 @@ fn t001_and_t004_diagnostics_keep_their_source_cause_spans() {
     };
     assert_eq!(diagnostic.reason, TypeReason::Argument);
     assert_eq!(diagnostic.primary.span(), application.argument.span);
-    let ash::surface::SurfaceTypeKind::Function(function_type) =
-        &t004_definition.interface.annotation.kind
-    else {
-        panic!("expected function annotation")
-    };
-    assert_eq!(diagnostic.related[0].span(), function_type.domain.span);
+    let (domain, _) = t004_definition
+        .interface
+        .annotation
+        .provenance
+        .function_parts()
+        .expect("expected function annotation");
+    assert_eq!(diagnostic.related[0].span(), domain.span().unwrap());
 
     let operational_source = SourceFile::new(
         "t004-operational.ash",
@@ -341,6 +362,6 @@ fn t001_and_t004_diagnostics_keep_their_source_cause_spans() {
     assert_eq!(diagnostic.primary.span(), application.argument.span);
     assert_eq!(
         diagnostic.related[0].span(),
-        operational_definition.header.parameter.annotation.span
+        operational_definition.header.parameters[0].annotation.span
     );
 }

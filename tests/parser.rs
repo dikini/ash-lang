@@ -2,7 +2,7 @@ use ash::{
     lexer::{TokenKind, lex},
     parser::{
         Event, NodeKind, ParseContext, ParseReason, ProjectionError, ResourceFailure,
-        STRUCTURAL_DEPTH_LIMIT, SynchronizationBoundary, parse, project,
+        STRUCTURAL_DEPTH_LIMIT, SYNTAX_WORK_LIMIT, SynchronizationBoundary, parse, project,
     },
     source::{ByteRange, SourceFile},
     surface::{
@@ -16,6 +16,11 @@ fn parse_valid(text: &str) -> (ash::parser::ConcreteTree, ash::surface::SurfaceP
     let lexed = lex(&source).expect("lexing should preserve source invariants");
     assert!(lexed.diagnostics.is_empty());
     let tree = parse(lexed);
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "unexpected parse diagnostics: {:?}",
+        tree.parse_diagnostics()
+    );
     let program = project(&source, &tree).expect("the fixture should project");
     (tree, program)
 }
@@ -46,6 +51,163 @@ fn binding(block: &SurfaceBlock, index: usize) -> &SurfaceBinding {
         panic!("expected ordinary binding")
     };
     binding
+}
+
+fn concrete_kinds(tree: &ash::parser::ConcreteTree) -> Vec<NodeKind> {
+    let mut kinds = Vec::new();
+    let mut pending = tree.root().into_iter().collect::<Vec<_>>();
+    while let Some(node) = pending.pop() {
+        kinds.push(node.kind);
+        pending.extend(node.children.iter().filter_map(|child| match child {
+            ash::parser::ConcreteElement::Node(child) => Some(child),
+            ash::parser::ConcreteElement::Token(_)
+            | ash::parser::ConcreteElement::Missing { .. }
+            | ash::parser::ConcreteElement::Error(_) => None,
+        }));
+    }
+    kinds
+}
+
+fn retained_reason_code(reason: ParseReason) -> &'static str {
+    match reason {
+        ParseReason::ExpectedResult => "parse.expected-result",
+        ParseReason::ExpectedForm => "parse.expected-form",
+        ParseReason::ExpectedOperand => "parse.expected-operand",
+        ParseReason::UnclosedGroup => "parse.unclosed-group",
+        ParseReason::RepeatedEquality => "parse.repeated-equality",
+        ParseReason::PolymorphicHeader => "parse.polymorphic-header",
+        ParseReason::ExpectedRecursiveMember => "parse.expected-recursive-member",
+        ParseReason::UnexpectedAnd => "parse.unexpected-and",
+        ParseReason::Semicolon => "parse.semicolon",
+        ParseReason::UnexpectedToken => "parse.unexpected-token",
+    }
+}
+
+#[test]
+fn public_parse_reasons_describe_only_retained_diagnostics() {
+    for reason in [
+        ParseReason::ExpectedResult,
+        ParseReason::ExpectedForm,
+        ParseReason::ExpectedOperand,
+        ParseReason::UnclosedGroup,
+        ParseReason::RepeatedEquality,
+        ParseReason::PolymorphicHeader,
+        ParseReason::ExpectedRecursiveMember,
+        ParseReason::UnexpectedAnd,
+        ParseReason::Semicolon,
+        ParseReason::UnexpectedToken,
+    ] {
+        assert_eq!(retained_reason_code(reason), reason.to_string());
+    }
+}
+
+#[test]
+fn data_and_pattern_forms_build_one_token_complete_concrete_tree() {
+    let source = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\ntype Choice =\n    Choice((Bool, Tree))\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn choose(flag : Bool, tree : Tree) -> Int {\n    match (flag, tree) {\n        (true, Tip(value)) => value\n        (_, Fork(left, right)) => size left + size right\n        (_, Tip(value)) => value\n    }\n}\n\nchoose(true, Tip(42))\n";
+    let (_source, tree) = parse_tree(source);
+
+    assert!(tree.lexical_diagnostics().is_empty());
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+    let kinds = concrete_kinds(&tree);
+    for expected in [
+        NodeKind::TypeDeclaration,
+        NodeKind::ConstructorDeclaration,
+        NodeKind::Pattern,
+        NodeKind::TuplePattern,
+        NodeKind::MatchExpression,
+        NodeKind::MatchArm,
+        NodeKind::TupleExpression,
+        NodeKind::TupleType,
+    ] {
+        assert!(kinds.contains(&expected), "missing {expected:?}: {kinds:?}");
+    }
+    assert_eq!(
+        tree.events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Token(index) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        (0..tree.tokens().len()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn data_and_pattern_recovery_stays_balanced_and_synchronizes_at_the_arm_line() {
+    let text = "match true {\n    true 1\n    false => 2\n}\n";
+    let (source, tree) = parse_tree(text);
+
+    let diagnostic = tree
+        .parse_diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.reason == ParseReason::ExpectedForm
+                && diagnostic.expected.as_deref() == Some("=>")
+        })
+        .expect("the missing arm arrow should have one structured diagnostic");
+    assert!(matches!(
+        diagnostic.context.as_slice(),
+        [ParseContext::Synchronization {
+            boundary: SynchronizationBoundary::LogicalLineEnd,
+            ..
+        }]
+    ));
+    assert_eq!(
+        project(&source, &tree),
+        Err(ProjectionError::RecoveryNodesPresent)
+    );
+    assert_eq!(
+        tree.events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Token(index) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        (0..tree.tokens().len()).collect::<Vec<_>>()
+    );
+    let mut depth = 0_u32;
+    for event in tree.events() {
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::Finish => depth -= 1,
+            Event::Token(_) | Event::Missing { .. } | Event::Error(_) => {}
+        }
+    }
+    assert_eq!(depth, 0);
+}
+
+#[test]
+fn projects_data_declarations_tuples_matches_and_pattern_vectors() {
+    let source = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nmatch (true, Tip(42)) {\n    (true, Tip(value)) => value\n    (_, Fork(left, right)) => size left + size right\n    (_, Tip(value)) => value\n}\n";
+    let (_tree, program) = parse_valid(source);
+
+    assert_eq!(program.type_declarations.len(), 1);
+    assert_eq!(program.type_declarations[0].name.text, "Tree");
+    assert_eq!(program.type_declarations[0].constructors.len(), 2);
+    assert_eq!(program.type_declarations[0].constructors[1].fields.len(), 2);
+    let SurfaceDefinitionKind::Equational(definition) = &program.definitions[0].kind else {
+        panic!("expected equational definition");
+    };
+    assert_eq!(definition.equations.len(), 2);
+    assert_eq!(definition.equations[0].patterns.len(), 1);
+    assert!(matches!(
+        definition.equations[0].patterns[0].kind,
+        ash::surface::SurfacePatternKind::Constructor { .. }
+    ));
+    let SurfaceExprKind::Match(match_expression) = &program.result.kind else {
+        panic!("expected structured match");
+    };
+    assert!(matches!(
+        match_expression.scrutinee.kind,
+        SurfaceExprKind::Tuple(_)
+    ));
+    assert_eq!(match_expression.arms.len(), 3);
 }
 
 #[test]
@@ -300,13 +462,6 @@ fn primitive_expression_forms_project_without_semantic_group_nodes() {
 
     let (_, name) = parse_valid("value");
     assert_name(&name.result, "value");
-
-    let (_, match_named_function) = parse_valid("match value");
-    let SurfaceExprKind::Apply(application) = &match_named_function.result.kind else {
-        panic!("match is an unreserved identifier in this increment");
-    };
-    assert_name(&application.function, "match");
-    assert_name(&application.argument, "value");
 }
 
 #[test]
@@ -367,19 +522,21 @@ fn both_v002_presentations_preserve_their_distinct_source_structure() {
             .end(),
         22
     );
-    assert_eq!(equational_definition.equation.span.range().start(), 23);
-    assert_eq!(equational_definition.equation.span.range().end(), 50);
-    assert_eq!(equational_definition.equation.name.text, "increment");
-    assert_eq!(equational_definition.equation.name.span.range().start(), 23);
-    assert_eq!(equational_definition.equation.name.span.range().end(), 32);
-    assert_eq!(
-        equational_definition.equation.binder.span.range().start(),
-        33
-    );
-    assert_eq!(equational_definition.equation.binder.span.range().end(), 38);
-    assert_eq!(equational_definition.equation.body.span.range().start(), 41);
-    assert_eq!(equational_definition.equation.body.span.range().end(), 50);
-    let SurfaceExprKind::Add(equational_add) = &equational_definition.equation.body.kind else {
+    let equation = &equational_definition.equations[0];
+    assert_eq!(equation.span.range().start(), 23);
+    assert_eq!(equation.span.range().end(), 50);
+    assert_eq!(equation.name.text, "increment");
+    assert_eq!(equation.name.span.range().start(), 23);
+    assert_eq!(equation.name.span.range().end(), 32);
+    let ash::surface::SurfacePatternKind::Binder(equation_binder) = &equation.patterns[0].kind
+    else {
+        panic!("expected equation binder");
+    };
+    assert_eq!(equation_binder.span.range().start(), 33);
+    assert_eq!(equation_binder.span.range().end(), 38);
+    assert_eq!(equation.body.span.range().start(), 41);
+    assert_eq!(equation.body.span.range().end(), 50);
+    let SurfaceExprKind::Add(equational_add) = &equation.body.kind else {
         panic!("expected equational addition body");
     };
     assert_eq!(equational_add.operator_span.range().start(), 47);
@@ -398,11 +555,17 @@ fn both_v002_presentations_preserve_their_distinct_source_structure() {
     assert_eq!(operational_definition.header.name.span.range().start(), 3);
     assert_eq!(operational_definition.header.name.span.range().end(), 12);
     assert_eq!(
-        operational_definition.header.parameter.span.range().start(),
+        operational_definition.header.parameters[0]
+            .span
+            .range()
+            .start(),
         13
     );
     assert_eq!(
-        operational_definition.header.parameter.span.range().end(),
+        operational_definition.header.parameters[0]
+            .span
+            .range()
+            .end(),
         24
     );
     assert_eq!(
@@ -490,7 +653,7 @@ fn higher_order_operational_parameter_and_parenthesized_function_argument_projec
         panic!("expected inline operational definition");
     };
     assert!(matches!(
-        definition.header.parameter.annotation.kind,
+        definition.header.parameters[0].annotation.kind,
         SurfaceTypeKind::Function(_)
     ));
     let SurfaceExprKind::Apply(application) = &program.result.kind else {
@@ -505,16 +668,6 @@ fn higher_order_operational_parameter_and_parenthesized_function_argument_projec
 #[test]
 fn excluded_structural_forms_report_owned_reasons_and_never_project() {
     let cases = [
-        ("(1, 2)", ParseReason::TupleSyntax),
-        ("match value {\n    true\n}", ParseReason::MatchSyntax),
-        (
-            "fn add(left : Int, right : Int) -> Int {\n    left\n}\n\nadd\n",
-            ParseReason::MultipleParameters,
-        ),
-        (
-            "add : Int -> Int\nadd left right = left\n\nadd\n",
-            ParseReason::MultipleBinders,
-        ),
         (
             "fn identity<a>(value : Int) -> Int {\n    value\n}\n\nidentity\n",
             ParseReason::PolymorphicHeader,
@@ -575,7 +728,7 @@ fn missing_final_result_and_lexical_errors_are_hard_projection_boundaries() {
 
 #[test]
 fn recovery_events_remain_balanced_and_retain_mismatched_delimiters() {
-    for text in ["(", "{\n1\n)", "fn(value, other) {\nvalue\n}"] {
+    for text in ["(", "{\n1\n)", "fn(value,, other) {\nvalue\n}"] {
         let (_source, tree) = parse_tree(text);
         let mut depth = 0_u32;
         for event in tree.events() {
@@ -621,8 +774,8 @@ fn every_surface_construct_retains_its_complete_accepted_span() {
         panic!("expected inline definition");
     };
     assert_eq!(definition.header.name.span.range().start(), 3);
-    assert_eq!(definition.header.parameter.span.range().start(), 13);
-    assert_eq!(definition.header.parameter.span.range().end(), 24);
+    assert_eq!(definition.header.parameters[0].span.range().start(), 13);
+    assert_eq!(definition.header.parameters[0].span.range().end(), 24);
     assert_eq!(binding(&definition.body, 0).span.range().start(), 39);
     assert_eq!(binding(&definition.body, 0).span.range().end(), 56);
     assert_eq!(program.span.range().start(), 0);
@@ -874,9 +1027,9 @@ fn crlf_programs_retain_two_byte_boundaries_and_surface_spans() {
     };
     assert_eq!(definition.interface.span.range().start(), 0);
     assert_eq!(definition.interface.span.range().end(), 22);
-    assert_eq!(definition.equation.span.range().start(), 24);
-    assert_eq!(definition.equation.span.range().end(), 51);
-    let SurfaceExprKind::Add(addition) = &definition.equation.body.kind else {
+    assert_eq!(definition.equations[0].span.range().start(), 24);
+    assert_eq!(definition.equations[0].span.range().end(), 51);
+    let SurfaceExprKind::Add(addition) = &definition.equations[0].body.kind else {
         panic!("expected addition body");
     };
     assert_eq!(addition.operator_span.range().start(), 48);
@@ -1061,6 +1214,133 @@ fn structural_depth_budget_bounds_parenthesized_types() {
     });
 }
 
+fn nested_constructor_pattern_source(depth: usize) -> String {
+    let mut source = "type Loop =\nEnd\n| Step(Loop)\n\nmatch End {\n".to_owned();
+    source.push_str(&"Step(".repeat(depth));
+    source.push('_');
+    source.push_str(&")".repeat(depth));
+    source.push_str(" => 1\n_ => 0\n}\n");
+    source
+}
+
+#[test]
+fn structural_depth_budget_bounds_nested_constructor_patterns() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let accepted_depth = STRUCTURAL_DEPTH_LIMIT / 8 - 4;
+                let accepted_source = SourceFile::new(
+                    "pattern-depth-boundary.ash",
+                    nested_constructor_pattern_source(accepted_depth),
+                )
+                .expect("the boundary source should fit");
+                let accepted = parse(lex(&accepted_source).expect("the boundary should lex"));
+                assert_eq!(accepted.resource_failure(), None);
+                project(&accepted_source, &accepted).expect("the boundary should project");
+
+                let rejected_source = SourceFile::new(
+                    "pattern-depth-overflow.ash",
+                    nested_constructor_pattern_source(accepted_depth + 1),
+                )
+                .expect("the overflow source should fit");
+                let rejected = parse(lex(&rejected_source).expect("the overflow should lex"));
+                assert_eq!(
+                    rejected.resource_failure(),
+                    Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    })
+                );
+                assert_eq!(
+                    project(&rejected_source, &rejected),
+                    Err(ProjectionError::ResourceLimit(
+                        ResourceFailure::StructuralDepth {
+                            limit: STRUCTURAL_DEPTH_LIMIT
+                        }
+                    ))
+                );
+
+                let far_source = SourceFile::new(
+                    "pattern-depth-far-overflow.ash",
+                    nested_constructor_pattern_source(1_000),
+                )
+                .expect("the far-overflow source should fit");
+                let far = parse(lex(&far_source).expect("the far overflow should lex"));
+                assert_eq!(
+                    far.resource_failure(),
+                    Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    })
+                );
+            })
+            .expect("the pattern-depth thread should start")
+            .join()
+            .expect("pattern depth should fit the small stack");
+    });
+}
+
+fn nested_match_source(depth: usize) -> String {
+    let mut source = "match true {\n_ => ".repeat(depth);
+    source.push('0');
+    source.push('\n');
+    source.push_str(&"}\n".repeat(depth));
+    source
+}
+
+#[test]
+fn structural_depth_budget_bounds_nested_matches() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let accepted_depth = STRUCTURAL_DEPTH_LIMIT / 32;
+                let accepted_source = SourceFile::new(
+                    "match-depth-boundary.ash",
+                    nested_match_source(accepted_depth),
+                )
+                .expect("the boundary source should fit");
+                let accepted = parse(lex(&accepted_source).expect("the boundary should lex"));
+                assert_eq!(accepted.resource_failure(), None);
+                project(&accepted_source, &accepted).expect("the boundary should project");
+
+                let rejected_source = SourceFile::new(
+                    "match-depth-overflow.ash",
+                    nested_match_source(accepted_depth + 1),
+                )
+                .expect("the overflow source should fit");
+                let rejected = parse(lex(&rejected_source).expect("the overflow should lex"));
+                assert_eq!(
+                    rejected.resource_failure(),
+                    Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    })
+                );
+                assert_eq!(
+                    project(&rejected_source, &rejected),
+                    Err(ProjectionError::ResourceLimit(
+                        ResourceFailure::StructuralDepth {
+                            limit: STRUCTURAL_DEPTH_LIMIT
+                        }
+                    ))
+                );
+
+                let far_source =
+                    SourceFile::new("match-depth-far-overflow.ash", nested_match_source(1_000))
+                        .expect("the far-overflow source should fit");
+                let far = parse(lex(&far_source).expect("the far overflow should lex"));
+                assert_eq!(
+                    far.resource_failure(),
+                    Some(ResourceFailure::StructuralDepth {
+                        limit: STRUCTURAL_DEPTH_LIMIT
+                    })
+                );
+            })
+            .expect("the match-depth thread should start")
+            .join()
+            .expect("match depth should fit the small stack");
+    });
+}
+
 #[test]
 fn structural_depth_budget_bounds_nested_blocks() {
     assert_depth_boundary(|depth| format!("{}1\n{}", "{\n".repeat(depth), "}\n".repeat(depth)));
@@ -1111,5 +1391,49 @@ fn far_over_budget_operator_input_has_linear_bounded_construction() {
     assert!(
         tree.events().len() <= tree.tokens().len() + 4 * STRUCTURAL_DEPTH_LIMIT + 16,
         "event construction must remain token-linear after the bounded prefix"
+    );
+}
+
+#[test]
+fn cumulative_syntax_work_stops_before_constructing_an_oversized_tree() {
+    const WIDTH: usize = 110_000;
+    let mut text = String::with_capacity(WIDTH * 5 + 32);
+    text.push_str("match (");
+    for index in 0..WIDTH {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push('0');
+    }
+    text.push_str(") {\n(");
+    for index in 0..WIDTH {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push('_');
+    }
+    text.push_str(") => 0\n}\n");
+    let source =
+        SourceFile::new("syntax-work-limit.ash", text).expect("the syntax work fixture should fit");
+
+    let tree = parse(lex(&source).expect("the syntax work fixture should lex"));
+
+    assert_eq!(
+        tree.resource_failure(),
+        Some(ResourceFailure::SyntaxWork {
+            limit: SYNTAX_WORK_LIMIT
+        })
+    );
+    assert!(tree.root().is_none());
+    assert!(tree.events().is_empty());
+    assert!(tree.lexical_diagnostics().is_empty());
+    assert!(tree.parse_diagnostics().is_empty());
+    assert_eq!(
+        project(&source, &tree),
+        Err(ProjectionError::ResourceLimit(
+            ResourceFailure::SyntaxWork {
+                limit: SYNTAX_WORK_LIMIT
+            }
+        ))
     );
 }

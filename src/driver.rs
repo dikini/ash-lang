@@ -1,12 +1,12 @@
 //! Reusable, stage-preserving Mini-Ash pipeline orchestration.
 
-use std::{error::Error, fmt, fs, io, path::PathBuf};
+use std::{error::Error, fmt, fs, io, path::PathBuf, sync::Arc};
 
 use crate::{
     core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate},
     diagnostic::Diagnostic,
     elaborate::{Elaborator, TypeError},
-    eval::{Evaluation, RuntimeFailure, Value, evaluate},
+    eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
     lexer::{LexReason, lex},
     parser::{
         ParseContext, ParseDiagnostic, ParseReason, ProjectionError, ResourceFailure, parse,
@@ -18,12 +18,33 @@ use crate::{
 };
 
 /// The observable result of one successful source-file pipeline.
+///
+/// The observation retains the evaluation heap even when `value` is a closure
+/// whose captured environment contains structural locations.
 #[derive(Clone, Debug)]
 pub struct Observation {
     /// The evaluated Mini-Ash value.
     pub value: Value,
     /// The structural type assigned to the program result.
     pub ty: Type,
+    type_display: Option<String>,
+    _heap: Arc<ObservedHeap>,
+}
+
+impl Observation {
+    /// Returns the structural rendering of the observed value.
+    #[must_use]
+    pub fn value_display(&self) -> String {
+        self.value.to_string()
+    }
+
+    /// Returns the source-facing rendering of the observed result type.
+    #[must_use]
+    pub fn type_display(&self) -> String {
+        self.type_display
+            .clone()
+            .unwrap_or_else(|| self.ty.to_string())
+    }
 }
 
 /// Lexical, parser, and resource facts retained before surface projection.
@@ -57,6 +78,33 @@ pub enum PipelineFailure {
 }
 
 impl PipelineFailure {
+    /// Returns the stable reason owned by the first failing stage.
+    #[must_use]
+    pub fn reason_code(&self) -> String {
+        match self {
+            Self::SourceModel(_) => "source.invalid".into(),
+            Self::Syntax(failure) if failure.resource.is_some() => "parse.resource".into(),
+            Self::Syntax(failure) => failure
+                .lexical
+                .first()
+                .map(|diagnostic| diagnostic.reason.to_string())
+                .or_else(|| {
+                    failure
+                        .parser
+                        .first()
+                        .map(|diagnostic| diagnostic.reason.to_string())
+                })
+                .unwrap_or_else(|| "parse.resource".into()),
+            Self::Projection(_) => "projection.malformed-tree".into(),
+            Self::Resolution(error) => error.reason.to_string(),
+            Self::Typing(TypeError::Source(diagnostic)) => diagnostic.reason.to_string(),
+            Self::Typing(TypeError::Mismatch(_)) => "type.mismatch".into(),
+            Self::Typing(TypeError::Internal(_)) => "type.internal".into(),
+            Self::Validation(error) => error.reason().to_string(),
+            Self::Runtime(error) => format!("runtime.{error:?}"),
+        }
+    }
+
     /// Reports whether this failure rejects Ash source rather than the tool.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
@@ -175,21 +223,28 @@ where
         })));
     }
     let surface = project(&source, &tree).map_err(PipelineFailure::Projection)?;
+    drop(tree);
     let resolved = resolve(&surface).map_err(PipelineFailure::Resolution)?;
+    drop(surface);
+    let registry = std::sync::Arc::clone(&resolved.registry);
     let mut elaborator = Elaborator::for_program(&resolved)
         .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
     let typed = elaborator
         .synthesize_program(&resolved)
         .map_err(PipelineFailure::Typing)?;
     let ty = typed.ty;
+    let type_display = registry.display_type(&ty);
     let unchecked = elaborator
         .finish(typed.node)
         .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
     let validated = validator(unchecked, &[&source]).map_err(PipelineFailure::Validation)?;
     let evaluation = evaluator(&validated).map_err(PipelineFailure::Runtime)?;
+    let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
-        value: evaluation.value,
+        value,
         ty,
+        type_display: Some(type_display),
+        _heap: heap,
     })
 }
 
@@ -294,5 +349,19 @@ mod tests {
         };
         assert_eq!(error.reason(), crate::core::ValidationReason::Provenance);
         assert!(!evaluation_called.get());
+    }
+
+    #[test]
+    fn returned_closure_observation_retains_its_captured_structural_heap() {
+        let source = SourceFile::new(
+            "observed-structural-capture.ash",
+            "{\nlet pair = (20, 22)\nlet keep : Unit -> (Int, Int) = fn(ignored) {\npair\n}\nkeep\n}\n",
+        )
+        .expect("the test source should fit");
+
+        let observation = run_source(source).expect("the closure should evaluate");
+
+        assert!(matches!(observation.value, Value::Function(_)));
+        assert_eq!(observation._heap.cell_count(), 1);
     }
 }

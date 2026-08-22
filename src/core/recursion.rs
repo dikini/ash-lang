@@ -1,8 +1,8 @@
-//! Simultaneous recursive function bindings in typed Core.
+//! Simultaneous recursive bindings in typed Core.
 
 use super::{dialect::NodeId, variable::TypedBinder};
 
-/// One typed function initializer in a recursive binding group.
+/// One typed initializer in a recursive binding group.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecursiveBindingMember {
     binder: TypedBinder,
@@ -23,14 +23,14 @@ impl RecursiveBindingMember {
         &self.binder
     }
 
-    /// Returns the function node that initializes this member.
+    /// Returns the function or guarded-data node that initializes this member.
     #[must_use]
     pub const fn initializer(&self) -> NodeId {
         self.initializer
     }
 }
 
-/// A simultaneous recursive function group followed by its lexical body.
+/// A simultaneous recursive binding group followed by its lexical body.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecursiveBindingNode {
     members: Box<[RecursiveBindingMember]>,

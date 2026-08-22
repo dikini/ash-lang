@@ -4,4 +4,5 @@ mod machine;
 mod value;
 
 pub use machine::{Control, Environment, Evaluation, RuntimeFailure, TraceEvent, evaluate};
-pub use value::{Closure, Value};
+pub(crate) use value::ObservedHeap;
+pub use value::{Closure, ObservedValue, Value};

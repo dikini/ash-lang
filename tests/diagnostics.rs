@@ -105,17 +105,14 @@ fn recursive_diagnostics_retain_exact_stage_facts() {
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("expected source typing failure")
     };
-    assert_eq!(diagnostic.reason, TypeReason::UnsafeRecursiveInitializer);
+    assert_eq!(diagnostic.reason, TypeReason::UnsafeRecursiveRoot);
     let initializer = unsafe_text.find("1\n").expect("initializer");
     assert_eq!(
         diagnostic.primary.span().range().start(),
         offset(initializer)
     );
     assert_eq!(diagnostic.related.len(), 2);
-    assert_eq!(
-        diagnostic.expected.as_deref(),
-        Some("a direct `fn` initializer")
-    );
+    assert_eq!(diagnostic.expected.as_deref(), None);
 }
 
 #[test]
@@ -229,6 +226,204 @@ fn r001_reports_only_the_unknown_occurrence_without_an_unjustified_suggestion() 
     assert!(error.expected.is_none());
     assert!(error.found.is_none());
     assert!(error.help.is_none());
+}
+
+#[test]
+fn data_resolution_diagnostics_retain_names_and_binder_sites() {
+    let duplicate_text = "type Thing =\nFirst\n\ntype Thing =\nSecond\n\nFirst\n";
+    let duplicate_source = source("duplicate-type.ash", duplicate_text);
+    let tree = parse(lex(&duplicate_source).expect("fixture should lex"));
+    let surface = project(&duplicate_source, &tree).expect("fixture should project");
+    let error = resolve(&surface).expect_err("duplicate type should fail");
+    assert_eq!(error.reason, ResolveReason::DuplicateType);
+    let first = duplicate_text.find("Thing").expect("first type name");
+    let second = duplicate_text.rfind("Thing").expect("second type name");
+    assert_eq!(error.primary.span().range().start(), offset(second));
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(error.related[0].span().range().start(), offset(first));
+    assert!(error.expected.is_none() && error.found.is_none() && error.help.is_none());
+
+    let binder_text = "{\nlet (value, value) = (1, 2)\nvalue\n}\n";
+    let binder_source = source("duplicate-pattern-binder.ash", binder_text);
+    let tree = parse(lex(&binder_source).expect("fixture should lex"));
+    let surface = project(&binder_source, &tree).expect("fixture should project");
+    let error = resolve(&surface).expect_err("duplicate binder should fail");
+    assert_eq!(error.reason, ResolveReason::DuplicatePatternBinder);
+    let first = binder_text.find("value").expect("first binder");
+    let second = binder_text[first + 1..]
+        .find("value")
+        .map(|relative| relative + first + 1)
+        .expect("second binder");
+    assert_eq!(error.primary.span().range().start(), offset(second));
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(error.related[0].span().range().start(), offset(first));
+
+    let unknown_text = "Missing\n";
+    let unknown_source = source("unknown-constructor.ash", unknown_text);
+    let tree = parse(lex(&unknown_source).expect("fixture should lex"));
+    let surface = project(&unknown_source, &tree).expect("fixture should project");
+    let error = resolve(&surface).expect_err("unknown constructor should fail");
+    assert_eq!(error.reason, ResolveReason::UnknownConstructor);
+    assert_eq!(error.primary.span().range().start(), 0);
+    assert_eq!(error.found.as_deref(), Some("Missing"));
+    assert!(error.related.is_empty() && error.expected.is_none() && error.help.is_none());
+}
+
+#[test]
+fn coverage_diagnostics_retain_arm_spans_and_concrete_witnesses() {
+    let missing_text = "match true {\ntrue => 1\n}\n";
+    let missing_source = source("missing-case.ash", missing_text);
+    let tree = parse(lex(&missing_source).expect("fixture should lex"));
+    let surface = project(&missing_source, &tree).expect("fixture should project");
+    let expected_span = resolve(&surface)
+        .expect("fixture should resolve")
+        .result
+        .span;
+    let error = run_source(missing_source).expect_err("false is uncovered");
+    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+        panic!("missing case should be a typed source diagnostic")
+    };
+    assert_eq!(diagnostic.reason, TypeReason::NonExhaustive);
+    assert_eq!(diagnostic.primary.span(), expected_span);
+    assert_eq!(diagnostic.found.as_deref(), Some("false"));
+    assert!(diagnostic.related.is_empty() && diagnostic.expected.is_none());
+
+    let redundant_text = "match true {\ntrue => 1\nfalse => 2\nfalse => 3\n}\n";
+    let redundant_source = source("redundant-case.ash", redundant_text);
+    let tree = parse(lex(&redundant_source).expect("fixture should lex"));
+    let surface = project(&redundant_source, &tree).expect("fixture should project");
+    let resolved = resolve(&surface).expect("fixture should resolve");
+    let ResolvedExprKind::Match(match_expression) = &resolved.result.kind else {
+        panic!("fixture should resolve to a match")
+    };
+    let expected_span = match_expression.arms[2].span;
+    let error = run_source(redundant_source).expect_err("third arm is redundant");
+    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+        panic!("redundant case should be a typed source diagnostic")
+    };
+    assert_eq!(diagnostic.reason, TypeReason::RedundantCase);
+    assert_eq!(diagnostic.primary.span(), expected_span);
+    assert!(diagnostic.found.is_none() && diagnostic.related.is_empty());
+}
+
+#[test]
+fn nominal_mismatches_render_source_declaration_spellings() {
+    let declarations = "type Left =\nLeftValue\n\ntype Right =\nRightValue\n\n";
+    let cases = [
+        (
+            "fn select(value : Left) -> Left {\nvalue\n}\n\nselect RightValue\n",
+            TypeReason::Argument,
+        ),
+        (
+            "{\nlet value : Left = RightValue\nvalue\n}\n",
+            TypeReason::BindingInitializer,
+        ),
+        (
+            "fn select(value : Left) -> Left {\nRightValue\n}\n\nselect LeftValue\n",
+            TypeReason::DefinitionResult,
+        ),
+    ];
+
+    for (index, (program, reason)) in cases.into_iter().enumerate() {
+        let source = source(
+            &format!("nominal-mismatch-{index}.ash"),
+            &format!("{declarations}{program}"),
+        );
+        let error = run_source(source).expect_err("distinct nominal declarations should differ");
+        let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+            panic!("nominal mismatch should be a typed source diagnostic")
+        };
+
+        assert_eq!(diagnostic.reason, reason);
+        assert_eq!(diagnostic.expected.as_deref(), Some("Left"));
+        assert_eq!(diagnostic.found.as_deref(), Some("Right"));
+        assert!(!diagnostic.render_plain().contains("<type:"));
+    }
+
+    let source = source(
+        "nominal-match-result.ash",
+        &format!("{declarations}match true {{\ntrue => LeftValue\nfalse => RightValue\n}}\n"),
+    );
+    let error = run_source(source).expect_err("match arms should have one nominal result type");
+    let PipelineFailure::Typing(error) = error else {
+        panic!("match result mismatch should fail during typing")
+    };
+    assert_eq!(
+        error.to_string(),
+        "type mismatch: expected Left, found Right"
+    );
+    let TypeError::Mismatch(mismatch) = error else {
+        panic!("match result mismatch should retain its structural types")
+    };
+    assert_ne!(mismatch.expected(), mismatch.found());
+}
+
+#[test]
+fn checked_match_arms_retain_the_definition_result_cause() {
+    let cases = [
+        (
+            "true => fn(value) {\nfalse\n}\nfalse => fn(value) {\nvalue\n}",
+            "bad-first-match-arm.ash",
+        ),
+        (
+            "true => fn(value) {\nvalue\n}\nfalse => fn(value) {\nfalse\n}",
+            "bad-later-match-arm.ash",
+        ),
+    ];
+
+    for (arms, name) in cases {
+        let text = format!(
+            "fn choose(flag : Bool) -> Int -> Int {{\nmatch flag {{\n{arms}\n}}\n}}\n\nchoose true 0\n"
+        );
+        let bad_body = text
+            .find("fn(value) {\nfalse\n}")
+            .expect("bad anonymous-function body")
+            + "fn(value) {\n".len();
+        let declared_result =
+            text.find("-> Int -> Int").expect("declared result") + "-> Int -> ".len();
+        let error = run_source(source(name, &text))
+            .expect_err("a Boolean arm result should violate the declared function result");
+        let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+            panic!("checked match arm should retain a source diagnostic")
+        };
+
+        assert_eq!(diagnostic.reason, TypeReason::DefinitionResult);
+        assert_eq!(diagnostic.primary.span().range().start(), offset(bad_body));
+        assert_eq!(
+            diagnostic.primary.span().range().end(),
+            offset(bad_body + "false".len())
+        );
+        assert_eq!(diagnostic.expected.as_deref(), Some("Int"));
+        assert_eq!(diagnostic.found.as_deref(), Some("Bool"));
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(
+            diagnostic.related[0].span().range().start(),
+            offset(declared_result)
+        );
+        assert_eq!(
+            diagnostic.related[0].span().range().end(),
+            offset(declared_result + "Int".len())
+        );
+    }
+}
+
+#[test]
+fn unguarded_recursive_use_retains_the_transporting_expression_span() {
+    let text = "type Stream =\nNext(Int, Stream)\n\nfn identity(value : Stream) -> Stream {\nvalue\n}\n\n{\nlet rec stream : Stream = Next(1, identity stream)\nstream\n}\n";
+    let source = source("unguarded-recursion.ash", text);
+    let error = run_source(source).expect_err("ordinary call cannot transport recursion");
+    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+        panic!("unguarded use should be a typed source diagnostic")
+    };
+    assert_eq!(diagnostic.reason, TypeReason::UnguardedRecursiveUse);
+    let start = text.find("identity stream").expect("transporting call");
+    assert_eq!(diagnostic.primary.span().range().start(), offset(start));
+    assert_eq!(
+        diagnostic.primary.span().range().end(),
+        offset(start + "identity stream".len())
+    );
+    assert!(diagnostic.related.is_empty());
+    assert!(diagnostic.expected.is_none() && diagnostic.found.is_none());
 }
 
 #[test]

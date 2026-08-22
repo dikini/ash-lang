@@ -21,7 +21,9 @@ value : Type
 Integers, Booleans, and unit use their Ash spellings. Function values render as
 `<function>` because function identity and captured bindings are not observable
 Ash values. Function types use right-associated arrows and parenthesize a
-function-valued domain.
+function-valued domain. Tuples and nominal data render structurally. Rendering
+uses `<cycle>` only when a heap location repeats on the active structural path.
+Nominal result types use their source declaration spelling.
 
 The executable test `tool_success_example_has_exact_cli_observation` runs this
 file:
@@ -84,12 +86,36 @@ Its exact standard output is:
 <function> : Int -> Int
 ```
 
+The executable test `tool_cyclic_data_uses_structural_rendering` runs:
+
+```ash
+type Stream =
+    Next(Int, Stream)
+
+{
+    let rec ones : Stream = Next(1, ones)
+    ones
+}
+```
+
+Its exact standard output is:
+
+```text
+Next(1, <cycle>) : Stream
+```
+
 ## Failures
 
 A source rejection writes structured diagnostics to standard error, writes no
 success value to standard output, and exits with status `1`. The first line of
 each diagnostic is its stable reason, followed by its plain-text explanation
 and source labels.
+
+Data and pattern diagnostics include stable reasons for duplicate or unknown
+types and constructors, constructor ownership and payload mismatches, duplicate
+pattern binders, equation arity, refutable local bindings, non-exhaustive and
+redundant cases, unsafe recursive roots, and unguarded recursive uses. A
+non-exhaustive diagnostic includes one concrete uncovered pattern witness.
 
 The executable test `tool_source_rejection_uses_status_one_and_stderr` checks
 that this file reports `type.operator-operand` on standard error:

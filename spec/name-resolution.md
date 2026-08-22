@@ -4,6 +4,20 @@ Name resolution gives each definition and parameter a stable lexical identity
 and connects every occurrence to exactly one such identity. Later phases use
 identity, not spelling, to distinguish shadowed binders.
 
+## Type and constructor scope
+
+All nominal type declarations in one file are mutually visible, including in
+their own and earlier constructor payloads. Resolution allocates each nominal
+identity in source order before resolving any payload type. Two type
+declarations cannot share a spelling.
+
+Every constructor receives a stable identity under its owning nominal type.
+Constructors form one file-wide term namespace and must have distinct spellings
+across all declarations. Constructor names do not conflict with ordinary
+lowercase term names because the lexical classes are separate. A type
+occurrence must name a file type or one of `Int`, `Bool`, and `Unit`; an
+uppercase term or pattern occurrence must name a constructor.
+
 ## Global scope
 
 All global function names in one file form a simultaneous scope. Each global
@@ -27,6 +41,12 @@ binder, but two members of one group cannot have the same spelling.
 
 A function parameter is visible only in its body and may shadow an outer
 binder. Parentheses and other grouping syntax do not introduce a scope.
+
+Pattern binders enter scope together after the complete pattern resolves. A
+spelling cannot occur twice in one pattern. Match-arm binders are visible only
+in that arm body. Equation-pattern binders are visible only in their clause
+body. A local `let` pattern contributes its binders to the later block
+remainder, not to its initializer.
 
 Forward references exist only among file globals and members of one explicit
 local recursive group. An ordinary `let` does not see itself or a later local

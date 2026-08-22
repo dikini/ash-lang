@@ -5,6 +5,7 @@ use ash::{
         CoreBuilder, MiniAshPureDialect, NodeId, Primitive, PureComputation, PureExprKind,
         PureValue, TypedExpr, ValidatedProgram,
         binding::BindingNode,
+        data::{ConstructorNode, MatchNode, TupleNode},
         function::{ApplicationNode, FunctionNode},
         literal::{BooleanNode, IntegerNode, UnitNode},
         primitive::PrimitiveNode,
@@ -131,6 +132,7 @@ enum ShadowValue {
     Boolean(BooleanNode),
     Unit(UnitNode),
     Function(FunctionNode),
+    Constructor(ConstructorNode),
 }
 
 enum ShadowPureComputation {
@@ -138,6 +140,8 @@ enum ShadowPureComputation {
     RecursiveBind(RecursiveBindingNode),
     Apply(ApplicationNode),
     Primitive(PrimitiveNode),
+    Tuple(TupleNode),
+    Match(MatchNode),
 }
 
 fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
@@ -147,6 +151,7 @@ fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
             PureValue::Boolean(node) => ShadowValue::Boolean(*node),
             PureValue::Unit(node) => ShadowValue::Unit(*node),
             PureValue::Function(node) => ShadowValue::Function(node.clone()),
+            PureValue::Constructor(node) => ShadowValue::Constructor(*node),
         }),
         PureExprKind::Variable(node) => ShadowExprKind::Variable(*node),
         PureExprKind::Computation(computation) => ShadowExprKind::Computation(match computation {
@@ -156,6 +161,8 @@ fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
             }
             PureComputation::Apply(node) => ShadowPureComputation::Apply(*node),
             PureComputation::Primitive(node) => ShadowPureComputation::Primitive(*node),
+            PureComputation::Tuple(node) => ShadowPureComputation::Tuple(node.clone()),
+            PureComputation::Match(node) => ShadowPureComputation::Match(node.clone()),
         }),
     };
     ShadowTypedExpr {
@@ -212,6 +219,10 @@ fn validate_shadow_value(ty: &Type, value: &ShadowValue, facts: &ShadowFacts<'_>
                 Box::new(body_type.clone()),
             )
         }),
+        ShadowValue::Constructor(node) => {
+            let _ = node.constructor();
+            true
+        }
     }
 }
 
@@ -247,6 +258,22 @@ fn validate_shadow_computation(
                 && facts.node_type(node.right()) == Some(&right)
                 && ty == &result
         }
+        ShadowPureComputation::Tuple(node) => {
+            let Type::Tuple(types) = ty else { return false };
+            node.elements().len() == types.len()
+                && node
+                    .elements()
+                    .iter()
+                    .zip(types)
+                    .all(|(element, expected)| facts.node_type(*element) == Some(expected))
+        }
+        ShadowPureComputation::Match(node) => {
+            facts.node_type(node.scrutinee()).is_some()
+                && node
+                    .arms()
+                    .iter()
+                    .all(|arm| facts.node_type(arm.body()) == Some(ty))
+        }
     }
 }
 
@@ -254,7 +281,10 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
     match &expression.kind {
         ShadowExprKind::Value(value) => match value {
             ShadowValue::Function(node) => vec![node.body()],
-            ShadowValue::Integer(_) | ShadowValue::Boolean(_) | ShadowValue::Unit(_) => Vec::new(),
+            ShadowValue::Integer(_)
+            | ShadowValue::Boolean(_)
+            | ShadowValue::Unit(_)
+            | ShadowValue::Constructor(_) => Vec::new(),
         },
         ShadowExprKind::Variable(_) | ShadowExprKind::Mock(_) => Vec::new(),
         ShadowExprKind::Computation(computation) => match computation {
@@ -267,6 +297,10 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
                 .collect(),
             ShadowPureComputation::Apply(node) => vec![node.function(), node.argument()],
             ShadowPureComputation::Primitive(node) => vec![node.left(), node.right()],
+            ShadowPureComputation::Tuple(node) => node.elements().to_vec(),
+            ShadowPureComputation::Match(node) => std::iter::once(node.scrutinee())
+                .chain(node.arms().iter().map(|arm| arm.body()))
+                .collect(),
         },
     }
 }
@@ -281,9 +315,10 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
     match &expression.kind {
         ShadowExprKind::Value(value) => match value {
             ShadowValue::Function(node) => ShadowTransformPlan::Preserve(vec![node.body()]),
-            ShadowValue::Integer(_) | ShadowValue::Boolean(_) | ShadowValue::Unit(_) => {
-                ShadowTransformPlan::Preserve(Vec::new())
-            }
+            ShadowValue::Integer(_)
+            | ShadowValue::Boolean(_)
+            | ShadowValue::Unit(_)
+            | ShadowValue::Constructor(_) => ShadowTransformPlan::Preserve(Vec::new()),
         },
         ShadowExprKind::Variable(_) => ShadowTransformPlan::Preserve(Vec::new()),
         ShadowExprKind::Computation(computation) => match computation {
@@ -303,6 +338,14 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
             ShadowPureComputation::Primitive(node) => {
                 ShadowTransformPlan::Preserve(vec![node.left(), node.right()])
             }
+            ShadowPureComputation::Tuple(node) => {
+                ShadowTransformPlan::Preserve(node.elements().to_vec())
+            }
+            ShadowPureComputation::Match(node) => ShadowTransformPlan::Preserve(
+                std::iter::once(node.scrutinee())
+                    .chain(node.arms().iter().map(|arm| arm.body()))
+                    .collect(),
+            ),
         },
         ShadowExprKind::Mock(_) => ShadowTransformPlan::ReplaceWithMockUnit,
     }
@@ -315,6 +358,7 @@ fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
             ShadowValue::Boolean(_) => "boolean",
             ShadowValue::Unit(_) => "unit",
             ShadowValue::Function(_) => "function",
+            ShadowValue::Constructor(_) => "constructor",
         },
         ShadowExprKind::Variable(_) => "variable",
         ShadowExprKind::Computation(computation) => match computation {
@@ -322,6 +366,8 @@ fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
             ShadowPureComputation::RecursiveBind(_) => "recursive binding",
             ShadowPureComputation::Apply(_) => "application",
             ShadowPureComputation::Primitive(_) => "primitive",
+            ShadowPureComputation::Tuple(_) => "tuple",
+            ShadowPureComputation::Match(_) => "match",
         },
         ShadowExprKind::Mock(_) => "mock",
     }
