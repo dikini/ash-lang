@@ -41,9 +41,20 @@ retained integration evidence.
 - Normative and tool documentation has executable examples. The retained
   integration report is linked from DN-0007 and DN-0019.
 - A 10,000-member cycle evaluates, renders, and drops on a 256 KiB host stack.
-- Unsigned checkpoints `d2e84c6` and `e5ac562` retain authorization and the
-  first complete implementation slice. Final verification remains before the
-  review stop.
+- Unsigned checkpoints `d2e84c6` through `8cf8b4e` retain authorization and
+  the first candidate implementation. Review found that its private parser,
+  Core wrapper, evaluator, and source-text routing violated the retained
+  compiler boundaries.
+- Unsigned checkpoints `23537c2` and `b6a683d` record the approved remediation
+  design and execution plan. Checkpoints `e18620a`, `c3f7962`, and `8c1c6af`
+  migrate syntax, resolution, typed Core, validation, heap evaluation, and all
+  source programs into the retained pipeline, then delete the parallel path.
+- Checkpoint `ac840eb` adds strict tuple-construction trace evidence and literal
+  folding through structured data, makes usefulness iterative and memoized,
+  and closes the project lint findings exposed by the retained forms.
+- `cargo test --locked --all-targets` passes after remediation, including the
+  10,000-member small-stack case. The remaining project-wide gates run before
+  the review stop.
 
 ## Verification
 
@@ -77,15 +88,11 @@ the exact results.
 
 ## Deviations
 
-The data-and-pattern dialect has a feature-owned structured Core and parser
-selected at the driver boundary instead of adding every form to the earlier
-first-stratum Surface and Core arenas. The boundary still retains tokens,
-resolved identities, independent validation, transforms, and the explicit heap
-evaluator. Review should decide whether this isolation is the intended AD-0005
-and AD-0007 composition or whether the forms must join the older arena before
-integration.
-
-Review rejected this deviation for product integration. The approved
+The first candidate used a feature-owned parser, Core wrapper, evaluator, and
+driver-level source-text switch. Review rejected that deviation for product
+integration. The approved
 [remediation design](../plans/2026-08-22-data-and-patterns-shared-pipeline-design.md)
-migrates the candidate behavior into the retained CST, resolution, typed Core,
-validation, and evaluator-machine boundaries before another review.
+migrated the behavior into the retained CST, resolution, typed Core,
+validation, transforms, and evaluator-machine boundaries. Commit `8c1c6af`
+deletes the parallel module and its driver, failure, and value variants. No
+known architecture deviation remains for the review candidate.

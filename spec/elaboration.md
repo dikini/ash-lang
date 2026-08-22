@@ -24,10 +24,12 @@ same form around the remainder of its block. The recursive binding owns a
 nonempty ordered sequence of annotated member initializers followed by one body
 term. Every group binder is in scope in every initializer and in that body.
 
-An ordinary local pattern binding remains a typed binding whose pattern is
-known to be irrefutable. An equational clause group remains one structured
-match over its curried arguments. An operational multi-parameter header and a
-multi-parameter anonymous function each become one tuple-domain pattern.
+A local binder pattern uses the ordinary nonrecursive Core binding. Any other
+local pattern becomes a one-arm structured match whose static coverage proves
+the arm irrefutable. An equational clause group becomes one structured match
+over its curried arguments. An operational multi-parameter header and a
+multi-parameter anonymous function each receive one tuple-domain value and
+match it with the source pattern in the function body.
 
 ## Function presentations
 

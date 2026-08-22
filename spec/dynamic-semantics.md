@@ -2,19 +2,21 @@
 
 Mini-Ash evaluation is defined by one deterministic small-step relation over
 configurations `CONFIG(heap, environment, control, continuation)`. The heap is
-fresh for one evaluation and maps numeric locations to initialized values,
-uninitialized recursive slots, or aliases. The environment maps resolved term
-identities to locations. The continuation records the remaining strict work.
+fresh for one evaluation and maps numeric locations to tuples, completed
+constructors, uninitialized recursive data slots, or aliases. Tuple elements
+and constructor payloads are runtime values. The environment maps resolved term
+identities to runtime values. The continuation records the remaining strict
+work.
 
-Integer cells contain arbitrary-precision mathematical integers. Other cells
-contain Booleans, unit, tuples of locations, a constructor identity with zero
-or one payload location, or a function template and its lexical environment.
-Payload constructor occurrences are function values. A location is an internal
-handle, not source-level identity or observable mutation.
+Runtime values are arbitrary-precision integers, Booleans, unit, lexical
+functions, payload-constructor functions, or heap locations. A function
+template becomes a lexical function with the recursive environment when its
+binder is looked up. A location is an internal handle, not source-level
+identity or observable mutation.
 
 ## Bindings
 
-A binding evaluates its initializer before matching the resulting location and
+A binding evaluates its initializer before matching the resulting value and
 extending the environment for its body. Its pattern binders are not in scope in
 the initializer. Static irrefutability makes match failure unreachable.
 
@@ -25,10 +27,10 @@ family binding-steps:
     CONFIG(heap, environment, let pattern = initializer; body, continuation) -> CONFIG(heap, environment, initializer, LET(pattern, body, environment) :: continuation)
 
   E-Let-Continue :=
-    match(heap, location, pattern) = bindings
+    match(heap, value, pattern) = bindings
     environment' = extend(environment, bindings)
     ===>
-    CONFIG(heap, environment_value, location, LET(pattern, body, environment) :: continuation) -> CONFIG(heap, environment', body, continuation)
+    CONFIG(heap, environment_value, value, LET(pattern, body, environment) :: continuation) -> CONFIG(heap, environment', body, continuation)
 ```
 
 `E-Let-Enter` saves the lexical environment that precedes the binding.
@@ -37,38 +39,38 @@ separate semantic fields; Mini-Ash source does not contain semicolons.
 
 ## Recursive bindings
 
-Entering a recursive group allocates one uninitialized slot per member and
-extends the environment with all slots simultaneously. Direct functions become
-templates that capture that environment. Constructor-guarded data initializers
-then evaluate in source order. Completing a member stores an alias from its
-slot to the initializer's constructed location. Lookup of a recursive data
-member returns its slot without forcing the alias.
+Entering a recursive group allocates one uninitialized slot per data member.
+It then installs all direct-function templates and data locations in one
+recursive environment entry. Constructor-guarded data initializers evaluate in
+source order. Completing a data member stores an alias from its slot to the
+initializer's constructed location. Lookup of a recursive data member returns
+its slot without forcing the alias; lookup of a function member materializes a
+lexical function from its template and the recursive environment.
 
 ```sequent
 family recursive-binding-steps:
   E-Let-Rec-Allocate :=
-    allocate_uninitialized(heap, n) = heap_1, locations
-    environment_1 = extend(environment, zip(member_names, locations))
+    allocate_uninitialized(heap, data_members) = heap_1, data_locations
+    environment_1 = extend_recursive(environment, function_templates, data_locations)
     ===>
-    CONFIG(heap, environment, let rec members; body, continuation) -> CONFIG(heap_1, environment_1, initialize(members, locations, body), continuation)
+    CONFIG(heap, environment, let rec members; body, continuation) -> CONFIG(heap_1, environment_1, initialize(data_members, data_locations, body), continuation)
 
   E-Let-Rec-Store :=
     member_initializer_i evaluates to value_location
     heap_2 = store_alias(heap_1, member_location_i, value_location)
     ===>
-    CONFIG(heap_1, environment_1, initialize(member_i :: rest, locations, body), continuation) -> CONFIG(heap_2, environment_1, initialize(rest, locations, body), continuation)
+    CONFIG(heap_1, environment_1, initialize(member_i :: rest, data_locations, body), continuation) -> CONFIG(heap_2, environment_1, initialize(rest, data_locations, body), continuation)
 
   E-Let-Rec-Body :=
     ===>
-    CONFIG(heap, environment, initialize(empty, locations, body), continuation) -> CONFIG(heap, environment, body, continuation)
+    CONFIG(heap, environment, initialize(empty, data_locations, body), continuation) -> CONFIG(heap, environment, body, continuation)
 ```
 
-Function members may be installed as templates before data initialization, but
-all member names denote their preallocated slots. Reaching an uninitialized
-cell, an alias loop, or an invalid location is an internal runtime failure. The
-static guardedness judgment makes those states unreachable from accepted
-source. These rules provide allocation for explicit recursive data; they do not
-add general laziness or source-visible mutation.
+Function templates and data locations enter scope before data initialization.
+Reaching an uninitialized cell, an alias loop, or an invalid location is an
+internal runtime failure. The static guardedness judgment makes those states
+unreachable from accepted source. These rules provide allocation for explicit
+recursive data; they do not add general laziness or source-visible mutation.
 
 The executable test `dynamic_recursive_group_example_is_executable` exercises
 mutual scope and lexical recursive closure materialization:
@@ -90,10 +92,10 @@ mutual scope and lexical recursive closure materialization:
 
 ## Application
 
-Application evaluates the function before the argument. Once both are
-locations, a lexical function matches its domain pattern, extends its captured
+Application evaluates the function before the argument. Once both are runtime
+values, a lexical function matches its domain pattern, extends its captured
 environment, and enters its body. A payload constructor allocates one
-constructor cell with the argument as its payload.
+constructor cell with the argument value as its payload.
 
 ```sequent
 family application-steps:
@@ -103,20 +105,20 @@ family application-steps:
 
   E-Apply-Argument :=
     ===>
-    CONFIG(heap, environment_value, function_location, APPLY_FUNCTION(argument, environment) :: continuation) -> CONFIG(heap, environment, argument, APPLY_ARGUMENT(function_location) :: continuation)
+    CONFIG(heap, environment_value, function_value, APPLY_FUNCTION(argument, environment) :: continuation) -> CONFIG(heap, environment, argument, APPLY_ARGUMENT(function_value) :: continuation)
 
   E-Beta :=
-    heap[function_location] = closure(pattern, body, captured_environment)
-    match(heap, argument_location, pattern) = bindings
+    function_value = closure(pattern, body, captured_environment)
+    match(heap, argument_value, pattern) = bindings
     body_environment = extend(captured_environment, bindings)
     ===>
-    CONFIG(heap, environment, argument_location, APPLY_ARGUMENT(function_location) :: continuation) -> CONFIG(heap, body_environment, body, continuation)
+    CONFIG(heap, environment, argument_value, APPLY_ARGUMENT(function_value) :: continuation) -> CONFIG(heap, body_environment, body, continuation)
 
   E-Constructor-Apply :=
-    heap[function_location] = constructor_function(constructor)
-    heap_1, result_location = allocate(heap, constructor(constructor, argument_location))
+    function_value = constructor_function(constructor)
+    heap_1, result_location = allocate(heap, constructor(constructor, argument_value))
     ===>
-    CONFIG(heap, environment, argument_location, APPLY_ARGUMENT(function_location) :: continuation) -> CONFIG(heap_1, environment, result_location, continuation)
+    CONFIG(heap, environment, argument_value, APPLY_ARGUMENT(function_value) :: continuation) -> CONFIG(heap_1, environment, result_location, continuation)
 ```
 
 The continuation frames make the left-to-right order explicit. A closed,
@@ -126,7 +128,7 @@ constructor value.
 ## Tuples, constructors, and matches
 
 Tuple elements evaluate strictly from left to right, after which one tuple cell
-stores their locations. A nullary constructor occurrence allocates its completed
+stores their runtime values. A nullary constructor occurrence allocates its completed
 constructor cell. A payload constructor occurrence produces the callable value
 used by `E-Constructor-Apply`.
 
@@ -143,10 +145,10 @@ family match-steps:
     CONFIG(heap, environment, match scrutinee { arms }, continuation) -> CONFIG(heap, environment, scrutinee, MATCH(arms, environment) :: continuation)
 
   E-Match-Select :=
-    first_match(heap, scrutinee_location, arms) = pattern, body, bindings
+    first_match(heap, scrutinee_value, arms) = pattern, body, bindings
     arm_environment = extend(environment, bindings)
     ===>
-    CONFIG(heap, environment_value, scrutinee_location, MATCH(arms, environment) :: continuation) -> CONFIG(heap, arm_environment, body, continuation)
+    CONFIG(heap, environment_value, scrutinee_value, MATCH(arms, environment) :: continuation) -> CONFIG(heap, arm_environment, body, continuation)
 ```
 
 The same matching operation selects an equational clause after its declared
@@ -215,7 +217,7 @@ rules compute the primitive result.
 
 ## Observation
 
-Successful evaluation retains the heap with the result location. Observation
+Successful evaluation retains the heap with the result value. Observation
 renders tuples and constructors structurally. A constructor with a tuple
 payload renders its components as constructor fields. A location already on
 the active rendering path renders as `<cycle>`. Removing a location from the
@@ -241,21 +243,21 @@ type Stream =
 
 ## Derived multi-step notation
 
-The relation `expression ->* result` is the reflexive transitive closure of
-`->`. It is useful for derivations but does not form a second normative
-evaluation relation.
+The relation `configuration ->* configuration'` is the reflexive transitive
+closure of the configuration step `->`. It is useful for derivations but does
+not form a second normative evaluation relation.
 
 ```sequent
 family derived-multi-step:
   E-Multi-Refl :=
     ===>
-    expression ->* expression
+    configuration ->* configuration
 
   E-Multi-Step :=
-    expression_1 -> expression_2
-    expression_2 ->* expression_3
+    configuration_1 -> configuration_2
+    configuration_2 ->* configuration_3
     ===>
-    expression_1 ->* expression_3
+    configuration_1 ->* configuration_3
 ```
 
 `E-Multi-Refl` permits zero steps. `E-Multi-Step` prefixes one normative step to
