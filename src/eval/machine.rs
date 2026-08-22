@@ -275,8 +275,6 @@ pub enum RuntimeFailure {
     EnvironmentCapacity,
     /// Machine control completed without exactly one final value.
     InvalidControlState,
-    /// A data node reached the machine before its retained transitions were installed.
-    UnsupportedData,
     /// The per-evaluation heap cannot represent another cell.
     HeapCapacity,
     /// A heap location is outside the current evaluation.
@@ -305,7 +303,6 @@ impl fmt::Display for RuntimeFailure {
             }
             Self::EnvironmentCapacity => "runtime lexical environment capacity is exhausted",
             Self::InvalidControlState => "runtime machine control state is inconsistent",
-            Self::UnsupportedData => "runtime data transition is not installed",
             Self::HeapCapacity => "runtime heap capacity is exhausted",
             Self::InvalidLocation => "runtime heap location is invalid",
             Self::UninitializedLocation => "runtime heap location is uninitialized",
@@ -1032,6 +1029,13 @@ mod tests {
 
     #[test]
     fn every_core_feature_has_one_named_entry_owner_and_explicit_return_owners() {
+        type EnterRecursive = fn(
+            &Arc<PureProgram>,
+            &crate::core::recursion::RecursiveBindingNode,
+            Environment,
+            &mut Vec<HeapCell>,
+        ) -> Result<Transition, RuntimeFailure>;
+
         let _: fn(&IntegerNode) -> Transition = enter_integer;
         let _: fn(BooleanNode) -> Transition = enter_boolean;
         let _: fn(UnitNode) -> Transition = enter_unit;
@@ -1047,12 +1051,7 @@ mod tests {
             Environment,
         ) -> Result<Transition, RuntimeFailure> = enter_variable;
         let _: fn(&BindingNode, Environment) -> Transition = enter_binding;
-        let _: fn(
-            &Arc<PureProgram>,
-            &crate::core::recursion::RecursiveBindingNode,
-            Environment,
-            &mut Vec<HeapCell>,
-        ) -> Result<Transition, RuntimeFailure> = enter_recursive_binding;
+        let _: EnterRecursive = enter_recursive_binding;
         let _: fn(ApplicationNode, Environment) -> Transition = enter_application;
         let _: fn(PrimitiveNode, Environment) -> Transition = enter_primitive;
         let _: fn(BinderId, NodeId, Environment, Value) -> Result<Transition, RuntimeFailure> =
@@ -1168,6 +1167,29 @@ mod tests {
                 Value::Integer(Integer::parse_decimal("1").expect("valid integer")),
             ),
             Err(RuntimeFailure::UnexpectedPrimitiveValue)
+        ));
+        assert!(matches!(
+            resolve_location(&[], 0),
+            Err(RuntimeFailure::InvalidLocation)
+        ));
+        assert!(matches!(
+            resolve_location(&[HeapCell::Uninitialized], 0),
+            Err(RuntimeFailure::UninitializedLocation)
+        ));
+        assert!(matches!(
+            resolve_location(&[HeapCell::Alias(0)], 0),
+            Err(RuntimeFailure::AliasLoop)
+        ));
+        assert!(matches!(
+            dispatch_return(
+                Frame::Match {
+                    arms: Box::new([]),
+                    environment: Environment::new(),
+                },
+                Value::Boolean(true),
+                &mut Vec::new(),
+            ),
+            Err(RuntimeFailure::ImpossibleMatch)
         ));
     }
 

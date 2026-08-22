@@ -1,6 +1,6 @@
 //! Shared typed-pattern usefulness and witness construction.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     core::{CorePattern, CorePatternKind},
@@ -38,6 +38,27 @@ enum Head {
 }
 
 type State = (Vec<Vec<WitnessPattern>>, Vec<WitnessPattern>, Vec<Type>);
+
+#[derive(Clone)]
+struct Choice {
+    child: State,
+    rebuild: Rebuild,
+}
+
+#[derive(Clone, Copy)]
+enum Rebuild {
+    Head { head: Head, argument_count: usize },
+    Wildcard,
+}
+
+enum Frame {
+    Call(State),
+    TryChoices {
+        state: State,
+        choices: Vec<Choice>,
+        next: usize,
+    },
+}
 
 /// Returns a concrete witness when `candidate` is useful against `matrix`.
 #[must_use]
@@ -95,100 +116,169 @@ fn usefulness_shapes(
     types: &[Type],
     registry: &ResolvedRegistry,
 ) -> Option<Vec<WitnessPattern>> {
+    let root = (matrix.to_vec(), candidate.to_vec(), types.to_vec());
+    let mut memo = HashMap::<State, Option<Vec<WitnessPattern>>>::new();
     let mut active = HashSet::new();
-    usefulness_inner(matrix, candidate, types, registry, &mut active)
+    let mut frames = vec![Frame::Call(root)];
+    let mut returned = None::<Option<Vec<WitnessPattern>>>;
+
+    while let Some(frame) = frames.pop() {
+        match frame {
+            Frame::Call(state) => {
+                if let Some(cached) = memo.get(&state) {
+                    returned = Some(cached.clone());
+                    continue;
+                }
+                if active.contains(&state) {
+                    returned = Some(None);
+                    continue;
+                }
+                match immediate_result(&state) {
+                    Some(result) => {
+                        memo.insert(state, result.clone());
+                        returned = Some(result);
+                    }
+                    None => {
+                        let choices = choices(&state, registry);
+                        active.insert(state.clone());
+                        frames.push(Frame::TryChoices {
+                            state,
+                            choices,
+                            next: 0,
+                        });
+                    }
+                }
+            }
+            Frame::TryChoices {
+                state,
+                choices,
+                mut next,
+            } => {
+                if let Some(child_result) = returned.take() {
+                    if let Some(choice) = choices.get(next.saturating_sub(1)) {
+                        if let Some(witness) = child_result {
+                            let result = Some(rebuild_witness(witness, choice.rebuild));
+                            active.remove(&state);
+                            memo.insert(state, result.clone());
+                            returned = Some(result);
+                            continue;
+                        }
+                    } else {
+                        active.remove(&state);
+                        memo.insert(state, None);
+                        returned = Some(None);
+                        continue;
+                    }
+                }
+                let Some(choice) = choices.get(next).cloned() else {
+                    active.remove(&state);
+                    memo.insert(state, None);
+                    returned = Some(None);
+                    continue;
+                };
+                next += 1;
+                frames.push(Frame::TryChoices {
+                    state,
+                    choices,
+                    next,
+                });
+                frames.push(Frame::Call(choice.child));
+            }
+        }
+    }
+
+    returned.flatten()
 }
 
-fn usefulness_inner(
-    matrix: &[Vec<WitnessPattern>],
-    candidate: &[WitnessPattern],
-    types: &[Type],
-    registry: &ResolvedRegistry,
-    active: &mut HashSet<State>,
-) -> Option<Vec<WitnessPattern>> {
+fn immediate_result(state: &State) -> Option<Option<Vec<WitnessPattern>>> {
+    let (matrix, candidate, types) = state;
     if candidate.is_empty() {
-        return matrix.is_empty().then(Vec::new);
+        return Some(matrix.is_empty().then(Vec::new));
     }
     if matrix.is_empty() {
-        return Some(candidate.to_vec());
+        return Some(Some(candidate.clone()));
     }
     if types.len() != candidate.len() || matrix.iter().any(|row| row.len() != candidate.len()) {
-        return None;
+        return Some(None);
     }
-    if matrix
+    matrix
         .iter()
         .any(|row| row.iter().all(WitnessPattern::is_wildcard))
-    {
-        return None;
-    }
-    let state = (matrix.to_vec(), candidate.to_vec(), types.to_vec());
-    if !active.insert(state.clone()) {
-        return None;
+        .then_some(None)
+}
+
+fn choices(state: &State, registry: &ResolvedRegistry) -> Vec<Choice> {
+    let (matrix, candidate, types) = state;
+    let first_type = &types[0];
+    if candidate[0].is_wildcard() {
+        if let Some(heads) = heads_for_type(first_type, registry) {
+            return heads
+                .into_iter()
+                .map(|head| {
+                    let argument_types = head_types(head, first_type, registry);
+                    let argument_count = argument_types.len();
+                    let specialized_matrix = specialize_matrix(matrix, head, argument_count);
+                    let mut specialized_candidate = vec![WitnessPattern::Wildcard; argument_count];
+                    specialized_candidate.extend_from_slice(&candidate[1..]);
+                    let mut specialized_types = argument_types;
+                    specialized_types.extend_from_slice(&types[1..]);
+                    Choice {
+                        child: (specialized_matrix, specialized_candidate, specialized_types),
+                        rebuild: Rebuild::Head {
+                            head,
+                            argument_count,
+                        },
+                    }
+                })
+                .collect();
+        }
+        let default = matrix
+            .iter()
+            .filter(|row| row[0].is_wildcard())
+            .map(|row| row[1..].to_vec())
+            .collect::<Vec<_>>();
+        return vec![Choice {
+            child: (default, candidate[1..].to_vec(), types[1..].to_vec()),
+            rebuild: Rebuild::Wildcard,
+        }];
     }
 
-    let first_type = &types[0];
-    let result = if candidate[0].is_wildcard() {
-        if let Some(heads) = heads_for_type(first_type, registry) {
-            heads.into_iter().find_map(|head| {
-                let argument_types = head_types(head, first_type, registry);
-                let specialized_matrix = specialize_matrix(matrix, head, argument_types.len());
-                let mut specialized_candidate =
-                    vec![WitnessPattern::Wildcard; argument_types.len()];
-                specialized_candidate.extend_from_slice(&candidate[1..]);
-                let mut specialized_types = argument_types.clone();
-                specialized_types.extend_from_slice(&types[1..]);
-                usefulness_inner(
-                    &specialized_matrix,
-                    &specialized_candidate,
-                    &specialized_types,
-                    registry,
-                    active,
-                )
-                .map(|mut witness| {
-                    let arguments = witness.drain(..argument_types.len()).collect();
-                    let mut rebuilt = vec![pattern_from_head(head, arguments)];
-                    rebuilt.extend(witness);
-                    rebuilt
-                })
-            })
-        } else {
-            let default = matrix
-                .iter()
-                .filter(|row| row[0].is_wildcard())
-                .map(|row| row[1..].to_vec())
-                .collect::<Vec<_>>();
-            usefulness_inner(&default, &candidate[1..], &types[1..], registry, active).map(
-                |mut witness| {
-                    let mut rebuilt = vec![WitnessPattern::Wildcard];
-                    rebuilt.append(&mut witness);
-                    rebuilt
-                },
-            )
-        }
-    } else {
-        let head = pattern_head(&candidate[0])?;
-        let argument_types = head_types(head, first_type, registry);
-        let specialized_matrix = specialize_matrix(matrix, head, argument_types.len());
-        let mut specialized_candidate = pattern_arguments(&candidate[0]);
-        specialized_candidate.extend_from_slice(&candidate[1..]);
-        let mut specialized_types = argument_types.clone();
-        specialized_types.extend_from_slice(&types[1..]);
-        usefulness_inner(
-            &specialized_matrix,
-            &specialized_candidate,
-            &specialized_types,
-            registry,
-            active,
-        )
-        .map(|mut witness| {
-            let arguments = witness.drain(..argument_types.len()).collect();
+    let Some(head) = pattern_head(&candidate[0]) else {
+        return Vec::new();
+    };
+    let argument_types = head_types(head, first_type, registry);
+    let argument_count = argument_types.len();
+    let specialized_matrix = specialize_matrix(matrix, head, argument_count);
+    let mut specialized_candidate = pattern_arguments(&candidate[0]);
+    specialized_candidate.extend_from_slice(&candidate[1..]);
+    let mut specialized_types = argument_types;
+    specialized_types.extend_from_slice(&types[1..]);
+    vec![Choice {
+        child: (specialized_matrix, specialized_candidate, specialized_types),
+        rebuild: Rebuild::Head {
+            head,
+            argument_count,
+        },
+    }]
+}
+
+fn rebuild_witness(mut witness: Vec<WitnessPattern>, rebuild: Rebuild) -> Vec<WitnessPattern> {
+    match rebuild {
+        Rebuild::Head {
+            head,
+            argument_count,
+        } => {
+            let arguments = witness.drain(..argument_count).collect();
             let mut rebuilt = vec![pattern_from_head(head, arguments)];
             rebuilt.extend(witness);
             rebuilt
-        })
-    };
-    active.remove(&state);
-    result
+        }
+        Rebuild::Wildcard => {
+            let mut rebuilt = vec![WitnessPattern::Wildcard];
+            rebuilt.append(&mut witness);
+            rebuilt
+        }
+    }
 }
 
 fn heads_for_type(ty: &Type, registry: &ResolvedRegistry) -> Option<Vec<Head>> {

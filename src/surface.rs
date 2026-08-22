@@ -203,7 +203,7 @@ pub struct SurfaceBlock {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceLocalDeclaration {
     /// A sequential nonrecursive binding.
-    Binding(SurfaceBinding),
+    Binding(Box<SurfaceBinding>),
     /// A simultaneous recursive function binding group.
     Recursive(SurfaceRecursiveGroup),
 }

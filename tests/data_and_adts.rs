@@ -1,8 +1,12 @@
 use ash::{
-    core::{PureComputation, PureExprKind, transform::identity_traversal, validate},
+    core::{
+        PureComputation, PureExprKind,
+        transform::{fold_literal_primitives, identity_traversal},
+        validate,
+    },
     driver::{Observation, PipelineFailure, run_source},
     elaborate::Elaborator,
-    eval::evaluate,
+    eval::{TraceEvent, evaluate},
     lexer::lex,
     parser::{parse, project},
     resolve::resolve,
@@ -13,7 +17,7 @@ use ash::{
 fn shared_pipeline_elaborates_and_validates_finite_data_core() {
     let source = SourceFile::new(
         "shared-data.ash",
-        "type Wrapped =\nWrap(Int)\n\nmatch Wrap(42) {\nWrap(value) => value\n}\n",
+        "type Wrapped =\nWrap(Int)\n\nmatch Wrap(40 + 2) {\nWrap(value) => value\n}\n",
     )
     .expect("fixture should fit");
     let tree = parse(lex(&source).expect("lex"));
@@ -47,6 +51,63 @@ fn shared_pipeline_elaborates_and_validates_finite_data_core() {
             .value
             .to_string(),
         "42"
+    );
+    let folded = fold_literal_primitives(&program).expect("literal transform");
+    let folded = validate(folded, &[&source]).expect("folded validation");
+    assert_eq!(
+        evaluate(&folded)
+            .expect("folded retained machine")
+            .value
+            .to_string(),
+        "42"
+    );
+}
+
+#[test]
+fn constructor_tuple_payloads_enter_elements_strictly_left_to_right() {
+    let source = SourceFile::new(
+        "tuple-order.ash",
+        "type Pair =\nPair(Int, Int)\n\nPair(20, 22)\n",
+    )
+    .expect("fixture should fit");
+    let tree = parse(lex(&source).expect("lex"));
+    let surface = project(&source, &tree).expect("project");
+    let resolved = resolve(&surface).expect("resolve");
+    let mut elaborator = Elaborator::for_program(&resolved).expect("reserve binders");
+    let typed = elaborator
+        .synthesize_program(&resolved)
+        .expect("shared elaboration");
+    let program = validate(elaborator.finish(typed.node).expect("finish"), &[&source])
+        .expect("independent validation");
+
+    let root = program.node(program.root()).expect("application root");
+    let PureExprKind::Computation(PureComputation::Apply(application)) = &root.kind else {
+        panic!("expected constructor application")
+    };
+    let argument = program
+        .node(application.argument())
+        .expect("tuple argument");
+    let PureExprKind::Computation(PureComputation::Tuple(tuple)) = &argument.kind else {
+        panic!("expected tuple payload")
+    };
+    let evaluation = evaluate(&program).expect("constructor application should evaluate");
+    let entered = evaluation
+        .trace
+        .iter()
+        .map(|event| match event {
+            TraceEvent::Enter(node) => *node,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        entered,
+        vec![
+            program.root(),
+            application.function(),
+            application.argument(),
+            tuple.elements()[0],
+            tuple.elements()[1],
+        ]
     );
 }
 

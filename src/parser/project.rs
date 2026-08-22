@@ -971,12 +971,12 @@ fn project_expression(
                                 ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
                             )?;
                             projected_declarations.push(SurfaceLocalDeclaration::Binding(
-                                SurfaceBinding {
+                                Box::new(SurfaceBinding {
                                     pattern: binding.pattern,
                                     annotation: binding.annotation,
                                     initializer,
                                     span: binding.span,
-                                },
+                                }),
                             ));
                         }
                         PendingLocalDeclaration::Recursive(group) => {

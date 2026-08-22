@@ -423,7 +423,6 @@ impl CoreBuilder {
     }
 
     /// Starts an empty arena carrying an immutable resolved data registry.
-    #[must_use]
     pub fn with_registry(registry: Arc<ResolvedRegistry>) -> Self {
         Self {
             registry,
