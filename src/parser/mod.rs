@@ -616,6 +616,8 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::FatArrow => "=>",
         TokenKind::Pipe => "|",
         TokenKind::Comma => ",",
+        TokenKind::Less => "<",
+        TokenKind::Greater => ">",
         TokenKind::Semicolon => ";",
         TokenKind::LineEnd => "line end",
         TokenKind::EndOfFile => "end of input",

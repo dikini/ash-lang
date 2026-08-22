@@ -70,6 +70,10 @@ pub enum TokenKind {
     Pipe,
     /// `,`, separating tuple elements, parameters, and constructor fields.
     Comma,
+    /// `<`, opening a type argument list.
+    Less,
+    /// `>`, closing a type argument list.
+    Greater,
     /// `;`, retained so the parser can reject excluded semicolon syntax.
     Semicolon,
     /// A logical line boundary.

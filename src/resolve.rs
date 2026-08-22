@@ -480,6 +480,17 @@ impl Resolver {
                         provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
                         completed.push((Type::Nominal(id), provenance.len() - 1));
                     }
+                    SurfaceTypeKind::Application { constructor, .. } => {
+                        let mut diagnostic = Diagnostic::new(
+                            ResolveReason::UnknownType,
+                            SourceLabel::new(
+                                constructor.span,
+                                "type applications are not resolved by this slice",
+                            ),
+                        );
+                        diagnostic.found = Some(constructor.text.clone());
+                        return Err(diagnostic.into());
+                    }
                     SurfaceTypeKind::Tuple(elements) => {
                         tasks.push(Task::Tuple(elements.len(), current.span));
                         tasks.extend(elements.iter().rev().map(Task::Visit));

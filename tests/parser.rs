@@ -909,15 +909,44 @@ fn logical_line_ends_stop_unparenthesized_infix_but_not_grouped_syntax() {
 }
 
 #[test]
-fn canonical_polymorphic_punctuation_remains_a_lexical_projection_boundary() {
+fn value_level_polymorphic_headers_remain_a_parser_projection_boundary() {
     let (source, tree) =
         parse_tree("fn identity<A>(value : Int) -> Int {\n    value\n}\n\nidentity\n");
 
-    assert!(!tree.lexical_diagnostics().is_empty());
+    assert!(tree.lexical_diagnostics().is_empty());
+    assert!(
+        tree.parse_diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.reason == ParseReason::PolymorphicHeader)
+    );
     assert_eq!(
         project(&source, &tree),
         Err(ProjectionError::RecoveryNodesPresent)
     );
+}
+
+#[test]
+fn parameterized_declarations_and_type_applications_project() {
+    let (_, program) = parse_valid(
+        "type Option<A> =\nNone\n| Some(A)\n\nid : Option<Int> -> Option<Int>\nid value = value\n\nid None\n",
+    );
+
+    assert_eq!(program.type_declarations[0].parameters[0].text, "A");
+    let SurfaceDefinitionKind::Equational(definition) = &program.definitions[0].kind else {
+        panic!("expected equational definition");
+    };
+    let SurfaceTypeKind::Function(function) = &definition.interface.annotation.kind else {
+        panic!("expected function annotation");
+    };
+    let SurfaceTypeKind::Application {
+        constructor,
+        arguments,
+    } = &function.domain.kind
+    else {
+        panic!("expected applied nominal domain");
+    };
+    assert_eq!(constructor.text, "Option");
+    assert!(matches!(arguments[0].kind, SurfaceTypeKind::Int));
 }
 
 #[test]
