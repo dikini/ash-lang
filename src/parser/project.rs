@@ -10,9 +10,9 @@ use crate::{
         SurfaceExpr, SurfaceExprKind, SurfaceExternalInterface, SurfaceImport, SurfaceImportItem,
         SurfaceImportSelection, SurfaceInlineOperationalHeader, SurfaceLocalDeclaration,
         SurfaceMatchArm, SurfaceMatchExpr, SurfaceModule, SurfaceModulePath, SurfaceName,
-        SurfacePattern, SurfacePatternKind, SurfaceProgram, SurfaceRecursiveGroup,
-        SurfaceRecursiveMember, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
-        SurfaceTypeVisibility, SurfaceTypedPattern,
+        SurfacePattern, SurfacePatternKind, SurfaceProgram, SurfaceQualifiedName,
+        SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference, SurfaceType,
+        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeVisibility, SurfaceTypedPattern,
     },
 };
 
@@ -1145,7 +1145,7 @@ fn project_expression(
                         let name = project_qualified_name(source, name, tokens)?;
                         projected.push(SurfaceExpr {
                             span: name.span,
-                            kind: SurfaceExprKind::Name(name),
+                            kind: SurfaceExprKind::Name(SurfaceReference::Qualified(name)),
                         });
                     } else {
                         projected.push(project_primitive(node, tokens)?);
@@ -1356,7 +1356,7 @@ enum ExpressionTask<'a> {
 }
 
 enum PendingLocalDeclaration {
-    Binding(PendingBinding),
+    Binding(Box<PendingBinding>),
     Recursive(PendingRecursiveGroup),
 }
 
@@ -1407,11 +1407,11 @@ fn schedule_block<'a>(
             let annotation = optional_child_of_kind(child, NodeKind::Type)?
                 .map(|annotation| project_type(source, annotation, tokens))
                 .transpose()?;
-            declarations.push(PendingLocalDeclaration::Binding(PendingBinding {
+            declarations.push(PendingLocalDeclaration::Binding(Box::new(PendingBinding {
                 pattern,
                 annotation,
                 span: node_span(source, child, tokens)?,
-            }));
+            })));
             initializers.push(expression_child(child)?);
         } else if child.kind == NodeKind::RecursiveBindingGroup {
             let mut introducers = direct_tokens(child, tokens);
@@ -1567,14 +1567,18 @@ fn project_primitive(
         TokenKind::Integer(value) => SurfaceExprKind::Integer(value.clone()),
         TokenKind::True => SurfaceExprKind::Boolean(true),
         TokenKind::False => SurfaceExprKind::Boolean(false),
-        TokenKind::Identifier(text) => SurfaceExprKind::Name(SurfaceName {
-            text: text.clone(),
-            span: token.span,
-        }),
-        TokenKind::UpperIdentifier(text) => SurfaceExprKind::Name(SurfaceName {
-            text: text.clone(),
-            span: token.span,
-        }),
+        TokenKind::Identifier(text) => {
+            SurfaceExprKind::Name(SurfaceReference::Unqualified(SurfaceName {
+                text: text.clone(),
+                span: token.span,
+            }))
+        }
+        TokenKind::UpperIdentifier(text) => {
+            SurfaceExprKind::Name(SurfaceReference::Unqualified(SurfaceName {
+                text: text.clone(),
+                span: token.span,
+            }))
+        }
         _ => return malformed(InternalReason::UnexpectedShape),
     };
     Ok(SurfaceExpr {
@@ -1626,7 +1630,7 @@ fn project_qualified_name(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &[Token],
-) -> Result<SurfaceName, ProjectionError> {
+) -> Result<SurfaceQualifiedName, ProjectionError> {
     require_kind(node, NodeKind::QualifiedName)?;
     let mut names = direct_tokens(node, tokens).filter(|token| {
         matches!(
@@ -1643,18 +1647,11 @@ fn project_qualified_name(
     if names.next().is_some() {
         return malformed(InternalReason::UnexpectedShape);
     }
-    let span = node_span(source, node, tokens)?;
-    let mut text = String::with_capacity(
-        qualifier
-            .text
-            .len()
-            .saturating_add(member.text.len())
-            .saturating_add(1),
-    );
-    text.push_str(&qualifier.text);
-    text.push('.');
-    text.push_str(&member.text);
-    Ok(SurfaceName { text, span })
+    Ok(SurfaceQualifiedName {
+        qualifier,
+        member,
+        span: node_span(source, node, tokens)?,
+    })
 }
 
 fn project_typed_pattern(
@@ -1694,14 +1691,14 @@ fn project_pattern(
         let name = if let Some(qualified) =
             optional_child_of_kind(constructor, NodeKind::QualifiedName)?
         {
-            project_qualified_name(source, qualified, tokens)?
+            SurfaceReference::Qualified(project_qualified_name(source, qualified, tokens)?)
         } else {
             let token = direct_tokens(constructor, tokens)
                 .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
                 .ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
-            surface_name(token)?
+            SurfaceReference::Unqualified(surface_name(token)?)
         };
         let payload = if let Some(tuple) =
             optional_child_of_kind(constructor, NodeKind::TuplePattern)?
@@ -1794,21 +1791,21 @@ fn project_type(
                         if let Some(name) = qualified {
                             projected.push(SurfaceType {
                                 span: name.span,
-                                kind: SurfaceTypeKind::Named(name),
+                                kind: SurfaceTypeKind::Named(SurfaceReference::Qualified(name)),
                             });
                         } else {
                             projected.push(project_atomic_primitive(node, tokens)?);
                         }
                     } else {
                         let constructor = if let Some(name) = qualified {
-                            name
+                            SurfaceReference::Qualified(name)
                         } else {
                             let token = direct_tokens(node, tokens)
                                 .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
                                 .ok_or(ProjectionError::MalformedTree(
                                     InternalReason::UnexpectedShape,
                                 ))?;
-                            surface_name(token)?
+                            SurfaceReference::Unqualified(surface_name(token)?)
                         };
                         tasks.push(TypeTask::FinishApplication {
                             constructor,
@@ -1894,7 +1891,7 @@ enum TypeTask<'a> {
         span: Span,
     },
     FinishApplication {
-        constructor: SurfaceName,
+        constructor: SurfaceReference,
         count: usize,
         span: Span,
     },
@@ -1910,10 +1907,12 @@ fn project_atomic_primitive(
         TokenKind::IntType => SurfaceTypeKind::Int,
         TokenKind::BoolType => SurfaceTypeKind::Bool,
         TokenKind::UnitType => SurfaceTypeKind::Unit,
-        TokenKind::UpperIdentifier(ref text) => SurfaceTypeKind::Named(SurfaceName {
-            text: text.clone(),
-            span: token.span,
-        }),
+        TokenKind::UpperIdentifier(ref text) => {
+            SurfaceTypeKind::Named(SurfaceReference::Unqualified(SurfaceName {
+                text: text.clone(),
+                span: token.span,
+            }))
+        }
         _ => return malformed(InternalReason::UnexpectedShape),
     };
     Ok(SurfaceType {

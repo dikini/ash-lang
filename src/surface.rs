@@ -206,8 +206,8 @@ pub enum SurfaceExprKind {
     Boolean(bool),
     /// The unit value.
     Unit,
-    /// An unresolved source name.
-    Name(SurfaceName),
+    /// An unresolved unqualified or module-qualified source name.
+    Name(SurfaceReference),
     /// A strict structural tuple.
     Tuple(Vec<SurfaceExpr>),
     /// Strict unary application.
@@ -341,6 +341,55 @@ pub struct SurfaceName {
     pub span: Span,
 }
 
+/// An unresolved source reference, with qualification retained structurally.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceReference {
+    /// A name resolved in the current lexical and imported namespaces.
+    Unqualified(SurfaceName),
+    /// A member selected through one imported module alias.
+    Qualified(SurfaceQualifiedName),
+}
+
+impl SurfaceReference {
+    /// Returns the referenced member spelling.
+    #[must_use]
+    pub const fn member(&self) -> &SurfaceName {
+        match self {
+            Self::Unqualified(name) => name,
+            Self::Qualified(name) => &name.member,
+        }
+    }
+
+    /// Returns the module alias for a qualified reference.
+    #[must_use]
+    pub const fn qualifier(&self) -> Option<&SurfaceName> {
+        match self {
+            Self::Unqualified(_) => None,
+            Self::Qualified(name) => Some(&name.qualifier),
+        }
+    }
+
+    /// Returns the complete reference span.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Unqualified(name) => name.span,
+            Self::Qualified(name) => name.span,
+        }
+    }
+}
+
+/// One module-qualified source reference.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceQualifiedName {
+    /// The imported module alias before the dot.
+    pub qualifier: SurfaceName,
+    /// The selected member after the dot.
+    pub member: SurfaceName,
+    /// The complete qualifier, dot, and member span.
+    pub span: Span,
+}
+
 /// A binder retained separately from later binder identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceBinder {
@@ -396,8 +445,8 @@ pub enum SurfacePatternKind {
     Tuple(Vec<SurfacePattern>),
     /// A nominal constructor pattern with an optional semantic payload.
     Constructor {
-        /// The unresolved constructor spelling.
-        name: SurfaceName,
+        /// The unresolved unqualified or module-qualified constructor reference.
+        name: SurfaceReference,
         /// Its optional payload pattern.
         payload: Option<Box<SurfacePattern>>,
     },
@@ -421,12 +470,12 @@ pub enum SurfaceTypeKind {
     Bool,
     /// The unit value.
     Unit,
-    /// An unresolved nominal type spelling.
-    Named(SurfaceName),
+    /// An unresolved unqualified or module-qualified nominal type reference.
+    Named(SurfaceReference),
     /// A named type constructor applied to one or more arguments.
     Application {
-        /// The constructor spelling.
-        constructor: SurfaceName,
+        /// The unqualified or module-qualified type-constructor reference.
+        constructor: SurfaceReference,
         /// Nonempty arguments in source order.
         arguments: Vec<SurfaceType>,
     },

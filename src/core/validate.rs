@@ -304,6 +304,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                     .map(|parameter| parameter.origin.primary_span().source())
             })
             .or(root_source);
+        let registry_module = registry
+            .nominals()
+            .first()
+            .map(|nominal| nominal.id.module())
+            .or_else(|| root_source.map(crate::module::ModuleId::from));
         if registry_source
             .zip(root_source)
             .is_some_and(|(registry_source, root_source)| registry_source != root_source)
@@ -314,9 +319,14 @@ impl<'program, 'source> Validator<'program, 'source> {
         for (index, nominal) in registry.nominals().iter().enumerate() {
             let index = u32::try_from(index)
                 .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
-            let source = registry_source.unwrap_or_else(|| nominal.id.source());
+            let Some(module) = registry_module else {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            };
+            let Some(source) = registry_source else {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            };
             let nominal_range = nominal.origin.primary_span().range();
-            if nominal.id != crate::types::NominalTypeId::new(source, index)
+            if nominal.id != crate::types::NominalTypeId::new(module, index)
                 || nominal.origin.primary_span().source() != source
                 || !origin_depth_within_limit(&nominal.origin)
                 || nominal.constructors.is_empty()
@@ -345,8 +355,20 @@ impl<'program, 'source> Validator<'program, 'source> {
         let type_variable_count = u32::try_from(registry.type_variable_count())
             .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
         let mut previous_type_variable_start = None;
+        let resolved_type_variables = registry_module.is_some_and(|module| {
+            registry
+                .type_variable(crate::types::TypeVariableId::resolved(module, 0))
+                .is_some()
+        });
         for value in 0..type_variable_count {
-            let identity = crate::types::TypeVariableId::new(value);
+            let identity = if resolved_type_variables {
+                crate::types::TypeVariableId::resolved(
+                    registry_module.expect("resolved variables require one module"),
+                    value,
+                )
+            } else {
+                crate::types::TypeVariableId::generated(value)
+            };
             let parameter = registry
                 .type_variable(identity)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;

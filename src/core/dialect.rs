@@ -1737,7 +1737,14 @@ fn admit_origin(origin: Origin) -> Result<Origin, BuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::{ByteRange, GeneratedReason, SourceFile};
+    use crate::{
+        module::ModuleId,
+        source::{ByteRange, GeneratedReason, SourceFile},
+    };
+
+    fn resolved_id(local: u32) -> BinderId {
+        BinderId::resolved(ModuleId::new(0), local)
+    }
 
     #[test]
     fn arena_allocator_reserves_maximum_as_its_exhaustion_sentinel() {
@@ -2426,31 +2433,31 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let mut builder = CoreBuilder::new();
         builder
-            .reserve_resolved_binders([BinderId::new(0), BinderId::new(1)])
+            .reserve_resolved_binders([resolved_id(0), resolved_id(1)])
             .expect("complete resolved namespace is reserved");
         assert_eq!(
             builder.resolved_binder(
-                BinderId::new(0),
+                resolved_id(0),
                 function_type(CORE_PAYLOAD_DEPTH_LIMIT + 1),
                 origin.clone(),
             ),
             Err(BuildError::TypeDepthExceeded)
         );
         let resolved = builder
-            .resolved_binder(BinderId::new(0), Type::Unit, origin.clone())
+            .resolved_binder(resolved_id(0), Type::Unit, origin.clone())
             .expect("first resolved identity is admitted");
         let generated = builder
             .binder(Type::Unit, origin.clone())
             .expect("fresh generated identity");
         let second_resolved = builder
-            .resolved_binder(BinderId::new(1), Type::Unit, origin.clone())
+            .resolved_binder(resolved_id(1), Type::Unit, origin.clone())
             .expect("later reserved identity remains materializable");
 
         assert_ne!(resolved.id(), generated.id());
         assert_ne!(second_resolved.id(), generated.id());
-        assert_eq!(generated.id().value(), 2);
+        assert_eq!(generated.id(), BinderId::generated(0));
         assert_eq!(
-            builder.resolved_binder(BinderId::new(0), Type::Unit, origin),
+            builder.resolved_binder(resolved_id(0), Type::Unit, origin),
             Err(BuildError::DuplicateResolvedBinder)
         );
     }
@@ -2461,13 +2468,13 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let mut builder = CoreBuilder::new();
         builder
-            .reserve_resolved_binders([BinderId::new(u32::MAX - 1)])
+            .reserve_resolved_binders([resolved_id(u32::MAX - 1)])
             .expect("high resolved identity is reserved");
 
         let generated = builder
             .binder(Type::Unit, origin)
             .expect("low generated identity remains available");
-        assert_eq!(generated.id().value(), 0);
+        assert_eq!(generated.id(), BinderId::generated(0));
     }
 
     #[test]
@@ -2476,22 +2483,22 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let mut builder = CoreBuilder::new();
         builder
-            .reserve_resolved_binders([BinderId::new(2)])
+            .reserve_resolved_binders([resolved_id(2)])
             .expect("first reservation");
         assert_eq!(
-            builder.reserve_resolved_binders([BinderId::new(3), BinderId::new(3)]),
+            builder.reserve_resolved_binders([resolved_id(3), resolved_id(3)]),
             Err(BuildError::DuplicateBinderReservation)
         );
-        assert!(!builder.reserved_resolved.contains(&BinderId::new(3)));
+        assert!(!builder.reserved_resolved.contains(&resolved_id(3)));
 
         builder
             .binder(Type::Unit, origin)
             .expect("generated allocation starts the binder phase");
         assert_eq!(
-            builder.reserve_resolved_binders([BinderId::new(4)]),
+            builder.reserve_resolved_binders([resolved_id(4)]),
             Err(BuildError::BinderReservationPhaseStarted)
         );
-        assert!(!builder.reserved_resolved.contains(&BinderId::new(4)));
+        assert!(!builder.reserved_resolved.contains(&resolved_id(4)));
     }
 
     #[test]
@@ -2500,17 +2507,17 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let mut builder = CoreBuilder::new();
         assert_eq!(
-            builder.resolved_binder(BinderId::new(0), Type::Unit, origin.clone()),
+            builder.resolved_binder(resolved_id(0), Type::Unit, origin.clone()),
             Err(BuildError::UnreservedResolvedBinder)
         );
         builder
-            .reserve_resolved_binders([BinderId::new(0)])
+            .reserve_resolved_binders([resolved_id(0)])
             .expect("resolved identity is reserved");
         builder
-            .resolved_binder(BinderId::new(0), Type::Unit, origin.clone())
+            .resolved_binder(resolved_id(0), Type::Unit, origin.clone())
             .expect("first materialization");
         assert_eq!(
-            builder.resolved_binder(BinderId::new(0), Type::Unit, origin),
+            builder.resolved_binder(resolved_id(0), Type::Unit, origin),
             Err(BuildError::DuplicateResolvedBinder)
         );
     }
@@ -2525,7 +2532,7 @@ mod tests {
         let last = builder
             .binder(Type::Unit, origin.clone())
             .expect("last allocatable binder");
-        assert_eq!(last.id().value(), u32::MAX - 1);
+        assert_eq!(last.id(), BinderId::generated(u32::MAX - 1));
         assert_eq!(
             builder.binder(Type::Unit, origin),
             Err(BuildError::BinderIdExhausted)
@@ -2537,7 +2544,7 @@ mod tests {
     fn failed_reserved_payload_admission_can_be_retried() {
         let source = SourceFile::new("binder.ash", "()").expect("test source");
         let origin = generated_origin(&source, 0);
-        let id = BinderId::new(7);
+        let id = resolved_id(7);
         let mut builder = CoreBuilder::new();
         builder
             .reserve_resolved_binders([id])

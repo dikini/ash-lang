@@ -1526,7 +1526,7 @@ fn rejects_cross_builder_binders_without_consuming_receiver_state() {
     let first_generated = function_receiver
         .binder(Type::Unit, origin.clone())
         .expect("rejection does not consume a binder identity");
-    assert_eq!(first_generated.id().value(), 0);
+    assert_eq!(first_generated.id().local(), 0);
     let program = validate(
         function_receiver
             .finish(body)
@@ -1547,7 +1547,7 @@ fn rejects_cross_builder_binders_without_consuming_receiver_state() {
     let first_generated = binding_receiver
         .binder(Type::Unit, origin)
         .expect("binding rejection does not consume a binder identity");
-    assert_eq!(first_generated.id().value(), 0);
+    assert_eq!(first_generated.id().local(), 0);
     let program = validate(
         binding_receiver
             .finish(unit)
@@ -1596,7 +1596,7 @@ fn foreign_binder_rejection_admits_payloads_before_checking_capability() {
             let first_generated = receiver
                 .binder(Type::Unit, origin)
                 .expect("rejections leave binder allocation untouched");
-            assert_eq!(first_generated.id().value(), 0);
+            assert_eq!(first_generated.id().local(), 0);
             let program = validate(receiver.finish(body).expect("receiver root"), &[&file])
                 .expect("receiver remains valid");
             assert_eq!(program.node_count(), 1);

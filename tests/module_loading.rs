@@ -78,6 +78,18 @@ fn loads_relative_descendants_in_dependency_order() {
 }
 
 #[test]
+fn separate_compilation_graphs_do_not_reuse_module_identity() {
+    let tree = TempTree::create();
+    let entry = tree.write("entry.ash", "");
+
+    let first = load_module_graph(&entry, &ModuleRoots::empty()).expect("first graph should load");
+    let second =
+        load_module_graph(&entry, &ModuleRoots::empty()).expect("second graph should load");
+
+    assert_ne!(first.entry(), second.entry());
+}
+
+#[test]
 fn loads_an_absolute_path_from_its_named_root() {
     let tree = TempTree::create();
     let entry = tree.write("app/entry.ash", "import @std.collections.list as List\n");

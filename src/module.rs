@@ -6,13 +6,14 @@ use std::{
     error::Error,
     fmt, fs, io,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use crate::{
     diagnostic::Diagnostic,
     lexer::{LexReason, lex},
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure, parse, project_module},
-    source::{SourceError, SourceFile, Span},
+    source::{SourceError, SourceFile, SourceId, Span},
     surface::{SurfaceImport, SurfaceModule, SurfaceModulePath},
 };
 
@@ -132,18 +133,69 @@ impl ModuleRoots {
 }
 
 /// Stable identity assigned when one canonical module source is admitted.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct ModuleId(u32);
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ModuleId {
+    namespace: ModuleIdNamespace,
+    graph: u32,
+    value: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum ModuleIdNamespace {
+    Admitted,
+    LegacySource,
+}
 
 impl ModuleId {
+    /// Reconstructs one graph-local module identity from its numeric value.
+    ///
+    /// Compiler stages should normally obtain identities from [`LoadedModule`].
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn new(value: u32) -> Self {
+        Self {
+            namespace: ModuleIdNamespace::Admitted,
+            graph: 0,
+            value,
+        }
+    }
+
+    const fn admitted(graph: u32, value: u32) -> Self {
+        Self {
+            namespace: ModuleIdNamespace::Admitted,
+            graph,
+            value,
+        }
+    }
+
     fn index(self) -> usize {
-        self.0 as usize
+        debug_assert!(matches!(self.namespace, ModuleIdNamespace::Admitted));
+        self.value as usize
     }
 
     /// Returns the graph-local identity value.
     #[must_use]
     pub const fn value(self) -> u32 {
-        self.0
+        self.value
+    }
+}
+
+impl From<SourceId> for ModuleId {
+    fn from(source: SourceId) -> Self {
+        Self {
+            namespace: ModuleIdNamespace::LegacySource,
+            graph: 0,
+            value: source.value(),
+        }
+    }
+}
+
+impl fmt::Display for ModuleId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.namespace {
+            ModuleIdNamespace::Admitted => write!(formatter, "{}:{}", self.graph, self.value),
+            ModuleIdNamespace::LegacySource => write!(formatter, "legacy:{}", self.value),
+        }
     }
 }
 
@@ -224,6 +276,12 @@ impl ModuleGraph {
         &self.modules
     }
 
+    /// Looks up one canonical module by graph-local identity.
+    #[must_use]
+    pub fn module(&self, id: ModuleId) -> Option<&LoadedModule> {
+        self.modules.iter().find(|module| module.id == id)
+    }
+
     /// Returns the entry module identity.
     #[must_use]
     pub const fn entry(&self) -> ModuleId {
@@ -273,6 +331,8 @@ impl fmt::Display for ModuleReason {
 /// The graph resource whose budget was exhausted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModuleResource {
+    /// Compilation-local graph identity allocation.
+    GraphIdentities,
     /// Canonical source admission.
     Sources,
     /// Import-edge retention.
@@ -281,6 +341,16 @@ pub enum ModuleResource {
     PathSegments,
     /// Active iterative traversal frames.
     PendingWork,
+}
+
+static NEXT_MODULE_GRAPH: AtomicU32 = AtomicU32::new(1);
+
+fn allocate_module_graph_identity() -> Result<u32, LoadGraphError> {
+    NEXT_MODULE_GRAPH
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| ModuleFailure::resource(ModuleResource::GraphIdentities).into())
 }
 
 /// A typed module-stage or root-configuration failure.
@@ -704,6 +774,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
             import_span: None,
         })?;
 
+    let graph_identity = allocate_module_graph_identity()?;
     let mut budget = GraphBudget::default();
     let mut staged = Vec::new();
     let mut by_path = HashMap::new();
@@ -714,6 +785,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
         &mut staged,
         &mut by_path,
         &mut budget,
+        graph_identity,
     )?;
     budget.charge_pending_work()?;
     let mut frames = vec![TraversalFrame {
@@ -758,6 +830,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
                 &mut staged,
                 &mut by_path,
                 &mut budget,
+                graph_identity,
             )?
         };
 
@@ -814,12 +887,13 @@ fn admit_module(
     staged: &mut Vec<StagedModule>,
     by_path: &mut HashMap<PathBuf, ModuleId>,
     budget: &mut GraphBudget,
+    graph_identity: u32,
 ) -> Result<ModuleId, LoadGraphError> {
     budget.charge_sources()?;
     let (source, surface) = load_surface_module(&canonical_path, import_span)?;
     let id_value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
-    let id = ModuleId(id_value);
+    let id = ModuleId::admitted(graph_identity, id_value);
     by_path.insert(canonical_path.clone(), id);
     staged.push(StagedModule {
         id,
@@ -1044,6 +1118,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn graph_lookup_uses_identity_after_dependency_ordering() {
+        let first = ModuleId::new(0);
+        let second = ModuleId::new(1);
+        let graph = ModuleGraph {
+            modules: vec![
+                loaded_module_for_lookup(second, "second"),
+                loaded_module_for_lookup(first, "first"),
+            ]
+            .into_boxed_slice(),
+            entry: first,
+        };
+
+        assert_eq!(graph.module(first).map(LoadedModule::id), Some(first));
+        assert_eq!(graph.module(second).map(LoadedModule::id), Some(second));
+    }
+
+    #[test]
+    fn legacy_source_identity_cannot_collide_with_admitted_module() {
+        let source = SourceFile::new("legacy", "x").expect("test source");
+
+        assert_ne!(
+            ModuleId::from(source.id()),
+            ModuleId::new(source.id().value())
+        );
+    }
+
+    #[test]
     fn graph_budgets_accept_exact_boundaries_and_reject_the_next_unit() {
         let mut budget = GraphBudget::with_limits(GraphLimits {
             sources: 1,
@@ -1069,5 +1170,25 @@ mod tests {
         assert_eq!(failure.reason(), ModuleReason::ResourceLimit);
         assert_eq!(failure.resource_kind(), Some(expected));
         assert!(!failure.is_source_rejection());
+    }
+
+    fn loaded_module_for_lookup(id: ModuleId, name: &str) -> LoadedModule {
+        let source = SourceFile::new(name, "main : Unit -> Unit\nmain value = value\n")
+            .expect("test module source");
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).expect("ordered test range"))
+            .expect("test span belongs to source");
+        LoadedModule {
+            id,
+            canonical_path: PathBuf::from(name),
+            source,
+            surface: SurfaceModule {
+                imports: Vec::new(),
+                type_declarations: Vec::new(),
+                definitions: Vec::new(),
+                span,
+            },
+            dependencies: Box::new([]),
+        }
     }
 }

@@ -1,0 +1,160 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use ash::{
+    module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
+    resolve::{DependencyExports, ResolveReason, resolve_module},
+    resolved::{Binder, ResolvedDefinition, ResolvedDefinitionKind, ResolvedModule},
+};
+
+static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct TempTree(PathBuf);
+
+impl TempTree {
+    fn create() -> Self {
+        loop {
+            let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("ash-module-resolution-{}-{id}", std::process::id()));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("test tree should be creatable: {error}"),
+            }
+        }
+    }
+
+    fn write(&self, relative: &str, text: &str) -> PathBuf {
+        let path = self.0.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("fixture parent should be creatable");
+        }
+        fs::write(&path, text).expect("fixture should be writable");
+        path
+    }
+}
+
+impl Drop for TempTree {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn load(tree: &TempTree, entry_text: &str, dependencies: &[(&str, &str)]) -> ModuleGraph {
+    let entry = tree.write("entry.ash", entry_text);
+    for (path, text) in dependencies {
+        tree.write(path, text);
+    }
+    load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture graph should load")
+}
+
+fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule {
+    graph
+        .modules()
+        .iter()
+        .find(|module| {
+            Path::new(module.source().display_path()).file_name() == Some(file_name.as_ref())
+        })
+        .expect("fixture module should be present")
+}
+
+fn resolve_leaf(module: &LoadedModule) -> ResolvedModule {
+    let dependencies: &[DependencyExports<'_>] = &[];
+    resolve_module(module, dependencies).expect("leaf module should resolve")
+}
+
+fn definition_binder(definition: &ResolvedDefinition) -> &Binder {
+    match &definition.kind {
+        ResolvedDefinitionKind::Equational(global) => &global.interface.name,
+        ResolvedDefinitionKind::InlineOperational(global) => &global.header.name,
+    }
+}
+
+#[test]
+fn local_binder_numbers_are_qualified_by_their_defining_module() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import first as First\nimport second as Second\n",
+        &[
+            ("first.ash", "same : Unit -> Unit\nsame value = value\n"),
+            ("second.ash", "same : Unit -> Unit\nsame value = value\n"),
+        ],
+    );
+    let first = module_named(&graph, "first.ash");
+    let second = module_named(&graph, "second.ash");
+    let first_resolved = resolve_leaf(first);
+    let second_resolved = resolve_leaf(second);
+    let first_id = definition_binder(&first_resolved.definitions()[0]).id;
+    let second_id = definition_binder(&second_resolved.definitions()[0]).id;
+
+    assert_eq!(first_id.local(), second_id.local());
+    assert_ne!(first_id, second_id);
+    assert_eq!(first_id.module(), Some(first.id()));
+    assert_eq!(second_id.module(), Some(second.id()));
+}
+
+#[test]
+fn resolved_modules_are_declarations_only() {
+    let tree = TempTree::create();
+    let graph = load(&tree, "main : Unit -> Int\nmain () = 42\n", &[]);
+    let entry = module_named(&graph, "entry.ash");
+    let resolved = resolve_leaf(entry);
+
+    assert_eq!(resolved.module(), entry.id());
+    assert_eq!(resolved.definitions().len(), 1);
+    assert_eq!(resolved.span(), entry.surface().span);
+}
+
+#[test]
+fn export_candidates_reflect_term_and_type_visibility() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "type Hidden = Hidden(Int)\n",
+            "pub opaque type Opaque = Opaque(Int)\n",
+            "pub type Visible = Visible(Int)\n",
+            "private_value : Unit -> Int\n",
+            "private_value () = 0\n",
+            "pub public_value : Unit -> Int\n",
+            "public_value () = 1\n",
+        ),
+        &[],
+    );
+    let resolved = resolve_leaf(module_named(&graph, "entry.ash"));
+    let candidate = resolved.export_candidate();
+
+    assert!(candidate.term("private_value").is_none());
+    assert!(candidate.term("public_value").is_some());
+
+    assert!(candidate.nominal("Hidden").is_none());
+    assert!(candidate.constructor("Hidden").is_none());
+
+    assert!(candidate.nominal("Opaque").is_some());
+    assert!(candidate.constructor("Opaque").is_none());
+
+    assert!(candidate.nominal("Visible").is_some());
+    assert!(candidate.constructor("Visible").is_some());
+}
+
+#[test]
+fn duplicate_module_aliases_are_rejected_before_export_lookup() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import first as Shared\nimport second as Shared\n",
+        &[("first.ash", ""), ("second.ash", "")],
+    );
+    let entry = module_named(&graph, "entry.ash");
+    let no_exports: &[DependencyExports<'_>] = &[];
+
+    let error = resolve_module(entry, no_exports)
+        .expect_err("a duplicate alias should fail before dependency export lookup");
+
+    assert_eq!(error.reason, ResolveReason::DuplicateModuleAlias);
+}

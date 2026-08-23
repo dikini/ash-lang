@@ -9,24 +9,32 @@ use std::{
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
+    module::{LoadedModule, ModuleDependency, ModuleId},
     resolved::{
-        Binder, BinderId, ResolvedApplicationExpr, ResolvedBinaryExpr, ResolvedBinding,
-        ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
-        ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal, ResolvedExpr,
-        ResolvedExprKind, ResolvedExternalInterface, ResolvedFunctionExpr,
-        ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader, ResolvedLocalDeclaration,
-        ResolvedMatchArm, ResolvedMatchExpr, ResolvedNominalType, ResolvedOccurrence,
-        ResolvedPattern, ResolvedPatternKind, ResolvedProgram, ResolvedRecursiveGroup,
-        ResolvedRecursiveMember, ResolvedRegistry, ResolvedType, ResolvedTypeProvenance,
-        ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern,
+        Binder, BinderId, CandidateConstructor, CandidateGlobal, CandidateNominal, ExportSummary,
+        ExportedConstructor, ExportedGlobal, ExportedType, ImportedConstructorFact, ImportedFacts,
+        ImportedGlobalScheme, ImportedNominalFact, ResolvedApplicationExpr, ResolvedBinaryExpr,
+        ResolvedBinding, ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence,
+        ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
+        ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
+        ResolvedFunctionExpr, ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
+        ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr, ResolvedModule,
+        ResolvedNominalType, ResolvedOccurrence, ResolvedPattern, ResolvedPatternKind,
+        ResolvedProgram, ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry,
+        ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
+        ResolvedTypedPattern,
     },
     source::Origin,
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr,
-        SurfaceExprKind, SurfaceLocalDeclaration, SurfacePattern, SurfacePatternKind,
-        SurfaceProgram, SurfaceRecursiveGroup, SurfaceType, SurfaceTypeKind,
+        SurfaceExprKind, SurfaceImportSelection, SurfaceLocalDeclaration, SurfaceModule,
+        SurfacePattern, SurfacePatternKind, SurfaceProgram, SurfaceRecursiveGroup,
+        SurfaceReference, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
+        SurfaceTypeVisibility,
     },
-    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
+    types::{
+        ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
+    },
 };
 
 /// The semantic reason that prevented name resolution.
@@ -42,6 +50,14 @@ pub enum ResolveReason {
     DuplicateType,
     /// A file contains a second constructor spelling.
     DuplicateConstructor,
+    /// Two complete imports bind the same module alias.
+    DuplicateModuleAlias,
+    /// An imported spelling is private or otherwise unavailable.
+    UnavailableExport,
+    /// An import binding conflicts with another file-wide binding.
+    ImportConflict,
+    /// A source occurrence attempts to inspect an opaque constructor.
+    OpaqueConstructor,
     /// A declaration repeats one type-parameter spelling.
     DuplicateTypeParameter,
     /// A source type occurrence names no declaration.
@@ -72,6 +88,10 @@ impl fmt::Display for ResolveReason {
             Self::DuplicateGlobal => "resolve.duplicate-global",
             Self::DuplicateType => "resolve.duplicate-type",
             Self::DuplicateConstructor => "resolve.duplicate-constructor",
+            Self::DuplicateModuleAlias => "resolve.duplicate-module-alias",
+            Self::UnavailableExport => "resolve.unavailable-export",
+            Self::ImportConflict => "resolve.import-conflict",
+            Self::OpaqueConstructor => "resolve.opaque-constructor",
             Self::DuplicateTypeParameter => "resolve.duplicate-type-parameter",
             Self::UnknownType => "resolve.unknown-type",
             Self::TypeArgumentCount => "resolve.type-argument-count",
@@ -134,18 +154,189 @@ impl std::error::Error for ResolveError {}
 /// definition violates the accepted name rules, the binder identity domain is
 /// exhausted, or an internal scope invariant is lost.
 pub fn resolve(program: &SurfaceProgram) -> Result<ResolvedProgram, ResolveError> {
-    Resolver::new().resolve_program(program)
+    Resolver::new(ModuleId::from(program.span.source())).resolve_program(program)
+}
+
+/// One source import edge paired with its checked dependency summary.
+#[derive(Clone, Copy, Debug)]
+pub struct DependencyExports<'a> {
+    edge: &'a ModuleDependency,
+    summary: &'a ExportSummary,
+}
+
+impl<'a> DependencyExports<'a> {
+    /// Authenticates a dependency edge and summary pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DependencyExportMismatch`] when the summary belongs to a
+    /// different canonical module.
+    pub fn new(
+        edge: &'a ModuleDependency,
+        summary: &'a ExportSummary,
+    ) -> Result<Self, DependencyExportMismatch> {
+        if edge.target() != summary.module() {
+            return Err(DependencyExportMismatch);
+        }
+        Ok(Self { edge, summary })
+    }
+}
+
+/// A dependency edge was paired with another module's summary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DependencyExportMismatch;
+
+impl fmt::Display for DependencyExportMismatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("dependency export summary does not match its module edge")
+    }
+}
+
+impl std::error::Error for DependencyExportMismatch {}
+
+/// Resolves one declarations-only module from checked dependency summaries.
+///
+/// # Errors
+///
+/// Returns a structured resolution failure for invalid import scopes, local
+/// declarations, or source occurrences.
+pub fn resolve_module(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+) -> Result<ResolvedModule, ResolveError> {
+    let module = loaded.id();
+    let surface = loaded.surface();
+    reject_duplicate_module_aliases(surface)?;
+    if dependencies.len() != loaded.dependencies().len()
+        || surface.imports.len() != loaded.dependencies().len()
+        || dependencies
+            .iter()
+            .zip(loaded.dependencies())
+            .zip(&surface.imports)
+            .any(|((dependency, loaded_edge), import)| {
+                dependency.edge != loaded_edge
+                    || loaded_edge.import_span() != import.span
+                    || dependency.edge.target() != dependency.summary.module()
+            })
+    {
+        return Err(error(
+            ResolveReason::InternalState,
+            surface.span,
+            "the resolver received incomplete or mismatched dependency summaries",
+        ));
+    }
+
+    let mut resolver = Resolver::new(module);
+    resolver.install_imports(surface, dependencies)?;
+    let (registry, definitions) =
+        resolver.resolve_declarations(&surface.type_declarations, &surface.definitions)?;
+    let imported = std::mem::take(&mut resolver.imported);
+    let export_candidate = build_export_candidate(surface, &registry, &definitions)?;
+    Ok(ResolvedModule::new(
+        module,
+        registry,
+        imported,
+        definitions,
+        export_candidate,
+        surface.span,
+    ))
+}
+
+fn reject_duplicate_module_aliases(surface: &SurfaceModule) -> Result<(), ResolveError> {
+    let mut aliases = HashMap::new();
+    for import in &surface.imports {
+        let SurfaceImportSelection::Qualified { alias } = &import.selection else {
+            continue;
+        };
+        if let Some(first) = aliases.insert(alias.text.as_str(), alias.span) {
+            let mut diagnostic = Diagnostic::new(
+                ResolveReason::DuplicateModuleAlias,
+                SourceLabel::new(alias.span, "this module alias is already bound"),
+            );
+            diagnostic
+                .related
+                .push(SourceLabel::new(first, "the first module alias is here"));
+            diagnostic.found = Some(alias.text.clone());
+            return Err(diagnostic.into());
+        }
+    }
+    Ok(())
+}
+
+fn build_export_candidate(
+    surface: &SurfaceModule,
+    registry: &ResolvedRegistry,
+    definitions: &[ResolvedDefinition],
+) -> Result<ResolvedExportCandidate, ResolveError> {
+    let mut candidate = ResolvedExportCandidate::default();
+    for (source, resolved) in surface.definitions.iter().zip(definitions) {
+        if !source.public {
+            continue;
+        }
+        let binder = definition_binder(resolved);
+        candidate.insert_term(
+            binder.spelling.clone(),
+            CandidateGlobal {
+                binder: binder.id,
+                origin: binder.origin.clone(),
+            },
+        );
+    }
+
+    for (source, resolved) in surface.type_declarations.iter().zip(registry.nominals()) {
+        if source.visibility == SurfaceTypeVisibility::Private {
+            continue;
+        }
+        candidate.insert_nominal(
+            source.name.text.clone(),
+            CandidateNominal {
+                id: resolved.id,
+                visibility: source.visibility,
+                origin: resolved.origin.clone(),
+            },
+        );
+        if source.visibility != SurfaceTypeVisibility::PublicTransparent {
+            continue;
+        }
+        for (constructor, id) in source.constructors.iter().zip(&resolved.constructors) {
+            let resolved_constructor = registry.constructor(*id).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    constructor.span,
+                    "the resolver lost a public constructor",
+                )
+            })?;
+            candidate.insert_constructor(
+                constructor.name.text.clone(),
+                CandidateConstructor {
+                    id: *id,
+                    origin: resolved_constructor.origin.clone(),
+                },
+            );
+        }
+    }
+    Ok(candidate)
+}
+
+fn definition_binder(definition: &ResolvedDefinition) -> &Binder {
+    match &definition.kind {
+        ResolvedDefinitionKind::Equational(global) => &global.interface.name,
+        ResolvedDefinitionKind::InlineOperational(global) => &global.header.name,
+    }
 }
 
 struct Resolver {
+    module: ModuleId,
     next_binder: u32,
     next_type_variable: u32,
     scopes: Vec<HashMap<String, Binder>>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
     constructor_names: HashMap<String, ConstructorId>,
+    module_aliases: HashMap<String, ImportedNamespaces>,
+    imported: ImportedFacts,
     type_scopes: Vec<HashMap<String, ResolvedTypeVariable>>,
-    nominal_parameter_counts: Vec<usize>,
+    nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     type_work: TypeWorkBudget,
     #[cfg(test)]
     max_type_pending_tasks: usize,
@@ -156,38 +347,348 @@ struct GlobalFact {
     definition_span: crate::source::Span,
 }
 
+#[derive(Debug, Default)]
+struct ImportedNamespaces {
+    terms: HashMap<String, BinderId>,
+    nominals: HashMap<String, ImportedNominalName>,
+    constructors: HashMap<String, ConstructorId>,
+    unavailable: HashSet<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ImportedNominalName {
+    id: NominalTypeId,
+    parameter_count: usize,
+}
+
 impl Resolver {
-    fn new() -> Self {
+    fn new(module: ModuleId) -> Self {
         Self {
+            module,
             next_binder: 0,
             next_type_variable: 0,
             scopes: vec![HashMap::new()],
             globals: HashMap::new(),
             type_names: HashMap::new(),
             constructor_names: HashMap::new(),
+            module_aliases: HashMap::new(),
+            imported: ImportedFacts::default(),
             type_scopes: Vec::new(),
-            nominal_parameter_counts: Vec::new(),
+            nominal_parameter_counts: HashMap::new(),
             type_work: TypeWorkBudget::default(),
             #[cfg(test)]
             max_type_pending_tasks: 0,
         }
     }
 
+    fn install_imports(
+        &mut self,
+        surface: &SurfaceModule,
+        dependencies: &[DependencyExports<'_>],
+    ) -> Result<(), ResolveError> {
+        for (import, dependency) in surface.imports.iter().zip(dependencies) {
+            match &import.selection {
+                SurfaceImportSelection::Qualified { alias } => {
+                    if self.file_name_is_bound(&alias.text) {
+                        return Err(import_conflict(alias.span, &alias.text));
+                    }
+                    let namespaces =
+                        self.clone_summary_namespaces(dependency.summary, import.span)?;
+                    self.module_aliases.insert(alias.text.clone(), namespaces);
+                }
+                SurfaceImportSelection::Targeted(items) => {
+                    for item in items {
+                        let local = item.alias.as_ref().unwrap_or(&item.name);
+                        if self.module_aliases.contains_key(&local.text) {
+                            return Err(import_conflict(local.span, &local.text));
+                        }
+                        let mut selected = false;
+                        if let Some(exported) = dependency.summary.term(&item.name.text) {
+                            selected = true;
+                            if self.constructor_names.contains_key(&local.text) {
+                                return Err(import_conflict(local.span, &local.text));
+                            }
+                            let scope = self.scopes.first_mut().ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    item.span,
+                                    "the resolver lost the file scope",
+                                )
+                            })?;
+                            if scope.contains_key(&local.text) {
+                                return Err(import_conflict(local.span, &local.text));
+                            }
+                            scope.insert(
+                                local.text.clone(),
+                                Binder {
+                                    id: exported.binder,
+                                    spelling: local.text.clone(),
+                                    origin: exported.origin.clone(),
+                                },
+                            );
+                            self.retain_imported_global(exported, item.span)?;
+                        }
+                        if let Some(exported) = dependency.summary.nominal(&item.name.text) {
+                            selected = true;
+                            if self.type_names.contains_key(&local.text) {
+                                return Err(import_conflict(local.span, &local.text));
+                            }
+                            self.type_names.insert(local.text.clone(), exported.id);
+                            self.nominal_parameter_counts
+                                .insert(exported.id, exported.parameter_count);
+                            self.retain_imported_nominal(exported);
+                        }
+                        if let Some(exported) = dependency.summary.constructor(&item.name.text) {
+                            selected = true;
+                            if self.constructor_names.contains_key(&local.text)
+                                || self
+                                    .scopes
+                                    .first()
+                                    .is_some_and(|scope| scope.contains_key(&local.text))
+                            {
+                                return Err(import_conflict(local.span, &local.text));
+                            }
+                            self.constructor_names
+                                .insert(local.text.clone(), exported.id);
+                            self.retain_imported_constructor(exported, item.span)?;
+                        }
+                        if !selected {
+                            return Err(unavailable_export(
+                                item.name.span,
+                                &item.name.text,
+                                dependency.summary.is_unavailable(&item.name.text),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn clone_summary_namespaces(
+        &mut self,
+        summary: &ExportSummary,
+        import_span: crate::source::Span,
+    ) -> Result<ImportedNamespaces, ResolveError> {
+        let mut namespaces = ImportedNamespaces::default();
+        for (spelling, exported) in summary.terms() {
+            namespaces
+                .terms
+                .insert(spelling.to_owned(), exported.binder);
+            self.retain_imported_global(exported, import_span)?;
+        }
+        for (spelling, exported) in summary.nominals() {
+            namespaces.nominals.insert(
+                spelling.to_owned(),
+                ImportedNominalName {
+                    id: exported.id,
+                    parameter_count: exported.parameter_count,
+                },
+            );
+            self.retain_imported_nominal(exported);
+        }
+        for (spelling, exported) in summary.constructors() {
+            namespaces
+                .constructors
+                .insert(spelling.to_owned(), exported.id);
+            self.retain_imported_constructor(exported, import_span)?;
+        }
+        namespaces
+            .unavailable
+            .extend(summary.unavailable().map(str::to_owned));
+        Ok(namespaces)
+    }
+
+    fn retain_imported_global(
+        &mut self,
+        exported: &ExportedGlobal,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        if self.imported.contains_global(exported.binder) {
+            return Ok(());
+        }
+        let scheme =
+            clone_type_with_budget(&exported.scheme, &mut self.type_work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported type retention exceeded its work budget",
+                )
+            })?;
+        self.imported.insert_global(ImportedGlobalScheme {
+            binder: exported.binder,
+            scheme,
+            origin: exported.origin.clone(),
+        });
+        Ok(())
+    }
+
+    fn retain_imported_nominal(&mut self, exported: &ExportedType) {
+        if self.imported.contains_nominal(exported.id) {
+            return;
+        }
+        self.imported.insert_nominal(ImportedNominalFact {
+            id: exported.id,
+            parameter_count: exported.parameter_count,
+            access: exported.access,
+            origin: exported.origin.clone(),
+        });
+    }
+
+    fn retain_imported_constructor(
+        &mut self,
+        exported: &ExportedConstructor,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        if self.imported.contains_constructor(exported.id) {
+            return Ok(());
+        }
+        let payload = exported
+            .payload
+            .as_ref()
+            .map(|payload| clone_type_with_budget(payload, &mut self.type_work))
+            .transpose()
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported constructor retention exceeded its work budget",
+                )
+            })?;
+        self.imported.insert_constructor(ImportedConstructorFact {
+            id: exported.id,
+            payload,
+            origin: exported.origin.clone(),
+        });
+        Ok(())
+    }
+
+    fn file_name_is_bound(&self, spelling: &str) -> bool {
+        self.module_aliases.contains_key(spelling)
+            || self.type_names.contains_key(spelling)
+            || self.constructor_names.contains_key(spelling)
+            || self
+                .scopes
+                .first()
+                .is_some_and(|scope| scope.contains_key(spelling))
+    }
+
+    fn imported_namespace(
+        &self,
+        reference: &SurfaceReference,
+    ) -> Result<Option<&ImportedNamespaces>, ResolveError> {
+        let SurfaceReference::Qualified(qualified) = reference else {
+            return Ok(None);
+        };
+        self.module_aliases
+            .get(&qualified.qualifier.text)
+            .map(Some)
+            .ok_or_else(|| {
+                unavailable_export(qualified.qualifier.span, &qualified.qualifier.text, false)
+            })
+    }
+
+    fn nominal_reference(
+        &self,
+        reference: &SurfaceReference,
+    ) -> Result<ImportedNominalName, ResolveError> {
+        if let Some(namespace) = self.imported_namespace(reference)? {
+            return namespace
+                .nominals
+                .get(&reference.member().text)
+                .copied()
+                .ok_or_else(|| {
+                    unavailable_export(
+                        reference.member().span,
+                        &reference.member().text,
+                        namespace.unavailable.contains(&reference.member().text),
+                    )
+                });
+        }
+        let name = reference.member();
+        let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
+            let mut diagnostic = Diagnostic::new(
+                ResolveReason::UnknownType,
+                SourceLabel::new(name.span, "this nominal type is not declared"),
+            );
+            diagnostic.found = Some(name.text.clone());
+            ResolveError::from(diagnostic)
+        })?;
+        let parameter_count = self.nominal_parameter_count(id).ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                name.span,
+                "the resolver lost nominal parameter metadata",
+            )
+        })?;
+        Ok(ImportedNominalName {
+            id,
+            parameter_count,
+        })
+    }
+
+    fn constructor_reference(
+        &self,
+        reference: &SurfaceReference,
+    ) -> Result<ConstructorId, ResolveError> {
+        if let Some(namespace) = self.imported_namespace(reference)? {
+            return namespace
+                .constructors
+                .get(&reference.member().text)
+                .copied()
+                .ok_or_else(|| {
+                    unavailable_export(
+                        reference.member().span,
+                        &reference.member().text,
+                        namespace.unavailable.contains(&reference.member().text),
+                    )
+                });
+        }
+        self.constructor_names
+            .get(&reference.member().text)
+            .copied()
+            .ok_or_else(|| {
+                let mut diagnostic = Diagnostic::new(
+                    ResolveReason::UnknownConstructor,
+                    SourceLabel::new(reference.member().span, "this constructor is not declared"),
+                );
+                diagnostic.found = Some(reference.member().text.clone());
+                ResolveError::from(diagnostic)
+            })
+    }
+
     fn resolve_program(
         mut self,
         program: &SurfaceProgram,
     ) -> Result<ResolvedProgram, ResolveError> {
-        let registry = self.resolve_registry(program)?;
-        let mut global_type_parameters = Vec::with_capacity(program.definitions.len());
-        for definition in &program.definitions {
+        let (registry, definitions) =
+            self.resolve_declarations(&program.type_declarations, &program.definitions)?;
+        let result = self.resolve_expr(&program.result)?;
+        Ok(ResolvedProgram {
+            registry,
+            definitions,
+            result,
+            span: program.span,
+        })
+    }
+
+    fn resolve_declarations(
+        &mut self,
+        type_declarations: &[SurfaceTypeDeclaration],
+        surface_definitions: &[crate::surface::SurfaceDefinition],
+    ) -> Result<(Arc<ResolvedRegistry>, Vec<ResolvedDefinition>), ResolveError> {
+        let registry = self.resolve_registry(type_declarations)?;
+        let mut global_type_parameters = Vec::with_capacity(surface_definitions.len());
+        for definition in surface_definitions {
             global_type_parameters.push(self.allocate_global_type_parameters(definition)?);
         }
         let registry = Arc::new(
             registry
                 .with_additional_type_variables(global_type_parameters.iter().flatten().cloned()),
         );
-        let mut global_binders = Vec::with_capacity(program.definitions.len());
-        for definition in &program.definitions {
+        let mut global_binders = Vec::with_capacity(surface_definitions.len());
+        for definition in surface_definitions {
             let (global_name, global_name_span) = match &definition.kind {
                 SurfaceDefinitionKind::Equational(equational) => {
                     if equational.equations.is_empty() {
@@ -244,6 +745,9 @@ impl Resolver {
                 ));
                 return Err(diagnostic.into());
             }
+            if self.file_name_is_bound(global_name) {
+                return Err(import_conflict(global_name_span, global_name));
+            }
             let global = self.allocate_binder(global_name, global_name_span)?;
             let Some(file_scope) = self.scopes.first_mut() else {
                 return Err(error(
@@ -263,9 +767,8 @@ impl Resolver {
             global_binders.push(global);
         }
 
-        let mut definitions = Vec::with_capacity(program.definitions.len());
-        for ((definition, global), type_parameters) in program
-            .definitions
+        let mut definitions = Vec::with_capacity(surface_definitions.len());
+        for ((definition, global), type_parameters) in surface_definitions
             .iter()
             .zip(global_binders)
             .zip(global_type_parameters)
@@ -366,22 +869,16 @@ impl Resolver {
             self.type_scopes.truncate(type_scope_checkpoint);
         }
 
-        let result = self.resolve_expr(&program.result)?;
-        Ok(ResolvedProgram {
-            registry,
-            definitions,
-            result,
-            span: program.span,
-        })
+        Ok((registry, definitions))
     }
 
     fn resolve_registry(
         &mut self,
-        program: &SurfaceProgram,
+        type_declarations: &[SurfaceTypeDeclaration],
     ) -> Result<ResolvedRegistry, ResolveError> {
         let mut first_types = HashMap::new();
-        let mut nominal_ids = Vec::with_capacity(program.type_declarations.len());
-        for (index, declaration) in program.type_declarations.iter().enumerate() {
+        let mut nominal_ids = Vec::with_capacity(type_declarations.len());
+        for (index, declaration) in type_declarations.iter().enumerate() {
             if let Some(first) =
                 first_types.insert(declaration.name.text.as_str(), declaration.name.span)
             {
@@ -397,6 +894,14 @@ impl Resolver {
                     .push(SourceLabel::new(first, "the first nominal type is here"));
                 return Err(diagnostic.into());
             }
+            if self.module_aliases.contains_key(&declaration.name.text)
+                || self.type_names.contains_key(&declaration.name.text)
+            {
+                return Err(import_conflict(
+                    declaration.name.span,
+                    &declaration.name.text,
+                ));
+            }
             let index = u32::try_from(index).map_err(|_| {
                 error(
                     ResolveReason::InternalState,
@@ -404,14 +909,14 @@ impl Resolver {
                     "the file contains too many type declarations",
                 )
             })?;
-            let id = NominalTypeId::new(declaration.span.source(), index);
+            let id = NominalTypeId::new(self.module, index);
             self.type_names.insert(declaration.name.text.clone(), id);
             nominal_ids.push(id);
         }
 
         let mut first_constructors = HashMap::new();
-        let mut constructor_ids = Vec::with_capacity(program.type_declarations.len());
-        for (declaration, owner) in program.type_declarations.iter().zip(&nominal_ids) {
+        let mut constructor_ids = Vec::with_capacity(type_declarations.len());
+        for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
             let mut owned = Vec::with_capacity(declaration.constructors.len());
             for (index, constructor) in declaration.constructors.iter().enumerate() {
                 if let Some(first) =
@@ -429,6 +934,18 @@ impl Resolver {
                         .push(SourceLabel::new(first, "the first constructor is here"));
                     return Err(diagnostic.into());
                 }
+                if self.module_aliases.contains_key(&constructor.name.text)
+                    || self.constructor_names.contains_key(&constructor.name.text)
+                    || self
+                        .scopes
+                        .first()
+                        .is_some_and(|scope| scope.contains_key(&constructor.name.text))
+                {
+                    return Err(import_conflict(
+                        constructor.name.span,
+                        &constructor.name.text,
+                    ));
+                }
                 let index = u32::try_from(index).map_err(|_| {
                     error(
                         ResolveReason::InternalState,
@@ -444,8 +961,8 @@ impl Resolver {
             constructor_ids.push(owned);
         }
 
-        let mut nominal_parameters = Vec::with_capacity(program.type_declarations.len());
-        for (declaration, owner) in program.type_declarations.iter().zip(&nominal_ids) {
+        let mut nominal_parameters = Vec::with_capacity(type_declarations.len());
+        for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
             let mut first = HashMap::new();
             let mut parameters = Vec::with_capacity(declaration.parameters.len());
             for parameter in &declaration.parameters {
@@ -464,13 +981,13 @@ impl Resolver {
             }
             nominal_parameters.push((*owner, parameters));
         }
-        self.nominal_parameter_counts = nominal_parameters
-            .iter()
-            .map(|(_, parameters)| parameters.len())
-            .collect();
+        self.nominal_parameter_counts.extend(
+            nominal_parameters
+                .iter()
+                .map(|(owner, parameters)| (*owner, parameters.len())),
+        );
 
-        let nominals = program
-            .type_declarations
+        let nominals = type_declarations
             .iter()
             .zip(&nominal_ids)
             .zip(&constructor_ids)
@@ -482,8 +999,7 @@ impl Resolver {
             })
             .collect::<Vec<_>>();
         let mut constructors = Vec::new();
-        for (((declaration, owner), ids), (_, parameters)) in program
-            .type_declarations
+        for (((declaration, owner), ids), (_, parameters)) in type_declarations
             .iter()
             .zip(&nominal_ids)
             .zip(&constructor_ids)
@@ -577,37 +1093,26 @@ impl Resolver {
                             completed.push((Type::Unit, provenance.len() - 1));
                         }
                         SurfaceTypeKind::Named(name) => {
-                            if let Some(variable) = self
-                                .type_scopes
-                                .iter()
-                                .rev()
-                                .find_map(|scope| scope.get(&name.text))
+                            if matches!(name, SurfaceReference::Unqualified(_))
+                                && let Some(variable) = self
+                                    .type_scopes
+                                    .iter()
+                                    .rev()
+                                    .find_map(|scope| scope.get(&name.member().text))
                             {
                                 provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
                                 completed.push((Type::Variable(variable.id), provenance.len() - 1));
                                 continue;
                             }
-                            let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
-                                let mut diagnostic = Diagnostic::new(
-                                    ResolveReason::UnknownType,
-                                    SourceLabel::new(
-                                        name.span,
-                                        "this nominal type is not declared",
-                                    ),
-                                );
-                                diagnostic.found = Some(name.text.clone());
-                                ResolveError::from(diagnostic)
-                            })?;
-                            let expected = self.nominal_parameter_count(id).ok_or_else(|| {
-                                error(
-                                    ResolveReason::InternalState,
-                                    current.span,
-                                    "the resolver lost nominal parameter metadata",
-                                )
-                            })?;
+                            let nominal = self.nominal_reference(name)?;
+                            let id = nominal.id;
+                            let expected = nominal.parameter_count;
                             if expected != 0 {
                                 return Err(type_argument_count(
-                                    name.span, &name.text, expected, 0,
+                                    name.span(),
+                                    &name.member().text,
+                                    expected,
+                                    0,
                                 ));
                             }
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
@@ -617,42 +1122,26 @@ impl Resolver {
                             constructor,
                             arguments,
                         } => {
-                            if self
-                                .type_scopes
-                                .iter()
-                                .rev()
-                                .any(|scope| scope.contains_key(&constructor.text))
+                            if matches!(constructor, SurfaceReference::Unqualified(_))
+                                && self
+                                    .type_scopes
+                                    .iter()
+                                    .rev()
+                                    .any(|scope| scope.contains_key(&constructor.member().text))
                             {
                                 return Err(error(
                                     ResolveReason::TypeKind,
-                                    constructor.span,
+                                    constructor.span(),
                                     "a parameter of kind Type cannot be applied",
                                 ));
                             }
-                            let id = self.type_names.get(&constructor.text).copied().ok_or_else(
-                                || {
-                                    let mut diagnostic = Diagnostic::new(
-                                        ResolveReason::UnknownType,
-                                        SourceLabel::new(
-                                            constructor.span,
-                                            "this nominal type is not declared",
-                                        ),
-                                    );
-                                    diagnostic.found = Some(constructor.text.clone());
-                                    ResolveError::from(diagnostic)
-                                },
-                            )?;
-                            let expected = self.nominal_parameter_count(id).ok_or_else(|| {
-                                error(
-                                    ResolveReason::InternalState,
-                                    current.span,
-                                    "the resolver lost nominal parameter metadata",
-                                )
-                            })?;
+                            let nominal = self.nominal_reference(constructor)?;
+                            let id = nominal.id;
+                            let expected = nominal.parameter_count;
                             if expected != arguments.len() {
                                 return Err(type_argument_count(
                                     current.span,
-                                    &constructor.text,
+                                    &constructor.member().text,
                                     expected,
                                     arguments.len(),
                                 ));
@@ -833,24 +1322,13 @@ impl Resolver {
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             SurfacePatternKind::Constructor { name, payload } => {
-                let constructor =
-                    self.constructor_names
-                        .get(&name.text)
-                        .copied()
-                        .ok_or_else(|| {
-                            let mut diagnostic = Diagnostic::new(
-                                ResolveReason::UnknownConstructor,
-                                SourceLabel::new(name.span, "this constructor is not declared"),
-                            );
-                            diagnostic.found = Some(name.text.clone());
-                            ResolveError::from(diagnostic)
-                        })?;
+                let constructor = self.constructor_reference(name)?;
                 ResolvedPatternKind::Constructor {
                     constructor,
                     occurrence: ResolvedConstructorOccurrence {
                         constructor,
-                        spelling: name.text.clone(),
-                        origin: Origin::Source(name.span),
+                        spelling: name.member().text.clone(),
+                        origin: Origin::Source(name.span()),
                     },
                     payload: payload
                         .as_deref()
@@ -882,7 +1360,7 @@ impl Resolver {
         spelling: &str,
         span: crate::source::Span,
     ) -> Result<Binder, ResolveError> {
-        let id = BinderId::new(self.next_binder);
+        let id = BinderId::resolved(self.module, self.next_binder);
         self.next_binder = self.next_binder.checked_add(1).ok_or_else(|| {
             error(
                 ResolveReason::BinderIdExhausted,
@@ -902,7 +1380,7 @@ impl Resolver {
         spelling: &str,
         span: crate::source::Span,
     ) -> Result<ResolvedTypeVariable, ResolveError> {
-        let id = TypeVariableId::new(self.next_type_variable);
+        let id = TypeVariableId::resolved(self.module, self.next_type_variable);
         self.next_type_variable = self.next_type_variable.checked_add(1).ok_or_else(|| {
             error(
                 ResolveReason::BinderIdExhausted,
@@ -959,9 +1437,7 @@ impl Resolver {
     }
 
     fn nominal_parameter_count(&self, id: NominalTypeId) -> Option<usize> {
-        usize::try_from(id.declaration())
-            .ok()
-            .and_then(|index| self.nominal_parameter_counts.get(index).copied())
+        self.nominal_parameter_counts.get(&id).copied()
     }
 
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
@@ -1268,42 +1744,62 @@ impl Resolver {
                 span: expression.span,
             }),
             SurfaceExprKind::Name(name) => {
-                let binder = self
-                    .scopes
-                    .iter()
-                    .rev()
-                    .find_map(|scope| scope.get(&name.text));
+                let member = name.member();
+                let qualified = self.imported_namespace(name)?;
+                let binder = if let Some(namespace) = qualified {
+                    namespace.terms.get(&member.text).copied()
+                } else {
+                    self.scopes
+                        .iter()
+                        .rev()
+                        .find_map(|scope| scope.get(&member.text))
+                        .map(|binder| binder.id)
+                };
                 if let Some(binder) = binder {
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                            binder: binder.id,
-                            spelling: name.text.clone(),
-                            origin: Origin::Source(name.span),
+                            binder,
+                            spelling: member.text.clone(),
+                            origin: Origin::Source(name.span()),
                         }),
                         span: expression.span,
                     });
-                } else if let Some(constructor) = self.constructor_names.get(&name.text).copied() {
+                } else if let Some(constructor) = qualified
+                    .and_then(|namespace| namespace.constructors.get(&member.text).copied())
+                    .or_else(|| {
+                        qualified
+                            .is_none()
+                            .then(|| self.constructor_names.get(&member.text).copied())
+                            .flatten()
+                    })
+                {
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Constructor(ResolvedConstructorOccurrence {
                             constructor,
-                            spelling: name.text.clone(),
-                            origin: Origin::Source(name.span),
+                            spelling: member.text.clone(),
+                            origin: Origin::Source(name.span()),
                         }),
                         span: expression.span,
                     });
+                } else if let Some(namespace) = qualified {
+                    return Err(unavailable_export(
+                        member.span,
+                        &member.text,
+                        namespace.unavailable.contains(&member.text),
+                    ));
                 } else {
                     return Err(
-                        if name.text.chars().next().is_some_and(char::is_uppercase) {
+                        if member.text.chars().next().is_some_and(char::is_uppercase) {
                             let mut diagnostic = Diagnostic::new(
                                 ResolveReason::UnknownConstructor,
-                                SourceLabel::new(name.span, "this constructor is not declared"),
+                                SourceLabel::new(member.span, "this constructor is not declared"),
                             );
-                            diagnostic.found = Some(name.text.clone());
+                            diagnostic.found = Some(member.text.clone());
                             ResolveError::from(diagnostic)
                         } else {
                             error(
                                 ResolveReason::UnknownName,
-                                name.span,
+                                member.span,
                                 "this name is not in scope",
                             )
                         },
@@ -1496,6 +1992,33 @@ fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> Res
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
 }
 
+fn import_conflict(span: crate::source::Span, spelling: &str) -> ResolveError {
+    let mut diagnostic = Diagnostic::new(
+        ResolveReason::ImportConflict,
+        SourceLabel::new(span, "this file-wide name is already bound"),
+    );
+    diagnostic.found = Some(spelling.to_owned());
+    diagnostic.into()
+}
+
+fn unavailable_export(
+    span: crate::source::Span,
+    spelling: &str,
+    known_private: bool,
+) -> ResolveError {
+    let message = if known_private {
+        "this declaration is private to its defining module"
+    } else {
+        "the dependency exports no declaration with this spelling"
+    };
+    let mut diagnostic = Diagnostic::new(
+        ResolveReason::UnavailableExport,
+        SourceLabel::new(span, message),
+    );
+    diagnostic.found = Some(spelling.to_owned());
+    diagnostic.into()
+}
+
 fn type_argument_count(
     span: crate::source::Span,
     spelling: &str,
@@ -1544,6 +2067,9 @@ fn collect_free_type_names<'a>(
         })?;
         match &ty.kind {
             SurfaceTypeKind::Named(name) => {
+                let SurfaceReference::Unqualified(name) = name else {
+                    continue;
+                };
                 if !nominals.contains_key(&name.text) && seen.insert(&name.text) {
                     output.push(name.clone());
                 }
@@ -1552,7 +2078,10 @@ fn collect_free_type_names<'a>(
                 constructor,
                 arguments,
             } => {
-                if !nominals.contains_key(&constructor.text) && seen.insert(&constructor.text) {
+                if let SurfaceReference::Unqualified(constructor) = constructor
+                    && !nominals.contains_key(&constructor.text)
+                    && seen.insert(&constructor.text)
+                {
                     output.push(constructor.clone());
                 }
                 work.push(Task::Slice(arguments.iter()));
@@ -1567,6 +2096,9 @@ fn collect_free_type_names<'a>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod module_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1586,7 +2118,7 @@ mod tests {
         let span = source
             .span(ByteRange::new(0, 4).expect("the range is ordered"))
             .expect("the range belongs to the fixture");
-        let mut resolver = Resolver::new();
+        let mut resolver = Resolver::new(ModuleId::new(0));
         resolver.next_binder = u32::MAX;
 
         let error = resolver
@@ -1609,7 +2141,7 @@ mod tests {
             let source = SourceFile::new(name, text).expect("the scope fixture should fit");
             let tree = parse(lex(&source).expect("the fixture should lex"));
             let program = project(&source, &tree).expect("the fixture should project");
-            let mut resolver = Resolver::new();
+            let mut resolver = Resolver::new(ModuleId::new(0));
             let initial_scope_count = resolver.scopes.len();
 
             let error = resolver
@@ -1630,10 +2162,10 @@ mod tests {
                 .span(ByteRange::new(start, end).expect("the range is ordered"))
                 .expect("the range belongs to the fixture");
             SurfaceType {
-                kind: SurfaceTypeKind::Named(SurfaceName {
+                kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(SurfaceName {
                     text: text.to_owned(),
                     span,
-                }),
+                })),
                 span,
             }
         };
@@ -1683,13 +2215,13 @@ mod tests {
         let program = project(&source, &tree).expect("the fixture should project");
         let second_field_span = program.type_declarations[0].constructors[0].fields[1].span;
 
-        let mut exact = Resolver::new();
+        let mut exact = Resolver::new(ModuleId::new(0));
         exact
             .type_work
             .charge(TYPE_WORK_LIMIT - 3)
             .expect("the fixture leaves the wrapper and two field cells");
         let registry = exact
-            .resolve_registry(&program)
+            .resolve_registry(&program.type_declarations)
             .expect("the exact constructor payload allowance should fit");
         assert_eq!(
             registry.constructors()[0].payload,
@@ -1697,13 +2229,13 @@ mod tests {
         );
         assert_eq!(exact.type_work.charge(1), Err(()));
 
-        let mut short = Resolver::new();
+        let mut short = Resolver::new(ModuleId::new(0));
         short
             .type_work
             .charge(TYPE_WORK_LIMIT - 2)
             .expect("the fixture leaves one cell fewer than the retained payload");
         let error = short
-            .resolve_registry(&program)
+            .resolve_registry(&program.type_declarations)
             .expect_err("the tuple wrapper must consume the remaining budget");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range(), second_field_span.range());
@@ -1726,7 +2258,7 @@ mod tests {
             kind: SurfaceTypeKind::Tuple(vec![int; WIDTH]),
             span,
         };
-        let mut resolver = Resolver::new();
+        let mut resolver = Resolver::new(ModuleId::new(0));
         resolver
             .type_work
             .charge(TYPE_WORK_LIMIT - 1)
@@ -1766,17 +2298,17 @@ mod tests {
         };
         let annotation = SurfaceType {
             kind: SurfaceTypeKind::Application {
-                constructor: SurfaceName {
+                constructor: SurfaceReference::Unqualified(SurfaceName {
                     text: "Wide".to_owned(),
                     span: constructor_span,
-                },
+                }),
                 arguments: vec![argument; WIDTH],
             },
             span: full_span,
         };
-        let mut resolver = Resolver::new();
+        let mut resolver = Resolver::new(ModuleId::new(0));
         resolver.type_names.insert("Wide".to_owned(), owner);
-        resolver.nominal_parameter_counts.push(WIDTH);
+        resolver.nominal_parameter_counts.insert(owner, WIDTH);
         resolver
             .type_work
             .charge(TYPE_WORK_LIMIT - 1)

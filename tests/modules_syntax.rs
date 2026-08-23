@@ -2,7 +2,10 @@ use ash::{
     lexer::{TokenKind, lex},
     parser::{NodeKind, ProjectionError, parse, project_module},
     source::SourceFile,
-    surface::{SurfaceImportSelection, SurfaceModulePath, SurfaceTypeVisibility},
+    surface::{
+        SurfaceDefinitionKind, SurfaceExprKind, SurfaceImportSelection, SurfaceModulePath,
+        SurfacePatternKind, SurfaceReference, SurfaceTypeKind, SurfaceTypeVisibility,
+    },
 };
 
 fn parse_valid(text: &str) -> ash::surface::SurfaceModule {
@@ -17,6 +20,11 @@ fn parse_valid(text: &str) -> ash::surface::SurfaceModule {
     );
     assert_eq!(tree.root().map(|root| root.kind), Some(NodeKind::Module));
     project_module(&source, &tree).expect("module source should project")
+}
+
+fn spanned_text(source: &SourceFile, span: ash::source::Span) -> &str {
+    let range = span.range();
+    &source.text()[range.start() as usize..range.end() as usize]
 }
 
 fn assert_parser_rejected(case: &str, text: &str) {
@@ -119,6 +127,58 @@ fn projects_imports_visibility_and_a_declarations_only_root() {
     );
     assert_eq!(module.definitions.len(), 1);
     assert!(module.definitions[0].public);
+}
+
+#[test]
+fn projects_qualified_occurrences_as_structured_references() {
+    let text = "main : Data.Input<Int> -> Data.Output\nmain Data.Input = Ops.finish\n";
+    let source = SourceFile::new("qualified.ash", text).expect("module source should fit");
+    let tree = parse(lex(&source).expect("module source should lex"));
+    let module = project_module(&source, &tree).expect("qualified references should project");
+    let SurfaceDefinitionKind::Equational(definition) = &module.definitions[0].kind else {
+        panic!("expected an equational definition");
+    };
+    let SurfaceTypeKind::Function(function) = &definition.interface.annotation.kind else {
+        panic!("expected a function type");
+    };
+    let SurfaceTypeKind::Application {
+        constructor: SurfaceReference::Qualified(domain),
+        arguments,
+    } = &function.domain.kind
+    else {
+        panic!("expected a qualified type application");
+    };
+    assert_eq!(domain.qualifier.text, "Data");
+    assert_eq!(domain.member.text, "Input");
+    assert_eq!(spanned_text(&source, domain.qualifier.span), "Data");
+    assert_eq!(spanned_text(&source, domain.member.span), "Input");
+    assert_eq!(spanned_text(&source, domain.span), "Data.Input");
+    assert!(matches!(arguments[0].kind, SurfaceTypeKind::Int));
+    let SurfaceTypeKind::Named(SurfaceReference::Qualified(codomain)) = &function.codomain.kind
+    else {
+        panic!("expected a qualified result type");
+    };
+    assert_eq!(spanned_text(&source, codomain.span), "Data.Output");
+
+    let SurfacePatternKind::Constructor {
+        name: SurfaceReference::Qualified(pattern),
+        payload: None,
+    } = &definition.equations[0].patterns[0].kind
+    else {
+        panic!("expected a qualified constructor pattern");
+    };
+    assert_eq!(pattern.qualifier.text, "Data");
+    assert_eq!(pattern.member.text, "Input");
+    assert_eq!(spanned_text(&source, pattern.span), "Data.Input");
+
+    let SurfaceExprKind::Name(SurfaceReference::Qualified(body)) =
+        &definition.equations[0].body.kind
+    else {
+        panic!("expected a qualified expression name");
+    };
+    assert_eq!(body.qualifier.text, "Ops");
+    assert_eq!(body.member.text, "finish");
+    assert_eq!(spanned_text(&source, body.span), "Ops.finish");
 }
 
 #[test]

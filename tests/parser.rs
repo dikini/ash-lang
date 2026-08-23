@@ -8,7 +8,7 @@ use ash::{
     source::{ByteRange, SourceFile},
     surface::{
         SurfaceBinding, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind,
-        SurfaceLocalDeclaration, SurfaceTypeKind,
+        SurfaceLocalDeclaration, SurfaceReference, SurfaceTypeKind,
     },
 };
 
@@ -99,7 +99,7 @@ fn parse_tree(text: &str) -> (SourceFile, ash::parser::ConcreteTree) {
 }
 
 fn assert_name(expression: &SurfaceExpr, expected: &str) {
-    let SurfaceExprKind::Name(name) = &expression.kind else {
+    let SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) = &expression.kind else {
         panic!("expected name expression, found {expression:?}");
     };
     assert_eq!(name.text, expected);
@@ -497,7 +497,7 @@ fn grouped_name_retains_the_identifier_token_span_inside_the_group_span() {
 
     assert_eq!(program.main_body.span.range().start(), 22);
     assert_eq!(program.main_body.span.range().end(), 31);
-    let SurfaceExprKind::Name(name) = &program.main_body.kind else {
+    let SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) = &program.main_body.kind else {
         panic!("expected a grouped name");
     };
     assert_eq!(name.text, "unknown");
@@ -977,7 +977,7 @@ fn parameterized_declarations_and_type_applications_project() {
     else {
         panic!("expected applied nominal domain");
     };
-    assert_eq!(constructor.text, "Option");
+    assert_eq!(constructor.member().text, "Option");
     assert!(matches!(arguments[0].kind, SurfaceTypeKind::Int));
 }
 

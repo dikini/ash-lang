@@ -1,26 +1,63 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     integer::Integer,
+    module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
+    surface::SurfaceTypeVisibility,
     types::{ConstructorId, NominalTypeId, Type, TypeVariableId, discard_type_iteratively},
 };
 
-/// Identifies one binding within a resolved program.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct BinderId(u32);
+/// Stable identity of one resolved or compiler-generated term binder.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum BinderId {
+    /// A source binder qualified by its defining canonical module.
+    Resolved {
+        /// Defining module identity.
+        module: ModuleId,
+        /// Source-order binder index within that module.
+        local: u32,
+    },
+    /// A compiler-generated binder in the enclosing Core program.
+    Generated(u32),
+}
 
 impl BinderId {
-    pub(crate) const fn new(value: u32) -> Self {
-        Self(value)
+    /// Creates one compiler-generated binder identity.
+    ///
+    /// Retained as the compatibility spelling for Core fixture construction.
+    pub(crate) const fn new(local: u32) -> Self {
+        Self::generated(local)
     }
 
-    /// Returns the resolver-assigned numeric identity.
+    pub(crate) const fn resolved(module: ModuleId, local: u32) -> Self {
+        Self::Resolved { module, local }
+    }
+
+    pub(crate) const fn generated(local: u32) -> Self {
+        Self::Generated(local)
+    }
+
+    /// Returns the defining module for a source binder.
     #[must_use]
-    pub const fn value(self) -> u32 {
-        self.0
+    pub const fn module(self) -> Option<ModuleId> {
+        match self {
+            Self::Resolved { module, .. } => Some(module),
+            Self::Generated(_) => None,
+        }
+    }
+
+    /// Returns the module-local or generated-program-local index.
+    #[must_use]
+    pub const fn local(self) -> u32 {
+        match self {
+            Self::Resolved { local, .. } | Self::Generated(local) => local,
+        }
     }
 }
 
@@ -57,6 +94,416 @@ pub struct ResolvedProgram {
     pub result: ResolvedExpr,
     /// Complete accepted source span.
     pub span: Span,
+}
+
+/// One declarations-only module after name resolution.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ResolvedModule {
+    module: ModuleId,
+    registry: Arc<ResolvedRegistry>,
+    imported: ImportedFacts,
+    definitions: Box<[ResolvedDefinition]>,
+    export_candidate: ResolvedExportCandidate,
+    span: Span,
+}
+
+impl ResolvedModule {
+    pub(crate) fn new(
+        module: ModuleId,
+        registry: Arc<ResolvedRegistry>,
+        imported: ImportedFacts,
+        definitions: Vec<ResolvedDefinition>,
+        export_candidate: ResolvedExportCandidate,
+        span: Span,
+    ) -> Self {
+        Self {
+            module,
+            registry,
+            imported,
+            definitions: definitions.into_boxed_slice(),
+            export_candidate,
+            span,
+        }
+    }
+
+    /// Returns the defining canonical module identity.
+    #[must_use]
+    pub const fn module(&self) -> ModuleId {
+        self.module
+    }
+
+    /// Returns the module's resolved local registry.
+    #[must_use]
+    pub fn registry(&self) -> &Arc<ResolvedRegistry> {
+        &self.registry
+    }
+
+    /// Returns selected, body-free facts cloned from dependency summaries.
+    #[must_use]
+    pub const fn imported_facts(&self) -> &ImportedFacts {
+        &self.imported
+    }
+
+    /// Returns local definitions in source order.
+    #[must_use]
+    pub fn definitions(&self) -> &[ResolvedDefinition] {
+        &self.definitions
+    }
+
+    /// Returns the unchecked set of local declarations eligible for export.
+    #[must_use]
+    pub const fn export_candidate(&self) -> &ResolvedExportCandidate {
+        &self.export_candidate
+    }
+
+    /// Returns the complete accepted module span.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+}
+
+/// Body-free dependency facts retained by one resolved module.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub struct ImportedFacts {
+    globals: HashMap<BinderId, ImportedGlobalScheme>,
+    nominals: HashMap<NominalTypeId, ImportedNominalFact>,
+    constructors: HashMap<ConstructorId, ImportedConstructorFact>,
+}
+
+impl ImportedFacts {
+    pub(crate) fn contains_global(&self, id: BinderId) -> bool {
+        self.globals.contains_key(&id)
+    }
+
+    pub(crate) fn insert_global(&mut self, fact: ImportedGlobalScheme) {
+        self.globals.insert(fact.binder, fact);
+    }
+
+    pub(crate) fn contains_nominal(&self, id: NominalTypeId) -> bool {
+        self.nominals.contains_key(&id)
+    }
+
+    pub(crate) fn insert_nominal(&mut self, fact: ImportedNominalFact) {
+        self.nominals.insert(fact.id, fact);
+    }
+
+    pub(crate) fn contains_constructor(&self, id: ConstructorId) -> bool {
+        self.constructors.contains_key(&id)
+    }
+
+    pub(crate) fn insert_constructor(&mut self, fact: ImportedConstructorFact) {
+        self.constructors.insert(fact.id, fact);
+    }
+}
+
+impl Drop for ImportedFacts {
+    fn drop(&mut self) {
+        for (_, fact) in self.globals.drain() {
+            discard_type_iteratively(fact.scheme);
+            discard_origin_iteratively(fact.origin);
+        }
+        for (_, fact) in self.nominals.drain() {
+            discard_origin_iteratively(fact.origin);
+        }
+        for (_, fact) in self.constructors.drain() {
+            if let Some(payload) = fact.payload {
+                discard_type_iteratively(payload);
+            }
+            discard_origin_iteratively(fact.origin);
+        }
+    }
+}
+
+/// One imported checked global scheme.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ImportedGlobalScheme {
+    /// Stable defining binder identity.
+    pub binder: BinderId,
+    /// Fully zonked closed rank-1 scheme.
+    pub scheme: Type,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+}
+
+/// One imported nominal access fact.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ImportedNominalFact {
+    /// Stable defining nominal identity.
+    pub id: NominalTypeId,
+    /// Number of parameters of kind `Type`.
+    pub parameter_count: usize,
+    /// Importer access mode.
+    pub access: ExportedTypeAccess,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+}
+
+/// One imported transparent constructor fact.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ImportedConstructorFact {
+    /// Stable defining constructor identity.
+    pub id: ConstructorId,
+    /// Optional semantic payload type.
+    pub payload: Option<Type>,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+}
+
+/// Public local declarations selected by resolution but not yet type-checked.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ResolvedExportCandidate {
+    terms: HashMap<String, CandidateGlobal>,
+    nominals: HashMap<String, CandidateNominal>,
+    constructors: HashMap<String, CandidateConstructor>,
+}
+
+impl ResolvedExportCandidate {
+    /// Looks up one public local term candidate.
+    #[must_use]
+    pub fn term(&self, spelling: &str) -> Option<&CandidateGlobal> {
+        self.terms.get(spelling)
+    }
+
+    /// Looks up one public opaque or transparent nominal candidate.
+    #[must_use]
+    pub fn nominal(&self, spelling: &str) -> Option<&CandidateNominal> {
+        self.nominals.get(spelling)
+    }
+
+    /// Looks up one constructor of a public transparent nominal candidate.
+    #[must_use]
+    pub fn constructor(&self, spelling: &str) -> Option<&CandidateConstructor> {
+        self.constructors.get(spelling)
+    }
+
+    pub(crate) fn insert_term(&mut self, spelling: String, candidate: CandidateGlobal) {
+        self.terms.insert(spelling, candidate);
+    }
+
+    pub(crate) fn insert_nominal(&mut self, spelling: String, candidate: CandidateNominal) {
+        self.nominals.insert(spelling, candidate);
+    }
+
+    pub(crate) fn insert_constructor(&mut self, spelling: String, candidate: CandidateConstructor) {
+        self.constructors.insert(spelling, candidate);
+    }
+}
+
+impl Drop for ResolvedExportCandidate {
+    fn drop(&mut self) {
+        for (_, candidate) in self.terms.drain() {
+            discard_origin_iteratively(candidate.origin);
+        }
+        for (_, candidate) in self.nominals.drain() {
+            discard_origin_iteratively(candidate.origin);
+        }
+        for (_, candidate) in self.constructors.drain() {
+            discard_origin_iteratively(candidate.origin);
+        }
+    }
+}
+
+/// One unchecked public global selected by resolution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateGlobal {
+    /// Stable local binder identity.
+    pub binder: BinderId,
+    /// Declaration provenance.
+    pub origin: Origin,
+}
+
+/// One unchecked public nominal selected by resolution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateNominal {
+    /// Stable nominal identity.
+    pub id: NominalTypeId,
+    /// Opaque or transparent source access.
+    pub visibility: SurfaceTypeVisibility,
+    /// Declaration provenance.
+    pub origin: Origin,
+}
+
+/// One unchecked constructor of a public transparent nominal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateConstructor {
+    /// Stable constructor identity.
+    pub id: ConstructorId,
+    /// Declaration provenance.
+    pub origin: Origin,
+}
+
+/// Source access for one exported nominal type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExportedTypeAccess {
+    /// The nominal name is available, but its constructors are not.
+    Opaque,
+    /// The nominal name and complete constructor set are available.
+    Transparent,
+}
+
+/// One checked public global in an immutable export summary.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ExportedGlobal {
+    /// Stable binder identity from the defining module.
+    pub binder: BinderId,
+    /// Fully zonked closed rank-1 scheme.
+    pub scheme: Type,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+}
+
+/// One public nominal in an immutable export summary.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ExportedType {
+    /// Stable nominal identity from the defining module.
+    pub id: NominalTypeId,
+    /// Number of parameters of kind `Type`.
+    pub parameter_count: usize,
+    /// Opaque or transparent importer access.
+    pub access: ExportedTypeAccess,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+}
+
+/// One transparent constructor in an immutable export summary.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ExportedConstructor {
+    /// Stable constructor identity from the defining module.
+    pub id: ConstructorId,
+    /// Optional semantic payload type.
+    pub payload: Option<Type>,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+}
+
+/// Checked, body-free exports from one dependency module.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ExportSummary {
+    module: ModuleId,
+    terms: HashMap<String, ExportedGlobal>,
+    nominals: HashMap<String, ExportedType>,
+    constructors: HashMap<String, ExportedConstructor>,
+    unavailable: HashSet<String>,
+}
+
+impl ExportSummary {
+    /// Returns the defining module identity.
+    #[must_use]
+    pub const fn module(&self) -> ModuleId {
+        self.module
+    }
+
+    pub(crate) fn term(&self, spelling: &str) -> Option<&ExportedGlobal> {
+        self.terms.get(spelling)
+    }
+
+    pub(crate) fn nominal(&self, spelling: &str) -> Option<&ExportedType> {
+        self.nominals.get(spelling)
+    }
+
+    pub(crate) fn constructor(&self, spelling: &str) -> Option<&ExportedConstructor> {
+        self.constructors.get(spelling)
+    }
+
+    pub(crate) fn terms(&self) -> impl Iterator<Item = (&str, &ExportedGlobal)> {
+        self.terms
+            .iter()
+            .map(|(spelling, exported)| (spelling.as_str(), exported))
+    }
+
+    pub(crate) fn nominals(&self) -> impl Iterator<Item = (&str, &ExportedType)> {
+        self.nominals
+            .iter()
+            .map(|(spelling, exported)| (spelling.as_str(), exported))
+    }
+
+    pub(crate) fn constructors(&self) -> impl Iterator<Item = (&str, &ExportedConstructor)> {
+        self.constructors
+            .iter()
+            .map(|(spelling, exported)| (spelling.as_str(), exported))
+    }
+
+    pub(crate) fn is_unavailable(&self, spelling: &str) -> bool {
+        self.unavailable.contains(spelling)
+    }
+
+    pub(crate) fn unavailable(&self) -> impl Iterator<Item = &str> {
+        self.unavailable.iter().map(String::as_str)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_fixture(
+        module: ModuleId,
+        terms: Vec<(&str, BinderId, Type, Origin)>,
+        nominals: Vec<(&str, NominalTypeId, ExportedTypeAccess, Origin)>,
+        constructors: Vec<(&str, ConstructorId, Option<Type>, Origin)>,
+        unavailable: Vec<&str>,
+    ) -> Self {
+        Self {
+            module,
+            terms: terms
+                .into_iter()
+                .map(|(spelling, binder, scheme, origin)| {
+                    (
+                        spelling.to_owned(),
+                        ExportedGlobal {
+                            binder,
+                            scheme,
+                            origin,
+                        },
+                    )
+                })
+                .collect(),
+            nominals: nominals
+                .into_iter()
+                .map(|(spelling, id, access, origin)| {
+                    (
+                        spelling.to_owned(),
+                        ExportedType {
+                            id,
+                            parameter_count: 0,
+                            access,
+                            origin,
+                        },
+                    )
+                })
+                .collect(),
+            constructors: constructors
+                .into_iter()
+                .map(|(spelling, id, payload, origin)| {
+                    (
+                        spelling.to_owned(),
+                        ExportedConstructor {
+                            id,
+                            payload,
+                            origin,
+                        },
+                    )
+                })
+                .collect(),
+            unavailable: unavailable.into_iter().map(str::to_owned).collect(),
+        }
+    }
+}
+
+impl Drop for ExportSummary {
+    fn drop(&mut self) {
+        for (_, exported) in self.terms.drain() {
+            discard_type_iteratively(exported.scheme);
+            discard_origin_iteratively(exported.origin);
+        }
+        for (_, exported) in self.nominals.drain() {
+            discard_origin_iteratively(exported.origin);
+        }
+        for (_, exported) in self.constructors.drain() {
+            if let Some(payload) = exported.payload {
+                discard_type_iteratively(payload);
+            }
+            discard_origin_iteratively(exported.origin);
+        }
+        self.unavailable.clear();
+    }
 }
 
 /// Immutable resolved metadata for one source file.
@@ -260,7 +707,7 @@ impl ResolvedRegistry {
                         if let Some(variable) = self.type_variable(*parameter) {
                             output.push_str(&variable.spelling);
                         } else {
-                            output.push_str(&format!("T{}", parameter.value()));
+                            output.push_str(&format!("T{}", parameter.local()));
                         }
                     }
                     output.push_str(". ");
@@ -746,7 +1193,20 @@ pub struct ResolvedFunctionExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::module::ModuleId;
     use crate::source::{ByteRange, GeneratedReason, SourceFile};
+
+    #[test]
+    fn binder_identities_separate_modules_and_generated_core() {
+        let first = BinderId::resolved(ModuleId::new(0), 0);
+        let second = BinderId::resolved(ModuleId::new(1), 0);
+        let generated = BinderId::generated(0);
+
+        assert_ne!(first, second);
+        assert_ne!(first, generated);
+        assert_eq!(first.module(), Some(ModuleId::new(0)));
+        assert_eq!(generated.module(), None);
+    }
 
     #[test]
     fn destroys_replaced_additional_type_variables_on_a_small_stack() {

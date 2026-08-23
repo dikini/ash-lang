@@ -150,8 +150,7 @@ impl Environment {
                     value,
                 } if *entry_binder == binder => return Some(value.clone()),
                 EnvironmentEntryKind::Recursive { members } => {
-                    if let Ok(index) = members
-                        .binary_search_by_key(&binder.value(), |member| member.binder.value())
+                    if let Ok(index) = members.binary_search_by_key(&binder, |member| member.binder)
                     {
                         let member = &members[index];
                         return Some(match &member.kind {
@@ -210,7 +209,7 @@ impl Environment {
             .len
             .checked_add(members.len())
             .ok_or(RuntimeFailure::EnvironmentCapacity)?;
-        members.sort_unstable_by_key(|member| member.binder.value());
+        members.sort_unstable_by_key(|member| member.binder);
         if members.is_empty()
             || members
                 .windows(2)

@@ -816,7 +816,7 @@ impl Elaborator {
     }
 
     fn fresh_type_variable(&mut self) -> Result<TypeVariableId, TypeError> {
-        let identity = TypeVariableId::new(self.next_generated_type_variable);
+        let identity = TypeVariableId::generated(self.next_generated_type_variable);
         self.next_generated_type_variable = self
             .next_generated_type_variable
             .checked_sub(1)

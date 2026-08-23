@@ -325,7 +325,7 @@ fn machine_returns_an_inspectable_closure_for_validated_function_core() {
     let Value::Function(closure) = evaluation.value else {
         panic!("expected a function value");
     };
-    assert_eq!(closure.parameter.value(), 0);
+    assert_eq!(closure.parameter.local(), 0);
     assert_eq!(closure.body.value(), 0);
     assert!(closure.environment.is_empty());
     assert_eq!(evaluation.trace, vec![TraceEvent::Enter(validated.root())]);
