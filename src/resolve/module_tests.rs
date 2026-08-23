@@ -7,8 +7,8 @@ use std::{
 use crate::{
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolved::{
-        BinderId, ExportSummary, ExportedTypeAccess, ResolvedDefinitionKind, ResolvedExprKind,
-        ResolvedModule, ResolvedPatternKind,
+        BinderId, ExportSummary, ExportedTypeAccess, ImportedTypeAccess, ResolvedDefinitionKind,
+        ResolvedExprKind, ResolvedModule, ResolvedPatternKind,
     },
     source::Origin,
     types::{ConstructorId, NominalTypeId, Type},
@@ -428,8 +428,15 @@ fn selecting_a_withheld_private_spelling_reports_unavailable_export() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let importer = module_named(&graph, "entry.ash");
-    let summary =
-        ExportSummary::test_fixture(dependency.id(), vec![], vec![], vec![], vec!["secret"]);
+    let summary = ExportSummary::test_fixture_with_access(
+        dependency.id(),
+        vec![],
+        vec![],
+        vec![],
+        vec!["secret"],
+        vec![],
+        vec![],
+    );
 
     let error = resolve_with(importer, &[&summary]).expect_err("private export should fail");
     assert_eq!(error.reason, ResolveReason::UnavailableExport);
@@ -496,4 +503,550 @@ fn diamond_consumers_preserve_one_shared_binder_and_nominal_identity() {
         right_definition.equations[0].body.kind,
         ResolvedExprKind::Occurrence(ref occurrence) if occurrence.binder == binder
     ));
+}
+
+fn opaque_nominal_summary(
+    dependency: &LoadedModule,
+    nominal_spelling: &str,
+    opaque_constructors: Vec<&str>,
+) -> ExportSummary {
+    let nominal = NominalTypeId::new(dependency.id(), 0);
+    let origin = Origin::Source(dependency.surface().span);
+    ExportSummary::test_fixture_with_access(
+        dependency.id(),
+        vec![],
+        vec![(
+            nominal_spelling,
+            nominal,
+            ExportedTypeAccess::Opaque,
+            origin.clone(),
+        )],
+        vec![],
+        vec![],
+        opaque_constructors
+            .into_iter()
+            .map(|spelling| (spelling, origin.clone()))
+            .collect(),
+        vec![],
+    )
+}
+
+#[test]
+fn targeted_import_of_an_opaque_constructor_reports_opaque_access() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (Seal)\n",
+        &[("dependency.ash", "pub opaque type Token = Seal(Int)\n")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary = opaque_nominal_summary(dependency, "Token", vec!["Seal"]);
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("an opaque constructor cannot be imported by name");
+
+    assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+}
+
+#[test]
+fn qualified_construction_of_an_opaque_type_reports_opaque_access() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency as Dep\n",
+            "main : Unit -> Dep.Token\n",
+            "main () = Dep.Seal(1)\n",
+        ),
+        &[("dependency.ash", "pub opaque type Token = Seal(Int)\n")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary = opaque_nominal_summary(dependency, "Token", vec!["Seal"]);
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("qualified construction must not inspect an opaque type");
+
+    assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(
+        error.related[0].span().source(),
+        dependency.surface().span.source()
+    );
+}
+
+#[test]
+fn qualified_pattern_on_an_opaque_type_reports_opaque_access() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency as Dep\n",
+            "main : Dep.Token -> Unit\n",
+            "main Dep.Seal(_) = ()\n",
+        ),
+        &[("dependency.ash", "pub opaque type Token = Seal(Int)\n")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary = opaque_nominal_summary(dependency, "Token", vec!["Seal"]);
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("qualified matching must not inspect an opaque type");
+
+    assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+}
+
+#[test]
+fn a_private_type_name_remains_unavailable_to_a_qualified_importer() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency as Dep\n",
+            "main : Dep.Hidden -> Unit\n",
+            "main _ = ()\n",
+        ),
+        &[("dependency.ash", "type Hidden = Hidden(Int)\n")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary =
+        ExportSummary::test_fixture(dependency.id(), vec![], vec![], vec![], vec!["Hidden"]);
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("a private type name must not enter the qualified namespace");
+
+    assert_eq!(error.reason, ResolveReason::UnavailableExport);
+}
+
+#[test]
+fn a_public_opaque_type_name_is_available_to_a_qualified_importer() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency as Dep\n",
+            "main : Dep.Token -> Dep.Token\n",
+            "main value = value\n",
+        ),
+        &[("dependency.ash", "pub opaque type Token = Seal(Int)\n")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let nominal = NominalTypeId::new(dependency.id(), 0);
+    let summary = opaque_nominal_summary(dependency, "Token", vec!["Seal"]);
+
+    let resolved =
+        resolve_with(importer, &[&summary]).expect("an opaque nominal name should be usable");
+
+    assert_eq!(
+        nominal_function_parts(&equational(&resolved, 0).interface.annotation.ty),
+        (nominal, nominal)
+    );
+}
+
+#[test]
+fn a_public_transparent_constructor_is_available_in_terms_and_patterns() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency as Dep\n",
+            "main : Dep.Token -> Dep.Token\n",
+            "main Dep.Seal(value) = Dep.Seal(value)\n",
+        ),
+        &[("dependency.ash", "pub type Token = Seal(Int)\n")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let nominal = NominalTypeId::new(dependency.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let origin = Origin::Source(dependency.surface().span);
+    let summary = ExportSummary::test_fixture(
+        dependency.id(),
+        vec![],
+        vec![(
+            "Token",
+            nominal,
+            ExportedTypeAccess::Transparent,
+            origin.clone(),
+        )],
+        vec![("Seal", constructor, Some(Type::Int), origin)],
+        vec![],
+    );
+
+    let resolved = resolve_with(importer, &[&summary])
+        .expect("a transparent constructor should resolve in terms and patterns");
+    let definition = equational(&resolved, 0);
+
+    assert!(matches!(
+        definition.equations[0].patterns[0].kind,
+        ResolvedPatternKind::Constructor {
+            constructor: found,
+            ..
+        } if found == constructor
+    ));
+    let ResolvedExprKind::Apply(application) = &definition.equations[0].body.kind else {
+        panic!("expected a constructor application");
+    };
+    assert!(matches!(
+        application.function.kind,
+        ResolvedExprKind::Constructor(ref occurrence) if occurrence.constructor == constructor
+    ));
+}
+
+#[test]
+fn targeting_only_a_transparent_constructor_retains_its_owner_metadata() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (Seal)\n",
+            "main : Unit -> Unit\n",
+            "main () = Seal(1)\n",
+        ),
+        &[("dependency.ash", "pub type Token = Seal(Int)\n")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let nominal = NominalTypeId::new(dependency.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let origin = Origin::Source(dependency.surface().span);
+    let summary = ExportSummary::test_fixture(
+        dependency.id(),
+        vec![],
+        vec![(
+            "Token",
+            nominal,
+            ExportedTypeAccess::Transparent,
+            origin.clone(),
+        )],
+        vec![("Seal", constructor, Some(Type::Int), origin)],
+        vec![],
+    );
+
+    let resolved = resolve_with(importer, &[&summary])
+        .expect("a targeted constructor should retain its semantic owner");
+
+    assert!(resolved.imported_facts().nominal(nominal).is_some());
+    assert!(resolved.imported_facts().constructor(constructor).is_some());
+}
+
+#[test]
+fn same_spelled_opaque_type_imports_but_its_constructor_remains_inaccessible() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (Token)\n",
+            "main : Unit -> Token\n",
+            "main () = Token\n",
+        ),
+        &[("dependency.ash", "pub opaque type Token = Token\n")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let nominal = NominalTypeId::new(dependency.id(), 0);
+    let origin = Origin::Source(dependency.surface().span);
+    let summary = ExportSummary::test_fixture_with_access(
+        dependency.id(),
+        vec![],
+        vec![("Token", nominal, ExportedTypeAccess::Opaque, origin.clone())],
+        vec![],
+        vec![],
+        vec![("Token", origin)],
+        vec![],
+    );
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("the selector imports the type but not its opaque constructor");
+
+    assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+}
+
+fn hidden_scheme_summary(
+    dependency: &LoadedModule,
+    term_spelling: &str,
+    hidden_spelling: &str,
+    declaration: u32,
+) -> (ExportSummary, NominalTypeId) {
+    let hidden = NominalTypeId::new(dependency.id(), declaration);
+    let origin = Origin::Source(dependency.surface().span);
+    let summary = ExportSummary::test_fixture_with_access(
+        dependency.id(),
+        vec![(
+            term_spelling,
+            BinderId::resolved(dependency.id(), declaration),
+            Type::Function(Box::new(Type::Unit), Box::new(Type::Nominal(hidden))),
+            origin.clone(),
+        )],
+        vec![],
+        vec![],
+        vec![hidden_spelling],
+        vec![],
+        vec![(hidden_spelling, hidden, 0, origin)],
+    );
+    (summary, hidden)
+}
+
+#[test]
+fn a_hidden_nominal_in_a_public_scheme_is_retained_without_becoming_nameable() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (make)\n",
+            "main : Unit -> Unit\n",
+            "main () = make\n",
+        ),
+        &[(
+            "dependency.ash",
+            concat!(
+                "type Hidden = Hidden(Int)\n",
+                "pub make : Unit -> Hidden\n",
+                "make () = Hidden(1)\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let (summary, hidden) = hidden_scheme_summary(dependency, "make", "Hidden", 0);
+
+    let resolved = resolve_with(importer, &[&summary])
+        .expect("the public term should carry its hidden nominal identity");
+
+    let hidden_fact = resolved
+        .imported_facts()
+        .nominal(hidden)
+        .expect("the hidden identity should remain available to checking");
+    assert_eq!(
+        hidden_fact.display_name("Dependency"),
+        "Dependency.<private Hidden>"
+    );
+    assert!(summary.nominal("Hidden").is_none());
+
+    let naming_tree = TempTree::create();
+    let naming_graph = load(
+        &naming_tree,
+        concat!(
+            "import dependency as Dep\n",
+            "name_hidden : Dep.Hidden -> Unit\n",
+            "name_hidden _ = ()\n",
+        ),
+        &[(
+            "dependency.ash",
+            concat!(
+                "type Hidden = Hidden(Int)\n",
+                "pub make : Unit -> Hidden\n",
+                "make () = Hidden(1)\n",
+            ),
+        )],
+    );
+    let naming_dependency = module_named(&naming_graph, "dependency.ash");
+    let naming_importer = module_named(&naming_graph, "entry.ash");
+    let (naming_summary, _) = hidden_scheme_summary(naming_dependency, "make", "Hidden", 0);
+    let error = resolve_with(naming_importer, &[&naming_summary])
+        .expect_err("hidden metadata must not add a source type binding");
+
+    assert_eq!(error.reason, ResolveReason::UnavailableExport);
+}
+
+#[test]
+fn hidden_nominals_from_distinct_dependencies_retain_distinct_identities() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import first as First\nimport second as Second\n",
+        &[
+            (
+                "first.ash",
+                "type Hidden = Hidden\npub make : Unit -> Hidden\nmake () = Hidden\n",
+            ),
+            (
+                "second.ash",
+                "type Hidden = Hidden\npub make : Unit -> Hidden\nmake () = Hidden\n",
+            ),
+        ],
+    );
+    let importer = module_named(&graph, "entry.ash");
+    let first = module_named(&graph, "first.ash");
+    let second = module_named(&graph, "second.ash");
+    let (first_summary, first_hidden) = hidden_scheme_summary(first, "make", "Hidden", 0);
+    let (second_summary, second_hidden) = hidden_scheme_summary(second, "make", "Hidden", 0);
+
+    let resolved = resolve_with(importer, &[&first_summary, &second_summary])
+        .expect("both hidden nominal facts should survive import installation");
+
+    assert_ne!(first_hidden, second_hidden);
+    assert!(resolved.imported_facts().nominal(first_hidden).is_some());
+    assert!(resolved.imported_facts().nominal(second_hidden).is_some());
+}
+
+#[test]
+fn direct_nominal_access_upgrades_the_same_identity_reached_hidden_in_either_import_order() {
+    for entry_text in [
+        "import carrier as Carrier\nimport owner as Owner\n",
+        "import owner as Owner\nimport carrier as Carrier\n",
+    ] {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            entry_text,
+            &[
+                ("carrier.ash", "import owner as Owner\n"),
+                ("owner.ash", "pub type Token = Token\n"),
+            ],
+        );
+        let importer = module_named(&graph, "entry.ash");
+        let carrier = module_named(&graph, "carrier.ash");
+        let owner = module_named(&graph, "owner.ash");
+        let token = NominalTypeId::new(owner.id(), 0);
+        let owner_origin = Origin::Source(owner.surface().span);
+        let carrier_summary = ExportSummary::test_fixture_with_access(
+            carrier.id(),
+            vec![(
+                "carry",
+                BinderId::resolved(carrier.id(), 0),
+                Type::Function(
+                    Box::new(Type::Nominal(token)),
+                    Box::new(Type::Nominal(token)),
+                ),
+                Origin::Source(carrier.surface().span),
+            )],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![("Token", token, 0, owner_origin.clone())],
+        );
+        let owner_summary = ExportSummary::test_fixture(
+            owner.id(),
+            vec![],
+            vec![(
+                "Token",
+                token,
+                ExportedTypeAccess::Transparent,
+                owner_origin,
+            )],
+            vec![],
+            vec![],
+        );
+        let summaries = if entry_text.starts_with("import carrier") {
+            vec![&carrier_summary, &owner_summary]
+        } else {
+            vec![&owner_summary, &carrier_summary]
+        };
+
+        let resolved = resolve_with(importer, &summaries)
+            .expect("access should merge by identity rather than first route");
+        let fact = resolved
+            .imported_facts()
+            .nominal(token)
+            .expect("the shared identity should be retained");
+
+        assert_eq!(fact.access, ImportedTypeAccess::Transparent);
+        assert_eq!(fact.display_spelling.as_deref(), Some("Token"));
+    }
+}
+
+#[test]
+fn withheld_type_and_constructor_facts_with_one_spelling_keep_their_namespaces() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency as Dep\nmain : Dep.Foo -> Unit\nmain _ = ()\n",
+        &[("dependency.ash", "")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary = ExportSummary::test_fixture_with_access(
+        dependency.id(),
+        vec![],
+        vec![],
+        vec![],
+        vec!["Foo"],
+        vec![("Foo", Origin::Source(dependency.surface().span))],
+        vec![],
+    );
+
+    let type_error = resolve_with(importer, &[&summary])
+        .expect_err("the private nominal must remain unavailable");
+    assert_eq!(type_error.reason, ResolveReason::UnavailableExport);
+
+    let expression_tree = TempTree::create();
+    let expression_graph = load(
+        &expression_tree,
+        "import dependency as Dep\nmain : Unit -> Unit\nmain () = Dep.Foo\n",
+        &[("dependency.ash", "")],
+    );
+    let expression_dependency = module_named(&expression_graph, "dependency.ash");
+    let expression_importer = module_named(&expression_graph, "entry.ash");
+    let expression_summary = ExportSummary::test_fixture_with_access(
+        expression_dependency.id(),
+        vec![],
+        vec![],
+        vec![],
+        vec!["Foo"],
+        vec![("Foo", Origin::Source(expression_dependency.surface().span))],
+        vec![],
+    );
+
+    let constructor_error = resolve_with(expression_importer, &[&expression_summary])
+        .expect_err("the opaque constructor must retain its own denial");
+    assert_eq!(constructor_error.reason, ResolveReason::OpaqueConstructor);
+}
+
+#[test]
+fn a_local_constructor_wins_over_a_targeted_opaque_marker_with_the_same_spelling() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (Token as Clash)\n",
+            "type Local = Clash\n",
+            "main : Local -> Local\n",
+            "main Clash = Clash\n",
+        ),
+        &[("dependency.ash", "pub opaque type Token = Token\n")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary = opaque_nominal_summary(dependency, "Token", vec!["Token"]);
+
+    resolve_with(importer, &[&summary])
+        .expect("an accessible local constructor must take precedence over a denial marker");
+}
+
+#[test]
+fn targeted_public_constructor_does_not_hide_a_private_type_denial_with_the_same_spelling() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (Foo)\nmain : Foo -> Unit\nmain _ = ()\n",
+        &[("dependency.ash", "")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let owner = NominalTypeId::new(dependency.id(), 1);
+    let constructor = ConstructorId::new(owner, 0);
+    let origin = Origin::Source(dependency.surface().span);
+    let summary = ExportSummary::test_fixture(
+        dependency.id(),
+        vec![],
+        vec![(
+            "Bar",
+            owner,
+            ExportedTypeAccess::Transparent,
+            origin.clone(),
+        )],
+        vec![("Foo", constructor, None, origin)],
+        vec!["Foo"],
+    );
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("the targeted constructor must not erase the private nominal denial");
+
+    assert_eq!(error.reason, ResolveReason::UnavailableExport);
 }

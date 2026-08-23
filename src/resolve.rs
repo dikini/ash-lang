@@ -11,18 +11,19 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     module::{LoadedModule, ModuleDependency, ModuleId},
     resolved::{
-        Binder, BinderId, CandidateConstructor, CandidateGlobal, CandidateNominal, ExportSummary,
-        ExportedConstructor, ExportedGlobal, ExportedType, ImportedConstructorFact, ImportedFacts,
-        ImportedGlobalScheme, ImportedNominalFact, ResolvedApplicationExpr, ResolvedBinaryExpr,
-        ResolvedBinding, ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence,
-        ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
+        Binder, BinderId, CandidateConstructor, CandidateGlobal, CandidateHiddenNominal,
+        CandidateNominal, ExportSummary, ExportedConstructor, ExportedGlobal, ExportedType,
+        ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme, ImportedNominalFact,
+        ResolvedApplicationExpr, ResolvedBinaryExpr, ResolvedBinding, ResolvedBlock,
+        ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
+        ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
         ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
         ResolvedFunctionExpr, ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
         ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr, ResolvedModule,
         ResolvedNominalType, ResolvedOccurrence, ResolvedPattern, ResolvedPatternKind,
         ResolvedProgram, ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry,
         ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
-        ResolvedTypedPattern,
+        ResolvedTypedPattern, WithheldExport, WithheldExportKind, WithheldNamespace,
     },
     source::Origin,
     surface::{
@@ -33,7 +34,8 @@ use crate::{
         SurfaceTypeVisibility,
     },
     types::{
-        ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
+        ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, charge_type_cells,
+        clone_type_with_budget,
     },
 };
 
@@ -271,6 +273,15 @@ fn build_export_candidate(
     let mut candidate = ResolvedExportCandidate::default();
     for (source, resolved) in surface.definitions.iter().zip(definitions) {
         if !source.public {
+            let binder = definition_binder(resolved);
+            candidate.insert_withheld(
+                WithheldNamespace::Term,
+                binder.spelling.clone(),
+                WithheldExport {
+                    kind: WithheldExportKind::Private,
+                    origin: Some(binder.origin.clone()),
+                },
+            );
             continue;
         }
         let binder = definition_binder(resolved);
@@ -285,6 +296,37 @@ fn build_export_candidate(
 
     for (source, resolved) in surface.type_declarations.iter().zip(registry.nominals()) {
         if source.visibility == SurfaceTypeVisibility::Private {
+            candidate.insert_hidden_nominal(CandidateHiddenNominal {
+                id: resolved.id,
+                parameter_count: source.parameters.len(),
+                spelling: source.name.text.clone(),
+                origin: resolved.origin.clone(),
+            });
+            candidate.insert_withheld(
+                WithheldNamespace::Nominal,
+                source.name.text.clone(),
+                WithheldExport {
+                    kind: WithheldExportKind::Private,
+                    origin: Some(resolved.origin.clone()),
+                },
+            );
+            for (constructor, id) in source.constructors.iter().zip(&resolved.constructors) {
+                let resolved_constructor = registry.constructor(*id).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        constructor.span,
+                        "the resolver lost a private constructor",
+                    )
+                })?;
+                candidate.insert_withheld(
+                    WithheldNamespace::Constructor,
+                    constructor.name.text.clone(),
+                    WithheldExport {
+                        kind: WithheldExportKind::Private,
+                        origin: Some(resolved_constructor.origin.clone()),
+                    },
+                );
+            }
             continue;
         }
         candidate.insert_nominal(
@@ -296,6 +338,23 @@ fn build_export_candidate(
             },
         );
         if source.visibility != SurfaceTypeVisibility::PublicTransparent {
+            for (constructor, id) in source.constructors.iter().zip(&resolved.constructors) {
+                let resolved_constructor = registry.constructor(*id).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        constructor.span,
+                        "the resolver lost an opaque constructor",
+                    )
+                })?;
+                candidate.insert_withheld(
+                    WithheldNamespace::Constructor,
+                    constructor.name.text.clone(),
+                    WithheldExport {
+                        kind: WithheldExportKind::OpaqueConstructor,
+                        origin: Some(resolved_constructor.origin.clone()),
+                    },
+                );
+            }
             continue;
         }
         for (constructor, id) in source.constructors.iter().zip(&resolved.constructors) {
@@ -334,6 +393,7 @@ struct Resolver {
     type_names: HashMap<String, NominalTypeId>,
     constructor_names: HashMap<String, ConstructorId>,
     module_aliases: HashMap<String, ImportedNamespaces>,
+    targeted_withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
     imported: ImportedFacts,
     type_scopes: Vec<HashMap<String, ResolvedTypeVariable>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
@@ -352,7 +412,13 @@ struct ImportedNamespaces {
     terms: HashMap<String, BinderId>,
     nominals: HashMap<String, ImportedNominalName>,
     constructors: HashMap<String, ConstructorId>,
-    unavailable: HashSet<String>,
+    withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WithheldImport {
+    kind: WithheldExportKind,
+    declaration: Option<crate::source::Span>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -372,6 +438,7 @@ impl Resolver {
             type_names: HashMap::new(),
             constructor_names: HashMap::new(),
             module_aliases: HashMap::new(),
+            targeted_withheld: HashMap::new(),
             imported: ImportedFacts::default(),
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
@@ -426,7 +493,7 @@ impl Resolver {
                                     origin: exported.origin.clone(),
                                 },
                             );
-                            self.retain_imported_global(exported, item.span)?;
+                            self.retain_imported_global(exported, dependency.summary, item.span)?;
                         }
                         if let Some(exported) = dependency.summary.nominal(&item.name.text) {
                             selected = true;
@@ -436,7 +503,11 @@ impl Resolver {
                             self.type_names.insert(local.text.clone(), exported.id);
                             self.nominal_parameter_counts
                                 .insert(exported.id, exported.parameter_count);
-                            self.retain_imported_nominal(exported);
+                            self.retain_imported_nominal(
+                                exported,
+                                Some(&item.name.text),
+                                item.span,
+                            )?;
                         }
                         if let Some(exported) = dependency.summary.constructor(&item.name.text) {
                             selected = true;
@@ -450,14 +521,64 @@ impl Resolver {
                             }
                             self.constructor_names
                                 .insert(local.text.clone(), exported.id);
-                            self.retain_imported_constructor(exported, item.span)?;
+                            self.retain_imported_constructor(
+                                exported,
+                                dependency.summary,
+                                item.span,
+                            )?;
                         }
                         if !selected {
-                            return Err(unavailable_export(
+                            let withheld = [
+                                WithheldNamespace::Term,
+                                WithheldNamespace::Nominal,
+                                WithheldNamespace::Constructor,
+                            ]
+                            .into_iter()
+                            .filter_map(|namespace| {
+                                dependency
+                                    .summary
+                                    .withheld_export(namespace, &item.name.text)
+                            })
+                            .map(|withheld| WithheldImport {
+                                kind: withheld.kind,
+                                declaration: withheld
+                                    .origin
+                                    .as_ref()
+                                    .map(crate::source::Origin::primary_span),
+                            })
+                            .min_by_key(|withheld| {
+                                match withheld.kind {
+                                    WithheldExportKind::Private => 0,
+                                    WithheldExportKind::OpaqueConstructor => 1,
+                                }
+                            });
+                            return Err(withheld_export_error(
                                 item.name.span,
                                 &item.name.text,
-                                dependency.summary.is_unavailable(&item.name.text),
+                                withheld,
                             ));
+                        }
+                        for namespace in [
+                            WithheldNamespace::Term,
+                            WithheldNamespace::Nominal,
+                            WithheldNamespace::Constructor,
+                        ] {
+                            let Some(withheld) = dependency
+                                .summary
+                                .withheld_export(namespace, &item.name.text)
+                            else {
+                                continue;
+                            };
+                            self.targeted_withheld.insert(
+                                (local.text.clone(), namespace),
+                                WithheldImport {
+                                    kind: withheld.kind,
+                                    declaration: withheld
+                                        .origin
+                                        .as_ref()
+                                        .map(crate::source::Origin::primary_span),
+                                },
+                            );
                         }
                     }
                 }
@@ -476,7 +597,7 @@ impl Resolver {
             namespaces
                 .terms
                 .insert(spelling.to_owned(), exported.binder);
-            self.retain_imported_global(exported, import_span)?;
+            self.retain_imported_global(exported, summary, import_span)?;
         }
         for (spelling, exported) in summary.nominals() {
             namespaces.nominals.insert(
@@ -486,23 +607,35 @@ impl Resolver {
                     parameter_count: exported.parameter_count,
                 },
             );
-            self.retain_imported_nominal(exported);
+            self.retain_imported_nominal(exported, Some(spelling), import_span)?;
         }
         for (spelling, exported) in summary.constructors() {
             namespaces
                 .constructors
                 .insert(spelling.to_owned(), exported.id);
-            self.retain_imported_constructor(exported, import_span)?;
+            self.retain_imported_constructor(exported, summary, import_span)?;
         }
         namespaces
-            .unavailable
-            .extend(summary.unavailable().map(str::to_owned));
+            .withheld
+            .extend(summary.withheld().map(|(namespace, spelling, withheld)| {
+                (
+                    (spelling.to_owned(), namespace),
+                    WithheldImport {
+                        kind: withheld.kind,
+                        declaration: withheld
+                            .origin
+                            .as_ref()
+                            .map(crate::source::Origin::primary_span),
+                    },
+                )
+            }));
         Ok(namespaces)
     }
 
     fn retain_imported_global(
         &mut self,
         exported: &ExportedGlobal,
+        summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         if self.imported.contains_global(exported.binder) {
@@ -521,28 +654,135 @@ impl Resolver {
             scheme,
             origin: exported.origin.clone(),
         });
+        self.retain_scheme_nominals(&exported.scheme, summary, span)?;
         Ok(())
     }
 
-    fn retain_imported_nominal(&mut self, exported: &ExportedType) {
-        if self.imported.contains_nominal(exported.id) {
-            return;
+    fn retain_scheme_nominals(
+        &mut self,
+        scheme: &Type,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        enum Task<'a> {
+            Type(&'a Type),
+            Sequence(std::slice::Iter<'a, Type>),
         }
-        self.imported.insert_nominal(ImportedNominalFact {
-            id: exported.id,
-            parameter_count: exported.parameter_count,
-            access: exported.access,
-            origin: exported.origin.clone(),
-        });
+
+        charge_type_cells(scheme, &mut self.type_work).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported nominal retention exceeded its work budget",
+            )
+        })?;
+        let mut pending = vec![Task::Type(scheme)];
+        let mut seen = HashSet::new();
+        while let Some(task) = pending.pop() {
+            let Task::Type(ty) = task else {
+                let Task::Sequence(mut remaining) = task else {
+                    unreachable!()
+                };
+                if let Some(next) = remaining.next() {
+                    pending.push(Task::Sequence(remaining));
+                    pending.push(Task::Type(next));
+                }
+                continue;
+            };
+            match ty {
+                Type::Nominal(id) => {
+                    seen.insert(*id);
+                }
+                Type::AppliedNominal(id, arguments) => {
+                    seen.insert(*id);
+                    pending.push(Task::Sequence(arguments.iter()));
+                }
+                Type::Tuple(elements) => pending.push(Task::Sequence(elements.iter())),
+                Type::Function(domain, codomain) => {
+                    pending.push(Task::Type(codomain));
+                    pending.push(Task::Type(domain));
+                }
+                Type::Forall(_, body) => pending.push(Task::Type(body)),
+                Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
+            }
+        }
+        for id in seen {
+            let Some(exported) = summary.nominal_fact(id) else {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an exported scheme references missing nominal metadata",
+                ));
+            };
+            self.retain_imported_nominal_fact(exported, span)?;
+        }
+        Ok(())
+    }
+
+    fn retain_imported_nominal_fact(
+        &mut self,
+        exported: crate::resolved::ImportedNominalFactRef<'_>,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.imported
+            .merge_nominal(ImportedNominalFact {
+                id: exported.id,
+                parameter_count: exported.parameter_count,
+                access: exported.access,
+                display_spelling: exported.display_spelling.map(str::to_owned),
+                origin: exported.origin.clone(),
+            })
+            .map_err(|_| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "imported routes disagree about nominal metadata",
+                )
+            })
+    }
+
+    fn retain_imported_nominal(
+        &mut self,
+        exported: &ExportedType,
+        display_spelling: Option<&str>,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.imported
+            .merge_nominal(ImportedNominalFact {
+                id: exported.id,
+                parameter_count: exported.parameter_count,
+                access: exported.access.into(),
+                display_spelling: display_spelling.map(str::to_owned),
+                origin: exported.origin.clone(),
+            })
+            .map_err(|_| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "imported routes disagree about nominal metadata",
+                )
+            })
     }
 
     fn retain_imported_constructor(
         &mut self,
         exported: &ExportedConstructor,
+        summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         if self.imported.contains_constructor(exported.id) {
             return Ok(());
+        }
+        let owner = summary.nominal_fact(exported.id.owner()).ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "an exported constructor references missing owner metadata",
+            )
+        })?;
+        self.retain_imported_nominal_fact(owner, span)?;
+        if let Some(payload) = &exported.payload {
+            self.retain_scheme_nominals(payload, summary, span)?;
         }
         let payload = exported
             .payload
@@ -585,7 +825,7 @@ impl Resolver {
             .get(&qualified.qualifier.text)
             .map(Some)
             .ok_or_else(|| {
-                unavailable_export(qualified.qualifier.span, &qualified.qualifier.text, false)
+                withheld_export_error(qualified.qualifier.span, &qualified.qualifier.text, None)
             })
     }
 
@@ -599,15 +839,25 @@ impl Resolver {
                 .get(&reference.member().text)
                 .copied()
                 .ok_or_else(|| {
-                    unavailable_export(
+                    withheld_export_error(
                         reference.member().span,
                         &reference.member().text,
-                        namespace.unavailable.contains(&reference.member().text),
+                        namespace
+                            .withheld
+                            .get(&(reference.member().text.clone(), WithheldNamespace::Nominal))
+                            .copied(),
                     )
                 });
         }
         let name = reference.member();
         let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
+            if let Some(withheld) = self
+                .targeted_withheld
+                .get(&(name.text.clone(), WithheldNamespace::Nominal))
+                .copied()
+            {
+                return withheld_export_error(name.span, &name.text, Some(withheld));
+            }
             let mut diagnostic = Diagnostic::new(
                 ResolveReason::UnknownType,
                 SourceLabel::new(name.span, "this nominal type is not declared"),
@@ -638,24 +888,46 @@ impl Resolver {
                 .get(&reference.member().text)
                 .copied()
                 .ok_or_else(|| {
-                    unavailable_export(
+                    withheld_export_error(
                         reference.member().span,
                         &reference.member().text,
-                        namespace.unavailable.contains(&reference.member().text),
+                        namespace
+                            .withheld
+                            .get(&(
+                                reference.member().text.clone(),
+                                WithheldNamespace::Constructor,
+                            ))
+                            .copied(),
                     )
                 });
         }
-        self.constructor_names
+        if let Some(constructor) = self
+            .constructor_names
             .get(&reference.member().text)
             .copied()
-            .ok_or_else(|| {
-                let mut diagnostic = Diagnostic::new(
-                    ResolveReason::UnknownConstructor,
-                    SourceLabel::new(reference.member().span, "this constructor is not declared"),
-                );
-                diagnostic.found = Some(reference.member().text.clone());
-                ResolveError::from(diagnostic)
-            })
+        {
+            return Ok(constructor);
+        }
+        if let Some(kind) = self
+            .targeted_withheld
+            .get(&(
+                reference.member().text.clone(),
+                WithheldNamespace::Constructor,
+            ))
+            .copied()
+        {
+            return Err(withheld_export_error(
+                reference.member().span,
+                &reference.member().text,
+                Some(kind),
+            ));
+        }
+        let mut diagnostic = Diagnostic::new(
+            ResolveReason::UnknownConstructor,
+            SourceLabel::new(reference.member().span, "this constructor is not declared"),
+        );
+        diagnostic.found = Some(reference.member().text.clone());
+        Err(diagnostic.into())
     }
 
     fn resolve_program(
@@ -1401,11 +1673,19 @@ impl Resolver {
     ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
         let mut names = Vec::new();
         let mut seen = HashSet::new();
+        let withheld_nominals = self
+            .targeted_withheld
+            .keys()
+            .filter_map(|(spelling, namespace)| {
+                (*namespace == WithheldNamespace::Nominal).then_some(spelling.as_str())
+            })
+            .collect::<HashSet<_>>();
         match &definition.kind {
             SurfaceDefinitionKind::Equational(equational) => {
                 collect_free_type_names(
                     &equational.interface.annotation,
                     &self.type_names,
+                    &withheld_nominals,
                     &mut seen,
                     &mut names,
                     &mut self.type_work,
@@ -1416,6 +1696,7 @@ impl Resolver {
                     collect_free_type_names(
                         &parameter.annotation,
                         &self.type_names,
+                        &withheld_nominals,
                         &mut seen,
                         &mut names,
                         &mut self.type_work,
@@ -1424,6 +1705,7 @@ impl Resolver {
                 collect_free_type_names(
                     &operational.header.result_type,
                     &self.type_names,
+                    &withheld_nominals,
                     &mut seen,
                     &mut names,
                     &mut self.type_work,
@@ -1782,12 +2064,31 @@ impl Resolver {
                         span: expression.span,
                     });
                 } else if let Some(namespace) = qualified {
-                    return Err(unavailable_export(
+                    return Err(withheld_export_error(
                         member.span,
                         &member.text,
-                        namespace.unavailable.contains(&member.text),
+                        namespace
+                            .withheld
+                            .get(&(member.text.clone(), WithheldNamespace::Term))
+                            .or_else(|| {
+                                namespace
+                                    .withheld
+                                    .get(&(member.text.clone(), WithheldNamespace::Constructor))
+                            })
+                            .copied(),
                     ));
                 } else {
+                    if let Some(kind) = self
+                        .targeted_withheld
+                        .get(&(member.text.clone(), WithheldNamespace::Term))
+                        .or_else(|| {
+                            self.targeted_withheld
+                                .get(&(member.text.clone(), WithheldNamespace::Constructor))
+                        })
+                        .copied()
+                    {
+                        return Err(withheld_export_error(member.span, &member.text, Some(kind)));
+                    }
                     return Err(
                         if member.text.chars().next().is_some_and(char::is_uppercase) {
                             let mut diagnostic = Diagnostic::new(
@@ -2001,20 +2302,32 @@ fn import_conflict(span: crate::source::Span, spelling: &str) -> ResolveError {
     diagnostic.into()
 }
 
-fn unavailable_export(
+fn withheld_export_error(
     span: crate::source::Span,
     spelling: &str,
-    known_private: bool,
+    withheld: Option<WithheldImport>,
 ) -> ResolveError {
-    let message = if known_private {
-        "this declaration is private to its defining module"
-    } else {
-        "the dependency exports no declaration with this spelling"
+    let (reason, message) = match withheld.map(|withheld| withheld.kind) {
+        Some(WithheldExportKind::Private) => (
+            ResolveReason::UnavailableExport,
+            "this declaration is private to its defining module",
+        ),
+        Some(WithheldExportKind::OpaqueConstructor) => (
+            ResolveReason::OpaqueConstructor,
+            "this constructor belongs to an opaque type",
+        ),
+        None => (
+            ResolveReason::UnavailableExport,
+            "the dependency exports no declaration with this spelling",
+        ),
     };
-    let mut diagnostic = Diagnostic::new(
-        ResolveReason::UnavailableExport,
-        SourceLabel::new(span, message),
-    );
+    let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
+    if let Some(declaration) = withheld.and_then(|withheld| withheld.declaration) {
+        diagnostic.related.push(SourceLabel::new(
+            declaration,
+            "the inaccessible declaration is here",
+        ));
+    }
     diagnostic.found = Some(spelling.to_owned());
     diagnostic.into()
 }
@@ -2037,6 +2350,7 @@ fn type_argument_count(
 fn collect_free_type_names<'a>(
     root: &'a SurfaceType,
     nominals: &HashMap<String, NominalTypeId>,
+    withheld_nominals: &HashSet<&str>,
     seen: &mut HashSet<&'a str>,
     output: &mut Vec<crate::surface::SurfaceName>,
     budget: &mut TypeWorkBudget,
@@ -2070,7 +2384,10 @@ fn collect_free_type_names<'a>(
                 let SurfaceReference::Unqualified(name) = name else {
                     continue;
                 };
-                if !nominals.contains_key(&name.text) && seen.insert(&name.text) {
+                if !nominals.contains_key(&name.text)
+                    && !withheld_nominals.contains(name.text.as_str())
+                    && seen.insert(&name.text)
+                {
                     output.push(name.clone());
                 }
             }
@@ -2080,6 +2397,7 @@ fn collect_free_type_names<'a>(
             } => {
                 if let SurfaceReference::Unqualified(constructor) = constructor
                     && !nominals.contains_key(&constructor.text)
+                    && !withheld_nominals.contains(constructor.text.as_str())
                     && seen.insert(&constructor.text)
                 {
                     output.push(constructor.clone());
@@ -2185,6 +2503,7 @@ mod tests {
         let error = collect_free_type_names(
             &annotation,
             &HashMap::new(),
+            &HashSet::new(),
             &mut seen,
             &mut output,
             &mut budget,

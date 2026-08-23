@@ -364,6 +364,11 @@ receive no binding. Preserve hidden identity inside `ExportedGlobal` schemes.
 Render hidden diagnostic types through a display-only module label such as
 `Math.<private T>` without inserting that spelling into any name map.
 
+At this checkpoint, retain the hidden display spelling, stable defining module
+identity, and causal declaration span. Task 6 connects that display-only data
+to modular type diagnostics when the module checker first exists; Task 5 has no
+cross-module type-diagnostic path to render yet.
+
 ### Task 5 — Step 4: Run visibility tests and witness GREEN
 
 Run: `cargo test --test module_visibility`

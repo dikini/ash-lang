@@ -131,12 +131,20 @@ fn export_candidates_reflect_term_and_type_visibility() {
 
     assert!(candidate.term("private_value").is_none());
     assert!(candidate.term("public_value").is_some());
+    assert!(candidate.is_private("private_value"));
 
     assert!(candidate.nominal("Hidden").is_none());
     assert!(candidate.constructor("Hidden").is_none());
+    assert!(candidate.is_private("Hidden"));
+    assert!(
+        candidate
+            .hidden_nominal(resolved.registry().nominals()[0].id)
+            .is_some()
+    );
 
     assert!(candidate.nominal("Opaque").is_some());
     assert!(candidate.constructor("Opaque").is_none());
+    assert!(candidate.is_opaque_constructor("Opaque"));
 
     assert!(candidate.nominal("Visible").is_some());
     assert!(candidate.constructor("Visible").is_some());
@@ -157,4 +165,19 @@ fn duplicate_module_aliases_are_rejected_before_export_lookup() {
         .expect_err("a duplicate alias should fail before dependency export lookup");
 
     assert_eq!(error.reason, ResolveReason::DuplicateModuleAlias);
+}
+
+#[test]
+fn export_candidates_keep_withheld_type_and_constructor_namespaces_separate() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!("type Foo = PrivateFoo\n", "pub opaque type Token = Foo\n",),
+        &[],
+    );
+    let resolved = resolve_leaf(module_named(&graph, "entry.ash"));
+    let candidate = resolved.export_candidate();
+
+    assert!(candidate.is_private("Foo"));
+    assert!(candidate.is_opaque_constructor("Foo"));
 }

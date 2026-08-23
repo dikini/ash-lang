@@ -1,9 +1,6 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     integer::Integer,
@@ -172,6 +169,24 @@ pub struct ImportedFacts {
 }
 
 impl ImportedFacts {
+    /// Looks up one imported checked global by semantic identity.
+    #[must_use]
+    pub fn global(&self, id: BinderId) -> Option<&ImportedGlobalScheme> {
+        self.globals.get(&id)
+    }
+
+    /// Looks up one imported nominal fact by semantic identity.
+    #[must_use]
+    pub fn nominal(&self, id: NominalTypeId) -> Option<&ImportedNominalFact> {
+        self.nominals.get(&id)
+    }
+
+    /// Looks up one imported transparent constructor by semantic identity.
+    #[must_use]
+    pub fn constructor(&self, id: ConstructorId) -> Option<&ImportedConstructorFact> {
+        self.constructors.get(&id)
+    }
+
     pub(crate) fn contains_global(&self, id: BinderId) -> bool {
         self.globals.contains_key(&id)
     }
@@ -180,12 +195,28 @@ impl ImportedFacts {
         self.globals.insert(fact.binder, fact);
     }
 
-    pub(crate) fn contains_nominal(&self, id: NominalTypeId) -> bool {
-        self.nominals.contains_key(&id)
-    }
-
-    pub(crate) fn insert_nominal(&mut self, fact: ImportedNominalFact) {
-        self.nominals.insert(fact.id, fact);
+    pub(crate) fn merge_nominal(
+        &mut self,
+        mut fact: ImportedNominalFact,
+    ) -> Result<(), ImportedNominalConflict> {
+        let Some(existing) = self.nominals.get_mut(&fact.id) else {
+            self.nominals.insert(fact.id, fact);
+            return Ok(());
+        };
+        if existing.parameter_count != fact.parameter_count {
+            discard_origin_iteratively(fact.origin);
+            return Err(ImportedNominalConflict);
+        }
+        if fact.access.rank() > existing.access.rank() {
+            existing.access = fact.access;
+            if fact.display_spelling.is_some() {
+                existing.display_spelling = fact.display_spelling.take();
+            }
+        } else if existing.display_spelling.is_none() {
+            existing.display_spelling = fact.display_spelling.take();
+        }
+        discard_origin_iteratively(fact.origin);
+        Ok(())
     }
 
     pub(crate) fn contains_constructor(&self, id: ConstructorId) -> bool {
@@ -234,10 +265,29 @@ pub struct ImportedNominalFact {
     /// Number of parameters of kind `Type`.
     pub parameter_count: usize,
     /// Importer access mode.
-    pub access: ExportedTypeAccess,
+    pub access: ImportedTypeAccess,
+    /// Display-only declaration spelling; never a resolver binding.
+    pub display_spelling: Option<String>,
     /// Causal declaration provenance.
     pub origin: Origin,
 }
+
+impl ImportedNominalFact {
+    /// Renders a diagnostic-only name without creating a resolver binding.
+    #[must_use]
+    pub fn display_name(&self, module_label: &str) -> String {
+        match (self.access, self.display_spelling.as_deref()) {
+            (ImportedTypeAccess::Hidden, Some(spelling)) => {
+                format!("{module_label}.<private {spelling}>")
+            }
+            (_, Some(spelling)) => format!("{module_label}.{spelling}"),
+            _ => Type::Nominal(self.id).to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ImportedNominalConflict;
 
 /// One imported transparent constructor fact.
 #[derive(Debug, Eq, PartialEq)]
@@ -256,6 +306,8 @@ pub struct ResolvedExportCandidate {
     terms: HashMap<String, CandidateGlobal>,
     nominals: HashMap<String, CandidateNominal>,
     constructors: HashMap<String, CandidateConstructor>,
+    hidden_nominals: HashMap<NominalTypeId, CandidateHiddenNominal>,
+    withheld: HashMap<(String, WithheldNamespace), WithheldExport>,
 }
 
 impl ResolvedExportCandidate {
@@ -277,6 +329,36 @@ impl ResolvedExportCandidate {
         self.constructors.get(spelling)
     }
 
+    /// Looks up one private nominal retained only for checked public schemes.
+    #[must_use]
+    pub fn hidden_nominal(&self, id: NominalTypeId) -> Option<&CandidateHiddenNominal> {
+        self.hidden_nominals.get(&id)
+    }
+
+    /// Reports whether one source spelling is withheld because it is private.
+    #[must_use]
+    pub fn is_private(&self, spelling: &str) -> bool {
+        [
+            WithheldNamespace::Term,
+            WithheldNamespace::Nominal,
+            WithheldNamespace::Constructor,
+        ]
+        .into_iter()
+        .any(|namespace| {
+            self.withheld
+                .get(&(spelling.to_owned(), namespace))
+                .is_some_and(|withheld| withheld.kind == WithheldExportKind::Private)
+        })
+    }
+
+    /// Reports whether a constructor spelling is withheld by opacity.
+    #[must_use]
+    pub fn is_opaque_constructor(&self, spelling: &str) -> bool {
+        self.withheld
+            .get(&(spelling.to_owned(), WithheldNamespace::Constructor))
+            .is_some_and(|withheld| withheld.kind == WithheldExportKind::OpaqueConstructor)
+    }
+
     pub(crate) fn insert_term(&mut self, spelling: String, candidate: CandidateGlobal) {
         self.terms.insert(spelling, candidate);
     }
@@ -287,6 +369,19 @@ impl ResolvedExportCandidate {
 
     pub(crate) fn insert_constructor(&mut self, spelling: String, candidate: CandidateConstructor) {
         self.constructors.insert(spelling, candidate);
+    }
+
+    pub(crate) fn insert_hidden_nominal(&mut self, candidate: CandidateHiddenNominal) {
+        self.hidden_nominals.insert(candidate.id, candidate);
+    }
+
+    pub(crate) fn insert_withheld(
+        &mut self,
+        namespace: WithheldNamespace,
+        spelling: String,
+        withheld: WithheldExport,
+    ) {
+        self.withheld.insert((spelling, namespace), withheld);
     }
 }
 
@@ -300,6 +395,14 @@ impl Drop for ResolvedExportCandidate {
         }
         for (_, candidate) in self.constructors.drain() {
             discard_origin_iteratively(candidate.origin);
+        }
+        for (_, candidate) in self.hidden_nominals.drain() {
+            discard_origin_iteratively(candidate.origin);
+        }
+        for (_, withheld) in self.withheld.drain() {
+            if let Some(origin) = withheld.origin {
+                discard_origin_iteratively(origin);
+            }
         }
     }
 }
@@ -333,6 +436,43 @@ pub struct CandidateConstructor {
     pub origin: Origin,
 }
 
+/// One private nominal identity available for checked public schemes only.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateHiddenNominal {
+    /// Stable nominal identity.
+    pub id: NominalTypeId,
+    /// Number of parameters of kind `Type`.
+    pub parameter_count: usize,
+    /// Display-only private spelling.
+    pub spelling: String,
+    /// Declaration provenance.
+    pub origin: Origin,
+}
+
+/// Why one dependency spelling is withheld from source resolution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WithheldExportKind {
+    /// The declaration is private to its defining module.
+    Private,
+    /// The constructor belongs to a public opaque nominal.
+    OpaqueConstructor,
+}
+
+/// Namespace containing one withheld source spelling.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum WithheldNamespace {
+    Term,
+    Nominal,
+    Constructor,
+}
+
+/// Diagnostic-only metadata for a withheld dependency spelling.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WithheldExport {
+    pub(crate) kind: WithheldExportKind,
+    pub(crate) origin: Option<Origin>,
+}
+
 /// Source access for one exported nominal type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExportedTypeAccess {
@@ -340,6 +480,36 @@ pub enum ExportedTypeAccess {
     Opaque,
     /// The nominal name and complete constructor set are available.
     Transparent,
+}
+
+/// Source access retained with one imported nominal identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImportedTypeAccess {
+    /// The identity is usable through schemes but has no source name.
+    Hidden,
+    /// The nominal has a source name but no constructor access.
+    Opaque,
+    /// The nominal and selected transparent constructors are accessible.
+    Transparent,
+}
+
+impl From<ExportedTypeAccess> for ImportedTypeAccess {
+    fn from(access: ExportedTypeAccess) -> Self {
+        match access {
+            ExportedTypeAccess::Opaque => Self::Opaque,
+            ExportedTypeAccess::Transparent => Self::Transparent,
+        }
+    }
+}
+
+impl ImportedTypeAccess {
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Hidden => 0,
+            Self::Opaque => 1,
+            Self::Transparent => 2,
+        }
+    }
 }
 
 /// One checked public global in an immutable export summary.
@@ -383,8 +553,23 @@ pub struct ExportSummary {
     module: ModuleId,
     terms: HashMap<String, ExportedGlobal>,
     nominals: HashMap<String, ExportedType>,
+    nominal_names_by_id: HashMap<NominalTypeId, String>,
     constructors: HashMap<String, ExportedConstructor>,
-    unavailable: HashSet<String>,
+    hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
+    withheld: HashMap<(String, WithheldNamespace), WithheldExport>,
+}
+
+/// One hidden nominal fact retained by identity without a source name binding.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ExportedHiddenType {
+    /// Stable nominal identity from the defining module.
+    pub id: NominalTypeId,
+    /// Number of parameters of kind `Type`.
+    pub parameter_count: usize,
+    /// Display-only private spelling.
+    pub spelling: String,
+    /// Causal declaration provenance.
+    pub origin: Origin,
 }
 
 impl ExportSummary {
@@ -424,12 +609,45 @@ impl ExportSummary {
             .map(|(spelling, exported)| (spelling.as_str(), exported))
     }
 
-    pub(crate) fn is_unavailable(&self, spelling: &str) -> bool {
-        self.unavailable.contains(spelling)
+    pub(crate) fn withheld_export(
+        &self,
+        namespace: WithheldNamespace,
+        spelling: &str,
+    ) -> Option<&WithheldExport> {
+        self.withheld.get(&(spelling.to_owned(), namespace))
     }
 
-    pub(crate) fn unavailable(&self) -> impl Iterator<Item = &str> {
-        self.unavailable.iter().map(String::as_str)
+    pub(crate) fn withheld(
+        &self,
+    ) -> impl Iterator<Item = (WithheldNamespace, &str, &WithheldExport)> {
+        self.withheld
+            .iter()
+            .map(|((spelling, namespace), withheld)| (*namespace, spelling.as_str(), withheld))
+    }
+
+    pub(crate) fn nominal_fact(&self, id: NominalTypeId) -> Option<ImportedNominalFactRef<'_>> {
+        if let Some(spelling) = self.nominal_names_by_id.get(&id) {
+            let exported = self
+                .nominals
+                .get(spelling)
+                .expect("the checked nominal identity index must name an export");
+            return Some(ImportedNominalFactRef {
+                id,
+                parameter_count: exported.parameter_count,
+                access: exported.access.into(),
+                display_spelling: Some(spelling),
+                origin: &exported.origin,
+            });
+        }
+        self.hidden_nominals
+            .get(&id)
+            .map(|exported| ImportedNominalFactRef {
+                id,
+                parameter_count: exported.parameter_count,
+                access: ImportedTypeAccess::Hidden,
+                display_spelling: Some(&exported.spelling),
+                origin: &exported.origin,
+            })
     }
 
     #[cfg(test)]
@@ -440,6 +658,10 @@ impl ExportSummary {
         constructors: Vec<(&str, ConstructorId, Option<Type>, Origin)>,
         unavailable: Vec<&str>,
     ) -> Self {
+        let nominal_names_by_id = nominals
+            .iter()
+            .map(|(spelling, id, _, _)| (*id, (*spelling).to_owned()))
+            .collect();
         Self {
             module,
             terms: terms
@@ -469,6 +691,7 @@ impl ExportSummary {
                     )
                 })
                 .collect(),
+            nominal_names_by_id,
             constructors: constructors
                 .into_iter()
                 .map(|(spelling, id, payload, origin)| {
@@ -482,9 +705,87 @@ impl ExportSummary {
                     )
                 })
                 .collect(),
-            unavailable: unavailable.into_iter().map(str::to_owned).collect(),
+            hidden_nominals: HashMap::new(),
+            withheld: unavailable
+                .into_iter()
+                .flat_map(|spelling| {
+                    [
+                        WithheldNamespace::Term,
+                        WithheldNamespace::Nominal,
+                        WithheldNamespace::Constructor,
+                    ]
+                    .into_iter()
+                    .map(move |namespace| {
+                        (
+                            (spelling.to_owned(), namespace),
+                            WithheldExport {
+                                kind: WithheldExportKind::Private,
+                                origin: None,
+                            },
+                        )
+                    })
+                })
+                .collect(),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_fixture_with_access(
+        module: ModuleId,
+        terms: Vec<(&str, BinderId, Type, Origin)>,
+        nominals: Vec<(&str, NominalTypeId, ExportedTypeAccess, Origin)>,
+        constructors: Vec<(&str, ConstructorId, Option<Type>, Origin)>,
+        unavailable: Vec<&str>,
+        opaque_constructors: Vec<(&str, Origin)>,
+        hidden_nominals: Vec<(&str, NominalTypeId, usize, Origin)>,
+    ) -> Self {
+        let mut summary = Self::test_fixture(module, terms, nominals, constructors, unavailable);
+        for (spelling, _) in &opaque_constructors {
+            summary
+                .withheld
+                .remove(&(spelling.to_string(), WithheldNamespace::Term));
+            summary
+                .withheld
+                .remove(&(spelling.to_string(), WithheldNamespace::Constructor));
+        }
+        summary
+            .withheld
+            .extend(opaque_constructors.into_iter().map(|(spelling, origin)| {
+                (
+                    (spelling.to_owned(), WithheldNamespace::Constructor),
+                    WithheldExport {
+                        kind: WithheldExportKind::OpaqueConstructor,
+                        origin: Some(origin),
+                    },
+                )
+            }));
+        summary
+            .hidden_nominals
+            .extend(
+                hidden_nominals
+                    .into_iter()
+                    .map(|(spelling, id, parameter_count, origin)| {
+                        (
+                            id,
+                            ExportedHiddenType {
+                                id,
+                                parameter_count,
+                                spelling: spelling.to_owned(),
+                                origin,
+                            },
+                        )
+                    }),
+            );
+        summary
+    }
+}
+
+pub(crate) struct ImportedNominalFactRef<'a> {
+    pub(crate) id: NominalTypeId,
+    pub(crate) parameter_count: usize,
+    pub(crate) access: ImportedTypeAccess,
+    pub(crate) display_spelling: Option<&'a str>,
+    pub(crate) origin: &'a Origin,
 }
 
 impl Drop for ExportSummary {
@@ -496,13 +797,21 @@ impl Drop for ExportSummary {
         for (_, exported) in self.nominals.drain() {
             discard_origin_iteratively(exported.origin);
         }
+        self.nominal_names_by_id.clear();
         for (_, exported) in self.constructors.drain() {
             if let Some(payload) = exported.payload {
                 discard_type_iteratively(payload);
             }
             discard_origin_iteratively(exported.origin);
         }
-        self.unavailable.clear();
+        for (_, exported) in self.hidden_nominals.drain() {
+            discard_origin_iteratively(exported.origin);
+        }
+        for (_, withheld) in self.withheld.drain() {
+            if let Some(origin) = withheld.origin {
+                discard_origin_iteratively(origin);
+            }
+        }
     }
 }
 
