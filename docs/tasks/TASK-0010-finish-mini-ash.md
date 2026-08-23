@@ -80,6 +80,14 @@ relative links resolve, and the new `sequent` rules have matching prose.
   its type shape is unchanged.
 - Boxing the two structural types inside rare mismatch errors keeps the public
   diagnostic API intact while restoring the denied `result_large_err` lint.
+- Recursive rigidity belongs to the definition currently being checked. Other
+  global schemes remain ordinary occurrences and instantiate freshly.
+- Type rebuilding must preflight the expanded zonked or substituted result.
+  Charging only its compact input permits multiplicative retained work before
+  the resource boundary can respond.
+- Core registry closure includes nominal parameter metadata and requires every
+  constructor payload variable to belong to its owner. Constructor payloads
+  remain monotypes.
 
 The retained integration and closure reports contain the transferable results
 and boundary audit.

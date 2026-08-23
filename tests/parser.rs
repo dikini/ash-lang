@@ -950,6 +950,26 @@ fn parameterized_declarations_and_type_applications_project() {
 }
 
 #[test]
+fn primitive_types_reject_type_arguments_before_projection() {
+    for primitive in ["Int", "Bool", "Unit"] {
+        let text = format!("bad : {primitive}<Int> -> Int\nbad value = 0\n\n0\n");
+        let (source, tree) = parse_tree(&text);
+
+        assert_eq!(
+            tree.parse_diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.reason)
+                .collect::<Vec<_>>(),
+            vec![ParseReason::UnexpectedToken]
+        );
+        assert_eq!(
+            project(&source, &tree),
+            Err(ProjectionError::RecoveryNodesPresent)
+        );
+    }
+}
+
+#[test]
 fn projection_rejects_a_tree_against_a_different_source_identity() {
     let source = SourceFile::new("first.ash", "1").expect("the first source should fit");
     let lexed = lex(&source).expect("lexing should preserve source invariants");

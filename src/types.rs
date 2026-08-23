@@ -269,12 +269,65 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
     true
 }
 
-/// Replaces rigid type variables according to one capture-free substitution.
-#[must_use]
-pub(crate) fn substitute_type_variables(
+/// Charges the expanded result before applying one capture-free substitution.
+pub(crate) fn substitute_type_variables_with<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
-) -> Type {
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+) -> Result<Type, E> {
+    enum ChargeTask<'a> {
+        Visit(&'a Type, bool),
+        Slice(std::slice::Iter<'a, Type>, bool),
+    }
+
+    let mut work = vec![ChargeTask::Visit(ty, true)];
+    while let Some(task) = work.pop() {
+        match task {
+            ChargeTask::Visit(Type::Variable(identity), true)
+                if replacements.contains_key(identity) =>
+            {
+                work.push(ChargeTask::Visit(&replacements[identity], false));
+            }
+            ChargeTask::Visit(Type::Tuple(elements), substitute)
+            | ChargeTask::Visit(Type::AppliedNominal(_, elements), substitute) => {
+                charge(1)?;
+                work.push(ChargeTask::Slice(elements.iter(), substitute));
+            }
+            ChargeTask::Visit(Type::Function(domain, codomain), substitute) => {
+                charge(1)?;
+                work.push(ChargeTask::Visit(codomain, substitute));
+                work.push(ChargeTask::Visit(domain, substitute));
+            }
+            ChargeTask::Visit(Type::Forall(parameters, body), substitute) => {
+                charge(1)?;
+                let substitute = substitute
+                    && !parameters
+                        .iter()
+                        .any(|parameter| replacements.contains_key(parameter));
+                work.push(ChargeTask::Visit(body, substitute));
+            }
+            ChargeTask::Visit(
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_),
+                _,
+            ) => charge(1)?,
+            ChargeTask::Slice(mut remaining, substitute) => {
+                if let Some(element) = remaining.next() {
+                    work.push(ChargeTask::Slice(remaining, substitute));
+                    work.push(ChargeTask::Visit(element, substitute));
+                }
+            }
+        }
+    }
+
+    Ok(substitute_type_variables(ty, replacements))
+}
+
+fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, Type>) -> Type {
     enum Task<'a> {
         Visit(&'a Type, bool),
         FinishTuple(usize),
@@ -356,4 +409,28 @@ pub enum Kind {
     Type,
     /// An internal unary type-constructor kind.
     Arrow(Box<Kind>, Box<Kind>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn substitution_charges_the_expanded_result_before_rebuilding() {
+        let parameter = TypeVariableId::new(0);
+        let source = Type::Tuple(vec![Type::Variable(parameter); 16].into_boxed_slice());
+        let replacements = HashMap::from([(
+            parameter,
+            Type::Tuple(vec![Type::Int; 16].into_boxed_slice()),
+        )]);
+        let mut remaining = 128_usize;
+
+        let result = substitute_type_variables_with(&source, &replacements, |cells| {
+            remaining = remaining.checked_sub(cells).ok_or(())?;
+            Ok(())
+        });
+
+        assert_eq!(result, Err(()));
+        assert_eq!(remaining, 0);
+    }
 }

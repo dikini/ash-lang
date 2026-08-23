@@ -21,7 +21,7 @@ use crate::{
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::{BinderId, ResolvedNominalType},
     source::{Origin, SourceFile, SourceId, Span},
-    types::{ConstructorId, TYPE_WORK_LIMIT, Type, same_type, substitute_type_variables},
+    types::{ConstructorId, TYPE_WORK_LIMIT, Type, same_type, substitute_type_variables_with},
 };
 
 /// The independently checked invariant that malformed Core violated.
@@ -254,6 +254,41 @@ impl<'program, 'source> Validator<'program, 'source> {
             previous_nominal_end = Some(nominal_range.end());
             self.validate_origin(&nominal.origin, self.program.root)?;
         }
+        if registry
+            .nominal_parameter_entries()
+            .any(|(owner, _)| registry.nominal(owner).is_none())
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        let mut parameter_ids = HashSet::new();
+        for nominal in registry.nominals() {
+            let nominal_range = nominal.origin.primary_span().range();
+            let parameters = registry
+                .nominal_parameters(nominal.id)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            let mut parameter_names = HashSet::new();
+            let mut previous_parameter_start = None;
+            for parameter in parameters {
+                let parameter_span = parameter.origin.primary_span();
+                let parameter_range = parameter_span.range();
+                if Some(parameter_span.source()) != registry_source
+                    || !origin_depth_within_limit(&parameter.origin)
+                    || !valid_upper_spelling(&parameter.spelling)
+                    || !parameter_ids.insert(parameter.id)
+                    || !parameter_names.insert(parameter.spelling.as_str())
+                    || registry.type_variable(parameter.id) != Some(parameter)
+                    || parameter_range.start() >= parameter_range.end()
+                    || parameter_range.start() < nominal_range.start()
+                    || parameter_range.end() > nominal_range.end()
+                    || previous_parameter_start
+                        .is_some_and(|previous| parameter_range.start() <= previous)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                previous_parameter_start = Some(parameter_range.start());
+                self.validate_origin(&parameter.origin, self.program.root)?;
+            }
+        }
         let mut previous_constructor_start = None;
         for constructor in registry.constructors() {
             let constructor_span = constructor.origin.primary_span();
@@ -261,7 +296,14 @@ impl<'program, 'source> Validator<'program, 'source> {
             let owner_range = registry
                 .nominal(constructor.owner)
                 .map(|owner| owner.origin.primary_span().range());
-            let payload_valid = self.valid_type(constructor.payload.as_ref())?;
+            let owner_parameters = registry
+                .nominal_parameters(constructor.owner)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?
+                .iter()
+                .map(|parameter| parameter.id)
+                .collect::<HashSet<_>>();
+            let payload_valid =
+                self.valid_registry_payload(constructor.payload.as_ref(), &owner_parameters)?;
             if constructor.id.owner() != constructor.owner
                 || !nominal_ids.contains(&constructor.owner)
                 || Some(constructor.origin.primary_span().source()) != registry_source
@@ -334,7 +376,12 @@ impl<'program, 'source> Validator<'program, 'source> {
             self.charge_type_work(1)?;
             match ty {
                 Type::Int | Type::Bool | Type::Unit => {}
-                Type::Nominal(id) if self.program.registry.nominal(*id).is_some() => {}
+                Type::Nominal(id)
+                    if self
+                        .program
+                        .registry
+                        .nominal_parameters(*id)
+                        .is_some_and(<[_]>::is_empty) => {}
                 Type::Nominal(_) => return Ok(false),
                 Type::Variable(_) => {}
                 Type::Inference(_) => return Ok(false),
@@ -367,6 +414,50 @@ impl<'program, 'source> Validator<'program, 'source> {
                 Type::Function(domain, codomain) => {
                     work.push((codomain, false));
                     work.push((domain, false));
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn valid_registry_payload(
+        &self,
+        root: Option<&Type>,
+        owner_parameters: &HashSet<crate::types::TypeVariableId>,
+    ) -> Result<bool, ValidationError> {
+        let Some(root) = root else {
+            return Ok(true);
+        };
+        let mut work = vec![root];
+        while let Some(ty) = work.pop() {
+            self.charge_type_work(1)?;
+            match ty {
+                Type::Int | Type::Bool | Type::Unit => {}
+                Type::Nominal(id)
+                    if self
+                        .program
+                        .registry
+                        .nominal_parameters(*id)
+                        .is_some_and(<[_]>::is_empty) => {}
+                Type::Nominal(_) => return Ok(false),
+                Type::Variable(variable) if owner_parameters.contains(variable) => {}
+                Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return Ok(false),
+                Type::AppliedNominal(id, arguments) => {
+                    if self
+                        .program
+                        .registry
+                        .nominal_parameters(*id)
+                        .is_none_or(|parameters| parameters.len() != arguments.len())
+                    {
+                        return Ok(false);
+                    }
+                    work.extend(arguments);
+                }
+                Type::Tuple(elements) if elements.len() >= 2 => work.extend(elements),
+                Type::Tuple(_) => return Ok(false),
+                Type::Function(domain, codomain) => {
+                    work.push(codomain);
+                    work.push(domain);
                 }
             }
         }
@@ -895,8 +986,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                     .zip(application.arguments())
                     .map(|(parameter, argument)| (*parameter, argument.clone()))
                     .collect();
-                self.charge_type_structure(body)?;
-                let instantiated = substitute_type_variables(body, &replacements);
+                let instantiated = substitute_type_variables_with(body, &replacements, |cells| {
+                    self.charge_type_work(cells)
+                })?;
                 if !same_type(&node.ty, &instantiated) {
                     return Err(ValidationError::new(
                         ValidationReason::TypeOperation,
@@ -1116,7 +1208,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let payload_type = info
                         .payload
                         .as_ref()
-                        .map(|payload| substitute_type_variables(payload, &replacements));
+                        .map(|payload| {
+                            substitute_type_variables_with(payload, &replacements, |cells| {
+                                self.charge_type_work(cells)
+                            })
+                        })
+                        .transpose()?;
                     match (&payload_type, payload.as_deref()) {
                         (None, None) => {}
                         (Some(payload_type), Some(payload_pattern)) => {

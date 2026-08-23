@@ -5,7 +5,7 @@ use ash::{
         validate,
     },
     integer::Integer,
-    resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry},
+    resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry, ResolvedTypeVariable},
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
     types::{ConstructorId, NominalTypeId, Type, TypeVariableId, same_type},
 };
@@ -79,6 +79,51 @@ fn core_construction_charges_type_cells_cumulatively_before_storage() {
         )
         .expect_err("cumulative argument admission must stop before storage");
     assert_eq!(error, BuildError::TypeWorkExceeded);
+}
+
+#[test]
+fn expanded_malformed_type_application_maps_to_validation_resource() {
+    const WIDTH: usize = 700;
+    let file = source("expanded malformed type application");
+    let origin = whole_origin(&file);
+    let type_parameter = TypeVariableId::new(0);
+    let element_type = Type::Variable(type_parameter);
+    let tuple_type = Type::Tuple(vec![element_type.clone(); WIDTH].into_boxed_slice());
+    let function_type =
+        Type::Function(Box::new(element_type.clone()), Box::new(tuple_type.clone()));
+    let mut builder = CoreBuilder::new();
+    let parameter = builder
+        .binder(element_type.clone(), origin.clone())
+        .expect("parameter binder");
+    let occurrence = builder
+        .variable(parameter.id(), element_type, origin.clone())
+        .expect("parameter occurrence");
+    let tuple = builder
+        .tuple(vec![occurrence; WIDTH], tuple_type, origin.clone())
+        .expect("compact tuple body");
+    let function = builder
+        .function(parameter, tuple, function_type.clone(), origin.clone())
+        .expect("polymorphic function body");
+    let abstraction = builder
+        .type_abstraction(
+            vec![type_parameter],
+            function,
+            Type::Forall(
+                vec![type_parameter].into_boxed_slice(),
+                Box::new(function_type),
+            ),
+            origin.clone(),
+        )
+        .expect("unchecked type abstraction");
+    let wide_argument = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+    let root = builder
+        .type_application(abstraction, vec![wide_argument], Type::Unit, origin)
+        .expect("compact malformed type application");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("expanded substitution must stop at the validation budget");
+
+    assert_eq!(error.reason(), ValidationReason::Resource);
 }
 
 #[test]
@@ -172,6 +217,82 @@ fn rejects_malformed_data_registries_and_constructor_annotations() {
     let error = validate(builder.finish(root).expect("root"), &[&file])
         .expect_err("constructor type disagreement");
     assert_eq!(error.reason(), ValidationReason::NodeType);
+}
+
+#[test]
+fn rejects_constructor_payload_variables_outside_the_owner_parameters() {
+    let file = source("parameterized registry payload");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let parameter = TypeVariableId::new(0);
+    let foreign = TypeVariableId::new(1);
+    let registry = Arc::new(
+        ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Wrap".into(),
+                constructors: vec![constructor].into_boxed_slice(),
+                origin: origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner: nominal,
+                spelling: "Wrapped".into(),
+                payload: Some(Type::Variable(foreign)),
+                origin: range_origin(&file, 1, 2),
+            }],
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                origin: range_origin(&file, 2, 3),
+            }],
+        )]),
+    );
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder.unit(Type::Unit, origin).expect("unit root");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("constructor payload variables must belong to their owner");
+
+    assert_eq!(error.reason(), ValidationReason::Registry);
+}
+
+#[test]
+fn rejects_polymorphic_constructor_payloads_in_the_registry() {
+    let file = source("polymorphic registry payload");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let parameter = TypeVariableId::new(0);
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "Wrap".into(),
+            constructors: vec![constructor].into_boxed_slice(),
+            origin: origin.clone(),
+        }],
+        vec![ResolvedConstructor {
+            id: constructor,
+            owner: nominal,
+            spelling: "Wrapped".into(),
+            payload: Some(Type::Forall(
+                vec![parameter].into_boxed_slice(),
+                Box::new(Type::Variable(parameter)),
+            )),
+            origin: range_origin(&file, 1, 2),
+        }],
+    ));
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder.unit(Type::Unit, origin).expect("unit root");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("constructor payloads must remain monomorphic");
+
+    assert_eq!(error.reason(), ValidationReason::Registry);
 }
 
 #[test]

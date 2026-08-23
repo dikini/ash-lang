@@ -8,7 +8,7 @@ use std::{
 use crate::{
     core::{CorePattern, CorePatternKind},
     resolved::ResolvedRegistry,
-    types::{ConstructorId, Type, substitute_type_variables},
+    types::{ConstructorId, Type, substitute_type_variables_with},
 };
 
 /// A binder-free pattern shape used for coverage witnesses.
@@ -664,12 +664,13 @@ fn head_types(
                         .zip(arguments)
                         .map(|(parameter, argument)| (parameter.id, argument.clone()))
                         .collect::<HashMap<_, _>>();
-                    substitute_type_variables(payload, &replacements)
+                    substitute_type_variables_with(payload, &replacements, |cells| {
+                        budget.charge(cells)
+                    })?
                 }
                 Type::Nominal(owner) if *owner == constructor.owner => payload.clone(),
                 _ => return Ok(Vec::new()),
             };
-            charge_types(std::slice::from_ref(&instantiated), budget)?;
             Ok(vec![instantiated])
         }
     }

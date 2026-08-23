@@ -26,7 +26,7 @@ use crate::{
     source::{GeneratedReason, Origin, Span},
     types::{
         InferenceVariableId, Type, TypeVariableId, TypeWorkBudget, charge_type_cells, same_type,
-        substitute_type_variables,
+        substitute_type_variables_with,
     },
 };
 
@@ -713,8 +713,11 @@ impl Elaborator {
         let solutions = &self.inference_solutions;
         let type_work = &mut self.type_work;
         self.builder.rewrite_types(|ty| {
-            charge_type_cells(ty, type_work).map_err(|()| BuildError::TypeWorkExceeded)?;
-            let zonked = zonk_type(ty, solutions);
+            let zonked = zonk_type_with(ty, solutions, |cells| {
+                type_work
+                    .charge(cells)
+                    .map_err(|()| BuildError::TypeWorkExceeded)
+            })?;
             if contains_unsolved_inference(&zonked) {
                 Err(BuildError::InvalidPayload)
             } else {
@@ -747,8 +750,8 @@ impl Elaborator {
         fact: &TypeFact,
         rigid: bool,
     ) -> Result<(Type, Vec<Type>), TypeError> {
-        self.charge_type(&fact.ty)?;
         if fact.quantified.is_empty() {
+            self.charge_type(&fact.ty)?;
             return Ok((fact.ty.clone(), Vec::new()));
         }
         let mut replacements = HashMap::with_capacity(fact.quantified.len());
@@ -762,15 +765,18 @@ impl Elaborator {
             replacements.insert(*binder, argument.clone());
             arguments.push(argument);
         }
-        Ok((
-            substitute_type_variables(&fact.ty, &replacements),
-            arguments,
-        ))
+        let instantiated = substitute_type_variables_with(&fact.ty, &replacements, |cells| {
+            self.type_work.charge(cells)
+        })
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        Ok((instantiated, arguments))
     }
 
     fn zonk(&mut self, ty: &Type) -> Result<Type, TypeError> {
-        self.charge_type(ty)?;
-        Ok(zonk_type(ty, &self.inference_solutions))
+        zonk_type_with(ty, &self.inference_solutions, |cells| {
+            self.type_work.charge(cells)
+        })
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
     fn charge_type(&mut self, ty: &Type) -> Result<(), TypeError> {
@@ -883,10 +889,18 @@ impl Elaborator {
             }
             context.set_quantified(name.id, quantified.clone())?;
             global_quantifiers.push((name.id, quantified));
-            self.monomorphic_recursive.insert(name.id);
         }
 
         for definition in &program.definitions {
+            let recursive_binder = match &definition.kind {
+                ResolvedDefinitionKind::Equational(equational) => equational.interface.name.id,
+                ResolvedDefinitionKind::InlineOperational(operational) => {
+                    operational.header.name.id
+                }
+            };
+            if !self.monomorphic_recursive.insert(recursive_binder) {
+                return Err(invalid_state());
+            }
             let (name, mut function) = match &definition.kind {
                 ResolvedDefinitionKind::Equational(equational) => {
                     let function_type =
@@ -928,6 +942,9 @@ impl Elaborator {
                     )
                 }
             };
+            if !self.monomorphic_recursive.remove(&recursive_binder) {
+                return Err(invalid_state());
+            }
             if !function.provenance.aligns(&function.ty) {
                 return Err(invalid_state());
             }
@@ -2008,8 +2025,12 @@ impl Elaborator {
                 let payload_type = declared_payload
                     .as_ref()
                     .map(|payload| {
-                        self.charge_type(payload)?;
-                        Ok::<Type, TypeError>(substitute_type_variables(payload, &replacements))
+                        substitute_type_variables_with(payload, &replacements, |cells| {
+                            self.type_work.charge(cells)
+                        })
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })
                     })
                     .transpose()?;
                 if info_owner != owner {
@@ -3236,6 +3257,55 @@ enum UnificationFailure {
     Resource,
 }
 
+fn zonk_type_with<E>(
+    ty: &Type,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+) -> Result<Type, E> {
+    enum ChargeTask<'a> {
+        Visit(&'a Type),
+        Slice(std::slice::Iter<'a, Type>),
+    }
+
+    let mut work = vec![ChargeTask::Visit(ty)];
+    while let Some(task) = work.pop() {
+        match task {
+            ChargeTask::Visit(Type::Inference(identity)) if solutions.contains_key(identity) => {
+                work.push(ChargeTask::Visit(&solutions[identity]));
+            }
+            ChargeTask::Visit(Type::Tuple(elements) | Type::AppliedNominal(_, elements)) => {
+                charge(1)?;
+                work.push(ChargeTask::Slice(elements.iter()));
+            }
+            ChargeTask::Visit(Type::Function(domain, codomain)) => {
+                charge(1)?;
+                work.push(ChargeTask::Visit(codomain));
+                work.push(ChargeTask::Visit(domain));
+            }
+            ChargeTask::Visit(Type::Forall(_, body)) => {
+                charge(1)?;
+                work.push(ChargeTask::Visit(body));
+            }
+            ChargeTask::Visit(
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_),
+            ) => charge(1)?,
+            ChargeTask::Slice(mut remaining) => {
+                if let Some(element) = remaining.next() {
+                    work.push(ChargeTask::Slice(remaining));
+                    work.push(ChargeTask::Visit(element));
+                }
+            }
+        }
+    }
+
+    Ok(zonk_type(ty, solutions))
+}
+
 fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type {
     enum Task<'a> {
         Visit(&'a Type),
@@ -3500,6 +3570,25 @@ mod tests {
         } else {
             structurally_equal(left, right)
         }
+    }
+
+    #[test]
+    fn zonking_charges_the_expanded_result_before_rebuilding() {
+        let inference = InferenceVariableId::new(0);
+        let source = Type::Tuple(vec![Type::Inference(inference); 16].into_boxed_slice());
+        let solutions = HashMap::from([(
+            inference,
+            Type::Tuple(vec![Type::Int; 16].into_boxed_slice()),
+        )]);
+        let mut remaining = 128_usize;
+
+        let result = zonk_type_with(&source, &solutions, |cells| {
+            remaining = remaining.checked_sub(cells).ok_or(())?;
+            Ok(())
+        });
+
+        assert_eq!(result, Err(()));
+        assert_eq!(remaining, 0);
     }
 
     #[test]

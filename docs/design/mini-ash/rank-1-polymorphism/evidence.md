@@ -79,12 +79,12 @@ count locates the closed sites; it is not an edit count or complexity metric.
 | Obligation | Retained evidence |
 | --- | --- |
 | Parameterized declarations and constructors | `tests/parser.rs`, `tests/polymorphism.rs::parameterized_constructors_are_ordinary_polymorphic_values` |
-| Global instantiation | `implicitly_quantified_global_instantiates_at_unrelated_types` |
+| Global instantiation | `implicitly_quantified_global_instantiates_at_unrelated_types`, `polymorphic_global_instantiates_freshly_inside_another_global` |
 | Conservative local generalization | `anonymous_function_local_bindings_generalize`, `application_shaped_local_bindings_remain_monomorphic`, `function_generalization_excludes_inference_shared_with_the_environment` |
 | Constructor patterns and coverage | `constructor_patterns_instantiate_the_expected_nominal_arguments`, `coverage_substitutes_parameterized_constructor_payloads` |
 | Occurs check and ambiguity | `infinite_inferred_types_are_rejected_by_the_occurs_check`, `unresolved_local_function_inference_is_a_source_ambiguity` |
 | Monomorphic recursion | `inferred_polymorphic_recursion_is_rejected`, `recursive_global_self_uses_apply_the_same_rigid_parameters` |
-| Explicit Core facts | `source_instantiation_is_explicit_in_validated_core` and malformed type-operation cases in `tests/core_validation.rs` |
+| Explicit Core facts | `source_instantiation_is_explicit_in_validated_core`, `rejects_constructor_payload_variables_outside_the_owner_parameters`, `rejects_polymorphic_constructor_payloads_in_the_registry`, and malformed type-operation cases in `tests/core_validation.rs` |
 | Transform preservation and erasure | `explicit_type_operations_survive_both_core_transforms_and_erasure` |
 | Parameterized cyclic data | `parameterized_guarded_recursive_data_keeps_runtime_types_erased` |
 | Source-facing output | `static_semantics_rank_one_polymorphism_is_executable` and `tool_rank_one_example_has_exact_cli_observation` |
@@ -125,8 +125,14 @@ oversized Core construction and unchecked-Core validation produce structured
 resource errors. The latter test does not depend on the source syntax or parser
 budget, so it proves malformed-Core error mapping at the target boundary.
 
-Substitution, zonking, Core type admission, Core validation, and the adjusted
-match elaboration traversal use explicit work stacks at their admitted depth.
+Substitution and zonking first charge every cell in the expanded result through
+constant-width work stacks and only then rebuild that result. The focused unit
+tests reject expanded substitutions and zonks before rebuilding. The direct
+`expanded_malformed_type_application_maps_to_validation_resource` case shows
+that a compact malformed Core application whose substitution exceeds the
+budget maps to `core.validation.resource`.
+Core type admission, Core validation, and the adjusted match elaboration
+traversal also use explicit work stacks at their admitted depth.
 `deep_parameter_substitution_completes_on_a_small_stack` and the retained deep
 pattern, recursive-group, heap, rendering, and destruction tests run on a 256
 KiB host stack. Type work is cumulative within each stage; repeated

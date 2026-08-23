@@ -113,6 +113,16 @@ fn implicitly_quantified_global_instantiates_at_unrelated_types() {
 }
 
 #[test]
+fn polymorphic_global_instantiates_freshly_inside_another_global() {
+    let observation = run(
+        "id : A -> A\nid value = value\n\nrelay : B -> B\nrelay value = id value\n\nrelay(true)\n",
+    );
+
+    assert_eq!(observation.value_display(), "true");
+    assert_eq!(observation.type_display(), "Bool");
+}
+
+#[test]
 fn parameterized_constructors_are_ordinary_polymorphic_values() {
     let observation = run(
         "type Option<A> =\nNone\n| Some(A)\n\napply : (A -> B, A) -> B\napply (function, value) = function value\n\napply(Some, 42)\n",

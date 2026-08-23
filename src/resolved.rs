@@ -165,6 +165,14 @@ impl ResolvedRegistry {
         Some(self.nominal_parameters.get(&id).map_or(&[], Box::as_ref))
     }
 
+    pub(crate) fn nominal_parameter_entries(
+        &self,
+    ) -> impl Iterator<Item = (NominalTypeId, &[ResolvedTypeVariable])> {
+        self.nominal_parameters
+            .iter()
+            .map(|(owner, parameters)| (*owner, parameters.as_ref()))
+    }
+
     /// Renders a type with source declaration spellings for nominal identities.
     #[must_use]
     pub fn display_type(&self, ty: &Type) -> String {
