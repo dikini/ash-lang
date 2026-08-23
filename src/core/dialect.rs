@@ -658,12 +658,25 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let arms = admit_match_arms(arms, &mut self.type_work)?;
-        self.push(
-            ty,
-            origin,
-            PureExprKind::Computation(PureComputation::Match(MatchNode::new(scrutinee, arms))),
-        )
+        let admitted_arms = admit_match_arms(arms, &mut self.type_work);
+        let admitted_result = admit_payloads(ty, origin, &mut self.type_work);
+        match (admitted_arms, admitted_result) {
+            (Ok(arms), Ok((ty, origin))) => self.push_admitted(
+                ty,
+                origin,
+                PureExprKind::Computation(PureComputation::Match(MatchNode::new(scrutinee, arms))),
+            ),
+            (Err(arm_error), Ok((ty, origin))) => {
+                discard_type_iteratively(ty);
+                discard_origin_iteratively(origin);
+                Err(arm_error)
+            }
+            (Ok(arms), Err(result_error)) => {
+                discard_match_arms(arms);
+                Err(result_error)
+            }
+            (Err(arm_error), Err(_)) => Err(arm_error),
+        }
     }
 
     /// Adds a variable occurrence with an unchecked result annotation.
@@ -1038,6 +1051,7 @@ impl CoreBuilder {
 
 enum PatternAdmissionTask {
     Visit(CorePattern, usize),
+    VisitSequence(std::vec::IntoIter<CorePattern>, usize),
     FinishTuple {
         ty: Type,
         origin: Origin,
@@ -1049,6 +1063,22 @@ enum PatternAdmissionTask {
         constructor: crate::types::ConstructorId,
         has_payload: bool,
     },
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static PATTERN_ADMISSION_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MATCH_ARM_RETAINED_CAPACITY_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_pattern_admission_pending(pending: usize) {
+    PATTERN_ADMISSION_PENDING_PEAK.with(|peak| peak.set(peak.get().max(pending)));
+}
+
+#[cfg(test)]
+fn record_match_arm_retained_capacity(capacity: usize) {
+    MATCH_ARM_RETAINED_CAPACITY_PEAK.with(|peak| peak.set(peak.get().max(capacity)));
 }
 
 enum PatternToken {
@@ -1064,23 +1094,38 @@ fn admit_match_arms(
     arms: Vec<CoreMatchArm>,
     type_work: &mut TypeWorkBudget,
 ) -> Result<Vec<CoreMatchArm>, BuildError> {
-    let mut admitted = Vec::with_capacity(arms.len());
-    let mut first_error = None;
-    for arm in arms {
+    let mut admitted = Vec::new();
+    let mut remaining = arms.into_iter();
+    while let Some(arm) = remaining.next() {
         let (pattern, body, origin) = arm.into_parts();
         let pattern = admit_pattern(pattern, type_work);
         let origin = admit_origin(origin);
         match (pattern, origin) {
-            (Ok(pattern), Ok(origin)) if first_error.is_none() => {
+            (Ok(pattern), Ok(origin)) => {
                 admitted.push(CoreMatchArm::new(pattern, body, origin));
+                #[cfg(test)]
+                record_match_arm_retained_capacity(admitted.capacity());
             }
-            (Err(error), _) | (_, Err(error)) => {
-                first_error.get_or_insert(error);
+            (Err(error), Ok(origin)) => {
+                discard_origin_iteratively(origin);
+                discard_match_arms(admitted);
+                discard_match_arm_remainder(remaining);
+                return Err(error);
             }
-            (Ok(_), Ok(_)) => {}
+            (Ok(pattern), Err(error)) => {
+                pattern.discard_iteratively();
+                discard_match_arms(admitted);
+                discard_match_arm_remainder(remaining);
+                return Err(error);
+            }
+            (Err(pattern_error), Err(_)) => {
+                discard_match_arms(admitted);
+                discard_match_arm_remainder(remaining);
+                return Err(pattern_error);
+            }
         }
     }
-    first_error.map_or(Ok(admitted), Err)
+    Ok(admitted)
 }
 
 fn admit_pattern(
@@ -1089,79 +1134,55 @@ fn admit_pattern(
 ) -> Result<CorePattern, BuildError> {
     let mut work = vec![PatternAdmissionTask::Visit(pattern, 0)];
     let mut tokens = Vec::new();
-    let mut first_error = None;
+    #[cfg(test)]
+    record_pattern_admission_pending(work.len());
     while let Some(task) = work.pop() {
         match task {
             PatternAdmissionTask::Visit(pattern, depth) => {
-                let CorePattern { ty, origin, kind } = pattern;
                 if depth > CORE_PATTERN_DEPTH_LIMIT {
-                    first_error.get_or_insert(BuildError::PatternDepthExceeded);
+                    pattern.discard_iteratively();
+                    discard_pattern_admission_work(work);
+                    discard_pattern_tokens(tokens);
+                    return Err(BuildError::PatternDepthExceeded);
                 }
-                let payloads = admit_payloads(ty, origin, type_work);
+                let CorePattern { ty, origin, kind } = pattern;
+                let (ty, origin) = match admit_payloads(ty, origin, type_work) {
+                    Ok(payloads) => payloads,
+                    Err(error) => {
+                        discard_pattern_kind(kind);
+                        discard_pattern_admission_work(work);
+                        discard_pattern_tokens(tokens);
+                        return Err(error);
+                    }
+                };
                 match kind {
-                    CorePatternKind::Binder(binder) => match payloads {
-                        Ok((ty, origin)) if first_error.is_none() => {
-                            tokens.push(PatternToken::Binder(ty, origin, binder));
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            first_error.get_or_insert(error);
-                        }
-                    },
-                    CorePatternKind::Wildcard => {
-                        push_pattern_leaf(payloads, &mut first_error, &mut tokens, |ty, origin| {
-                            PatternToken::Wildcard(ty, origin)
-                        })
+                    CorePatternKind::Binder(binder) => {
+                        tokens.push(PatternToken::Binder(ty, origin, binder));
                     }
+                    CorePatternKind::Wildcard => tokens.push(PatternToken::Wildcard(ty, origin)),
                     CorePatternKind::Boolean(value) => {
-                        push_pattern_leaf(payloads, &mut first_error, &mut tokens, |ty, origin| {
-                            PatternToken::Boolean(ty, origin, value)
-                        })
+                        tokens.push(PatternToken::Boolean(ty, origin, value));
                     }
-                    CorePatternKind::Unit => {
-                        push_pattern_leaf(payloads, &mut first_error, &mut tokens, |ty, origin| {
-                            PatternToken::Unit(ty, origin)
-                        })
-                    }
+                    CorePatternKind::Unit => tokens.push(PatternToken::Unit(ty, origin)),
                     CorePatternKind::Tuple(elements) => {
-                        if let Ok((ty, origin)) = payloads {
-                            let count = elements.len();
-                            if first_error.is_none() {
-                                work.push(PatternAdmissionTask::FinishTuple { ty, origin, count });
-                            }
-                            for element in elements.into_vec().into_iter().rev() {
-                                work.push(PatternAdmissionTask::Visit(
-                                    element,
-                                    depth.saturating_add(1),
-                                ));
-                            }
-                        } else if let Err(error) = payloads {
-                            first_error.get_or_insert(error);
-                            for element in elements.into_vec().into_iter().rev() {
-                                work.push(PatternAdmissionTask::Visit(
-                                    element,
-                                    depth.saturating_add(1),
-                                ));
-                            }
-                        }
+                        let count = elements.len();
+                        work.push(PatternAdmissionTask::FinishTuple { ty, origin, count });
+                        work.push(PatternAdmissionTask::VisitSequence(
+                            elements.into_vec().into_iter(),
+                            depth.saturating_add(1),
+                        ));
                     }
                     CorePatternKind::Constructor {
                         constructor,
                         payload,
                     } => {
                         let has_payload = payload.is_some();
-                        if let Ok((ty, origin)) = payloads {
-                            if first_error.is_none() {
-                                work.push(PatternAdmissionTask::FinishConstructor {
-                                    ty,
-                                    origin,
-                                    constructor,
-                                    has_payload,
-                                });
-                            }
-                        } else if let Err(error) = payloads {
-                            first_error.get_or_insert(error);
-                        }
+                        work.push(PatternAdmissionTask::FinishConstructor {
+                            ty,
+                            origin,
+                            constructor,
+                            has_payload,
+                        });
                         if let Some(payload) = payload {
                             work.push(PatternAdmissionTask::Visit(
                                 *payload,
@@ -1169,6 +1190,12 @@ fn admit_pattern(
                             ));
                         }
                     }
+                }
+            }
+            PatternAdmissionTask::VisitSequence(mut remaining, depth) => {
+                if let Some(pattern) = remaining.next() {
+                    work.push(PatternAdmissionTask::VisitSequence(remaining, depth));
+                    work.push(PatternAdmissionTask::Visit(pattern, depth));
                 }
             }
             PatternAdmissionTask::FinishTuple { ty, origin, count } => {
@@ -1186,13 +1213,13 @@ fn admit_pattern(
                 has_payload,
             )),
         }
-    }
-    if let Some(error) = first_error {
-        return Err(error);
+        #[cfg(test)]
+        record_pattern_admission_pending(work.len());
     }
 
     let mut rebuilt = Vec::new();
-    for token in tokens {
+    let mut remaining_tokens = tokens.into_iter();
+    while let Some(token) = remaining_tokens.next() {
         let pattern = match token {
             PatternToken::Binder(ty, origin, binder) => {
                 CorePattern::new(ty, origin, CorePatternKind::Binder(binder))
@@ -1206,6 +1233,10 @@ fn admit_pattern(
             PatternToken::Unit(ty, origin) => CorePattern::new(ty, origin, CorePatternKind::Unit),
             PatternToken::Tuple(ty, origin, count) => {
                 if rebuilt.len() < count {
+                    discard_type_iteratively(ty);
+                    discard_origin_iteratively(origin);
+                    discard_patterns(rebuilt);
+                    discard_pattern_token_remainder(remaining_tokens);
                     return Err(BuildError::InvalidPayload);
                 }
                 let elements = rebuilt.split_off(rebuilt.len() - count);
@@ -1217,7 +1248,14 @@ fn admit_pattern(
             }
             PatternToken::Constructor(ty, origin, constructor, has_payload) => {
                 let payload = if has_payload {
-                    Some(Box::new(rebuilt.pop().ok_or(BuildError::InvalidPayload)?))
+                    let Some(payload) = rebuilt.pop() else {
+                        discard_type_iteratively(ty);
+                        discard_origin_iteratively(origin);
+                        discard_patterns(rebuilt);
+                        discard_pattern_token_remainder(remaining_tokens);
+                        return Err(BuildError::InvalidPayload);
+                    };
+                    Some(Box::new(payload))
                 } else {
                     None
                 };
@@ -1233,25 +1271,91 @@ fn admit_pattern(
         };
         rebuilt.push(pattern);
     }
-    let result = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
+    let Some(result) = rebuilt.pop() else {
+        return Err(BuildError::InvalidPayload);
+    };
     if rebuilt.is_empty() {
         Ok(result)
     } else {
+        result.discard_iteratively();
+        discard_patterns(rebuilt);
         Err(BuildError::InvalidPayload)
     }
 }
 
-fn push_pattern_leaf(
-    payloads: Result<(Type, Origin), BuildError>,
-    first_error: &mut Option<BuildError>,
-    tokens: &mut Vec<PatternToken>,
-    token: impl FnOnce(Type, Origin) -> PatternToken,
-) {
-    match payloads {
-        Ok((ty, origin)) if first_error.is_none() => tokens.push(token(ty, origin)),
-        Ok(_) => {}
-        Err(error) => {
-            first_error.get_or_insert(error);
+fn discard_patterns(patterns: Vec<CorePattern>) {
+    for pattern in patterns {
+        pattern.discard_iteratively();
+    }
+}
+
+fn discard_pattern_token_remainder(tokens: impl Iterator<Item = PatternToken>) {
+    discard_pattern_tokens(tokens);
+}
+
+fn discard_match_arm_remainder(arms: impl Iterator<Item = CoreMatchArm>) {
+    for arm in arms {
+        let (pattern, _, origin) = arm.into_parts();
+        pattern.discard_iteratively();
+        discard_origin_iteratively(origin);
+    }
+}
+
+fn discard_match_arms(arms: Vec<CoreMatchArm>) {
+    discard_match_arm_remainder(arms.into_iter());
+}
+
+fn discard_pattern_kind(kind: CorePatternKind) {
+    match kind {
+        CorePatternKind::Binder(binder) => binder.discard_metadata(),
+        CorePatternKind::Tuple(elements) => {
+            for pattern in elements.into_vec() {
+                pattern.discard_iteratively();
+            }
+        }
+        CorePatternKind::Constructor { payload, .. } => {
+            if let Some(payload) = payload {
+                payload.discard_iteratively();
+            }
+        }
+        CorePatternKind::Wildcard | CorePatternKind::Boolean(_) | CorePatternKind::Unit => {}
+    }
+}
+
+fn discard_pattern_admission_work(mut work: Vec<PatternAdmissionTask>) {
+    while let Some(task) = work.pop() {
+        match task {
+            PatternAdmissionTask::Visit(pattern, _) => pattern.discard_iteratively(),
+            PatternAdmissionTask::VisitSequence(remaining, _) => {
+                for pattern in remaining {
+                    pattern.discard_iteratively();
+                }
+            }
+            PatternAdmissionTask::FinishTuple { ty, origin, .. }
+            | PatternAdmissionTask::FinishConstructor { ty, origin, .. } => {
+                discard_type_iteratively(ty);
+                discard_origin_iteratively(origin);
+            }
+        }
+    }
+}
+
+fn discard_pattern_tokens(tokens: impl IntoIterator<Item = PatternToken>) {
+    for token in tokens {
+        match token {
+            PatternToken::Binder(ty, origin, binder) => {
+                discard_type_iteratively(ty);
+                discard_origin_iteratively(origin);
+                binder.discard_metadata();
+            }
+            PatternToken::Wildcard(ty, origin)
+            | PatternToken::Boolean(ty, origin, _)
+            | PatternToken::Unit(ty, origin)
+            | PatternToken::Tuple(ty, origin, _)
+            | PatternToken::Constructor(ty, origin, _, _) => {
+                discard_type_iteratively(ty);
+                discard_origin_iteratively(origin);
+            }
         }
     }
 }
@@ -1619,6 +1723,19 @@ mod tests {
         TYPE_ADMISSION_PENDING_PEAK.with(std::cell::Cell::get)
     }
 
+    fn reset_pattern_admission_peaks() {
+        PATTERN_ADMISSION_PENDING_PEAK.with(|peak| peak.set(0));
+        MATCH_ARM_RETAINED_CAPACITY_PEAK.with(|peak| peak.set(0));
+    }
+
+    fn pattern_admission_pending_peak() -> usize {
+        PATTERN_ADMISSION_PENDING_PEAK.with(std::cell::Cell::get)
+    }
+
+    fn match_arm_retained_capacity_peak() -> usize {
+        MATCH_ARM_RETAINED_CAPACITY_PEAK.with(std::cell::Cell::get)
+    }
+
     fn nested_pattern(source: &SourceFile, depth: usize) -> CorePattern {
         let origin = generated_origin(source, 0);
         let mut pattern = CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard);
@@ -1674,6 +1791,90 @@ mod tests {
             .expect("pattern admission thread should start")
             .join()
             .expect("pattern admission should fit the small stack");
+    }
+
+    #[test]
+    fn failed_match_arms_admit_and_dispose_deep_result_payloads_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("core-match-result-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("match-result.ash", "()").expect("test source");
+                let shallow_origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let value = builder
+                    .unit(Type::Unit, shallow_origin.clone())
+                    .expect("unit node");
+
+                let error = builder
+                    .match_expression(
+                        value,
+                        vec![CoreMatchArm::new(
+                            nested_pattern(&source, CORE_PATTERN_DEPTH_LIMIT + 1),
+                            value,
+                            shallow_origin,
+                        )],
+                        function_type(5_000),
+                        generated_origin(&source, 5_000),
+                    )
+                    .expect_err("the arm error retains precedence");
+                assert_eq!(error, BuildError::PatternDepthExceeded);
+            })
+            .expect("match result disposal thread should start")
+            .join()
+            .expect("all failed match payloads must be disposed iteratively");
+    }
+
+    #[test]
+    fn wide_pattern_admission_keeps_owned_pending_work_constant() {
+        const WIDTH: usize = 100_000;
+        const ALLOWANCE: usize = 64;
+        let source = SourceFile::new("wide-pattern.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let element = CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard);
+        let pattern = CorePattern::new(
+            Type::Unit,
+            origin,
+            CorePatternKind::Tuple(vec![element; WIDTH].into_boxed_slice()),
+        );
+        let mut budget = TypeWorkBudget::default();
+        budget
+            .charge(crate::types::TYPE_WORK_LIMIT - ALLOWANCE)
+            .expect("test setup leaves a small exact allowance");
+        reset_pattern_admission_peaks();
+
+        assert_eq!(
+            admit_pattern(pattern, &mut budget),
+            Err(BuildError::TypeWorkExceeded)
+        );
+        assert!(pattern_admission_pending_peak() <= 3);
+    }
+
+    #[test]
+    fn huge_match_arm_groups_retain_only_charged_admitted_arms() {
+        const WIDTH: usize = 100_000;
+        const ALLOWANCE: usize = 64;
+        let source = SourceFile::new("wide-arms.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let arena = ArenaId::new(77);
+        let body = NodeId::new(arena, 0);
+        let arm = CoreMatchArm::new(
+            CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard),
+            body,
+            origin,
+        );
+        let mut budget = TypeWorkBudget::default();
+        budget
+            .charge(crate::types::TYPE_WORK_LIMIT - ALLOWANCE)
+            .expect("test setup leaves an exact arm allowance");
+        reset_pattern_admission_peaks();
+
+        assert_eq!(
+            admit_match_arms(vec![arm; WIDTH], &mut budget),
+            Err(BuildError::TypeWorkExceeded)
+        );
+        assert!(match_arm_retained_capacity_peak() <= ALLOWANCE);
+        assert!(pattern_admission_pending_peak() <= 1);
     }
 
     #[test]

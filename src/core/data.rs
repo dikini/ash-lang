@@ -64,19 +64,14 @@ impl CorePattern {
 
     /// Visits every binder definition in deterministic left-to-right order.
     pub(crate) fn binders<'a>(&'a self, output: &mut Vec<&'a TypedBinder>) {
-        let mut work = vec![self];
-        while let Some(pattern) = work.pop() {
-            match &pattern.kind {
-                CorePatternKind::Binder(binder) => output.push(binder),
-                CorePatternKind::Tuple(elements) => work.extend(elements.iter().rev()),
-                CorePatternKind::Constructor { payload, .. } => {
-                    if let Some(payload) = payload.as_deref() {
-                        work.push(payload);
-                    }
-                }
-                CorePatternKind::Wildcard | CorePatternKind::Boolean(_) | CorePatternKind::Unit => {
-                }
-            }
+        for binder in self.binder_iter() {
+            output.push(binder);
+        }
+    }
+
+    pub(crate) fn binder_iter(&self) -> CorePatternBinderIter<'_> {
+        CorePatternBinderIter {
+            work: vec![BinderTraversalTask::Visit(self)],
         }
     }
 
@@ -137,6 +132,70 @@ impl CorePattern {
                 }
             }
         }
+    }
+}
+
+enum BinderTraversalTask<'a> {
+    Visit(&'a CorePattern),
+    Sequence(std::slice::Iter<'a, CorePattern>),
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static BINDER_TRAVERSAL_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn reset_binder_traversal_pending_peak() {
+    BINDER_TRAVERSAL_PENDING_PEAK.with(|peak| peak.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn binder_traversal_pending_peak() -> usize {
+    BINDER_TRAVERSAL_PENDING_PEAK.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn record_binder_traversal_pending(pending: usize) {
+    BINDER_TRAVERSAL_PENDING_PEAK.with(|peak| peak.set(peak.get().max(pending)));
+}
+
+pub(crate) struct CorePatternBinderIter<'a> {
+    work: Vec<BinderTraversalTask<'a>>,
+}
+
+impl<'a> Iterator for CorePatternBinderIter<'a> {
+    type Item = &'a TypedBinder;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(task) = self.work.pop() {
+            match task {
+                BinderTraversalTask::Visit(pattern) => match &pattern.kind {
+                    CorePatternKind::Binder(binder) => return Some(binder),
+                    CorePatternKind::Tuple(elements) => {
+                        self.work
+                            .push(BinderTraversalTask::Sequence(elements.iter()));
+                    }
+                    CorePatternKind::Constructor { payload, .. } => {
+                        if let Some(payload) = payload.as_deref() {
+                            self.work.push(BinderTraversalTask::Visit(payload));
+                        }
+                    }
+                    CorePatternKind::Wildcard
+                    | CorePatternKind::Boolean(_)
+                    | CorePatternKind::Unit => {}
+                },
+                BinderTraversalTask::Sequence(mut remaining) => {
+                    if let Some(pattern) = remaining.next() {
+                        self.work.push(BinderTraversalTask::Sequence(remaining));
+                        self.work.push(BinderTraversalTask::Visit(pattern));
+                    }
+                }
+            }
+            #[cfg(test)]
+            record_binder_traversal_pending(self.work.len());
+        }
+        None
     }
 }
 

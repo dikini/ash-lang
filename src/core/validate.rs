@@ -751,9 +751,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 PureExprKind::Computation(PureComputation::Match(match_node)) => {
                     for arm in match_node.arms() {
-                        let mut binders = Vec::new();
-                        arm.pattern().binders(&mut binders);
-                        for binder in binders {
+                        for binder in arm.pattern().binder_iter() {
                             self.collect_binder(id, binder, ValidationReason::Pattern, false)?;
                         }
                     }
@@ -796,9 +794,13 @@ impl<'program, 'source> Validator<'program, 'source> {
         if !type_valid {
             return Err(ValidationError::new(invalid_type, Some(node)));
         }
-        if self.binders.insert(binder.id(), binder).is_some() {
+        if self.binders.contains_key(&binder.id()) {
             return Err(ValidationError::new(ValidationReason::Scope, Some(node)));
         }
+        self.binders
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+        self.binders.insert(binder.id(), binder);
         Ok(())
     }
 
@@ -1801,9 +1803,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                             for arm in match_node.arms() {
                                 let mut arm_free =
                                     self.requirements_for(&requirements, arm.body())?;
-                                let mut binders = Vec::new();
-                                arm.pattern().binders(&mut binders);
-                                for binder in binders {
+                                for binder in arm.pattern().binder_iter() {
                                     arm_free.remove(&binder.id());
                                 }
                                 free = union_requirements(free, arm_free);
@@ -2187,6 +2187,69 @@ mod tests {
             .expect_err("wide type must exhaust deterministic work");
         assert_eq!(error.reason(), ValidationReason::Resource);
         assert!(validator.type_validation_pending_peak.get() <= 2);
+        drop(validator);
+        program.discard_iteratively();
+    }
+
+    #[test]
+    fn wide_pattern_binders_are_validated_incrementally_before_retention() {
+        const WIDTH: usize = 100_000;
+        const ALLOWANCE: usize = 64;
+        let file = source();
+        let origin = origin(&file);
+        let arena = super::super::dialect::ArenaId::new(185);
+        let patterns = (0..WIDTH)
+            .map(|index| {
+                CorePattern::new(
+                    Type::Unit,
+                    origin.clone(),
+                    CorePatternKind::Binder(TypedBinder::new(
+                        arena,
+                        BinderId::new(u32::try_from(index).expect("binder identity")),
+                        Type::Unit,
+                        origin.clone(),
+                    )),
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let pattern = CorePattern::new(
+            Type::Tuple(vec![Type::Unit; WIDTH].into_boxed_slice()),
+            origin.clone(),
+            CorePatternKind::Tuple(patterns),
+        );
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes: vec![StoredNode {
+                dialect: DialectId::PURE,
+                ty: Type::Unit,
+                origin: Some(origin.clone()),
+                kind: PureExprKind::Computation(PureComputation::Match(
+                    super::super::data::MatchNode::new(
+                        NodeId::new(arena, 0),
+                        vec![super::super::data::CoreMatchArm::new(
+                            pattern,
+                            NodeId::new(arena, 0),
+                            origin,
+                        )],
+                    ),
+                )),
+            }],
+            root: NodeId::new(arena, 0),
+        };
+        let mut validator = Validator::new(&program, &[&file]);
+        validator
+            .charge_type_work(TYPE_WORK_LIMIT - ALLOWANCE)
+            .expect("test setup leaves a small exact allowance");
+        super::super::data::reset_binder_traversal_pending_peak();
+
+        let error = validator
+            .collect_binders()
+            .expect_err("binder types must consume the remaining allowance");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert!(super::super::data::binder_traversal_pending_peak() <= 2);
+        assert!(validator.binders.len() <= ALLOWANCE);
         drop(validator);
         program.discard_iteratively();
     }
