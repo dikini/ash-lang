@@ -809,13 +809,26 @@ impl Elaborator {
     }
 
     fn admit_public_context(&mut self, context: &TypeContext) -> Result<(), TypeError> {
+        let mut invalid = false;
         for fact in context.binders.values() {
             if !fact.quantified.is_empty() {
-                return Err(invalid_state());
+                invalid = true;
             }
-            self.admit_public_monotype(&fact.ty)?;
+            match validate_and_charge_public_monotype(&fact.ty, &mut self.type_work) {
+                Ok(()) => {}
+                Err(PublicTypeAdmissionError::Invalid) => invalid = true,
+                Err(PublicTypeAdmissionError::Resource) => {
+                    return Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ));
+                }
+            }
         }
-        Ok(())
+        if invalid {
+            Err(invalid_state())
+        } else {
+            Ok(())
+        }
     }
 
     fn admit_public_monotype(&mut self, ty: &Type) -> Result<(), TypeError> {
@@ -4240,6 +4253,76 @@ mod tests {
         );
         let mut elaborator =
             Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
+
+        assert_eq!(
+            elaborator.synthesize(&resolved.result, &context),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        TYPE_CONTEXT_CLONES.with(|clones| assert_eq!(clones.get(), 0));
+    }
+
+    #[test]
+    fn public_context_resource_precedes_invalid_type_independent_of_insertion_order() {
+        let source =
+            SourceFile::new("public-context-order.ash", "42\n").expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+
+        for round in 0..16_u32 {
+            let first_id = BinderId::new(round * 2);
+            let second_id = BinderId::new(round * 2 + 1);
+            let mut context = TypeContext::new();
+            if round % 2 == 0 {
+                context.insert(first_id, Type::Unit);
+                context.insert(second_id, Type::Unit);
+            } else {
+                context.insert(second_id, Type::Unit);
+                context.insert(first_id, Type::Unit);
+            }
+            let ids = context.binders.keys().copied().collect::<Vec<_>>();
+            context.insert(ids[0], Type::Inference(InferenceVariableId::new(0)));
+            context.insert(ids[1], Type::Tuple(vec![Type::Int; 8].into_boxed_slice()));
+            let mut elaborator = Elaborator::new();
+            elaborator
+                .type_work
+                .charge(crate::types::TYPE_WORK_LIMIT - 9)
+                .expect("the fixture leaves exactly the wide valid type allowance");
+            TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
+
+            assert_eq!(
+                elaborator.synthesize(&resolved.result, &context),
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                ))
+            );
+            TYPE_CONTEXT_CLONES.with(|clones| assert_eq!(clones.get(), 0));
+        }
+    }
+
+    #[test]
+    fn public_context_resource_precedes_invalid_quantification() {
+        let source = SourceFile::new("public-context-quantification.ash", "42\n")
+            .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let mut context = TypeContext::new();
+        context.insert(BinderId::new(0), Type::Unit);
+        context.insert(BinderId::new(1), Type::Unit);
+        let ids = context.binders.keys().copied().collect::<Vec<_>>();
+        context
+            .set_quantified(ids[0], vec![TypeVariableId::new(0)].into_boxed_slice())
+            .expect("the fact exists");
+        context.insert(ids[1], Type::Tuple(vec![Type::Int; 8].into_boxed_slice()));
+        let mut elaborator = Elaborator::new();
+        elaborator
+            .type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 9)
+            .expect("the fixture leaves exactly the wide valid type allowance");
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         assert_eq!(
