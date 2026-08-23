@@ -410,6 +410,58 @@ fn rejects_registry_type_parameter_identities_out_of_source_order() {
 }
 
 #[test]
+fn rejects_nominal_parameters_reused_as_type_abstraction_binders() {
+    let file = source("BoxAValue");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let parameter = TypeVariableId::new(0);
+    let registry = Arc::new(
+        ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Box".into(),
+                constructors: vec![constructor].into_boxed_slice(),
+                origin: origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner: nominal,
+                spelling: "Boxed".into(),
+                payload: Some(Type::Variable(parameter)),
+                origin: range_origin(&file, 4, 9),
+            }],
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                origin: range_origin(&file, 3, 4),
+            }],
+        )]),
+    );
+    let mut builder = CoreBuilder::with_registry(registry);
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("unit abstraction body");
+    let root = builder
+        .type_abstraction(
+            vec![parameter],
+            body,
+            Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+            origin,
+        )
+        .expect("unchecked type abstraction");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("nominal parameters cannot define value-level type abstractions");
+
+    assert_eq!(error.reason(), ValidationReason::TypeOperation);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
 fn validates_ten_thousand_constructor_owner_links_without_pairwise_scanning() {
     const WIDTH: u32 = 10_000;
     let file = source(&"x".repeat(WIDTH as usize + 1));

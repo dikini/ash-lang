@@ -271,16 +271,19 @@ impl<'program, 'source> Validator<'program, 'source> {
     }
 
     fn run(mut self) -> Result<(), ValidationError> {
-        self.validate_registry()?;
+        let nominal_parameter_owners = self.validate_registry()?;
         self.validate_envelopes()?;
         self.validate_graph()?;
         self.collect_binders()?;
-        self.validate_node_types()?;
+        self.validate_node_types(&nominal_parameter_owners)?;
         self.validate_scopes()?;
         self.validate_type_scopes()
     }
 
-    fn validate_registry(&self) -> Result<(), ValidationError> {
+    fn validate_registry(
+        &self,
+    ) -> Result<HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>, ValidationError>
+    {
         let registry = &self.program.registry;
         let mut nominal_ids = HashSet::new();
         let mut nominal_names = HashSet::new();
@@ -458,7 +461,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         }) {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
-        Ok(())
+        Ok(parameter_owners)
     }
 
     fn valid_type(&self, root: Option<&Type>) -> Result<bool, ValidationError> {
@@ -899,7 +902,13 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(())
     }
 
-    fn validate_node_types(&self) -> Result<(), ValidationError> {
+    fn validate_node_types(
+        &self,
+        nominal_parameter_owners: &HashMap<
+            crate::types::TypeVariableId,
+            crate::types::NominalTypeId,
+        >,
+    ) -> Result<(), ValidationError> {
         let mut type_abstraction_definitions = HashMap::new();
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
@@ -919,6 +928,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         node,
                         computation,
                         &mut type_abstraction_definitions,
+                        nominal_parameter_owners,
                     )?;
                 }
             }
@@ -971,6 +981,10 @@ impl<'program, 'source> Validator<'program, 'source> {
         node: &StoredNode,
         computation: &PureComputation,
         type_abstraction_definitions: &mut HashMap<crate::types::TypeVariableId, NodeId>,
+        nominal_parameter_owners: &HashMap<
+            crate::types::TypeVariableId,
+            crate::types::NominalTypeId,
+        >,
     ) -> Result<(), ValidationError> {
         match computation {
             PureComputation::Bind(binding) => {
@@ -1147,6 +1161,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                     || !abstraction.parameters().iter().copied().all(|parameter| {
                         type_abstraction_definitions.insert(parameter, id).is_none()
                     })
+                    || abstraction
+                        .parameters()
+                        .iter()
+                        .any(|parameter| nominal_parameter_owners.contains_key(parameter))
                     || abstraction.parameters() != parameters.as_ref()
                     || !same_type(&body.ty, scheme_body)
                     || matches!(scheme_body.as_ref(), Type::Forall(_, _))
@@ -2641,6 +2659,7 @@ mod tests {
                     _ => unreachable!("test abstraction computation"),
                 },
                 &mut HashMap::new(),
+                &HashMap::new(),
             )
             .expect("one abstraction binder fits exactly");
         assert_eq!(
@@ -2664,6 +2683,7 @@ mod tests {
                     _ => unreachable!("test application computation"),
                 },
                 &mut HashMap::new(),
+                &HashMap::new(),
             )
             .expect("one argument validation, clone, replacement entry, and result fit exactly");
         assert_eq!(
@@ -2735,6 +2755,7 @@ mod tests {
                 &program.nodes[2],
                 computation,
                 &mut HashMap::new(),
+                &HashMap::new(),
             )
             .expect("the exact argument-validation and clone allowance fits");
         assert_eq!(
@@ -2755,6 +2776,7 @@ mod tests {
                 &program.nodes[2],
                 computation,
                 &mut HashMap::new(),
+                &HashMap::new(),
             )
             .expect_err("argument clones must not cross the validation budget");
         assert_eq!(error.reason(), ValidationReason::Resource);
