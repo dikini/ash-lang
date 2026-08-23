@@ -16,16 +16,18 @@ gates are complete. Current decision readiness is tracked in the
 and its [convergence record](design/mini-ash/first-stratum/comparisons/component-convergence.md).
 
 [DN-0020](design/DN-0020-ash-dialect-milestones.md) outlines two retained
-implementation milestones. Mini-Ash closes with rank-1 polymorphism and a
-simplification analysis. Modular Ash then adds passive static modules and
-interfaces, uses that boundary to compare core language forms with library
-definitions, and closes with its own simplification analysis. The two remain
-independently selectable and testable dialects.
+milestones. The `mini-ash` Git tag preserves the completed Mini-Ash
+implementation, tests, specification, and evidence. Current source then evolves
+into Modular Ash through passive static modules, interfaces, and a
+core-versus-library audit. Historical comparisons build the tag separately;
+the current compiler does not keep both dialects selectable.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
-| [Mini-Ash phase](design/DN-0015-mini-ash-phase.md) | implementation | current [Mini-Ash specification](../spec/README.md), reviewed [first corpus stratum](design/DN-0016-first-mini-ash-corpus.md), accepted component decisions, retained [data-and-pattern evidence](design/mini-ash/data-and-patterns/evidence.md), and retained [rank-1 evidence](design/mini-ash/rank-1-polymorphism/evidence.md) | Preserve the completed dialect as the input to Modular Ash design. |
-| [Modular Ash milestone](design/DN-0020-ash-dialect-milestones.md#start-modular-ash-at-the-static-boundary) | outlined | completed Mini-Ash dialect and its simplification analysis | Design passive static modules and interfaces, then use them to test core-versus-library boundaries. |
+| [Mini-Ash phase](design/DN-0015-mini-ash-phase.md) | implementation | current [Mini-Ash specification](../spec/README.md), reviewed [first corpus stratum](design/DN-0016-first-mini-ash-corpus.md), accepted component decisions, retained [data-and-pattern evidence](design/mini-ash/data-and-patterns/evidence.md), and retained [rank-1 evidence](design/mini-ash/rank-1-polymorphism/evidence.md) | Preserve the completed dialect at the `mini-ash` tag as historical input to Modular Ash design. |
+| [Passive static modules](design/DN-0022-passive-static-modules.md) | designed | completed Mini-Ash tag and closure evidence | Write a change proposal for declarations-only modules, rooted imports, visibility, opacity, generated export summaries, and linked execution through `main`. |
+| [Interfaces and `impl`](design/DN-0020-ash-dialect-milestones.md#add-modular-ash-in-bounded-increments) | outlined | implemented passive static modules | Compare type-class-like interface and implementation semantics against real module boundaries. |
+| [Modular core-versus-library audit](design/DN-0020-ash-dialect-milestones.md#candidate-trajectory) | outlined | implemented modules and interfaces | Compare representative retained Core behavior with an operation expressed through a library interface, then run the Modular Ash simplification analysis. |
 | [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Exercise the retained closed pure dialect and operation-family seam against the next proposed feature pressure. |
 | [Parser architecture](decisions/AD-0005-parser-architecture.md) | implementation | accepted event-producing recursive-descent boundary and current grammar | Measure locality, recovery, and source coverage when a later proposal adds syntax. |
 | [Front-end semantic boundaries](decisions/AD-0006-front-end-semantic-boundaries.md) | implementation | accepted resolved-surface and bidirectional typed-elaboration boundaries | Extend stage interfaces and structured diagnostics only with an authorized semantic increment. |

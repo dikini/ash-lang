@@ -21,8 +21,11 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0016: First Mini-Ash Corpus Stratum](DN-0016-first-mini-ash-corpus.md) —
   shared evidence for the initial monomorphic functional nucleus.
 - [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md) — Mini-Ash
-  closure through rank-1 polymorphism, followed by a distinct Modular Ash
+  closure through rank-1 polymorphism, followed by an evolving Modular Ash
   milestone and core-versus-library analysis.
+- [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md) —
+  declarations-only modules, rooted imports, visibility, opacity, generated
+  export summaries, and single-program Core assembly.
 - [Mini-Ash closure report](mini-ash/closure.md) — retained dialect inventory,
   simplification audit, budgets, ownership boundaries, and exclusions.
 - [Rank-1 integration evidence](mini-ash/rank-1-polymorphism/evidence.md) —
