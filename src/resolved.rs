@@ -102,10 +102,16 @@ impl ResolvedRegistry {
     ) -> Self {
         for (owner, parameters) in parameters {
             for parameter in &parameters {
-                self.type_variables.insert(parameter.id, parameter.clone());
+                self.insert_type_variable(parameter.clone());
             }
-            self.nominal_parameters
-                .insert(owner, parameters.into_boxed_slice());
+            if let Some(replaced) = self
+                .nominal_parameters
+                .insert(owner, parameters.into_boxed_slice())
+            {
+                for parameter in replaced.into_vec() {
+                    discard_origin_iteratively(parameter.origin);
+                }
+            }
         }
         self
     }
@@ -117,9 +123,15 @@ impl ResolvedRegistry {
         parameters: impl IntoIterator<Item = ResolvedTypeVariable>,
     ) -> Self {
         for parameter in parameters {
-            self.type_variables.insert(parameter.id, parameter);
+            self.insert_type_variable(parameter);
         }
         self
+    }
+
+    fn insert_type_variable(&mut self, parameter: ResolvedTypeVariable) {
+        if let Some(replaced) = self.type_variables.insert(parameter.id, parameter) {
+            discard_origin_iteratively(replaced.origin);
+        }
     }
 
     /// Returns nominal declarations in source order.
@@ -725,4 +737,63 @@ pub struct ResolvedFunctionExpr {
     pub pattern: ResolvedPattern,
     /// Resolved braced body.
     pub body: ResolvedBlock,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::{ByteRange, GeneratedReason, SourceFile};
+
+    #[test]
+    fn destroys_replaced_additional_type_variables_on_a_small_stack() {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .stack_size(256 * 1024)
+                .spawn_scoped(scope, move || {
+                    let file = SourceFile::new("additional parameter", "parameter")
+                        .expect("test source should fit");
+                    let span = file
+                        .span(ByteRange::new(0, 1).expect("ordered parameter range"))
+                        .expect("parameter range should belong to source");
+                    let mut origin = Origin::Source(span);
+                    for index in 0..5_000 {
+                        origin = if index % 2 == 0 {
+                            Origin::Generated {
+                                cause: Box::new(origin),
+                                reason: GeneratedReason::TypeChecking,
+                            }
+                        } else {
+                            Origin::Related {
+                                primary: Box::new(origin),
+                                related: vec![span],
+                            }
+                        };
+                    }
+                    let parameter = TypeVariableId::new(0);
+                    let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+                        .with_additional_type_variables([
+                            ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "A".into(),
+                                origin,
+                            },
+                            ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "B".into(),
+                                origin: Origin::Source(span),
+                            },
+                        ]);
+                    assert_eq!(
+                        registry
+                            .type_variable(parameter)
+                            .map(|parameter| parameter.spelling.as_str()),
+                        Some("B")
+                    );
+                    drop(registry);
+                })
+                .expect("small-stack thread should start")
+                .join()
+                .expect("replaced additional parameter teardown must fit the small stack");
+        });
+    }
 }

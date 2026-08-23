@@ -646,6 +646,133 @@ fn rejects_and_destroys_overdeep_registry_parameter_origins_on_a_small_stack() {
 }
 
 #[test]
+fn rejects_and_destroys_replaced_registry_parameter_ids_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, move || {
+                let file = source("replaced parameter identity");
+                let nominal = NominalTypeId::new(file.id(), 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                let parameter = TypeVariableId::new(0);
+                let origin = whole_origin(&file);
+                let registry = Arc::new(
+                    ResolvedRegistry::new(
+                        vec![ResolvedNominalType {
+                            id: nominal,
+                            spelling: "Bounded".into(),
+                            constructors: vec![constructor].into_boxed_slice(),
+                            origin: origin.clone(),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner: nominal,
+                            spelling: "Make".into(),
+                            payload: Some(Type::Variable(parameter)),
+                            origin: range_origin(&file, 1, 2),
+                        }],
+                    )
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![
+                            ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "A".into(),
+                                origin: mixed_origin(&file, 5_000),
+                            },
+                            ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "B".into(),
+                                origin: range_origin(&file, 2, 3),
+                            },
+                        ],
+                    )]),
+                );
+                assert_eq!(
+                    registry
+                        .type_variable(parameter)
+                        .map(|parameter| parameter.spelling.as_str()),
+                    Some("B")
+                );
+                let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+                let root = builder.unit(Type::Unit, origin).expect("unit root");
+                let error = validate(builder.finish(root).expect("root"), &[&file])
+                    .expect_err("duplicate parameter identities must be rejected");
+                assert_eq!(error.reason(), ValidationReason::Registry);
+                drop(registry);
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("replaced parameter teardown must fit the small stack");
+    });
+}
+
+#[test]
+fn rejects_and_destroys_replaced_registry_parameter_owners_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, move || {
+                let file = source("replaced parameter owner");
+                let nominal = NominalTypeId::new(file.id(), 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                let first_parameter = TypeVariableId::new(0);
+                let second_parameter = TypeVariableId::new(1);
+                let origin = whole_origin(&file);
+                let registry = Arc::new(
+                    ResolvedRegistry::new(
+                        vec![ResolvedNominalType {
+                            id: nominal,
+                            spelling: "Bounded".into(),
+                            constructors: vec![constructor].into_boxed_slice(),
+                            origin: origin.clone(),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner: nominal,
+                            spelling: "Make".into(),
+                            payload: Some(Type::Variable(first_parameter)),
+                            origin: range_origin(&file, 1, 2),
+                        }],
+                    )
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![ResolvedTypeVariable {
+                            id: first_parameter,
+                            spelling: "A".into(),
+                            origin: mixed_origin(&file, 5_000),
+                        }],
+                    )])
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![ResolvedTypeVariable {
+                            id: second_parameter,
+                            spelling: "B".into(),
+                            origin: range_origin(&file, 2, 3),
+                        }],
+                    )]),
+                );
+                assert_eq!(
+                    registry
+                        .nominal_parameters(nominal)
+                        .and_then(|parameters| parameters.first())
+                        .map(|parameter| parameter.spelling.as_str()),
+                    Some("B")
+                );
+                let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+                let root = builder.unit(Type::Unit, origin).expect("unit root");
+                let error = validate(builder.finish(root).expect("root"), &[&file])
+                    .expect_err("duplicate parameter owners must be rejected");
+                assert_eq!(error.reason(), ValidationReason::Registry);
+                drop(registry);
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("replaced owner teardown must fit the small stack");
+    });
+}
+
+#[test]
 fn rejects_missing_and_redundant_structured_match_arms() {
     let file = source("coverage core");
     let origin = whole_origin(&file);
@@ -846,6 +973,27 @@ fn generated_origin(source: &SourceFile, depth: usize) -> Origin {
         origin = Origin::Generated {
             cause: Box::new(origin),
             reason: GeneratedReason::TypeChecking,
+        };
+    }
+    origin
+}
+
+fn mixed_origin(source: &SourceFile, depth: usize) -> Origin {
+    let span = source
+        .span(ByteRange::new(0, 1).expect("ordered origin range"))
+        .expect("origin range should belong to source");
+    let mut origin = Origin::Source(span);
+    for index in 0..depth {
+        origin = if index % 2 == 0 {
+            Origin::Generated {
+                cause: Box::new(origin),
+                reason: GeneratedReason::TypeChecking,
+            }
+        } else {
+            Origin::Related {
+                primary: Box::new(origin),
+                related: vec![span],
+            }
         };
     }
     origin
