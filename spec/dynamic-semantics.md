@@ -105,10 +105,10 @@ therefore source order, explicit. A function-only group has an empty `pending`
 sequence and proceeds through `E-Let-Rec-Body`; its templates were installed by
 `E-Let-Rec-Allocate`.
 
-A polymorphic function member may have one or more outer
-`TypeAbstraction` nodes around its function value. Allocation follows those
-wrappers to install the same function template; ordinary evaluation still uses
-`E-Type-Abstraction`. No type wrapper becomes part of a closure.
+A polymorphic function member has one outer `TypeAbstraction` node whose
+nonempty parameter sequence contains all generalized parameters. Allocation
+follows that wrapper to install the same function template; ordinary evaluation
+still uses `E-Type-Abstraction`. No type wrapper becomes part of a closure.
 
 Reaching an uninitialized cell, an alias loop, or an invalid location is an
 internal runtime failure. The static guardedness judgment makes those states
