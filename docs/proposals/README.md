@@ -13,10 +13,10 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0005: Passive Static Modules](CP-0005-passive-static-modules.md) —
-  declarations-only modules, deterministic imports, visibility, opacity,
-  generated export summaries, and execution through entry `main`.
+No change proposal is currently under consideration.
 
 ## Accepted changes
 
-No change proposal is currently accepted and awaiting implementation.
+- [CP-0005: Passive Static Modules](CP-0005-passive-static-modules.md) —
+  declarations-only modules, deterministic imports, visibility, opacity,
+  generated export summaries, and execution through entry `main`.

@@ -1,7 +1,7 @@
 # CP-0005: Passive Static Modules
 
 - ID: `CP-0005`
-- Status: proposed
+- Status: accepted
 - Related: [DN-0022: Passive Static Modules](../design/DN-0022-passive-static-modules.md), [DN-0020: Ash Dialect Milestones](../design/DN-0020-ash-dialect-milestones.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), and [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md)
 
 > This proposal is not current Ash.
