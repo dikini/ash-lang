@@ -4,7 +4,7 @@
 
 **Goal:** Replace the Mini-Ash file program with an acyclic graph of passive modules whose accepted exports link through entry-local `main : Unit -> R` into one validated pure Core program.
 
-**Architecture:** Extend the existing lossless lexer/parser/projector with a declarations-only `SurfaceModule`. A new module loader admits canonical sources and produces a deterministic dependency order; the resolver checks one module at a time from immutable dependency export summaries, then assembles resolved module groups for the existing typed Core boundary. Elaboration nests dependency groups around their dependents and generates `main ()`; imports, visibility, and opacity have no Core representation.
+**Architecture:** Extend the existing lossless lexer/parser/projector with a declarations-only `SurfaceModule`. A new module loader admits canonical sources and produces a deterministic dependency order; each module resolves and type-checks against immutable dependency export summaries before its own fully zonked summary is published. Final graph assembly consumes those checked module records, nests dependency groups around dependents, and generates `main ()` in the only retained Core program; imports, visibility, and opacity have no Core representation.
 
 **Tech Stack:** Rust 2024, existing Ash concrete-tree parser, resolver, rank-1 elaborator, pure Core validator and evaluator, Cargo integration tests, Markdown specification.
 
@@ -279,17 +279,19 @@ reachable through the summary API.
 
 Split the current resolver entry into a `ModuleResolver` created with its
 `ModuleId` and selected dependency summaries. Populate qualified and targeted
-scopes before local declarations, reject all silent shadowing, retain file-wide
-local mutual visibility, and publish the immutable summary only after the
-resolved module succeeds. Preserve explicit type-work accounting while cloning
-summary types and origins.
+scopes before local declarations, reject all silent shadowing, and retain
+file-wide local mutual visibility. Resolution produces a private export
+candidate; it must not publish an `ExportSummary` until Task 6 has checked the
+complete defining module. Preserve explicit type-work accounting while cloning
+dependency summary types and origins.
 
 ### Task 4 — Step 5: Run focused tests and witness GREEN
 
 Run: `cargo test --test module_resolution --test resolution`
 
 Expected: PASS, including proof that two hidden identities with the same source
-spelling do not compare equal.
+spelling do not compare equal and that an unchecked export candidate cannot be
+supplied as a dependency summary.
 
 ### Task 4 — Step 6: Commit
 
@@ -378,7 +380,21 @@ cargo test --test module_elaboration --test core_validation --test provenance
 Expected: FAIL because `ResolvedProgram` has one file-wide definition group and
 one source.
 
-### Task 6 — Step 3: Represent linked groups without a module Core node
+### Task 6 — Step 3: Check each module before freezing its summary
+
+Add a module-checking entry that receives only the resolved defining module and
+its selected dependency summaries. Check all local definitions against their
+declared schemes, fully zonk public schemes, reject escaped inference, and then
+freeze the export candidate as an immutable `ExportSummary`. The existing
+elaborator may emit temporary builder nodes during this check, but the checker
+must discard them: they are neither validated programs, compiled fragments,
+cache artifacts, nor linker inputs.
+
+Process modules in dependency order. A dependent resolver and checker can
+observe only summaries already frozen by successful dependency checks, never a
+dependency body or unchecked candidate.
+
+### Task 6 — Step 4: Represent linked groups without a module Core node
 
 Change the resolved program root to retain dependency-ordered groups:
 
@@ -386,6 +402,7 @@ Change the resolved program root to retain dependency-ordered groups:
 pub struct ResolvedModuleGroup {
     pub module: ModuleId,
     pub definitions: Vec<ResolvedDefinition>,
+    pub schemes: Box<[CheckedGlobalScheme]>,
     pub span: Span,
 }
 
@@ -397,25 +414,26 @@ pub struct ResolvedProgram {
 }
 ```
 
-Merge registries by authenticated identity. Keep each module's declared global
-schemes in an immutable group input and do not infer them from dependency
-bodies.
+Merge registries by authenticated identity. Populate each group's schemes from
+its checked record and do not recompute exported schemes from dependency bodies
+or re-generalize them during final lowering.
 
-### Task 6 — Step 4: Nest ordinary Core recursive groups in dependency order
+### Task 6 — Step 5: Nest ordinary Core recursive groups in dependency order
 
-Refactor `elaborate_program` so it admits each module's schemes into the typing
-context, checks that module's bodies, and records an ordinary recursive Core
-group. Fold groups in reverse dependency order around generated entry
+Refactor `elaborate_program` so it admits each checked module scheme into the
+typing context, lowers that module's bodies, and records an ordinary recursive
+Core group. Fold groups in reverse dependency order around the generated entry
 application. Do not add import, export, module, opacity, or loader variants to
-the Core dialect.
+the Core dialect. Only this final builder is finished and passed to independent
+Core validation.
 
-### Task 6 — Step 5: Validate with every admitted source
+### Task 6 — Step 6: Validate with every admitted source
 
 Pass the complete stable source slice to `validate`. Assert related provenance
 never crosses sources unless represented by separate related labels and that
 every Core origin belongs to one admitted source.
 
-### Task 6 — Step 6: Run focused tests and witness GREEN
+### Task 6 — Step 7: Run focused tests and witness GREEN
 
 Run:
 
@@ -425,7 +443,7 @@ cargo test --test module_elaboration --test core_validation --test provenance --
 
 Expected: PASS; the closed Core feature inventory remains unchanged.
 
-### Task 6 — Step 7: Commit
+### Task 6 — Step 8: Commit
 
 ```text
 git add src/resolved.rs src/elaborate.rs src/core src/driver.rs tests/module_elaboration.rs tests/core_validation.rs tests/provenance.rs tests/semantics.rs
