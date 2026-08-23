@@ -147,6 +147,8 @@ struct Resolver {
     type_scopes: Vec<HashMap<String, ResolvedTypeVariable>>,
     nominal_parameter_counts: Vec<usize>,
     type_work: TypeWorkBudget,
+    #[cfg(test)]
+    max_type_pending_tasks: usize,
 }
 
 struct GlobalFact {
@@ -166,6 +168,8 @@ impl Resolver {
             type_scopes: Vec::new(),
             nominal_parameter_counts: Vec::new(),
             type_work: TypeWorkBudget::default(),
+            #[cfg(test)]
+            max_type_pending_tasks: 0,
         }
     }
 
@@ -528,6 +532,7 @@ impl Resolver {
     fn resolve_type(&mut self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
         enum Task<'a> {
             Visit(&'a SurfaceType),
+            Sequence(std::slice::Iter<'a, SurfaceType>),
             Tuple(usize, crate::source::Span),
             Function(crate::source::Span),
             Application(NominalTypeId, usize, crate::source::Span),
@@ -536,6 +541,10 @@ impl Resolver {
         let mut completed = Vec::new();
         let mut provenance = Vec::new();
         while let Some(task) = tasks.pop() {
+            #[cfg(test)]
+            {
+                self.max_type_pending_tasks = self.max_type_pending_tasks.max(tasks.len() + 1);
+            }
             match task {
                 Task::Visit(current) => {
                     self.type_work.charge(1).map_err(|()| {
@@ -640,17 +649,23 @@ impl Resolver {
                                 ));
                             }
                             tasks.push(Task::Application(id, arguments.len(), current.span));
-                            tasks.extend(arguments.iter().rev().map(Task::Visit));
+                            tasks.push(Task::Sequence(arguments.iter()));
                         }
                         SurfaceTypeKind::Tuple(elements) => {
                             tasks.push(Task::Tuple(elements.len(), current.span));
-                            tasks.extend(elements.iter().rev().map(Task::Visit));
+                            tasks.push(Task::Sequence(elements.iter()));
                         }
                         SurfaceTypeKind::Function(function) => {
                             tasks.push(Task::Function(current.span));
                             tasks.push(Task::Visit(&function.codomain));
                             tasks.push(Task::Visit(&function.domain));
                         }
+                    }
+                }
+                Task::Sequence(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        tasks.push(Task::Sequence(remaining));
+                        tasks.push(Task::Visit(next));
                     }
                 }
                 Task::Tuple(count, span) => {
@@ -1646,5 +1661,91 @@ mod tests {
             ["A"]
         );
         assert_eq!(seen, HashSet::from(["A"]));
+    }
+
+    #[test]
+    fn wide_tuple_resolution_keeps_pending_type_work_constant_width() {
+        const WIDTH: usize = 4_096;
+
+        let source =
+            SourceFile::new("wide-tuple-budget.ash", "Int").expect("the budget fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 3).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let int = SurfaceType {
+            kind: SurfaceTypeKind::Int,
+            span,
+        };
+        let annotation = SurfaceType {
+            kind: SurfaceTypeKind::Tuple(vec![int; WIDTH]),
+            span,
+        };
+        let mut resolver = Resolver::new();
+        resolver
+            .type_work
+            .charge(TYPE_WORK_LIMIT - 1)
+            .expect("the fixture leaves one unit for the tuple root");
+
+        let error = resolver
+            .resolve_type(&annotation)
+            .expect_err("the first tuple field exceeds the remaining budget");
+
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert!(
+            resolver.max_type_pending_tasks <= 3,
+            "wide tuples retained {} pending resolver tasks",
+            resolver.max_type_pending_tasks
+        );
+    }
+
+    #[test]
+    fn wide_nominal_application_resolution_keeps_pending_type_work_constant_width() {
+        const WIDTH: usize = 4_096;
+
+        let source = SourceFile::new("wide-application-budget.ash", "Wide<Int>")
+            .expect("the budget fixture should fit");
+        let full_span = source
+            .span(ByteRange::new(0, 9).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let constructor_span = source
+            .span(ByteRange::new(0, 4).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let argument_span = source
+            .span(ByteRange::new(5, 8).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let owner = NominalTypeId::new(source.id(), 0);
+        let argument = SurfaceType {
+            kind: SurfaceTypeKind::Int,
+            span: argument_span,
+        };
+        let annotation = SurfaceType {
+            kind: SurfaceTypeKind::Application {
+                constructor: SurfaceName {
+                    text: "Wide".to_owned(),
+                    span: constructor_span,
+                },
+                arguments: vec![argument; WIDTH],
+            },
+            span: full_span,
+        };
+        let mut resolver = Resolver::new();
+        resolver.type_names.insert("Wide".to_owned(), owner);
+        resolver.nominal_parameter_counts.push(WIDTH);
+        resolver
+            .type_work
+            .charge(TYPE_WORK_LIMIT - 1)
+            .expect("the fixture leaves one unit for the application root");
+
+        let error = resolver
+            .resolve_type(&annotation)
+            .expect_err("the first nominal argument exceeds the remaining budget");
+
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.primary.span(), argument_span);
+        assert!(
+            resolver.max_type_pending_tasks <= 3,
+            "wide applications retained {} pending resolver tasks",
+            resolver.max_type_pending_tasks
+        );
     }
 }
