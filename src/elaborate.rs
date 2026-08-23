@@ -721,10 +721,12 @@ impl Elaborator {
                     .charge(cells)
                     .map_err(|()| BuildError::TypeWorkExceeded)
             })?;
-            if contains_unsolved_inference(&zonked) {
-                Err(BuildError::InvalidPayload)
-            } else {
+            let unresolved = collect_unsolved_inference(&zonked, type_work)
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
+            if unresolved.is_empty() {
                 Ok(zonked)
+            } else {
+                Err(BuildError::InvalidPayload)
             }
         })?;
         self.builder.finish(root).map_err(Into::into)
@@ -988,7 +990,10 @@ impl Elaborator {
             },
             &mut context,
         )?;
-        if contains_unsolved_inference(&self.zonk(&result.ty)?) {
+        let result_type = self.zonk(&result.ty)?;
+        let result_variables = collect_unsolved_inference(&result_type, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        if !result_variables.is_empty() {
             return Err(inference_failure(
                 TypeReason::AmbiguousType,
                 program.result.span,
@@ -1572,20 +1577,25 @@ impl Elaborator {
                         && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
                     {
                         let inferred = self.zonk(&initializer.ty)?;
-                        self.charge_type(&inferred)?;
-                        let mut variables = Vec::new();
-                        collect_unsolved_inference(&inferred, &mut variables);
-                        let environment_types = context
-                            .binders
-                            .values()
-                            .map(|fact| fact.ty.clone())
-                            .collect::<Vec<_>>();
-                        let mut environment_variables = Vec::new();
-                        for ty in environment_types {
-                            let ty = self.zonk(&ty)?;
-                            self.charge_type(&ty)?;
-                            collect_unsolved_inference(&ty, &mut environment_variables);
+                        let mut variables =
+                            collect_unsolved_inference(&inferred, &mut self.type_work).map_err(
+                                |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                            )?;
+                        let mut environment_variables = HashSet::new();
+                        for fact in context.binders.values() {
+                            let ty = self.zonk(&fact.ty)?;
+                            let variables = collect_unsolved_inference(&ty, &mut self.type_work)
+                                .map_err(|()| {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                })?;
+                            self.type_work.charge(variables.len()).map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                            environment_variables.extend(variables);
                         }
+                        self.type_work.charge(variables.len()).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
                         variables.retain(|variable| !environment_variables.contains(variable));
                         for variable in variables {
                             let binder = self.fresh_type_variable()?;
@@ -3425,19 +3435,40 @@ fn type_contains_inference(
     false
 }
 
-fn collect_unsolved_inference(ty: &Type, output: &mut Vec<InferenceVariableId>) {
-    let mut work = vec![ty];
-    while let Some(ty) = work.pop() {
+fn collect_unsolved_inference(
+    ty: &Type,
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<InferenceVariableId>, ()> {
+    enum Task<'a> {
+        Visit(&'a Type),
+        Slice(std::slice::Iter<'a, Type>),
+    }
+
+    let mut work = vec![Task::Visit(ty)];
+    let mut seen = HashSet::new();
+    let mut found = Vec::new();
+    while let Some(task) = work.pop() {
+        let Task::Visit(ty) = task else {
+            let Task::Slice(mut remaining) = task else {
+                unreachable!("inference collection task is closed")
+            };
+            if let Some(next) = remaining.next() {
+                work.push(Task::Slice(remaining));
+                work.push(Task::Visit(next));
+            }
+            continue;
+        };
+        budget.charge(1)?;
         match ty {
-            Type::Inference(identity) if !output.contains(identity) => output.push(*identity),
+            Type::Inference(identity) if seen.insert(*identity) => found.push(*identity),
             Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
-                work.extend(elements.iter().rev());
+                work.push(Task::Slice(elements.iter()));
             }
             Type::Function(domain, codomain) => {
-                work.push(codomain);
-                work.push(domain);
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
             }
-            Type::Forall(_, body) => work.push(body),
+            Type::Forall(_, body) => work.push(Task::Visit(body)),
             Type::Int
             | Type::Bool
             | Type::Unit
@@ -3446,12 +3477,7 @@ fn collect_unsolved_inference(ty: &Type, output: &mut Vec<InferenceVariableId>) 
             | Type::Inference(_) => {}
         }
     }
-}
-
-fn contains_unsolved_inference(ty: &Type) -> bool {
-    let mut variables = Vec::new();
-    collect_unsolved_inference(ty, &mut variables);
-    !variables.is_empty()
+    Ok(found)
 }
 
 fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError {
@@ -3613,6 +3639,32 @@ mod tests {
 
         assert_eq!(result, Err(()));
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn unsolved_inference_collection_is_indexed_and_charged_in_source_order() {
+        let first = InferenceVariableId::new(2);
+        let second = InferenceVariableId::new(1);
+        let third = InferenceVariableId::new(3);
+        let ty = Type::Tuple(
+            vec![
+                Type::Inference(first),
+                Type::Inference(second),
+                Type::Inference(first),
+                Type::Inference(third),
+            ]
+            .into_boxed_slice(),
+        );
+        let mut budget = TypeWorkBudget::default();
+        budget
+            .charge(crate::types::TYPE_WORK_LIMIT - 5)
+            .expect("the fixture leaves one unit per type cell");
+
+        let found = collect_unsolved_inference(&ty, &mut budget)
+            .expect("one charge per type cell should fit exactly");
+
+        assert_eq!(found, [first, second, third]);
+        assert_eq!(budget.charge(1), Err(()));
     }
 
     #[test]

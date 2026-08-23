@@ -906,7 +906,8 @@ impl Resolver {
                     &self.type_names,
                     &mut seen,
                     &mut names,
-                );
+                    &mut self.type_work,
+                )?;
             }
             SurfaceDefinitionKind::InlineOperational(operational) => {
                 for parameter in &operational.header.parameters {
@@ -915,14 +916,16 @@ impl Resolver {
                         &self.type_names,
                         &mut seen,
                         &mut names,
-                    );
+                        &mut self.type_work,
+                    )?;
                 }
                 collect_free_type_names(
                     &operational.header.result_type,
                     &self.type_names,
                     &mut seen,
                     &mut names,
-                );
+                    &mut self.type_work,
+                )?;
             }
         }
         names
@@ -1489,9 +1492,32 @@ fn collect_free_type_names<'a>(
     nominals: &HashMap<String, NominalTypeId>,
     seen: &mut HashSet<&'a str>,
     output: &mut Vec<crate::surface::SurfaceName>,
-) {
-    let mut work = vec![root];
-    while let Some(ty) = work.pop() {
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ResolveError> {
+    enum Task<'a> {
+        Visit(&'a SurfaceType),
+        Slice(std::slice::Iter<'a, SurfaceType>),
+    }
+
+    let mut work = vec![Task::Visit(root)];
+    while let Some(task) = work.pop() {
+        let Task::Visit(ty) = task else {
+            let Task::Slice(mut remaining) = task else {
+                unreachable!("free type discovery task is closed")
+            };
+            if let Some(next) = remaining.next() {
+                work.push(Task::Slice(remaining));
+                work.push(Task::Visit(next));
+            }
+            continue;
+        };
+        budget.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                ty.span,
+                "free type discovery exceeded its work budget",
+            )
+        })?;
         match &ty.kind {
             SurfaceTypeKind::Named(name) => {
                 if !nominals.contains_key(&name.text) && seen.insert(&name.text) {
@@ -1505,16 +1531,17 @@ fn collect_free_type_names<'a>(
                 if !nominals.contains_key(&constructor.text) && seen.insert(&constructor.text) {
                     output.push(constructor.clone());
                 }
-                work.extend(arguments.iter().rev());
+                work.push(Task::Slice(arguments.iter()));
             }
-            SurfaceTypeKind::Tuple(elements) => work.extend(elements.iter().rev()),
+            SurfaceTypeKind::Tuple(elements) => work.push(Task::Slice(elements.iter())),
             SurfaceTypeKind::Function(function) => {
-                work.push(&function.codomain);
-                work.push(&function.domain);
+                work.push(Task::Visit(&function.codomain));
+                work.push(Task::Visit(&function.domain));
             }
             SurfaceTypeKind::Int | SurfaceTypeKind::Bool | SurfaceTypeKind::Unit => {}
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1522,6 +1549,7 @@ mod tests {
     use super::*;
     use crate::source::{ByteRange, SourceFile};
     use crate::surface::{SurfaceName, SurfaceTypeKind};
+    use crate::types::TYPE_WORK_LIMIT;
     use crate::{
         lexer::lex,
         parser::{parse, project},
@@ -1570,69 +1598,53 @@ mod tests {
     }
 
     #[test]
-    fn distinct_interface_variables_follow_the_indexed_linear_reference() {
-        fn distinct_variables(count: usize, span: crate::source::Span) -> SurfaceType {
+    fn free_type_discovery_charges_before_retaining_each_name() {
+        let source = SourceFile::new("free-type-budget.ash", "A B C")
+            .expect("the budget fixture should fit");
+        let name = |text: &str, start, end| {
+            let span = source
+                .span(ByteRange::new(start, end).expect("the range is ordered"))
+                .expect("the range belongs to the fixture");
             SurfaceType {
-                kind: SurfaceTypeKind::Tuple(
-                    (0..count)
-                        .map(|index| SurfaceType {
-                            kind: SurfaceTypeKind::Named(SurfaceName {
-                                text: format!("A{index}"),
-                                span,
-                            }),
-                            span,
-                        })
-                        .collect(),
-                ),
+                kind: SurfaceTypeKind::Named(SurfaceName {
+                    text: text.to_owned(),
+                    span,
+                }),
                 span,
             }
-        }
+        };
+        let annotation = SurfaceType {
+            kind: SurfaceTypeKind::Tuple(vec![name("A", 0, 1), name("B", 2, 3), name("C", 4, 5)]),
+            span: source
+                .span(ByteRange::new(0, 5).expect("the range is ordered"))
+                .expect("the range belongs to the fixture"),
+        };
+        let mut budget = TypeWorkBudget::default();
+        budget
+            .charge(TYPE_WORK_LIMIT - 2)
+            .expect("the fixture leaves two units");
+        let mut seen = HashSet::new();
+        let mut output = Vec::new();
 
-        fn collection_time(annotation: &SurfaceType) -> (std::time::Duration, Vec<SurfaceName>) {
-            let started = std::time::Instant::now();
-            let mut output = Vec::new();
-            collect_free_type_names(
-                annotation,
-                &HashMap::new(),
-                &mut HashSet::new(),
-                &mut output,
-            );
-            (started.elapsed(), output)
-        }
+        let error = collect_free_type_names(
+            &annotation,
+            &HashMap::new(),
+            &mut seen,
+            &mut output,
+            &mut budget,
+        )
+        .expect_err("the second name exceeds the remaining budget");
 
-        fn indexed_reference(annotation: &SurfaceType) -> (std::time::Duration, Vec<SurfaceName>) {
-            let SurfaceTypeKind::Tuple(elements) = &annotation.kind else {
-                unreachable!("the fixture is a tuple")
-            };
-            let started = std::time::Instant::now();
-            let mut seen = HashSet::new();
-            let mut output = Vec::new();
-            for element in elements {
-                let SurfaceTypeKind::Named(name) = &element.kind else {
-                    unreachable!("every fixture element is named")
-                };
-                if seen.insert(name.text.as_str()) {
-                    output.push(name.clone());
-                }
-            }
-            (started.elapsed(), output)
-        }
-
-        let source =
-            SourceFile::new("free-type-scaling.ash", "x").expect("the scaling fixture should fit");
-        let span = source
-            .span(ByteRange::new(0, 1).expect("the range is ordered"))
-            .expect("the range belongs to the fixture");
-        let annotation = distinct_variables(12_000, span);
-
-        let (reference_time, expected) = indexed_reference(&annotation);
-        let (collection_time, found) = collection_time(&annotation);
-
-        assert_eq!(found, expected);
-        assert!(
-            collection_time
-                < reference_time.saturating_mul(4) + std::time::Duration::from_millis(20),
-            "free-name collection took {collection_time:?}; the indexed reference took {reference_time:?}"
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.primary.span().range().start(), 2);
+        assert_eq!(error.primary.span().range().end(), 3);
+        assert_eq!(
+            output
+                .iter()
+                .map(|name| name.text.as_str())
+                .collect::<Vec<_>>(),
+            ["A"]
         );
+        assert_eq!(seen, HashSet::from(["A"]));
     }
 }
