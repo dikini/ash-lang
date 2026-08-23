@@ -1702,7 +1702,7 @@ impl Elaborator {
                         }
                         initializer.ty = self.zonk(&initializer.ty)?;
                     }
-                    let binding_type = expected.unwrap_or_else(|| ProvenancedType {
+                    let mut binding_type = expected.unwrap_or_else(|| ProvenancedType {
                         ty: initializer.ty.clone(),
                         provenance: initializer.provenance.clone(),
                     });
@@ -1714,6 +1714,10 @@ impl Elaborator {
                         &mut binder_ids,
                         GeneratedReason::BindingLowering,
                     )?;
+                    binding_type.ty = pattern.ty.clone();
+                    if !binding_type.provenance.aligns(&binding_type.ty) {
+                        binding_type.provenance = TypeProvenance::unknown(&binding_type.ty);
+                    }
                     let matrix = vec![vec![pattern.clone()]];
                     if let Some(witness) = missing_witness_for_types(
                         &matrix,
@@ -2026,6 +2030,10 @@ impl Elaborator {
             &mut binders,
             GeneratedReason::BindingLowering,
         )?;
+        progress.scrutinee.ty = pattern.ty.clone();
+        if !progress.scrutinee.provenance.aligns(&progress.scrutinee.ty) {
+            progress.scrutinee.provenance = TypeProvenance::unknown(&progress.scrutinee.ty);
+        }
         let row = vec![pattern.clone()];
         if usefulness_with_budget(
             &progress.matrix,
@@ -2079,7 +2087,7 @@ impl Elaborator {
         binders: &mut Vec<BinderId>,
         binder_reason: GeneratedReason,
     ) -> Result<CorePattern, TypeError> {
-        let mut expected = self.zonk(expected)?;
+        let (mut expected, expected_was_unresolved) = self.zonk_with_status(expected)?;
         let kind = match &pattern.kind {
             ResolvedPatternKind::Binder(binder) => {
                 let typed = self.builder.resolved_binder(
@@ -2228,6 +2236,11 @@ impl Elaborator {
                     payload: checked_payload,
                 }
             }
+        };
+        let expected = if expected_was_unresolved {
+            self.zonk(&expected)?
+        } else {
+            expected
         };
         Ok(CorePattern::new(
             expected,

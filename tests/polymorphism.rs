@@ -186,6 +186,24 @@ fn boolean_patterns_refine_before_function_coverage_rejection() {
 }
 
 #[test]
+fn match_patterns_refine_inferred_scrutinee_types_before_coverage() {
+    let observation = run(
+        "{\nlet negate = fn(value) {\nmatch value {\ntrue => false\nfalse => true\n}\n}\nnegate(true)\n}\n",
+    );
+
+    assert_eq!(observation.value_display(), "false");
+    assert_eq!(observation.type_display(), "Bool");
+}
+
+#[test]
+fn local_patterns_refine_inferred_binding_types_before_coverage() {
+    let observation = run("{\nlet consume = fn(value) {\nlet () = value\n42\n}\nconsume(())\n}\n");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
 fn constructor_patterns_instantiate_the_expected_nominal_arguments() {
     let observation = run(
         "type Option<A> =\nNone\n| Some(A)\n\nunwrap_or : (A, Option<A>) -> A\nunwrap_or (fallback, None) = fallback\nunwrap_or (_, Some(value)) = value\n\nunwrap_or(0, Some(42))\n",
