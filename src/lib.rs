@@ -17,6 +17,7 @@ pub mod elaborate;
 pub mod eval;
 pub mod integer;
 pub mod lexer;
+pub mod module;
 pub mod parser;
 pub mod pattern;
 pub mod render;
