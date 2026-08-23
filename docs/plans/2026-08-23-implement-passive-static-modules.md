@@ -230,7 +230,14 @@ git commit -m "feat: load canonical module graphs"
 - Modify: `src/resolve.rs`
 - Modify: `src/module.rs`
 - Modify: `src/types.rs`
+- Modify: `src/core/dialect.rs`
+- Modify: `src/core/transform.rs`
+- Modify: `src/core/validate.rs`
+- Modify: `src/eval/machine.rs`
+- Modify: `src/elaborate.rs`
+- Modify: `src/pattern.rs`
 - Modify: `tests/resolution.rs`
+- Modify: `tests/core_validation.rs`
 - Create: `tests/module_resolution.rs`
 
 ### Task 4 — Step 1: Write failing import-scope and identity tests
@@ -255,8 +262,13 @@ Use typed identities rather than encoded strings:
 
 ```rust
 pub struct BinderId {
-    module: ModuleId,
+    namespace: BinderNamespace,
     local: u32,
+}
+
+pub enum BinderNamespace {
+    Module(ModuleId),
+    Generated,
 }
 
 pub struct ExportSummary {
@@ -276,6 +288,11 @@ Keep hidden nominal identities in exported global schemes but omit their name
 map entry. Include transparent constructors only. Summaries own fully resolved
 and closed schemes plus causal declaration origins; dependency bodies are not
 reachable through the summary API.
+
+Use the same disjoint ownership rule for type-variable identities: source type
+variables are qualified by their defining module, while elaborator-generated
+type variables occupy a generated namespace. Core transforms preserve both
+binder namespaces exactly.
 
 ### Task 4 — Step 4: Resolve one module from dependency summaries
 

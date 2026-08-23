@@ -46,8 +46,8 @@ Execute the linked plan to:
 - The implementation plan records the intended red-green checkpoints.
 - Declarations-only module syntax and import spellings are implemented and
   committed with focused syntax evidence.
-- Canonical graph loading is implemented with focused loader evidence. Its
-  commit follows this accepted identity and overlapping-root clarification.
+- Canonical graph loading is implemented and committed with focused loader
+  evidence.
 
 ## Verification
 
@@ -73,7 +73,15 @@ compatibility path.
   one compilation-local module identity, retains every owning root, and checks
   relative descendants against every owner. This removes discovery-order
   dependence without creating route-specific module identities.
+- Linking registries also requires module-qualified resolved type variables and
+  a separate namespace for generated term and type binders. Qualifying only
+  source term binders and nominal declarations would leave cross-module or
+  generated-identity collisions.
 
 ## Deviations
 
-None.
+- Task 4's identity migration crosses Core construction, transformation,
+  validation, evaluation, and their tests in addition to the files named by the
+  initial plan. Those consumers must change together to preserve exact
+  identities. This expands the implementation boundary without changing
+  CP-0005 semantics.
