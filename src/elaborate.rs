@@ -458,6 +458,7 @@ impl TypeProvenance {
 }
 
 impl ProvenancedType {
+    #[cfg(test)]
     fn unknown(ty: Type) -> Self {
         let provenance = TypeProvenance::unknown(&ty);
         Self { ty, provenance }
@@ -525,6 +526,9 @@ impl TypeContext {
     }
 
     /// Adds or replaces one resolved binder type.
+    ///
+    /// This prepares caller-owned context metadata. Public elaboration entry
+    /// points validate and charge the complete context before cloning it.
     pub fn insert(&mut self, binder: BinderId, ty: Type) -> Option<Type> {
         let provenance = TypeProvenance::unknown(&ty);
         self.binders
@@ -710,11 +714,21 @@ impl Elaborator {
             self.state = ElaboratorState::Poisoned;
             return Err(error);
         }
+        let expected_provenance = match self.unknown_provenance(expected) {
+            Ok(provenance) => provenance,
+            Err(error) => {
+                self.state = ElaboratorState::Poisoned;
+                return Err(error);
+            }
+        };
         let mut context = context.clone();
         let result = self.elaborate_expression_with_context(
             ElaborationTask::Check {
                 expression,
-                expected: ProvenancedType::unknown(expected.clone()),
+                expected: ProvenancedType {
+                    ty: expected.clone(),
+                    provenance: expected_provenance,
+                },
                 kind: CheckKind::General,
             },
             &mut context,
@@ -885,6 +899,11 @@ impl Elaborator {
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
+    fn unknown_provenance(&mut self, ty: &Type) -> Result<TypeProvenance, TypeError> {
+        unknown_provenance_with_budget(ty, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
     fn admit_public_context(&mut self, context: &TypeContext) -> Result<(), TypeError> {
         self.type_work
             .charge(context.binders.len())
@@ -1019,7 +1038,7 @@ impl Elaborator {
                     let provenance = if expected.provenance.aligns(&expected_ty) {
                         expected.provenance
                     } else {
-                        TypeProvenance::unknown(&expected_ty)
+                        self.unknown_provenance(&expected_ty)?
                     };
                     return Ok(ProvenancedType {
                         ty: expected_ty,
@@ -1047,7 +1066,11 @@ impl Elaborator {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         }
                     })?;
-                Ok(ProvenancedType::unknown(exposed))
+                let provenance = self.unknown_provenance(&exposed)?;
+                Ok(ProvenancedType {
+                    ty: exposed,
+                    provenance,
+                })
             }
             _ => Err(function_needs_context(span, None)),
         }
@@ -1329,7 +1352,7 @@ impl Elaborator {
         }
         result.ty = zonked_result;
         if !result.provenance.aligns(&result.ty) {
-            result.provenance = TypeProvenance::unknown(&result.ty);
+            result.provenance = self.unknown_provenance(&result.ty)?;
         }
         let ambiguous = (0..self.next_inference).find(|identity| {
             !self
@@ -1561,9 +1584,10 @@ impl Elaborator {
                                 occurrence.origin.clone(),
                             )?;
                         }
+                        let provenance = self.unknown_provenance(&ty)?;
                         values.push(TypedNode {
                             node,
-                            provenance: TypeProvenance::unknown(&ty),
+                            provenance,
                             ty,
                         });
                     }
@@ -1615,10 +1639,11 @@ impl Elaborator {
                         }
                         let domain = self.fresh_inference(current.span)?;
                         let codomain = self.fresh_inference(current.span)?;
-                        let expected = ProvenancedType::unknown(Type::Function(
-                            Box::new(domain),
-                            Box::new(codomain),
-                        ));
+                        let expected_ty = Type::Function(Box::new(domain), Box::new(codomain));
+                        let expected = ProvenancedType {
+                            provenance: self.unknown_provenance(&expected_ty)?,
+                            ty: expected_ty,
+                        };
                         tasks.push(ElaborationTask::Check {
                             expression: current,
                             expected,
@@ -1878,7 +1903,7 @@ impl Elaborator {
                     let provenance = if function.provenance.aligns(&function_ty) {
                         function.provenance.clone()
                     } else {
-                        TypeProvenance::unknown(&function_ty)
+                        self.unknown_provenance(&function_ty)?
                     };
                     let (domain_provenance, codomain_provenance) =
                         provenance.function_parts(&function_ty)?;
@@ -1926,7 +1951,7 @@ impl Elaborator {
                     let provenance = if codomain.provenance.aligns(&ty) {
                         codomain.provenance
                     } else {
-                        TypeProvenance::unknown(&ty)
+                        self.unknown_provenance(&ty)?
                     };
                     let origin = Origin::Related {
                         primary: Box::new(Origin::Source(whole_span)),
@@ -2073,7 +2098,7 @@ impl Elaborator {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?;
                         if !binding_type.provenance.aligns(&binding_type.ty) {
-                            binding_type.provenance = TypeProvenance::unknown(&binding_type.ty);
+                            binding_type.provenance = self.unknown_provenance(&binding_type.ty)?;
                         }
                     }
                     let mut matrix = vec![vec![pattern]];
@@ -2487,7 +2512,7 @@ impl Elaborator {
             progress.scrutinee.ty = clone_type_with_budget(&pattern.ty, &mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             if !progress.scrutinee.provenance.aligns(&progress.scrutinee.ty) {
-                progress.scrutinee.provenance = TypeProvenance::unknown(&progress.scrutinee.ty);
+                progress.scrutinee.provenance = self.unknown_provenance(&progress.scrutinee.ty)?;
             }
         }
         row.push(pattern);
@@ -2575,6 +2600,8 @@ impl Elaborator {
                     .insert_with_provenance(
                         binder.id,
                         expected.clone(),
+                        // `charge_pattern_binder_storage` reserves this tree
+                        // before the binder and context entries are retained.
                         TypeProvenance::unknown(&expected),
                     )?
                     .is_some()
@@ -2843,15 +2870,15 @@ impl Elaborator {
         if inference_changed {
             domain.ty = self.zonk(&domain.ty)?;
             if !domain.provenance.aligns(&domain.ty) {
-                domain.provenance = TypeProvenance::unknown(&domain.ty);
+                domain.provenance = self.unknown_provenance(&domain.ty)?;
             }
             codomain.ty = self.zonk(&codomain.ty)?;
             if !codomain.provenance.aligns(&codomain.ty) {
-                codomain.provenance = TypeProvenance::unknown(&codomain.ty);
+                codomain.provenance = self.unknown_provenance(&codomain.ty)?;
             }
             function_type.ty = self.zonk(&function_type.ty)?;
             if !function_type.provenance.aligns(&function_type.ty) {
-                function_type.provenance = TypeProvenance::unknown(&function_type.ty);
+                function_type.provenance = self.unknown_provenance(&function_type.ty)?;
             }
         }
         let function_parts_align = matches!(
@@ -4249,8 +4276,8 @@ fn clone_type_variables_with_budget(
 fn charge_pattern_binder_storage(ty: &Type, budget: &mut TypeWorkBudget) -> Result<(), ()> {
     charge_type_cells(ty, budget)?;
     charge_type_cells(ty, budget)?;
-    let provenance_nodes = type_provenance_node_count(ty);
-    budget.charge(provenance_nodes.saturating_add(2))?;
+    charge_type_provenance_nodes(ty, budget)?;
+    budget.charge(2)?;
     Ok(())
 }
 
@@ -4259,17 +4286,24 @@ fn reserve_context_entry(context: &mut TypeContext, budget: &mut TypeWorkBudget)
     context.binders.try_reserve(1).map_err(|_| ())
 }
 
-fn type_provenance_node_count(ty: &Type) -> usize {
-    let mut count = 0_usize;
+fn charge_type_provenance_nodes(ty: &Type, budget: &mut TypeWorkBudget) -> Result<(), ()> {
     let mut work = vec![ty];
     while let Some(ty) = work.pop() {
-        count = count.saturating_add(1);
+        budget.charge(1)?;
         if let Type::Function(domain, codomain) = ty {
             work.push(codomain);
             work.push(domain);
         }
     }
-    count
+    Ok(())
+}
+
+fn unknown_provenance_with_budget(
+    ty: &Type,
+    budget: &mut TypeWorkBudget,
+) -> Result<TypeProvenance, ()> {
+    charge_type_provenance_nodes(ty, budget)?;
+    Ok(TypeProvenance::unknown(ty))
 }
 
 fn constructor_replacements_with_budget(
@@ -5009,6 +5043,34 @@ mod tests {
             .charge(crate::types::TYPE_WORK_LIMIT - 11)
             .expect("the fixture leaves two type copies, provenance, and two indexes");
         assert_eq!(charge_pattern_binder_storage(&ty, &mut exact), Ok(()));
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn rebuilt_unknown_provenance_requires_the_exact_node_budget() {
+        let ty = Type::Function(
+            Box::new(Type::Int),
+            Box::new(Type::Function(Box::new(Type::Bool), Box::new(Type::Unit))),
+        );
+
+        let mut short = TypeWorkBudget::default();
+        short
+            .charge(crate::types::TYPE_WORK_LIMIT - 4)
+            .expect("the fixture leaves one fewer unit than five provenance nodes");
+        assert_eq!(unknown_provenance_with_budget(&ty, &mut short), Err(()));
+        assert_eq!(
+            short.charge(1),
+            Err(()),
+            "the failed traversal must consume the affordable prefix"
+        );
+
+        let mut exact = TypeWorkBudget::default();
+        exact
+            .charge(crate::types::TYPE_WORK_LIMIT - 5)
+            .expect("the fixture leaves exactly five provenance nodes");
+        let provenance = unknown_provenance_with_budget(&ty, &mut exact)
+            .expect("the complete rebuilt provenance should fit");
+        assert!(provenance.aligns(&ty));
         assert_eq!(exact.charge(1), Err(()));
     }
 

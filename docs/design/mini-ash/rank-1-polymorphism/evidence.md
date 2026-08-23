@@ -141,7 +141,11 @@ that substitution never visits.
 Ordinary matches precharge progress, unary coverage rows, and final Core arms,
 then move the coverage-owned patterns into Core without an uncharged duplicate.
 Direct function binders and tuple operational domains likewise charge their
-context and provenance metadata before retention.
+context and provenance metadata before retention. Resolution charges a
+synthesized constructor tuple-payload wrapper in addition to its field types.
+When inference changes a type's function shape, provenance rebuilding charges
+each node during preflight, so an exhausted budget stops before traversing the
+unaffordable suffix.
 `deep_parameter_substitution_completes_on_a_small_stack` and the retained deep
 pattern, recursive-group, heap, rendering, and destruction tests run on a 256
 KiB host stack. Type work is cumulative within each stage; repeated

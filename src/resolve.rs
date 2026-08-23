@@ -499,13 +499,22 @@ impl Resolver {
                 let payload = match constructor.fields.as_slice() {
                     [] => None,
                     [field] => Some(self.resolve_type(field)?.ty),
-                    fields => Some(Type::Tuple(
-                        fields
-                            .iter()
-                            .map(|field| self.resolve_type(field).map(|resolved| resolved.ty))
-                            .collect::<Result<Vec<_>, _>>()?
-                            .into_boxed_slice(),
-                    )),
+                    fields => {
+                        self.type_work.charge(1).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                constructor.span,
+                                "constructor payload synthesis exceeded its type-work budget",
+                            )
+                        })?;
+                        Some(Type::Tuple(
+                            fields
+                                .iter()
+                                .map(|field| self.resolve_type(field).map(|resolved| resolved.ty))
+                                .collect::<Result<Vec<_>, _>>()?
+                                .into_boxed_slice(),
+                        ))
+                    }
                 };
                 constructors.push(ResolvedConstructor {
                     id: *id,
@@ -1661,6 +1670,43 @@ mod tests {
             ["A"]
         );
         assert_eq!(seen, HashSet::from(["A"]));
+    }
+
+    #[test]
+    fn constructor_tuple_payloads_charge_the_synthesized_wrapper_exactly() {
+        let source = SourceFile::new(
+            "constructor-tuple-budget.ash",
+            "type Pair =\nPair(Int, Int)\n\n()\n",
+        )
+        .expect("the budget fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let program = project(&source, &tree).expect("the fixture should project");
+        let second_field_span = program.type_declarations[0].constructors[0].fields[1].span;
+
+        let mut exact = Resolver::new();
+        exact
+            .type_work
+            .charge(TYPE_WORK_LIMIT - 3)
+            .expect("the fixture leaves the wrapper and two field cells");
+        let registry = exact
+            .resolve_registry(&program)
+            .expect("the exact constructor payload allowance should fit");
+        assert_eq!(
+            registry.constructors()[0].payload,
+            Some(Type::Tuple(vec![Type::Int, Type::Int].into_boxed_slice()))
+        );
+        assert_eq!(exact.type_work.charge(1), Err(()));
+
+        let mut short = Resolver::new();
+        short
+            .type_work
+            .charge(TYPE_WORK_LIMIT - 2)
+            .expect("the fixture leaves one cell fewer than the retained payload");
+        let error = short
+            .resolve_registry(&program)
+            .expect_err("the tuple wrapper must consume the remaining budget");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.primary.span().range(), second_field_span.range());
     }
 
     #[test]

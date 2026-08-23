@@ -96,6 +96,9 @@ relative links resolve, and the new `sequent` rules have matching prose.
 - Successful whole-program inference retains its zonked result before the
   driver constructs source-facing type output; later Core rewriting is not the
   owner of that public type.
+- Synthesized tuple-payload wrappers and rebuilt function-shaped provenance are
+  separate retained type metadata. Both require cumulative charges in addition
+  to the structural types that caused their construction.
 
 The retained integration and closure reports contain the transferable results
 and boundary audit.
