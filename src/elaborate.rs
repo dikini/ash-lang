@@ -839,20 +839,24 @@ impl Elaborator {
         expected: ProvenancedType,
         span: Span,
     ) -> Result<ProvenancedType, TypeError> {
-        let expected_ty = self.zonk(&expected.ty)?;
-        match expected_ty {
-            Type::Function(_, _) => {
-                let provenance = if expected.provenance.aligns(&expected_ty) {
-                    expected.provenance
-                } else {
-                    TypeProvenance::unknown(&expected_ty)
-                };
-                Ok(ProvenancedType {
-                    ty: expected_ty,
-                    provenance,
-                })
-            }
+        match &expected.ty {
+            Type::Function(_, _) => Ok(expected),
             Type::Inference(_) => {
+                let expected_ty = self.zonk(&expected.ty)?;
+                if matches!(expected_ty, Type::Function(_, _)) {
+                    let provenance = if expected.provenance.aligns(&expected_ty) {
+                        expected.provenance
+                    } else {
+                        TypeProvenance::unknown(&expected_ty)
+                    };
+                    return Ok(ProvenancedType {
+                        ty: expected_ty,
+                        provenance,
+                    });
+                }
+                if !matches!(expected_ty, Type::Inference(_)) {
+                    return Err(function_needs_context(span, None));
+                }
                 self.type_work
                     .charge(3)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -1707,16 +1711,19 @@ impl Elaborator {
                         provenance: initializer.provenance.clone(),
                     });
                     let mut binder_ids = Vec::new();
-                    let mut pattern = self.check_core_pattern(
+                    let checked = self.check_core_pattern(
                         &binding.pattern,
                         &binding_type.ty,
                         context,
                         &mut binder_ids,
                         GeneratedReason::BindingLowering,
                     )?;
-                    binding_type.ty = pattern.ty.clone();
-                    if !binding_type.provenance.aligns(&binding_type.ty) {
-                        binding_type.provenance = TypeProvenance::unknown(&binding_type.ty);
+                    let mut pattern = checked.pattern;
+                    if checked.inference_changed {
+                        binding_type.ty = pattern.ty.clone();
+                        if !binding_type.provenance.aligns(&binding_type.ty) {
+                            binding_type.provenance = TypeProvenance::unknown(&binding_type.ty);
+                        }
                     }
                     let matrix = vec![vec![pattern.clone()]];
                     if let Some(witness) = missing_witness_for_types(
@@ -2023,16 +2030,19 @@ impl Elaborator {
         };
 
         let mut binders = Vec::new();
-        let pattern = self.check_core_pattern(
+        let checked = self.check_core_pattern(
             &arm.pattern,
             &progress.scrutinee.ty,
             context,
             &mut binders,
             GeneratedReason::BindingLowering,
         )?;
-        progress.scrutinee.ty = pattern.ty.clone();
-        if !progress.scrutinee.provenance.aligns(&progress.scrutinee.ty) {
-            progress.scrutinee.provenance = TypeProvenance::unknown(&progress.scrutinee.ty);
+        let pattern = checked.pattern;
+        if checked.inference_changed {
+            progress.scrutinee.ty = pattern.ty.clone();
+            if !progress.scrutinee.provenance.aligns(&progress.scrutinee.ty) {
+                progress.scrutinee.provenance = TypeProvenance::unknown(&progress.scrutinee.ty);
+            }
         }
         let row = vec![pattern.clone()];
         if usefulness_with_budget(
@@ -2086,8 +2096,16 @@ impl Elaborator {
         context: &mut TypeContext,
         binders: &mut Vec<BinderId>,
         binder_reason: GeneratedReason,
-    ) -> Result<CorePattern, TypeError> {
-        let (mut expected, expected_was_unresolved) = self.zonk_with_status(expected)?;
+    ) -> Result<CheckedPattern, TypeError> {
+        let (mut expected, mut inference_changed) = if let Type::Inference(identity) = expected {
+            let zonked = self.zonk(expected)?;
+            let changed = !matches!(&zonked, Type::Inference(zonked) if *zonked == *identity);
+            (zonked, changed)
+        } else {
+            self.charge_type(expected)?;
+            (expected.clone(), false)
+        };
+        let mut rebuild_expected = false;
         let kind = match &pattern.kind {
             ResolvedPatternKind::Binder(binder) => {
                 let typed = self.builder.resolved_binder(
@@ -2113,11 +2131,23 @@ impl Elaborator {
             }
             ResolvedPatternKind::Wildcard => CorePatternKind::Wildcard,
             ResolvedPatternKind::Boolean(value) => {
-                expected = self.refine_pattern_expected(&expected, &Type::Bool, pattern.span)?;
+                if matches!(expected, Type::Inference(_)) {
+                    expected =
+                        self.refine_pattern_expected(&expected, &Type::Bool, pattern.span)?;
+                    inference_changed = true;
+                } else if !matches!(expected, Type::Bool) {
+                    return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
+                }
                 CorePatternKind::Boolean(*value)
             }
             ResolvedPatternKind::Unit => {
-                expected = self.refine_pattern_expected(&expected, &Type::Unit, pattern.span)?;
+                if matches!(expected, Type::Inference(_)) {
+                    expected =
+                        self.refine_pattern_expected(&expected, &Type::Unit, pattern.span)?;
+                    inference_changed = true;
+                } else if !matches!(expected, Type::Unit) {
+                    return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
+                }
                 CorePatternKind::Unit
             }
             ResolvedPatternKind::Tuple(patterns) => {
@@ -2133,6 +2163,7 @@ impl Elaborator {
                     }
                     let required = Type::Tuple(types.into_boxed_slice());
                     expected = self.refine_pattern_expected(&expected, &required, pattern.span)?;
+                    inference_changed = true;
                 }
                 let Type::Tuple(types) = &expected else {
                     return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
@@ -2142,13 +2173,11 @@ impl Elaborator {
                 }
                 let mut checked = Vec::with_capacity(patterns.len());
                 for (pattern, ty) in patterns.iter().zip(types) {
-                    checked.push(self.check_core_pattern(
-                        pattern,
-                        ty,
-                        context,
-                        binders,
-                        binder_reason,
-                    )?);
+                    let outcome =
+                        self.check_core_pattern(pattern, ty, context, binders, binder_reason)?;
+                    rebuild_expected |= outcome.inference_changed;
+                    inference_changed |= outcome.inference_changed;
+                    checked.push(outcome.pattern);
                 }
                 CorePatternKind::Tuple(checked.into_boxed_slice())
             }
@@ -2183,6 +2212,7 @@ impl Elaborator {
                         Type::AppliedNominal(info_owner, arguments.into_boxed_slice())
                     };
                     expected = self.refine_pattern_expected(&expected, &required, pattern.span)?;
+                    inference_changed = true;
                 }
                 let (owner, arguments): (_, &[Type]) = match &expected {
                     Type::Nominal(owner) => (*owner, &[]),
@@ -2222,13 +2252,13 @@ impl Elaborator {
                 }
                 let checked_payload = match (payload.as_deref(), payload_type.as_ref()) {
                     (None, None) => None,
-                    (Some(pattern), Some(ty)) => Some(Box::new(self.check_core_pattern(
-                        pattern,
-                        ty,
-                        context,
-                        binders,
-                        binder_reason,
-                    )?)),
+                    (Some(pattern), Some(ty)) => {
+                        let outcome =
+                            self.check_core_pattern(pattern, ty, context, binders, binder_reason)?;
+                        rebuild_expected |= outcome.inference_changed;
+                        inference_changed |= outcome.inference_changed;
+                        Some(Box::new(outcome.pattern))
+                    }
                     _ => return Err(constructor_mismatch(pattern.span)),
                 };
                 CorePatternKind::Constructor {
@@ -2237,16 +2267,15 @@ impl Elaborator {
                 }
             }
         };
-        let expected = if expected_was_unresolved {
+        let expected = if rebuild_expected {
             self.zonk(&expected)?
         } else {
             expected
         };
-        Ok(CorePattern::new(
-            expected,
-            Origin::Source(pattern.span),
-            kind,
-        ))
+        Ok(CheckedPattern {
+            pattern: CorePattern::new(expected, Origin::Source(pattern.span), kind),
+            inference_changed,
+        })
     }
 
     fn remove_pattern_binders(
@@ -2279,24 +2308,27 @@ impl Elaborator {
             body_check,
         } = check;
         let mut pattern_binders = Vec::new();
-        let pattern = self.check_core_pattern(
+        let checked = self.check_core_pattern(
             parameter,
             &domain.ty,
             context,
             &mut pattern_binders,
             GeneratedReason::FunctionLowering,
         )?;
-        domain.ty = self.zonk(&domain.ty)?;
-        if !domain.provenance.aligns(&domain.ty) {
-            domain.provenance = TypeProvenance::unknown(&domain.ty);
-        }
-        codomain.ty = self.zonk(&codomain.ty)?;
-        if !codomain.provenance.aligns(&codomain.ty) {
-            codomain.provenance = TypeProvenance::unknown(&codomain.ty);
-        }
-        function_type.ty = self.zonk(&function_type.ty)?;
-        if !function_type.provenance.aligns(&function_type.ty) {
-            function_type.provenance = TypeProvenance::unknown(&function_type.ty);
+        let pattern = checked.pattern;
+        if checked.inference_changed {
+            domain.ty = self.zonk(&domain.ty)?;
+            if !domain.provenance.aligns(&domain.ty) {
+                domain.provenance = TypeProvenance::unknown(&domain.ty);
+            }
+            codomain.ty = self.zonk(&codomain.ty)?;
+            if !codomain.provenance.aligns(&codomain.ty) {
+                codomain.provenance = TypeProvenance::unknown(&codomain.ty);
+            }
+            function_type.ty = self.zonk(&function_type.ty)?;
+            if !function_type.provenance.aligns(&function_type.ty) {
+                function_type.provenance = TypeProvenance::unknown(&function_type.ty);
+            }
         }
         let (parameter_binder, retained_pattern) = match &pattern.kind {
             CorePatternKind::Binder(binder) => (binder.clone(), None),
@@ -2401,13 +2433,16 @@ impl Elaborator {
             let mut binder_ids = Vec::new();
             let mut patterns = Vec::with_capacity(arity);
             for (pattern, domain) in clause.patterns.iter().zip(&domains) {
-                patterns.push(self.check_core_pattern(
-                    pattern,
-                    &domain.ty,
-                    context,
-                    &mut binder_ids,
-                    GeneratedReason::FunctionLowering,
-                )?);
+                patterns.push(
+                    self.check_core_pattern(
+                        pattern,
+                        &domain.ty,
+                        context,
+                        &mut binder_ids,
+                        GeneratedReason::FunctionLowering,
+                    )?
+                    .pattern,
+                );
             }
             if usefulness_with_budget(
                 &coverage_matrix,
@@ -2556,6 +2591,7 @@ impl Elaborator {
                 &mut binder_ids,
                 GeneratedReason::FunctionLowering,
             )?
+            .pattern
         } else {
             let Type::Tuple(types) = &domain.ty else {
                 return Err(invalid_state());
@@ -2565,13 +2601,16 @@ impl Elaborator {
             }
             let mut elements = Vec::with_capacity(types.len());
             for (parameter, ty) in operational.header.parameters.iter().zip(types) {
-                elements.push(self.check_core_pattern(
-                    &parameter.pattern,
-                    ty,
-                    context,
-                    &mut binder_ids,
-                    GeneratedReason::FunctionLowering,
-                )?);
+                elements.push(
+                    self.check_core_pattern(
+                        &parameter.pattern,
+                        ty,
+                        context,
+                        &mut binder_ids,
+                        GeneratedReason::FunctionLowering,
+                    )?
+                    .pattern,
+                );
             }
             CorePattern::new(
                 domain.ty.clone(),
@@ -2794,6 +2833,11 @@ struct FunctionCheck<'a> {
     presentation: Origin,
     function_type: ProvenancedType,
     body_check: CheckKind,
+}
+
+struct CheckedPattern {
+    pattern: CorePattern,
+    inference_changed: bool,
 }
 
 struct ElaboratedBinding {
