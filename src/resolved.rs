@@ -185,6 +185,10 @@ impl ResolvedRegistry {
             .map(|(owner, parameters)| (*owner, parameters.as_ref()))
     }
 
+    pub(crate) fn type_variable_count(&self) -> usize {
+        self.type_variables.len()
+    }
+
     /// Renders a type with source declaration spellings for nominal identities.
     #[must_use]
     pub fn display_type(&self, ty: &Type) -> String {

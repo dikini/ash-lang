@@ -19,7 +19,7 @@ use super::{
 use crate::{
     core::{CorePattern, CorePatternKind},
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
-    resolved::{BinderId, ResolvedNominalType},
+    resolved::{BinderId, ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable},
     source::{Origin, SourceFile, SourceId, Span},
     types::{ConstructorId, TYPE_WORK_LIMIT, Type, same_type, substitute_type_variables_with},
 };
@@ -137,6 +137,69 @@ fn constructor_belongs_to_owner(owner: &ResolvedNominalType, constructor: Constr
         .is_some_and(|owned| *owned == constructor)
 }
 
+fn function_value_type_matches(annotation: &Type, domain: &Type, codomain: &Type) -> bool {
+    let Type::Function(actual_domain, actual_codomain) = annotation else {
+        return false;
+    };
+    same_type(actual_domain, domain) && same_type(actual_codomain, codomain)
+}
+
+fn constructor_value_type_matches(
+    annotation: &Type,
+    constructor: &ResolvedConstructor,
+    parameters: &[ResolvedTypeVariable],
+) -> bool {
+    let monotype = if parameters.is_empty() {
+        annotation
+    } else {
+        let Type::Forall(actual_parameters, body) = annotation else {
+            return false;
+        };
+        if actual_parameters.len() != parameters.len()
+            || !actual_parameters
+                .iter()
+                .zip(parameters)
+                .all(|(actual, expected)| *actual == expected.id)
+        {
+            return false;
+        }
+        body
+    };
+    let result = if let Some(payload) = constructor.payload.as_ref() {
+        let Type::Function(actual_payload, result) = monotype else {
+            return false;
+        };
+        if !same_type(actual_payload, payload) {
+            return false;
+        }
+        result.as_ref()
+    } else {
+        monotype
+    };
+    match result {
+        Type::Nominal(owner) => parameters.is_empty() && *owner == constructor.owner,
+        Type::AppliedNominal(owner, arguments) => {
+            !parameters.is_empty()
+                && *owner == constructor.owner
+                && arguments.len() == parameters.len()
+                && arguments
+                    .iter()
+                    .zip(parameters)
+                    .all(|(argument, parameter)| {
+                        matches!(argument, Type::Variable(identity) if *identity == parameter.id)
+                    })
+        }
+        Type::Int
+        | Type::Bool
+        | Type::Unit
+        | Type::Tuple(_)
+        | Type::Variable(_)
+        | Type::Inference(_)
+        | Type::Forall(_, _)
+        | Type::Function(_, _) => false,
+    }
+}
+
 /// Consumes unchecked Core and returns the capability required by consumers.
 ///
 /// `sources` is the complete set admitted to the current compilation. Every
@@ -223,15 +286,24 @@ impl<'program, 'source> Validator<'program, 'source> {
         let mut nominal_names = HashSet::new();
         let mut constructor_ids = HashSet::new();
         let mut constructor_names = HashSet::new();
+        let root_source = self
+            .node(self.program.root)
+            .ok()
+            .and_then(|root| root.origin.as_ref())
+            .map(|origin| origin.primary_span().source());
         let registry_source = registry
             .nominals()
             .first()
-            .map(|nominal| nominal.origin.primary_span().source());
-        if let (Some(registry_source), Ok(root)) = (registry_source, self.node(self.program.root))
-            && root
-                .origin
-                .as_ref()
-                .is_some_and(|origin| origin.primary_span().source() != registry_source)
+            .map(|nominal| nominal.origin.primary_span().source())
+            .or_else(|| {
+                registry
+                    .type_variable(crate::types::TypeVariableId::new(0))
+                    .map(|parameter| parameter.origin.primary_span().source())
+            })
+            .or(root_source);
+        if registry_source
+            .zip(root_source)
+            .is_some_and(|(registry_source, root_source)| registry_source != root_source)
         {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
@@ -256,11 +328,36 @@ impl<'program, 'source> Validator<'program, 'source> {
             previous_nominal_end = Some(nominal_range.end());
             self.validate_origin(&nominal.origin, self.program.root)?;
         }
-        if registry
-            .nominal_parameter_entries()
-            .any(|(owner, _)| registry.nominal(owner).is_none())
-        {
+        let owner_parameter_count =
+            registry
+                .nominal_parameter_entries()
+                .try_fold(0_usize, |count, (owner, parameters)| {
+                    registry
+                        .nominal(owner)
+                        .and_then(|_| count.checked_add(parameters.len()))
+                });
+        if owner_parameter_count.is_none_or(|count| count > registry.type_variable_count()) {
             return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        let type_variable_count = u32::try_from(registry.type_variable_count())
+            .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
+        for value in 0..type_variable_count {
+            let identity = crate::types::TypeVariableId::new(value);
+            let parameter = registry
+                .type_variable(identity)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            self.charge_type_work(1)?;
+            let parameter_span = parameter.origin.primary_span();
+            let parameter_range = parameter_span.range();
+            if identity != parameter.id
+                || Some(parameter_span.source()) != registry_source
+                || !origin_depth_within_limit(&parameter.origin)
+                || !valid_upper_spelling(&parameter.spelling)
+                || parameter_range.start() >= parameter_range.end()
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            self.validate_origin(&parameter.origin, self.program.root)?;
         }
         let mut parameter_owners = HashMap::new();
         for nominal in registry.nominals() {
@@ -271,19 +368,14 @@ impl<'program, 'source> Validator<'program, 'source> {
             let mut parameter_names = HashSet::new();
             let mut previous_parameter_start = None;
             for parameter in parameters {
-                self.charge_type_work(1)?;
                 #[cfg(test)]
                 self.owner_parameter_index_work
                     .set(self.owner_parameter_index_work.get() + 1);
                 let parameter_span = parameter.origin.primary_span();
                 let parameter_range = parameter_span.range();
-                if Some(parameter_span.source()) != registry_source
-                    || !origin_depth_within_limit(&parameter.origin)
-                    || !valid_upper_spelling(&parameter.spelling)
-                    || parameter_owners.insert(parameter.id, nominal.id).is_some()
+                if parameter_owners.insert(parameter.id, nominal.id).is_some()
                     || !parameter_names.insert(parameter.spelling.as_str())
                     || registry.type_variable(parameter.id) != Some(parameter)
-                    || parameter_range.start() >= parameter_range.end()
                     || parameter_range.start() < nominal_range.start()
                     || parameter_range.end() > nominal_range.end()
                     || previous_parameter_start
@@ -292,7 +384,6 @@ impl<'program, 'source> Validator<'program, 'source> {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
                 previous_parameter_start = Some(parameter_range.start());
-                self.validate_origin(&parameter.origin, self.program.root)?;
             }
         }
         let mut previous_constructor_start = None;
@@ -837,10 +928,10 @@ impl<'program, 'source> Validator<'program, 'source> {
             PureValue::Unit(unit) => unit.expected_type(),
             PureValue::Function(function) => {
                 let body = self.node(function.body())?;
-                Type::Function(
-                    Box::new(function.parameter().ty().clone()),
-                    Box::new(body.ty.clone()),
-                )
+                if !function_value_type_matches(&node.ty, function.parameter().ty(), &body.ty) {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                return Ok(());
             }
             PureValue::Constructor(constructor) => {
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
@@ -852,34 +943,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     .registry
                     .nominal_parameters(info.owner)
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
-                let result = if parameters.is_empty() {
-                    Type::Nominal(info.owner)
-                } else {
-                    Type::AppliedNominal(
-                        info.owner,
-                        parameters
-                            .iter()
-                            .map(|parameter| Type::Variable(parameter.id))
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice(),
-                    )
-                };
-                let monotype = info.payload.as_ref().map_or(result.clone(), |payload| {
-                    Type::Function(Box::new(payload.clone()), Box::new(result))
-                });
-                let expected = if parameters.is_empty() {
-                    monotype
-                } else {
-                    Type::Forall(
-                        parameters
-                            .iter()
-                            .map(|parameter| parameter.id)
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice(),
-                        Box::new(monotype),
-                    )
-                };
-                if !same_type(&node.ty, &expected) {
+                if !constructor_value_type_matches(&node.ty, info, parameters) {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
                 return Ok(());
@@ -2696,6 +2760,492 @@ mod tests {
             validator.owner_parameter_index_work.get(),
             PARAMETERS as usize
         );
+    }
+
+    #[test]
+    fn rejects_malformed_additional_registry_type_variable_metadata() {
+        let file = source();
+        let foreign = SourceFile::new("foreign.ash", "A").expect("foreign source");
+        let parameter_origin = Origin::Source(
+            file.span(ByteRange::new(0, 1).expect("ordered parameter range"))
+                .expect("parameter span"),
+        );
+        let registry =
+            crate::resolved::ResolvedRegistry::default().with_additional_type_variables([
+                crate::resolved::ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::new(0),
+                    spelling: "lowercase".into(),
+                    origin: parameter_origin,
+                },
+            ]);
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder.unit(Type::Unit, origin(&file)).expect("unit root");
+
+        let error = validate(builder.finish(root).expect("root"), &[&file])
+            .expect_err("additional type-variable metadata must be validated");
+
+        assert_eq!(error.reason(), ValidationReason::Registry);
+
+        let registry =
+            crate::resolved::ResolvedRegistry::default().with_additional_type_variables([
+                crate::resolved::ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::new(0),
+                    spelling: "A".into(),
+                    origin: Origin::Source(
+                        foreign
+                            .span(ByteRange::new(0, 1).expect("ordered foreign range"))
+                            .expect("foreign parameter span"),
+                    ),
+                },
+            ]);
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder.unit(Type::Unit, origin(&file)).expect("unit root");
+
+        let error = validate(builder.finish(root).expect("root"), &[&file, &foreign])
+            .expect_err("additional type-variable provenance must belong to the registry source");
+
+        assert_eq!(error.reason(), ValidationReason::Registry);
+
+        let registry =
+            crate::resolved::ResolvedRegistry::default().with_additional_type_variables([
+                crate::resolved::ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::new(1),
+                    spelling: "A".into(),
+                    origin: Origin::Source(
+                        file.span(ByteRange::new(0, 1).expect("ordered parameter range"))
+                            .expect("parameter span"),
+                    ),
+                },
+            ]);
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder.unit(Type::Unit, origin(&file)).expect("unit root");
+
+        let error = validate(builder.finish(root).expect("root"), &[&file])
+            .expect_err("type-variable identities must be contiguous from zero");
+
+        assert_eq!(error.reason(), ValidationReason::Registry);
+    }
+
+    #[test]
+    fn accepts_well_formed_non_nominal_registry_type_variables() {
+        let file = source();
+        let registry =
+            crate::resolved::ResolvedRegistry::default().with_additional_type_variables([
+                crate::resolved::ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::new(0),
+                    spelling: "A".into(),
+                    origin: Origin::Source(
+                        file.span(ByteRange::new(0, 1).expect("ordered parameter range"))
+                            .expect("parameter span"),
+                    ),
+                },
+            ]);
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder.unit(Type::Unit, origin(&file)).expect("unit root");
+
+        validate(builder.finish(root).expect("root"), &[&file])
+            .expect("global interface parameters need no nominal owner");
+    }
+
+    #[test]
+    fn borrowed_value_type_matching_handles_wide_function_and_constructor_shapes() {
+        const WIDTH: usize = 4_096;
+        let file = source();
+        let node_origin = origin(&file);
+        let arena = super::super::dialect::ArenaId::new(106);
+        let nominal = crate::types::NominalTypeId::new(file.id(), 0);
+        let parameter = crate::types::TypeVariableId::new(0);
+        let constructor_id = ConstructorId::new(nominal, 0);
+        let payload = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+        let constructor = crate::resolved::ResolvedConstructor {
+            id: constructor_id,
+            owner: nominal,
+            spelling: "Make".into(),
+            payload: Some(payload.clone()),
+            origin: node_origin.clone(),
+        };
+        let parameters = vec![crate::resolved::ResolvedTypeVariable {
+            id: parameter,
+            spelling: "A".into(),
+            origin: node_origin.clone(),
+        }];
+        let constructor_type = Type::Forall(
+            vec![parameter].into_boxed_slice(),
+            Box::new(Type::Function(
+                Box::new(payload.clone()),
+                Box::new(Type::AppliedNominal(
+                    nominal,
+                    vec![Type::Variable(parameter)].into_boxed_slice(),
+                )),
+            )),
+        );
+        let function_type = Type::Function(Box::new(payload.clone()), Box::new(Type::Bool));
+        let malformed_function_type = Type::Function(
+            Box::new(Type::Tuple(
+                std::iter::repeat_n(Type::Int, WIDTH - 1)
+                    .chain(std::iter::once(Type::Bool))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )),
+            Box::new(Type::Bool),
+        );
+        let malformed_constructor_type = Type::Forall(
+            vec![parameter].into_boxed_slice(),
+            Box::new(Type::Function(
+                Box::new(payload.clone()),
+                Box::new(Type::AppliedNominal(
+                    nominal,
+                    vec![Type::Int].into_boxed_slice(),
+                )),
+            )),
+        );
+        let binder = TypedBinder::new(
+            arena,
+            BinderId::new(0),
+            payload.clone(),
+            node_origin.clone(),
+        );
+        let body = NodeId::new(arena, 0);
+        let function = NodeId::new(arena, 1);
+        let constructor_node = NodeId::new(arena, 2);
+        let malformed_function = NodeId::new(arena, 3);
+        let malformed_constructor = NodeId::new(arena, 4);
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![crate::resolved::ResolvedNominalType {
+                id: nominal,
+                spelling: "Wide".into(),
+                constructors: vec![constructor_id].into_boxed_slice(),
+                origin: node_origin.clone(),
+            }],
+            vec![constructor],
+        )
+        .with_type_parameters(vec![(nominal, parameters)]);
+        let program = UnvalidatedProgram {
+            registry: Arc::new(registry),
+            arena,
+            nodes: vec![
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Bool,
+                    origin: Some(node_origin.clone()),
+                    kind: PureExprKind::Value(PureValue::Boolean(
+                        super::super::literal::BooleanNode::new(false),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: function_type,
+                    origin: Some(node_origin.clone()),
+                    kind: PureExprKind::Value(PureValue::Function(
+                        super::super::function::FunctionNode::new(binder, body),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: constructor_type,
+                    origin: Some(node_origin.clone()),
+                    kind: PureExprKind::Value(PureValue::Constructor(
+                        super::super::data::ConstructorNode::new(constructor_id),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: malformed_function_type,
+                    origin: Some(node_origin.clone()),
+                    kind: PureExprKind::Value(PureValue::Function(
+                        super::super::function::FunctionNode::new(
+                            TypedBinder::new(arena, BinderId::new(1), payload, node_origin.clone()),
+                            body,
+                        ),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: malformed_constructor_type,
+                    origin: Some(node_origin),
+                    kind: PureExprKind::Value(PureValue::Constructor(
+                        super::super::data::ConstructorNode::new(constructor_id),
+                    )),
+                },
+            ],
+            root: constructor_node,
+        };
+        let validator = Validator::new(&program, &[&file]);
+        validator
+            .charge_type_work(TYPE_WORK_LIMIT)
+            .expect("test setup reaches the exact validation boundary");
+
+        for id in [function, constructor_node] {
+            let node = validator.node(id).expect("test value node");
+            let PureExprKind::Value(value) = &node.kind else {
+                unreachable!("test node is a value")
+            };
+            validator
+                .validate_value(id, node, value)
+                .expect("borrowed value-type validation retains no derived type tree");
+        }
+        assert_eq!(validator.type_work.get(), TYPE_WORK_LIMIT);
+
+        for id in [malformed_function, malformed_constructor] {
+            let node = validator.node(id).expect("malformed test value node");
+            let PureExprKind::Value(value) = &node.kind else {
+                unreachable!("test node is a value")
+            };
+            let error = validator
+                .validate_value(id, node, value)
+                .expect_err("malformed value types remain node-type failures at the budget edge");
+            assert_eq!(error.reason(), ValidationReason::NodeType);
+            assert_eq!(error.node(), Some(id));
+        }
+        assert_eq!(validator.type_work.get(), TYPE_WORK_LIMIT);
+    }
+
+    #[test]
+    fn constructor_value_type_matching_covers_every_payload_and_parameter_shape() {
+        let file = source();
+        let node_origin = origin(&file);
+        let arena = super::super::dialect::ArenaId::new(107);
+        let monomorphic = crate::types::NominalTypeId::new(file.id(), 0);
+        let parameterized = crate::types::NominalTypeId::new(file.id(), 1);
+        let mono_nullary = ConstructorId::new(monomorphic, 0);
+        let mono_payload = ConstructorId::new(monomorphic, 1);
+        let poly_nullary = ConstructorId::new(parameterized, 0);
+        let poly_payload = ConstructorId::new(parameterized, 1);
+        let parameter = crate::types::TypeVariableId::new(0);
+        let parameterized_result = || {
+            Type::AppliedNominal(
+                parameterized,
+                vec![Type::Variable(parameter)].into_boxed_slice(),
+            )
+        };
+        let parameterized_scheme =
+            |body| Type::Forall(vec![parameter].into_boxed_slice(), Box::new(body));
+        let constructors = [
+            crate::resolved::ResolvedConstructor {
+                id: mono_nullary,
+                owner: monomorphic,
+                spelling: "MonoNullary".into(),
+                payload: None,
+                origin: node_origin.clone(),
+            },
+            crate::resolved::ResolvedConstructor {
+                id: mono_payload,
+                owner: monomorphic,
+                spelling: "MonoPayload".into(),
+                payload: Some(Type::Int),
+                origin: node_origin.clone(),
+            },
+            crate::resolved::ResolvedConstructor {
+                id: poly_nullary,
+                owner: parameterized,
+                spelling: "PolyNullary".into(),
+                payload: None,
+                origin: node_origin.clone(),
+            },
+            crate::resolved::ResolvedConstructor {
+                id: poly_payload,
+                owner: parameterized,
+                spelling: "PolyPayload".into(),
+                payload: Some(Type::Int),
+                origin: node_origin.clone(),
+            },
+        ];
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![
+                crate::resolved::ResolvedNominalType {
+                    id: monomorphic,
+                    spelling: "Mono".into(),
+                    constructors: vec![mono_nullary, mono_payload].into_boxed_slice(),
+                    origin: node_origin.clone(),
+                },
+                crate::resolved::ResolvedNominalType {
+                    id: parameterized,
+                    spelling: "Poly".into(),
+                    constructors: vec![poly_nullary, poly_payload].into_boxed_slice(),
+                    origin: node_origin.clone(),
+                },
+            ],
+            constructors.into(),
+        )
+        .with_type_parameters(vec![(
+            parameterized,
+            vec![crate::resolved::ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                origin: node_origin.clone(),
+            }],
+        )]);
+        let valid = [
+            (mono_nullary, Type::Nominal(monomorphic)),
+            (
+                mono_payload,
+                Type::Function(Box::new(Type::Int), Box::new(Type::Nominal(monomorphic))),
+            ),
+            (poly_nullary, parameterized_scheme(parameterized_result())),
+            (
+                poly_payload,
+                parameterized_scheme(Type::Function(
+                    Box::new(Type::Int),
+                    Box::new(parameterized_result()),
+                )),
+            ),
+        ];
+        let malformed = [
+            (
+                mono_nullary,
+                Type::Function(Box::new(Type::Int), Box::new(Type::Nominal(monomorphic))),
+            ),
+            (mono_payload, Type::Nominal(monomorphic)),
+            (poly_nullary, parameterized_result()),
+            (
+                poly_payload,
+                parameterized_scheme(Type::Function(
+                    Box::new(Type::Int),
+                    Box::new(Type::AppliedNominal(
+                        parameterized,
+                        vec![Type::Int].into_boxed_slice(),
+                    )),
+                )),
+            ),
+        ];
+        let nodes = valid
+            .iter()
+            .chain(&malformed)
+            .map(|(constructor, ty)| StoredNode {
+                dialect: DialectId::PURE,
+                ty: ty.clone(),
+                origin: Some(node_origin.clone()),
+                kind: PureExprKind::Value(PureValue::Constructor(
+                    super::super::data::ConstructorNode::new(*constructor),
+                )),
+            })
+            .collect::<Vec<_>>();
+        let program = UnvalidatedProgram {
+            registry: Arc::new(registry),
+            arena,
+            nodes,
+            root: NodeId::new(arena, 0),
+        };
+        let validator = Validator::new(&program, &[&file]);
+
+        for index in 0..valid.len() {
+            let id = NodeId::new(arena, u32::try_from(index).expect("valid node identity"));
+            let node = validator.node(id).expect("valid constructor node");
+            let PureExprKind::Value(value) = &node.kind else {
+                unreachable!("test node is a value")
+            };
+            validator
+                .validate_value(id, node, value)
+                .expect("valid constructor scheme shape");
+        }
+        for index in valid.len()..valid.len() + malformed.len() {
+            let id = NodeId::new(
+                arena,
+                u32::try_from(index).expect("malformed node identity"),
+            );
+            let node = validator.node(id).expect("malformed constructor node");
+            let PureExprKind::Value(value) = &node.kind else {
+                unreachable!("test node is a value")
+            };
+            let error = validator
+                .validate_value(id, node, value)
+                .expect_err("malformed constructor scheme shape");
+            assert_eq!(error.reason(), ValidationReason::NodeType);
+            assert_eq!(error.node(), Some(id));
+        }
+    }
+
+    #[test]
+    fn borrowed_value_type_matching_does_not_clone_deep_types_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("borrowed-core-value-type-matching".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 5_000;
+                let file = source();
+                let node_origin = origin(&file);
+                let arena = super::super::dialect::ArenaId::new(108);
+                let nominal = crate::types::NominalTypeId::new(file.id(), 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                let body = NodeId::new(arena, 0);
+                let function = NodeId::new(arena, 1);
+                let constructor_node = NodeId::new(arena, 2);
+                let registry = crate::resolved::ResolvedRegistry::new(
+                    vec![crate::resolved::ResolvedNominalType {
+                        id: nominal,
+                        spelling: "Deep".into(),
+                        constructors: vec![constructor].into_boxed_slice(),
+                        origin: node_origin.clone(),
+                    }],
+                    vec![crate::resolved::ResolvedConstructor {
+                        id: constructor,
+                        owner: nominal,
+                        spelling: "Make".into(),
+                        payload: Some(function_type(DEPTH)),
+                        origin: node_origin.clone(),
+                    }],
+                );
+                let program = UnvalidatedProgram {
+                    registry: Arc::new(registry),
+                    arena,
+                    nodes: vec![
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: function_type(DEPTH),
+                            origin: Some(node_origin.clone()),
+                            kind: PureExprKind::Value(PureValue::Unit(
+                                super::super::literal::UnitNode,
+                            )),
+                        },
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: Type::Function(
+                                Box::new(function_type(DEPTH)),
+                                Box::new(function_type(DEPTH)),
+                            ),
+                            origin: Some(node_origin.clone()),
+                            kind: PureExprKind::Value(PureValue::Function(
+                                super::super::function::FunctionNode::new(
+                                    TypedBinder::new(
+                                        arena,
+                                        BinderId::new(0),
+                                        function_type(DEPTH),
+                                        node_origin.clone(),
+                                    ),
+                                    body,
+                                ),
+                            )),
+                        },
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: Type::Function(
+                                Box::new(function_type(DEPTH)),
+                                Box::new(Type::Nominal(nominal)),
+                            ),
+                            origin: Some(node_origin),
+                            kind: PureExprKind::Value(PureValue::Constructor(
+                                super::super::data::ConstructorNode::new(constructor),
+                            )),
+                        },
+                    ],
+                    root: constructor_node,
+                };
+                let validator = Validator::new(&program, &[&file]);
+                for id in [function, constructor_node] {
+                    let node = validator.node(id).expect("deep value node");
+                    let PureExprKind::Value(value) = &node.kind else {
+                        unreachable!("test node is a value")
+                    };
+                    validator
+                        .validate_value(id, node, value)
+                        .expect("deep value matching uses borrowed explicit work stacks");
+                }
+                drop(validator);
+                program.discard_iteratively();
+            })
+            .expect("small-stack validation thread should start")
+            .join()
+            .expect("borrowed value matching must fit the small stack");
     }
 
     #[test]
