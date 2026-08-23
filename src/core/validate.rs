@@ -190,6 +190,8 @@ struct Validator<'program, 'source> {
     sources: HashMap<SourceId, &'source SourceFile>,
     binders: HashMap<BinderId, &'program TypedBinder>,
     type_work: Cell<usize>,
+    #[cfg(test)]
+    owner_parameter_index_work: Cell<usize>,
 }
 
 impl<'program, 'source> Validator<'program, 'source> {
@@ -202,6 +204,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                 .collect(),
             binders: HashMap::new(),
             type_work: Cell::new(0),
+            #[cfg(test)]
+            owner_parameter_index_work: Cell::new(0),
         }
     }
 
@@ -260,7 +264,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
-        let mut parameter_ids = HashSet::new();
+        let mut parameter_owners = HashMap::new();
         for nominal in registry.nominals() {
             let nominal_range = nominal.origin.primary_span().range();
             let parameters = registry
@@ -269,12 +273,16 @@ impl<'program, 'source> Validator<'program, 'source> {
             let mut parameter_names = HashSet::new();
             let mut previous_parameter_start = None;
             for parameter in parameters {
+                self.charge_type_work(1)?;
+                #[cfg(test)]
+                self.owner_parameter_index_work
+                    .set(self.owner_parameter_index_work.get() + 1);
                 let parameter_span = parameter.origin.primary_span();
                 let parameter_range = parameter_span.range();
                 if Some(parameter_span.source()) != registry_source
                     || !origin_depth_within_limit(&parameter.origin)
                     || !valid_upper_spelling(&parameter.spelling)
-                    || !parameter_ids.insert(parameter.id)
+                    || parameter_owners.insert(parameter.id, nominal.id).is_some()
                     || !parameter_names.insert(parameter.spelling.as_str())
                     || registry.type_variable(parameter.id) != Some(parameter)
                     || parameter_range.start() >= parameter_range.end()
@@ -296,14 +304,11 @@ impl<'program, 'source> Validator<'program, 'source> {
             let owner_range = registry
                 .nominal(constructor.owner)
                 .map(|owner| owner.origin.primary_span().range());
-            let owner_parameters = registry
-                .nominal_parameters(constructor.owner)
-                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?
-                .iter()
-                .map(|parameter| parameter.id)
-                .collect::<HashSet<_>>();
-            let payload_valid =
-                self.valid_registry_payload(constructor.payload.as_ref(), &owner_parameters)?;
+            let payload_valid = self.valid_registry_payload(
+                constructor.payload.as_ref(),
+                constructor.owner,
+                &parameter_owners,
+            )?;
             if constructor.id.owner() != constructor.owner
                 || !nominal_ids.contains(&constructor.owner)
                 || Some(constructor.origin.primary_span().source()) != registry_source
@@ -368,10 +373,22 @@ impl<'program, 'source> Validator<'program, 'source> {
     }
 
     fn valid_type(&self, root: Option<&Type>) -> Result<bool, ValidationError> {
+        self.valid_type_with_scheme(root, true)
+    }
+
+    fn valid_monotype(&self, root: Option<&Type>) -> Result<bool, ValidationError> {
+        self.valid_type_with_scheme(root, false)
+    }
+
+    fn valid_type_with_scheme(
+        &self,
+        root: Option<&Type>,
+        allow_scheme: bool,
+    ) -> Result<bool, ValidationError> {
         let Some(root) = root else {
             return Ok(true);
         };
-        let mut work = vec![(root, true)];
+        let mut work = vec![(root, allow_scheme)];
         while let Some((ty, allow_scheme)) = work.pop() {
             self.charge_type_work(1)?;
             match ty {
@@ -423,7 +440,8 @@ impl<'program, 'source> Validator<'program, 'source> {
     fn valid_registry_payload(
         &self,
         root: Option<&Type>,
-        owner_parameters: &HashSet<crate::types::TypeVariableId>,
+        owner: crate::types::NominalTypeId,
+        parameter_owners: &HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>,
     ) -> Result<bool, ValidationError> {
         let Some(root) = root else {
             return Ok(true);
@@ -440,7 +458,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         .nominal_parameters(*id)
                         .is_some_and(<[_]>::is_empty) => {}
                 Type::Nominal(_) => return Ok(false),
-                Type::Variable(variable) if owner_parameters.contains(variable) => {}
+                Type::Variable(variable) if parameter_owners.get(variable) == Some(&owner) => {}
                 Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return Ok(false),
                 Type::AppliedNominal(id, arguments) => {
                     if self
@@ -899,6 +917,9 @@ impl<'program, 'source> Validator<'program, 'source> {
             }
             PureComputation::Match(match_node) => {
                 let scrutinee = self.node(match_node.scrutinee())?;
+                if !self.valid_monotype(Some(&scrutinee.ty))? {
+                    return Err(ValidationError::new(ValidationReason::Pattern, Some(id)));
+                }
                 if match_node.arms().is_empty() {
                     return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
                 }
@@ -1144,7 +1165,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         let mut binders = HashSet::new();
         while let Some((pattern, expected)) = work.pop() {
             self.validate_origin(&pattern.origin, node)?;
-            if !same_type(&pattern.ty, &expected) || !self.valid_type(Some(&pattern.ty))? {
+            if !same_type(&pattern.ty, &expected) || !self.valid_monotype(Some(&pattern.ty))? {
                 return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
             }
             match (&pattern.kind, &expected) {
@@ -1660,6 +1681,85 @@ mod tests {
             &owner,
             ConstructorId::new(crate::types::NominalTypeId::new(file.id(), 1), WIDTH - 1,)
         ));
+    }
+
+    #[test]
+    fn constructor_payload_owner_parameters_are_indexed_once() {
+        const PARAMETERS: u32 = 64;
+        const CONSTRUCTORS: u32 = 64;
+        let file = SourceFile::new("test.ash", "x".repeat(CONSTRUCTORS as usize + 1))
+            .expect("test source");
+        let registry_origin = Origin::Source(
+            file.span(ByteRange::new(0, CONSTRUCTORS + 1).expect("ordered registry range"))
+                .expect("registry span"),
+        );
+        let nominal = crate::types::NominalTypeId::new(file.id(), 0);
+        let constructors = (0..CONSTRUCTORS)
+            .map(|index| ConstructorId::new(nominal, index))
+            .collect::<Vec<_>>();
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![crate::resolved::ResolvedNominalType {
+                id: nominal,
+                spelling: "Wide".into(),
+                constructors: constructors.clone().into_boxed_slice(),
+                origin: registry_origin.clone(),
+            }],
+            constructors
+                .into_iter()
+                .enumerate()
+                .map(|(index, id)| crate::resolved::ResolvedConstructor {
+                    id,
+                    owner: nominal,
+                    spelling: format!("C{index}"),
+                    payload: Some(Type::Variable(crate::types::TypeVariableId::new(
+                        u32::try_from(index).expect("constructor index should fit") % PARAMETERS,
+                    ))),
+                    origin: Origin::Source(
+                        file.span(
+                            ByteRange::new(
+                                u32::try_from(index).expect("constructor index should fit"),
+                                u32::try_from(index + 1).expect("constructor index should fit"),
+                            )
+                            .expect("ordered constructor range"),
+                        )
+                        .expect("constructor span"),
+                    ),
+                })
+                .collect(),
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            (0..PARAMETERS)
+                .map(|index| crate::resolved::ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::new(index),
+                    spelling: format!("A{index}"),
+                    origin: Origin::Source(
+                        file.span(
+                            ByteRange::new(index, index + 1).expect("ordered parameter range"),
+                        )
+                        .expect("parameter span"),
+                    ),
+                })
+                .collect(),
+        )]);
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder
+            .unit(Type::Unit, registry_origin)
+            .expect("unit root");
+        let program = builder.finish(root).expect("root");
+        let validator = Validator::new(&program, &[&file]);
+
+        let result = validator.validate_registry();
+        assert!(
+            result.is_ok(),
+            "indexed parameterized registry should validate after {} index insertions: {result:?}",
+            validator.owner_parameter_index_work.get()
+        );
+
+        assert_eq!(
+            validator.owner_parameter_index_work.get(),
+            PARAMETERS as usize
+        );
     }
 
     #[test]

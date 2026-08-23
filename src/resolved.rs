@@ -263,19 +263,17 @@ impl ResolvedRegistry {
     }
 
     /// Destroys untrusted registry payloads without following host recursion.
-    pub(crate) fn discard_iteratively(self) {
-        let Self {
-            nominals,
-            constructors,
-            nominal_positions,
-            constructor_positions,
-            nominal_parameters,
-            type_variables,
-        } = self;
-        drop(nominal_positions);
-        drop(constructor_positions);
-        drop(nominal_parameters);
-        drop(type_variables);
+    pub(crate) fn discard_iteratively(mut self) {
+        self.discard_owned_payloads();
+    }
+
+    fn discard_owned_payloads(&mut self) {
+        let nominals = std::mem::take(&mut self.nominals);
+        let constructors = std::mem::take(&mut self.constructors);
+        let nominal_parameters = std::mem::take(&mut self.nominal_parameters);
+        let type_variables = std::mem::take(&mut self.type_variables);
+        self.nominal_positions.clear();
+        self.constructor_positions.clear();
         for nominal in nominals.into_vec() {
             discard_origin(nominal.origin);
         }
@@ -285,6 +283,20 @@ impl ResolvedRegistry {
             }
             discard_origin(constructor.origin);
         }
+        for parameters in nominal_parameters.into_values() {
+            for parameter in parameters.into_vec() {
+                discard_origin(parameter.origin);
+            }
+        }
+        for parameter in type_variables.into_values() {
+            discard_origin(parameter.origin);
+        }
+    }
+}
+
+impl Drop for ResolvedRegistry {
+    fn drop(&mut self) {
+        self.discard_owned_payloads();
     }
 }
 

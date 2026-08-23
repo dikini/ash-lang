@@ -63,6 +63,37 @@ fn rejects_malformed_explicit_type_operations_and_free_type_variables() {
 }
 
 #[test]
+fn rejects_polymorphic_match_domains() {
+    let file = source("polymorphic match domain");
+    let origin = whole_origin(&file);
+    let parameter = TypeVariableId::new(0);
+    let scheme = Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit));
+    let mut builder = CoreBuilder::new();
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("abstraction body");
+    let scrutinee = builder
+        .type_abstraction(vec![parameter], body, scheme.clone(), origin.clone())
+        .expect("unchecked type abstraction");
+    let arm_body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("match arm body");
+    let arm = CoreMatchArm::new(
+        CorePattern::new(scheme, origin.clone(), CorePatternKind::Wildcard),
+        arm_body,
+        origin.clone(),
+    );
+    let root = builder
+        .match_expression(scrutinee, vec![arm], Type::Unit, origin)
+        .expect("unchecked polymorphic match");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("match domains must remain monomorphic");
+
+    assert_eq!(error.reason(), ValidationReason::Pattern);
+}
+
+#[test]
 fn core_construction_charges_type_cells_cumulatively_before_storage() {
     let file = source("bounded type construction");
     let origin = whole_origin(&file);
@@ -519,6 +550,63 @@ fn rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack() {
             .expect("small-stack thread should start")
             .join()
             .expect("registry rejection and destruction must fit the small stack");
+    });
+}
+
+#[test]
+fn rejects_and_destroys_overdeep_registry_parameter_origins_on_a_small_stack() {
+    let file = source("parameter origin bounds");
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let parameter = TypeVariableId::new(0);
+    let origin = whole_origin(&file);
+    let mut deep_parameter_origin = range_origin(&file, 0, 1);
+    for _ in 0..5_000 {
+        deep_parameter_origin = Origin::Generated {
+            cause: Box::new(deep_parameter_origin),
+            reason: GeneratedReason::TypeChecking,
+        };
+    }
+    let registry = Arc::new(
+        ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Bounded".into(),
+                constructors: vec![constructor].into_boxed_slice(),
+                origin: origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner: nominal,
+                spelling: "Make".into(),
+                payload: Some(Type::Variable(parameter)),
+                origin: range_origin(&file, 1, 2),
+            }],
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                origin: deep_parameter_origin,
+            }],
+        )]),
+    );
+
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, move || {
+                let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+                let root = builder.unit(Type::Unit, origin).expect("unit root");
+                let error = validate(builder.finish(root).expect("root"), &[&file])
+                    .expect_err("overdeep parameter origin");
+                assert_eq!(error.reason(), ValidationReason::Registry);
+                drop(registry);
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("parameter-origin rejection and destruction must fit the small stack");
     });
 }
 
