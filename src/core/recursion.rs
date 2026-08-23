@@ -28,6 +28,14 @@ impl RecursiveBindingMember {
     pub const fn initializer(&self) -> NodeId {
         self.initializer
     }
+
+    pub(super) fn binder_mut(&mut self) -> &mut TypedBinder {
+        &mut self.binder
+    }
+
+    fn discard_metadata(self) {
+        self.binder.discard_metadata();
+    }
 }
 
 /// A simultaneous recursive binding group followed by its lexical body.
@@ -51,6 +59,10 @@ impl RecursiveBindingNode {
         &self.members
     }
 
+    pub(super) fn members_mut(&mut self) -> &mut [RecursiveBindingMember] {
+        &mut self.members
+    }
+
     /// Returns the body evaluated with every member in scope.
     #[must_use]
     pub const fn body(&self) -> NodeId {
@@ -68,5 +80,11 @@ impl RecursiveBindingNode {
         self.members
             .get(index)
             .map(RecursiveBindingMember::initializer)
+    }
+
+    pub(super) fn discard_metadata(self) {
+        for member in self.members.into_vec() {
+            member.discard_metadata();
+        }
     }
 }

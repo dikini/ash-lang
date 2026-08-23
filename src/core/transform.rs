@@ -112,7 +112,9 @@ fn rebuild(
             | PureExprKind::Computation(
                 PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
-                | PureComputation::Tuple(_),
+                | PureComputation::Tuple(_)
+                | PureComputation::TypeAbstraction(_)
+                | PureComputation::TypeApplication(_),
             ) => {}
         }
     }
@@ -292,6 +294,22 @@ fn rebuild_node(
                 )
                 .map_err(TransformError::from)
         }
+        PureExprKind::Computation(PureComputation::TypeAbstraction(node)) => builder
+            .type_abstraction(
+                node.parameters().to_vec(),
+                remap(remapped, node.body())?,
+                expression.ty.clone(),
+                expression.origin.clone(),
+            )
+            .map_err(TransformError::from),
+        PureExprKind::Computation(PureComputation::TypeApplication(node)) => builder
+            .type_application(
+                remap(remapped, node.function())?,
+                node.arguments().to_vec(),
+                expression.ty.clone(),
+                expression.origin.clone(),
+            )
+            .map_err(TransformError::from),
     }
 }
 

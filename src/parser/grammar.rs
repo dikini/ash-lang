@@ -242,6 +242,24 @@ fn type_declaration(parser: &mut Parser<'_>) {
     } else {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
     }
+    if parser.at(&TokenKind::Less) {
+        let _ = parser.bump();
+        if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+            let _ = parser.bump();
+            while parser.at(&TokenKind::Comma) {
+                let _ = parser.bump();
+                if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+                    let _ = parser.bump();
+                } else {
+                    parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+                    break;
+                }
+            }
+        } else {
+            parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+        }
+        let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Type);
+    }
     let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
     if parser.at(&TokenKind::LineEnd) {
         let _ = parser.bump();
@@ -648,7 +666,7 @@ fn function_expression(parser: &mut Parser<'_>) {
 }
 
 fn reject_polymorphic_header(parser: &mut Parser<'_>) {
-    if !matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+    if !parser.at(&TokenKind::Less) {
         return;
     }
     parser.error_at_current(ParseReason::PolymorphicHeader);
@@ -804,18 +822,33 @@ fn type_expression(parser: &mut Parser<'_>) {
 fn atomic_type(parser: &mut Parser<'_>) {
     parser.start(NodeKind::AtomicType);
     match atomic_type_form(parser) {
-        Some(
-            AtomicTypeForm::Int
-            | AtomicTypeForm::Bool
-            | AtomicTypeForm::Unit
-            | AtomicTypeForm::Nominal,
-        ) => {
+        Some(AtomicTypeForm::Int | AtomicTypeForm::Bool | AtomicTypeForm::Unit) => {
             let _ = parser.bump();
+            if parser.at(&TokenKind::Less) {
+                parser.error_at_current(ParseReason::UnexpectedToken);
+                type_arguments(parser);
+            }
+        }
+        Some(AtomicTypeForm::Nominal) => {
+            let _ = parser.bump();
+            if parser.at(&TokenKind::Less) {
+                type_arguments(parser);
+            }
         }
         Some(AtomicTypeForm::Parenthesized) => parenthesized_type(parser),
         _ => parser.report(ParseReason::ExpectedForm, ExpectedForm::Type),
     }
     parser.finish();
+}
+
+fn type_arguments(parser: &mut Parser<'_>) {
+    let _ = parser.bump();
+    type_expression(parser);
+    while parser.at(&TokenKind::Comma) {
+        let _ = parser.bump();
+        type_expression(parser);
+    }
+    let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Type);
 }
 
 fn atomic_type_form(parser: &Parser<'_>) -> Option<AtomicTypeForm> {

@@ -7,23 +7,26 @@ not part of the source language.
 ## Tokens
 
 An ordinary identifier starts with an ASCII lowercase letter or underscore and
-continues with ASCII letters, decimal digits, or underscores. A constructor or
-nominal type identifier starts with an ASCII uppercase letter and has the same
-continuation characters. The reserved words `fn`, `let`, `rec`, `and`, `type`,
-`match`, `Int`, `Bool`, `Unit`, `true`, and `false` cannot be identifiers. The
-single spelling `_` is the wildcard token rather than an ordinary identifier;
-spellings such as `_tail` remain ordinary identifiers.
+continues with ASCII letters, decimal digits, or underscores. A constructor,
+nominal type, or type-variable identifier starts with an ASCII uppercase letter
+and has the same continuation characters. Resolution determines which of those
+three meanings an uppercase occurrence has from its syntactic position and
+scope. The reserved words `fn`, `let`, `rec`, `and`, `type`, `match`, `Int`,
+`Bool`, `Unit`, `true`, and `false` cannot be identifiers. The single spelling
+`_` is the wildcard token rather than an ordinary identifier; spellings such as
+`_tail` remain ordinary identifiers.
 
 An integer literal is either `0` or a nonzero decimal digit followed by zero or
 more decimal digits. Its value is the corresponding mathematical non-negative
 integer. There is no fixed-width overflow. A leading zero in a multi-digit
 integer is invalid. A leading `-` is not part of an integer literal.
 
-The remaining punctuation admitted by Mini-Ash is `(`, `)`, `{`, `}`, `:`,
-`=`, `==`, `+`, `*`, `->`, `=>`, `|`, and comma. The longest token wins where
-one spelling prefixes another. Semicolon is recognized only to provide its
-specified source rejection; no grammar production admits it as source
-punctuation.
+The remaining punctuation admitted by Mini-Ash is `(`, `)`, `{`, `}`, `<`,
+`>`, `:`, `=`, `==`, `+`, `*`, `->`, `=>`, `|`, and comma. Angle brackets
+occur only in parameterized type declarations and saturated nominal type
+applications. The longest token wins where one spelling prefixes another.
+Semicolon is recognized only to provide its specified source rejection; no
+grammar production admits it as source punctuation.
 
 Mini-Ash has no comments, string or character literals, escapes, Unicode
 identifiers, or negative literals.

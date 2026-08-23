@@ -1,6 +1,11 @@
 //! Lexical name resolution for recovery-free surface syntax.
 
-use std::{collections::HashMap, fmt, ops::Deref, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    ops::Deref,
+    sync::Arc,
+};
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
@@ -13,7 +18,7 @@ use crate::{
         ResolvedMatchArm, ResolvedMatchExpr, ResolvedNominalType, ResolvedOccurrence,
         ResolvedPattern, ResolvedPatternKind, ResolvedProgram, ResolvedRecursiveGroup,
         ResolvedRecursiveMember, ResolvedRegistry, ResolvedType, ResolvedTypeProvenance,
-        ResolvedTypeProvenanceNode, ResolvedTypedPattern,
+        ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern,
     },
     source::Origin,
     surface::{
@@ -21,7 +26,7 @@ use crate::{
         SurfaceExprKind, SurfaceLocalDeclaration, SurfacePattern, SurfacePatternKind,
         SurfaceProgram, SurfaceRecursiveGroup, SurfaceType, SurfaceTypeKind,
     },
-    types::{ConstructorId, NominalTypeId, Type},
+    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
 };
 
 /// The semantic reason that prevented name resolution.
@@ -37,8 +42,14 @@ pub enum ResolveReason {
     DuplicateType,
     /// A file contains a second constructor spelling.
     DuplicateConstructor,
+    /// A declaration repeats one type-parameter spelling.
+    DuplicateTypeParameter,
     /// A source type occurrence names no declaration.
     UnknownType,
+    /// A nominal type constructor has the wrong number of arguments.
+    TypeArgumentCount,
+    /// A type of kind `Type` was used as a type constructor.
+    TypeKind,
     /// An uppercase term or pattern names no constructor.
     UnknownConstructor,
     /// One pattern vector binds the same spelling more than once.
@@ -47,6 +58,8 @@ pub enum ResolveReason {
     DuplicateRecursiveMember,
     /// The resolver cannot assign another distinct binder identity.
     BinderIdExhausted,
+    /// Cumulative source-type resolution exceeded the compiler work budget.
+    TypeResourceExhausted,
     /// An internal resolver invariant was lost.
     InternalState,
 }
@@ -59,11 +72,15 @@ impl fmt::Display for ResolveReason {
             Self::DuplicateGlobal => "resolve.duplicate-global",
             Self::DuplicateType => "resolve.duplicate-type",
             Self::DuplicateConstructor => "resolve.duplicate-constructor",
+            Self::DuplicateTypeParameter => "resolve.duplicate-type-parameter",
             Self::UnknownType => "resolve.unknown-type",
+            Self::TypeArgumentCount => "resolve.type-argument-count",
+            Self::TypeKind => "resolve.type-kind",
             Self::UnknownConstructor => "resolve.unknown-constructor",
             Self::DuplicatePatternBinder => "pattern.duplicate-binder",
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
             Self::BinderIdExhausted => "resolve.binder-id-exhausted",
+            Self::TypeResourceExhausted => "resolve.type-resource",
             Self::InternalState => "resolve.internal-state",
         })
     }
@@ -122,10 +139,16 @@ pub fn resolve(program: &SurfaceProgram) -> Result<ResolvedProgram, ResolveError
 
 struct Resolver {
     next_binder: u32,
+    next_type_variable: u32,
     scopes: Vec<HashMap<String, Binder>>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
     constructor_names: HashMap<String, ConstructorId>,
+    type_scopes: Vec<HashMap<String, ResolvedTypeVariable>>,
+    nominal_parameter_counts: Vec<usize>,
+    type_work: TypeWorkBudget,
+    #[cfg(test)]
+    max_type_pending_tasks: usize,
 }
 
 struct GlobalFact {
@@ -137,10 +160,16 @@ impl Resolver {
     fn new() -> Self {
         Self {
             next_binder: 0,
+            next_type_variable: 0,
             scopes: vec![HashMap::new()],
             globals: HashMap::new(),
             type_names: HashMap::new(),
             constructor_names: HashMap::new(),
+            type_scopes: Vec::new(),
+            nominal_parameter_counts: Vec::new(),
+            type_work: TypeWorkBudget::default(),
+            #[cfg(test)]
+            max_type_pending_tasks: 0,
         }
     }
 
@@ -149,6 +178,14 @@ impl Resolver {
         program: &SurfaceProgram,
     ) -> Result<ResolvedProgram, ResolveError> {
         let registry = self.resolve_registry(program)?;
+        let mut global_type_parameters = Vec::with_capacity(program.definitions.len());
+        for definition in &program.definitions {
+            global_type_parameters.push(self.allocate_global_type_parameters(definition)?);
+        }
+        let registry = Arc::new(
+            registry
+                .with_additional_type_variables(global_type_parameters.iter().flatten().cloned()),
+        );
         let mut global_binders = Vec::with_capacity(program.definitions.len());
         for definition in &program.definitions {
             let (global_name, global_name_span) = match &definition.kind {
@@ -227,7 +264,19 @@ impl Resolver {
         }
 
         let mut definitions = Vec::with_capacity(program.definitions.len());
-        for (definition, global) in program.definitions.iter().zip(global_binders) {
+        for ((definition, global), type_parameters) in program
+            .definitions
+            .iter()
+            .zip(global_binders)
+            .zip(global_type_parameters)
+        {
+            let type_scope_checkpoint = self.type_scopes.len();
+            self.type_scopes.push(
+                type_parameters
+                    .iter()
+                    .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
+                    .collect(),
+            );
             let kind = match &definition.kind {
                 SurfaceDefinitionKind::Equational(equational) => {
                     let annotation = self.resolve_type(&equational.interface.annotation)?;
@@ -261,6 +310,7 @@ impl Resolver {
                         interface: ResolvedExternalInterface {
                             name: global.clone(),
                             annotation,
+                            type_parameters: type_parameters.clone().into_boxed_slice(),
                             span: equational.interface.span,
                         },
                         equations,
@@ -302,6 +352,7 @@ impl Resolver {
                             name: global.clone(),
                             parameters,
                             result_type: self.resolve_type(&operational.header.result_type)?,
+                            type_parameters: type_parameters.clone().into_boxed_slice(),
                             span: operational.header.span,
                         },
                         body,
@@ -312,6 +363,7 @@ impl Resolver {
                 kind,
                 span: definition.span,
             });
+            self.type_scopes.truncate(type_scope_checkpoint);
         }
 
         let result = self.resolve_expr(&program.result)?;
@@ -326,7 +378,7 @@ impl Resolver {
     fn resolve_registry(
         &mut self,
         program: &SurfaceProgram,
-    ) -> Result<Arc<ResolvedRegistry>, ResolveError> {
+    ) -> Result<ResolvedRegistry, ResolveError> {
         let mut first_types = HashMap::new();
         let mut nominal_ids = Vec::with_capacity(program.type_declarations.len());
         for (index, declaration) in program.type_declarations.iter().enumerate() {
@@ -392,6 +444,31 @@ impl Resolver {
             constructor_ids.push(owned);
         }
 
+        let mut nominal_parameters = Vec::with_capacity(program.type_declarations.len());
+        for (declaration, owner) in program.type_declarations.iter().zip(&nominal_ids) {
+            let mut first = HashMap::new();
+            let mut parameters = Vec::with_capacity(declaration.parameters.len());
+            for parameter in &declaration.parameters {
+                if let Some(first_span) = first.insert(parameter.text.as_str(), parameter.span) {
+                    let mut diagnostic = Diagnostic::new(
+                        ResolveReason::DuplicateTypeParameter,
+                        SourceLabel::new(parameter.span, "this type parameter is already declared"),
+                    );
+                    diagnostic.related.push(SourceLabel::new(
+                        first_span,
+                        "the first type parameter is here",
+                    ));
+                    return Err(diagnostic.into());
+                }
+                parameters.push(self.allocate_type_variable(&parameter.text, parameter.span)?);
+            }
+            nominal_parameters.push((*owner, parameters));
+        }
+        self.nominal_parameter_counts = nominal_parameters
+            .iter()
+            .map(|(_, parameters)| parameters.len())
+            .collect();
+
         let nominals = program
             .type_declarations
             .iter()
@@ -405,23 +482,39 @@ impl Resolver {
             })
             .collect::<Vec<_>>();
         let mut constructors = Vec::new();
-        for ((declaration, owner), ids) in program
+        for (((declaration, owner), ids), (_, parameters)) in program
             .type_declarations
             .iter()
             .zip(&nominal_ids)
             .zip(&constructor_ids)
+            .zip(&nominal_parameters)
         {
+            self.type_scopes.push(
+                parameters
+                    .iter()
+                    .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
+                    .collect(),
+            );
             for (constructor, id) in declaration.constructors.iter().zip(ids) {
                 let payload = match constructor.fields.as_slice() {
                     [] => None,
                     [field] => Some(self.resolve_type(field)?.ty),
-                    fields => Some(Type::Tuple(
-                        fields
-                            .iter()
-                            .map(|field| self.resolve_type(field).map(|resolved| resolved.ty))
-                            .collect::<Result<Vec<_>, _>>()?
-                            .into_boxed_slice(),
-                    )),
+                    fields => {
+                        self.type_work.charge(1).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                constructor.span,
+                                "constructor payload synthesis exceeded its type-work budget",
+                            )
+                        })?;
+                        Some(Type::Tuple(
+                            fields
+                                .iter()
+                                .map(|field| self.resolve_type(field).map(|resolved| resolved.ty))
+                                .collect::<Result<Vec<_>, _>>()?
+                                .into_boxed_slice(),
+                        ))
+                    }
                 };
                 constructors.push(ResolvedConstructor {
                     id: *id,
@@ -431,8 +524,9 @@ impl Resolver {
                     origin: Origin::Source(constructor.span),
                 });
             }
+            let _ = self.type_scopes.pop();
         }
-        Ok(Arc::new(ResolvedRegistry::new(nominals, constructors)))
+        Ok(ResolvedRegistry::new(nominals, constructors).with_type_parameters(nominal_parameters))
     }
 
     fn push_binder_scope_many(&mut self, binders: &[Binder]) {
@@ -444,52 +538,145 @@ impl Resolver {
         );
     }
 
-    fn resolve_type(&self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
+    fn resolve_type(&mut self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
         enum Task<'a> {
             Visit(&'a SurfaceType),
+            Sequence(std::slice::Iter<'a, SurfaceType>),
             Tuple(usize, crate::source::Span),
             Function(crate::source::Span),
+            Application(NominalTypeId, usize, crate::source::Span),
         }
         let mut tasks = vec![Task::Visit(surface)];
         let mut completed = Vec::new();
         let mut provenance = Vec::new();
         while let Some(task) = tasks.pop() {
+            #[cfg(test)]
+            {
+                self.max_type_pending_tasks = self.max_type_pending_tasks.max(tasks.len() + 1);
+            }
             match task {
-                Task::Visit(current) => match &current.kind {
-                    SurfaceTypeKind::Int => {
-                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                        completed.push((Type::Int, provenance.len() - 1));
+                Task::Visit(current) => {
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            current.span,
+                            "source type resolution exceeded its work budget",
+                        )
+                    })?;
+                    match &current.kind {
+                        SurfaceTypeKind::Int => {
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            completed.push((Type::Int, provenance.len() - 1));
+                        }
+                        SurfaceTypeKind::Bool => {
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            completed.push((Type::Bool, provenance.len() - 1));
+                        }
+                        SurfaceTypeKind::Unit => {
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            completed.push((Type::Unit, provenance.len() - 1));
+                        }
+                        SurfaceTypeKind::Named(name) => {
+                            if let Some(variable) = self
+                                .type_scopes
+                                .iter()
+                                .rev()
+                                .find_map(|scope| scope.get(&name.text))
+                            {
+                                provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                                completed.push((Type::Variable(variable.id), provenance.len() - 1));
+                                continue;
+                            }
+                            let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
+                                let mut diagnostic = Diagnostic::new(
+                                    ResolveReason::UnknownType,
+                                    SourceLabel::new(
+                                        name.span,
+                                        "this nominal type is not declared",
+                                    ),
+                                );
+                                diagnostic.found = Some(name.text.clone());
+                                ResolveError::from(diagnostic)
+                            })?;
+                            let expected = self.nominal_parameter_count(id).ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    current.span,
+                                    "the resolver lost nominal parameter metadata",
+                                )
+                            })?;
+                            if expected != 0 {
+                                return Err(type_argument_count(
+                                    name.span, &name.text, expected, 0,
+                                ));
+                            }
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            completed.push((Type::Nominal(id), provenance.len() - 1));
+                        }
+                        SurfaceTypeKind::Application {
+                            constructor,
+                            arguments,
+                        } => {
+                            if self
+                                .type_scopes
+                                .iter()
+                                .rev()
+                                .any(|scope| scope.contains_key(&constructor.text))
+                            {
+                                return Err(error(
+                                    ResolveReason::TypeKind,
+                                    constructor.span,
+                                    "a parameter of kind Type cannot be applied",
+                                ));
+                            }
+                            let id = self.type_names.get(&constructor.text).copied().ok_or_else(
+                                || {
+                                    let mut diagnostic = Diagnostic::new(
+                                        ResolveReason::UnknownType,
+                                        SourceLabel::new(
+                                            constructor.span,
+                                            "this nominal type is not declared",
+                                        ),
+                                    );
+                                    diagnostic.found = Some(constructor.text.clone());
+                                    ResolveError::from(diagnostic)
+                                },
+                            )?;
+                            let expected = self.nominal_parameter_count(id).ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    current.span,
+                                    "the resolver lost nominal parameter metadata",
+                                )
+                            })?;
+                            if expected != arguments.len() {
+                                return Err(type_argument_count(
+                                    current.span,
+                                    &constructor.text,
+                                    expected,
+                                    arguments.len(),
+                                ));
+                            }
+                            tasks.push(Task::Application(id, arguments.len(), current.span));
+                            tasks.push(Task::Sequence(arguments.iter()));
+                        }
+                        SurfaceTypeKind::Tuple(elements) => {
+                            tasks.push(Task::Tuple(elements.len(), current.span));
+                            tasks.push(Task::Sequence(elements.iter()));
+                        }
+                        SurfaceTypeKind::Function(function) => {
+                            tasks.push(Task::Function(current.span));
+                            tasks.push(Task::Visit(&function.codomain));
+                            tasks.push(Task::Visit(&function.domain));
+                        }
                     }
-                    SurfaceTypeKind::Bool => {
-                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                        completed.push((Type::Bool, provenance.len() - 1));
+                }
+                Task::Sequence(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        tasks.push(Task::Sequence(remaining));
+                        tasks.push(Task::Visit(next));
                     }
-                    SurfaceTypeKind::Unit => {
-                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                        completed.push((Type::Unit, provenance.len() - 1));
-                    }
-                    SurfaceTypeKind::Named(name) => {
-                        let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
-                            let mut diagnostic = Diagnostic::new(
-                                ResolveReason::UnknownType,
-                                SourceLabel::new(name.span, "this nominal type is not declared"),
-                            );
-                            diagnostic.found = Some(name.text.clone());
-                            ResolveError::from(diagnostic)
-                        })?;
-                        provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                        completed.push((Type::Nominal(id), provenance.len() - 1));
-                    }
-                    SurfaceTypeKind::Tuple(elements) => {
-                        tasks.push(Task::Tuple(elements.len(), current.span));
-                        tasks.extend(elements.iter().rev().map(Task::Visit));
-                    }
-                    SurfaceTypeKind::Function(function) => {
-                        tasks.push(Task::Function(current.span));
-                        tasks.push(Task::Visit(&function.codomain));
-                        tasks.push(Task::Visit(&function.domain));
-                    }
-                },
+                }
                 Task::Tuple(count, span) => {
                     let split = completed.len().checked_sub(count).ok_or_else(|| {
                         error(
@@ -541,6 +728,36 @@ impl Resolver {
                     });
                     completed.push((
                         Type::Function(Box::new(domain), Box::new(codomain)),
+                        provenance.len() - 1,
+                    ));
+                }
+                Task::Application(owner, count, span) => {
+                    let split = completed.len().checked_sub(count).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the resolver lost a type argument",
+                        )
+                    })?;
+                    let arguments = completed.split_off(split);
+                    let roots = arguments
+                        .iter()
+                        .map(|(_, root)| *root)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
+                    provenance.push(ResolvedTypeProvenanceNode::Application {
+                        span,
+                        arguments: roots,
+                    });
+                    completed.push((
+                        Type::AppliedNominal(
+                            owner,
+                            arguments
+                                .into_iter()
+                                .map(|(ty, _)| ty)
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        ),
                         provenance.len() - 1,
                     ));
                 }
@@ -678,6 +895,73 @@ impl Resolver {
             spelling: spelling.to_owned(),
             origin: Origin::Source(span),
         })
+    }
+
+    fn allocate_type_variable(
+        &mut self,
+        spelling: &str,
+        span: crate::source::Span,
+    ) -> Result<ResolvedTypeVariable, ResolveError> {
+        let id = TypeVariableId::new(self.next_type_variable);
+        self.next_type_variable = self.next_type_variable.checked_add(1).ok_or_else(|| {
+            error(
+                ResolveReason::BinderIdExhausted,
+                span,
+                "the program contains too many type binders",
+            )
+        })?;
+        Ok(ResolvedTypeVariable {
+            id,
+            spelling: spelling.to_owned(),
+            origin: Origin::Source(span),
+        })
+    }
+
+    fn allocate_global_type_parameters(
+        &mut self,
+        definition: &crate::surface::SurfaceDefinition,
+    ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        match &definition.kind {
+            SurfaceDefinitionKind::Equational(equational) => {
+                collect_free_type_names(
+                    &equational.interface.annotation,
+                    &self.type_names,
+                    &mut seen,
+                    &mut names,
+                    &mut self.type_work,
+                )?;
+            }
+            SurfaceDefinitionKind::InlineOperational(operational) => {
+                for parameter in &operational.header.parameters {
+                    collect_free_type_names(
+                        &parameter.annotation,
+                        &self.type_names,
+                        &mut seen,
+                        &mut names,
+                        &mut self.type_work,
+                    )?;
+                }
+                collect_free_type_names(
+                    &operational.header.result_type,
+                    &self.type_names,
+                    &mut seen,
+                    &mut names,
+                    &mut self.type_work,
+                )?;
+            }
+        }
+        names
+            .into_iter()
+            .map(|name| self.allocate_type_variable(&name.text, name.span))
+            .collect()
+    }
+
+    fn nominal_parameter_count(&self, id: NominalTypeId) -> Option<usize> {
+        usize::try_from(id.declaration())
+            .ok()
+            .and_then(|index| self.nominal_parameter_counts.get(index).copied())
     }
 
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
@@ -1212,10 +1496,84 @@ fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> Res
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
 }
 
+fn type_argument_count(
+    span: crate::source::Span,
+    spelling: &str,
+    expected: usize,
+    found: usize,
+) -> ResolveError {
+    let mut diagnostic = Diagnostic::new(
+        ResolveReason::TypeArgumentCount,
+        SourceLabel::new(span, "this nominal type has the wrong number of arguments"),
+    );
+    diagnostic.expected = Some(format!("{spelling} with {expected} type arguments"));
+    diagnostic.found = Some(found.to_string());
+    diagnostic.into()
+}
+
+fn collect_free_type_names<'a>(
+    root: &'a SurfaceType,
+    nominals: &HashMap<String, NominalTypeId>,
+    seen: &mut HashSet<&'a str>,
+    output: &mut Vec<crate::surface::SurfaceName>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ResolveError> {
+    enum Task<'a> {
+        Visit(&'a SurfaceType),
+        Slice(std::slice::Iter<'a, SurfaceType>),
+    }
+
+    let mut work = vec![Task::Visit(root)];
+    while let Some(task) = work.pop() {
+        let Task::Visit(ty) = task else {
+            let Task::Slice(mut remaining) = task else {
+                unreachable!("free type discovery task is closed")
+            };
+            if let Some(next) = remaining.next() {
+                work.push(Task::Slice(remaining));
+                work.push(Task::Visit(next));
+            }
+            continue;
+        };
+        budget.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                ty.span,
+                "free type discovery exceeded its work budget",
+            )
+        })?;
+        match &ty.kind {
+            SurfaceTypeKind::Named(name) => {
+                if !nominals.contains_key(&name.text) && seen.insert(&name.text) {
+                    output.push(name.clone());
+                }
+            }
+            SurfaceTypeKind::Application {
+                constructor,
+                arguments,
+            } => {
+                if !nominals.contains_key(&constructor.text) && seen.insert(&constructor.text) {
+                    output.push(constructor.clone());
+                }
+                work.push(Task::Slice(arguments.iter()));
+            }
+            SurfaceTypeKind::Tuple(elements) => work.push(Task::Slice(elements.iter())),
+            SurfaceTypeKind::Function(function) => {
+                work.push(Task::Visit(&function.codomain));
+                work.push(Task::Visit(&function.domain));
+            }
+            SurfaceTypeKind::Int | SurfaceTypeKind::Bool | SurfaceTypeKind::Unit => {}
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::source::{ByteRange, SourceFile};
+    use crate::surface::{SurfaceName, SurfaceTypeKind};
+    use crate::types::TYPE_WORK_LIMIT;
     use crate::{
         lexer::lex,
         parser::{parse, project},
@@ -1261,5 +1619,179 @@ mod tests {
             assert_eq!(error.reason, ResolveReason::UnknownName);
             assert_eq!(resolver.scopes.len(), initial_scope_count);
         }
+    }
+
+    #[test]
+    fn free_type_discovery_charges_before_retaining_each_name() {
+        let source = SourceFile::new("free-type-budget.ash", "A B C")
+            .expect("the budget fixture should fit");
+        let name = |text: &str, start, end| {
+            let span = source
+                .span(ByteRange::new(start, end).expect("the range is ordered"))
+                .expect("the range belongs to the fixture");
+            SurfaceType {
+                kind: SurfaceTypeKind::Named(SurfaceName {
+                    text: text.to_owned(),
+                    span,
+                }),
+                span,
+            }
+        };
+        let annotation = SurfaceType {
+            kind: SurfaceTypeKind::Tuple(vec![name("A", 0, 1), name("B", 2, 3), name("C", 4, 5)]),
+            span: source
+                .span(ByteRange::new(0, 5).expect("the range is ordered"))
+                .expect("the range belongs to the fixture"),
+        };
+        let mut budget = TypeWorkBudget::default();
+        budget
+            .charge(TYPE_WORK_LIMIT - 2)
+            .expect("the fixture leaves two units");
+        let mut seen = HashSet::new();
+        let mut output = Vec::new();
+
+        let error = collect_free_type_names(
+            &annotation,
+            &HashMap::new(),
+            &mut seen,
+            &mut output,
+            &mut budget,
+        )
+        .expect_err("the second name exceeds the remaining budget");
+
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.primary.span().range().start(), 2);
+        assert_eq!(error.primary.span().range().end(), 3);
+        assert_eq!(
+            output
+                .iter()
+                .map(|name| name.text.as_str())
+                .collect::<Vec<_>>(),
+            ["A"]
+        );
+        assert_eq!(seen, HashSet::from(["A"]));
+    }
+
+    #[test]
+    fn constructor_tuple_payloads_charge_the_synthesized_wrapper_exactly() {
+        let source = SourceFile::new(
+            "constructor-tuple-budget.ash",
+            "type Pair =\nPair(Int, Int)\n\n()\n",
+        )
+        .expect("the budget fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let program = project(&source, &tree).expect("the fixture should project");
+        let second_field_span = program.type_declarations[0].constructors[0].fields[1].span;
+
+        let mut exact = Resolver::new();
+        exact
+            .type_work
+            .charge(TYPE_WORK_LIMIT - 3)
+            .expect("the fixture leaves the wrapper and two field cells");
+        let registry = exact
+            .resolve_registry(&program)
+            .expect("the exact constructor payload allowance should fit");
+        assert_eq!(
+            registry.constructors()[0].payload,
+            Some(Type::Tuple(vec![Type::Int, Type::Int].into_boxed_slice()))
+        );
+        assert_eq!(exact.type_work.charge(1), Err(()));
+
+        let mut short = Resolver::new();
+        short
+            .type_work
+            .charge(TYPE_WORK_LIMIT - 2)
+            .expect("the fixture leaves one cell fewer than the retained payload");
+        let error = short
+            .resolve_registry(&program)
+            .expect_err("the tuple wrapper must consume the remaining budget");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.primary.span().range(), second_field_span.range());
+    }
+
+    #[test]
+    fn wide_tuple_resolution_keeps_pending_type_work_constant_width() {
+        const WIDTH: usize = 4_096;
+
+        let source =
+            SourceFile::new("wide-tuple-budget.ash", "Int").expect("the budget fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 3).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let int = SurfaceType {
+            kind: SurfaceTypeKind::Int,
+            span,
+        };
+        let annotation = SurfaceType {
+            kind: SurfaceTypeKind::Tuple(vec![int; WIDTH]),
+            span,
+        };
+        let mut resolver = Resolver::new();
+        resolver
+            .type_work
+            .charge(TYPE_WORK_LIMIT - 1)
+            .expect("the fixture leaves one unit for the tuple root");
+
+        let error = resolver
+            .resolve_type(&annotation)
+            .expect_err("the first tuple field exceeds the remaining budget");
+
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert!(
+            resolver.max_type_pending_tasks <= 3,
+            "wide tuples retained {} pending resolver tasks",
+            resolver.max_type_pending_tasks
+        );
+    }
+
+    #[test]
+    fn wide_nominal_application_resolution_keeps_pending_type_work_constant_width() {
+        const WIDTH: usize = 4_096;
+
+        let source = SourceFile::new("wide-application-budget.ash", "Wide<Int>")
+            .expect("the budget fixture should fit");
+        let full_span = source
+            .span(ByteRange::new(0, 9).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let constructor_span = source
+            .span(ByteRange::new(0, 4).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let argument_span = source
+            .span(ByteRange::new(5, 8).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let owner = NominalTypeId::new(source.id(), 0);
+        let argument = SurfaceType {
+            kind: SurfaceTypeKind::Int,
+            span: argument_span,
+        };
+        let annotation = SurfaceType {
+            kind: SurfaceTypeKind::Application {
+                constructor: SurfaceName {
+                    text: "Wide".to_owned(),
+                    span: constructor_span,
+                },
+                arguments: vec![argument; WIDTH],
+            },
+            span: full_span,
+        };
+        let mut resolver = Resolver::new();
+        resolver.type_names.insert("Wide".to_owned(), owner);
+        resolver.nominal_parameter_counts.push(WIDTH);
+        resolver
+            .type_work
+            .charge(TYPE_WORK_LIMIT - 1)
+            .expect("the fixture leaves one unit for the application root");
+
+        let error = resolver
+            .resolve_type(&annotation)
+            .expect_err("the first nominal argument exceeds the remaining budget");
+
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.primary.span(), argument_span);
+        assert!(
+            resolver.max_type_pending_tasks <= 3,
+            "wide applications retained {} pending resolver tasks",
+            resolver.max_type_pending_tasks
+        );
     }
 }

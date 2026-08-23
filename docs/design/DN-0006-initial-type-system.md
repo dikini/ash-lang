@@ -275,6 +275,13 @@ Record for each candidate:
 - whether all inferred surface omissions become explicit, checkable Core structure;
 - whether adding a mock future fact to the generalization decision changes one rule or many callers.
 
+The retained [rank-1 integration report](mini-ash/rank-1-polymorphism/evidence.md)
+answers the Mini-Ash slice of these questions. It found that first-order
+unification, rigid global parameters, function-only local generalization, and
+explicit Core type operations compose with parameterized data without exposing
+inference variables beyond elaboration. Higher-rank, higher-kinded, module, and
+effect pressure remains open rather than becoming Mini-Ash behavior.
+
 ## Open questions
 
 - Is rank-1 polymorphism part of the smallest useful architectural test, or should a monomorphic cut come first?

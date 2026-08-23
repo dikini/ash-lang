@@ -14,6 +14,29 @@ template becomes a lexical function with the recursive environment when its
 binder is looked up. A location is an internal handle, not source-level
 identity or observable mutation.
 
+Core type abstractions and applications are static evidence. They are not
+runtime values, do not extend the environment, and allocate no heap cells.
+
+## Type erasure
+
+Entering either explicit Core type operation takes one step to its retained
+term. Validation has already checked parameter scope, argument arity, kinds,
+and substitution, so evaluation does not inspect the parameters or arguments.
+
+```sequent
+family type-erasure-steps:
+  E-Type-Abstraction :=
+    ===>
+    CONFIG(heap, environment, TypeAbstraction(parameters, body), continuation) -> CONFIG(heap, environment, body, continuation)
+
+  E-Type-Application :=
+    ===>
+    CONFIG(heap, environment, TypeApplication(function, arguments), continuation) -> CONFIG(heap, environment, function, continuation)
+```
+
+The unchanged heap and environment make erasure observable only as progress in
+the machine. No source program can inspect a type parameter or type argument.
+
 ## Bindings
 
 A binding evaluates its initializer before matching the resulting value and
@@ -81,6 +104,11 @@ these two one-step rules makes every intermediate heap and control state, and
 therefore source order, explicit. A function-only group has an empty `pending`
 sequence and proceeds through `E-Let-Rec-Body`; its templates were installed by
 `E-Let-Rec-Allocate`.
+
+A polymorphic function member has one outer `TypeAbstraction` node whose
+nonempty parameter sequence contains all generalized parameters. Allocation
+follows that wrapper to install the same function template; ordinary evaluation
+still uses `E-Type-Abstraction`. No type wrapper becomes part of a closure.
 
 Reaching an uninitialized cell, an alias loop, or an invalid location is an
 internal runtime failure. The static guardedness judgment makes those states

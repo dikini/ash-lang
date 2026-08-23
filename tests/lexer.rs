@@ -64,7 +64,7 @@ fn assert_range(token: &Token, start: u32, end: u32) {
 fn recognizes_the_closed_token_family_and_reserved_word_boundaries() {
     let source = SourceFile::new(
         "tokens.ash",
-        "fn let Int Bool Unit true false name_1 fnn 18446744073709551616 ( ) { } : = == + * -> , ;",
+        "fn let Int Bool Unit true false name_1 fnn 18446744073709551616 ( ) { } : = == + * -> , < > ;",
     )
     .expect("the token source should fit");
 
@@ -95,6 +95,8 @@ fn recognizes_the_closed_token_family_and_reserved_word_boundaries() {
             TokenKind::Star,
             TokenKind::Arrow,
             TokenKind::Comma,
+            TokenKind::Less,
+            TokenKind::Greater,
             TokenKind::Semicolon,
             TokenKind::EndOfFile,
         ]
@@ -103,7 +105,7 @@ fn recognizes_the_closed_token_family_and_reserved_word_boundaries() {
 
 #[test]
 fn every_closed_token_kind_has_an_exact_span_in_one_stream() {
-    let source_text = "name 0 true false fn let Int Bool Unit ( ) { } : = == + * -> , ;\n";
+    let source_text = "name 0 true false fn let Int Bool Unit ( ) { } : = == + * -> , < > ;\n";
     let source =
         SourceFile::new("closed-family.ash", source_text).expect("the token source should fit");
     let lexed = lex(&source).expect("the source should remain representable while lexing");
@@ -135,9 +137,11 @@ fn every_closed_token_kind_has_an_exact_span_in_one_stream() {
         (TokenKind::Star, 56, 57),
         (TokenKind::Arrow, 58, 60),
         (TokenKind::Comma, 61, 62),
-        (TokenKind::Semicolon, 63, 64),
-        (TokenKind::LineEnd, 64, 65),
-        (TokenKind::EndOfFile, 65, 65),
+        (TokenKind::Less, 63, 64),
+        (TokenKind::Greater, 65, 66),
+        (TokenKind::Semicolon, 67, 68),
+        (TokenKind::LineEnd, 68, 69),
+        (TokenKind::EndOfFile, 69, 69),
     ];
 
     assert!(lexed.diagnostics.is_empty());

@@ -297,6 +297,8 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
             b'+' => single(&mut offset, TokenKind::Plus),
             b'*' => single(&mut offset, TokenKind::Star),
             b',' => single(&mut offset, TokenKind::Comma),
+            b'<' => single(&mut offset, TokenKind::Less),
+            b'>' => single(&mut offset, TokenKind::Greater),
             b'|' => single(&mut offset, TokenKind::Pipe),
             b';' => single(&mut offset, TokenKind::Semicolon),
             b'=' if bytes.get(offset + 1) == Some(&b'=') => {

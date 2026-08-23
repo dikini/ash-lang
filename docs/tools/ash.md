@@ -25,6 +25,37 @@ function-valued domain. Tuples and nominal data render structurally. Rendering
 uses `<cycle>` only when a heap location repeats on the active structural path.
 Nominal result types use their source declaration spelling.
 
+Parameterized nominal result types retain that spelling and render their
+structural arguments. The executable test
+`tool_rank_one_example_has_exact_cli_observation` runs:
+
+```ash
+type Option<A> =
+    None
+    | Some(A)
+
+id : A -> A
+id value = value
+
+{
+    let local = fn(value) {
+        value
+    }
+    (id(Some(42)), local(false))
+}
+```
+
+Its exact standard output is:
+
+```text
+(Some(42), false) : (Option<Int>, Bool)
+```
+
+The global interface quantifies `A` implicitly. Each use of `id` and `Some`
+instantiates its outer scheme. The unannotated local anonymous function is the
+only local initializer form that generalizes. These type operations are erased
+before producing runtime values.
+
 The executable test `tool_success_example_has_exact_cli_observation` runs this
 file:
 
@@ -116,6 +147,12 @@ types and constructors, constructor ownership and payload mismatches, duplicate
 pattern binders, equation arity, refutable local bindings, non-exhaustive and
 redundant cases, unsafe recursive roots, and unguarded recursive uses. A
 non-exhaustive diagnostic includes one concrete uncovered pattern witness.
+
+Rank-1 diagnostics include stable reasons for duplicate declaration type
+parameters, unknown types, incorrect type-argument counts, kind errors,
+infinite inferred types, ambiguous unsolved inference, and rejected
+polymorphic recursion. Source diagnostics render nominal declaration spellings
+and applied arguments rather than internal identities.
 
 The executable test `tool_source_rejection_uses_status_one_and_stderr` checks
 that this file reports `type.operator-operand` on standard error:

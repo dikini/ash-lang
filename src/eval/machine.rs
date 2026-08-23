@@ -494,6 +494,12 @@ fn dispatch_entry(
         PureExprKind::Computation(PureComputation::Match(match_node)) => {
             enter_match(match_node, environment)
         }
+        PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+            enter_type_abstraction(operation, environment)
+        }
+        PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+            enter_type_application(operation, environment)
+        }
     })
 }
 
@@ -558,6 +564,20 @@ fn enter_match(match_node: &crate::core::data::MatchNode, environment: Environme
     )
 }
 
+fn enter_type_abstraction(
+    operation: &crate::core::type_ops::TypeAbstractionNode,
+    environment: Environment,
+) -> Transition {
+    Transition::direct(Control::Evaluate(operation.body(), environment))
+}
+
+fn enter_type_application(
+    operation: &crate::core::type_ops::TypeApplicationNode,
+    environment: Environment,
+) -> Transition {
+    Transition::direct(Control::Evaluate(operation.function(), environment))
+}
+
 fn enter_function(
     function: &crate::core::function::FunctionNode,
     program: Arc<PureProgram>,
@@ -596,13 +616,32 @@ fn enter_recursive_binding(
         let initializer = program
             .node(member.initializer())
             .ok_or(RuntimeFailure::MissingNode)?;
-        let kind = match &initializer.kind {
+        let mut erased_initializer = member.initializer();
+        loop {
+            let expression = program
+                .node(erased_initializer)
+                .ok_or(RuntimeFailure::MissingNode)?;
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) =
+                &expression.kind
+            else {
+                break;
+            };
+            erased_initializer = operation.body();
+        }
+        let erased = program
+            .node(erased_initializer)
+            .ok_or(RuntimeFailure::MissingNode)?;
+        let kind = match &erased.kind {
             PureExprKind::Value(PureValue::Function(function)) => RecursiveMemberKind::Function {
                 parameter: function.parameter().id(),
                 body: function.body(),
                 origin: initializer.origin.clone(),
             },
-            _ if matches!(member.binder().ty(), crate::types::Type::Nominal(_)) => {
+            _ if matches!(
+                member.binder().ty(),
+                crate::types::Type::Nominal(_) | crate::types::Type::AppliedNominal(_, _)
+            ) =>
+            {
                 let location = allocate_heap(heap, HeapCell::Uninitialized)?;
                 pending.push((location, member.initializer()));
                 RecursiveMemberKind::Data { location }
@@ -983,9 +1022,17 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CoreBuilder, binding::BindingNode, function::ApplicationNode, function::FunctionNode,
-            literal::BooleanNode, literal::IntegerNode, literal::UnitNode,
-            primitive::PrimitiveNode, validate, variable::VariableNode,
+            CoreBuilder,
+            binding::BindingNode,
+            function::ApplicationNode,
+            function::FunctionNode,
+            literal::BooleanNode,
+            literal::IntegerNode,
+            literal::UnitNode,
+            primitive::PrimitiveNode,
+            type_ops::{TypeAbstractionNode, TypeApplicationNode},
+            validate,
+            variable::VariableNode,
         },
         elaborate::Elaborator,
         integer::Integer,
@@ -993,7 +1040,7 @@ mod tests {
         parser::{parse, project},
         resolve::resolve,
         source::{ByteRange, Origin, SourceFile},
-        types::Type,
+        types::{Type, TypeVariableId},
     };
 
     struct TransitionOwner {
@@ -1075,6 +1122,18 @@ mod tests {
             entry: "enter_match",
             frames: &["Frame::Match"],
             returns: &["return_match"],
+        },
+        TransitionOwner {
+            feature: "type abstraction",
+            entry: "enter_type_abstraction",
+            frames: &[],
+            returns: &[],
+        },
+        TransitionOwner {
+            feature: "type application",
+            entry: "enter_type_application",
+            frames: &[],
+            returns: &[],
         },
     ];
 
@@ -1167,6 +1226,8 @@ mod tests {
             Environment,
         ) -> Result<Transition, RuntimeFailure> = enter_tuple;
         let _: fn(&crate::core::data::MatchNode, Environment) -> Transition = enter_match;
+        let _: fn(&TypeAbstractionNode, Environment) -> Transition = enter_type_abstraction;
+        let _: fn(&TypeApplicationNode, Environment) -> Transition = enter_type_application;
         let _: fn(BinderId, NodeId, Environment, Value) -> Result<Transition, RuntimeFailure> =
             return_binding;
         let _: fn(Primitive, NodeId, Environment, Value) -> Transition = return_primitive_left;
@@ -1180,7 +1241,7 @@ mod tests {
         let _: ReturnMatch = return_match;
         let _: ReturnRecursiveInitialization = return_recursive_initialization;
 
-        assert_eq!(TRANSITION_OWNERSHIP.len(), 12);
+        assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
         assert_eq!(
             TRANSITION_OWNERSHIP
                 .iter()
@@ -1199,6 +1260,8 @@ mod tests {
                 "primitive",
                 "tuple",
                 "match",
+                "type abstraction",
+                "type application",
             ]
         );
         assert!(
@@ -1209,6 +1272,57 @@ mod tests {
         for owner in TRANSITION_OWNERSHIP {
             assert_eq!(owner.frames.is_empty(), owner.returns.is_empty());
         }
+    }
+
+    #[test]
+    fn type_erasure_enters_each_explicit_operation_once_without_runtime_state() {
+        let source = SourceFile::new("type-erasure-trace.ash", "42").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("source span"),
+        );
+        let parameter = TypeVariableId::new(0);
+        let mut builder = CoreBuilder::new();
+        let body = builder
+            .integer(
+                Integer::parse_decimal("42").expect("valid integer"),
+                Type::Int,
+                origin.clone(),
+            )
+            .expect("integer should fit");
+        let abstraction = builder
+            .type_abstraction(
+                vec![parameter],
+                body,
+                Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Int)),
+                origin.clone(),
+            )
+            .expect("type abstraction should fit");
+        let application = builder
+            .type_application(abstraction, vec![Type::Unit], Type::Int, origin)
+            .expect("type application should fit");
+        let validated = validate(
+            builder
+                .finish(application)
+                .expect("type application root should finish"),
+            &[&source],
+        )
+        .expect("type-operation Core should validate");
+
+        let evaluation = evaluate(&validated).expect("type operations should erase");
+
+        assert_eq!(evaluation.value.to_string(), "42");
+        assert_eq!(evaluation.heap.cell_count(), 0);
+        assert_eq!(evaluation.max_frame_depth, 0);
+        assert_eq!(
+            evaluation.trace,
+            vec![
+                TraceEvent::Enter(application),
+                TraceEvent::Enter(abstraction),
+                TraceEvent::Enter(body),
+            ]
+        );
     }
 
     #[test]

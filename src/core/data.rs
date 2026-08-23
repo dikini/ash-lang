@@ -2,8 +2,8 @@
 
 use super::{NodeId, TypedBinder};
 use crate::{
-    source::Origin,
-    types::{ConstructorId, Type},
+    source::{Origin, discard_origin_iteratively},
+    types::{ConstructorId, Type, discard_type_iteratively},
 };
 
 /// A strict structural tuple construction.
@@ -64,13 +64,29 @@ impl CorePattern {
 
     /// Visits every binder definition in deterministic left-to-right order.
     pub(crate) fn binders<'a>(&'a self, output: &mut Vec<&'a TypedBinder>) {
+        for binder in self.binder_iter() {
+            output.push(binder);
+        }
+    }
+
+    pub(crate) fn binder_iter(&self) -> CorePatternBinderIter<'_> {
+        CorePatternBinderIter {
+            work: vec![BinderTraversalTask::Visit(self)],
+        }
+    }
+
+    pub(super) fn rewrite_types<F>(&mut self, rewrite: &mut F) -> Result<(), super::BuildError>
+    where
+        F: FnMut(&Type) -> Result<Type, super::BuildError>,
+    {
         let mut work = vec![self];
         while let Some(pattern) = work.pop() {
-            match &pattern.kind {
-                CorePatternKind::Binder(binder) => output.push(binder),
-                CorePatternKind::Tuple(elements) => work.extend(elements.iter().rev()),
+            pattern.ty = rewrite(&pattern.ty)?;
+            match &mut pattern.kind {
+                CorePatternKind::Binder(binder) => binder.rewrite_type(rewrite)?,
+                CorePatternKind::Tuple(elements) => work.extend(elements.iter_mut()),
                 CorePatternKind::Constructor { payload, .. } => {
-                    if let Some(payload) = payload.as_deref() {
+                    if let Some(payload) = payload.as_deref_mut() {
                         work.push(payload);
                     }
                 }
@@ -78,6 +94,108 @@ impl CorePattern {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub(super) fn discard_iteratively(self) {
+        enum Task {
+            Visit(CorePattern),
+            Sequence(std::vec::IntoIter<CorePattern>),
+        }
+
+        let mut work = vec![Task::Visit(self)];
+        while let Some(task) = work.pop() {
+            match task {
+                Task::Visit(pattern) => {
+                    discard_type_iteratively(pattern.ty);
+                    discard_origin_iteratively(pattern.origin);
+                    match pattern.kind {
+                        CorePatternKind::Binder(binder) => binder.discard_metadata(),
+                        CorePatternKind::Tuple(elements) => {
+                            work.push(Task::Sequence(elements.into_vec().into_iter()));
+                        }
+                        CorePatternKind::Constructor { payload, .. } => {
+                            if let Some(payload) = payload {
+                                work.push(Task::Visit(*payload));
+                            }
+                        }
+                        CorePatternKind::Wildcard
+                        | CorePatternKind::Boolean(_)
+                        | CorePatternKind::Unit => {}
+                    }
+                }
+                Task::Sequence(mut remaining) => {
+                    if let Some(pattern) = remaining.next() {
+                        work.push(Task::Sequence(remaining));
+                        work.push(Task::Visit(pattern));
+                    }
+                }
+            }
+        }
+    }
+}
+
+enum BinderTraversalTask<'a> {
+    Visit(&'a CorePattern),
+    Sequence(std::slice::Iter<'a, CorePattern>),
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static BINDER_TRAVERSAL_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn reset_binder_traversal_pending_peak() {
+    BINDER_TRAVERSAL_PENDING_PEAK.with(|peak| peak.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn binder_traversal_pending_peak() -> usize {
+    BINDER_TRAVERSAL_PENDING_PEAK.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn record_binder_traversal_pending(pending: usize) {
+    BINDER_TRAVERSAL_PENDING_PEAK.with(|peak| peak.set(peak.get().max(pending)));
+}
+
+pub(crate) struct CorePatternBinderIter<'a> {
+    work: Vec<BinderTraversalTask<'a>>,
+}
+
+impl<'a> Iterator for CorePatternBinderIter<'a> {
+    type Item = &'a TypedBinder;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(task) = self.work.pop() {
+            match task {
+                BinderTraversalTask::Visit(pattern) => match &pattern.kind {
+                    CorePatternKind::Binder(binder) => return Some(binder),
+                    CorePatternKind::Tuple(elements) => {
+                        self.work
+                            .push(BinderTraversalTask::Sequence(elements.iter()));
+                    }
+                    CorePatternKind::Constructor { payload, .. } => {
+                        if let Some(payload) = payload.as_deref() {
+                            self.work.push(BinderTraversalTask::Visit(payload));
+                        }
+                    }
+                    CorePatternKind::Wildcard
+                    | CorePatternKind::Boolean(_)
+                    | CorePatternKind::Unit => {}
+                },
+                BinderTraversalTask::Sequence(mut remaining) => {
+                    if let Some(pattern) = remaining.next() {
+                        self.work.push(BinderTraversalTask::Sequence(remaining));
+                        self.work.push(BinderTraversalTask::Visit(pattern));
+                    }
+                }
+            }
+            #[cfg(test)]
+            record_binder_traversal_pending(self.work.len());
+        }
+        None
     }
 }
 
@@ -143,6 +261,10 @@ impl CoreMatchArm {
     pub(super) fn into_parts(self) -> (CorePattern, NodeId, Origin) {
         (self.pattern, self.body, self.origin)
     }
+
+    pub(super) fn pattern_mut(&mut self) -> &mut CorePattern {
+        &mut self.pattern
+    }
 }
 
 /// A structured match whose scrutinee is evaluated once.
@@ -170,5 +292,17 @@ impl MatchNode {
     #[must_use]
     pub fn arms(&self) -> &[CoreMatchArm] {
         &self.arms
+    }
+
+    pub(super) fn arms_mut(&mut self) -> &mut [CoreMatchArm] {
+        &mut self.arms
+    }
+
+    pub(super) fn discard_metadata(self) {
+        for arm in self.arms.into_vec() {
+            let (pattern, _, origin) = arm.into_parts();
+            pattern.discard_iteratively();
+            discard_origin_iteratively(origin);
+        }
     }
 }

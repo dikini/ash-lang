@@ -211,6 +211,15 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         NodeKind::TypeDeclaration => {
             shape.token(&TokenKind::Type)?;
             shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            if shape.peek_token_is(&TokenKind::Less) {
+                shape.token(&TokenKind::Less)?;
+                shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+                while shape.peek_token_is(&TokenKind::Comma) {
+                    shape.token(&TokenKind::Comma)?;
+                    shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+                }
+                shape.token(&TokenKind::Greater)?;
+            }
             shape.token(&TokenKind::Equal)?;
             shape.optional_token(&TokenKind::LineEnd)?;
             shape.node(NodeKind::ConstructorDeclaration)?;
@@ -462,6 +471,15 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                             | TokenKind::UpperIdentifier(_)
                     )
                 })?;
+                if shape.peek_token_is(&TokenKind::Less) {
+                    shape.token(&TokenKind::Less)?;
+                    shape.node(NodeKind::Type)?;
+                    while shape.peek_token_is(&TokenKind::Comma) {
+                        shape.token(&TokenKind::Comma)?;
+                        shape.node(NodeKind::Type)?;
+                    }
+                    shape.token(&TokenKind::Greater)?;
+                }
             }
         }
         NodeKind::ParenthesizedType => {
@@ -631,11 +649,11 @@ fn project_type_declaration(
     tokens: &[Token],
 ) -> Result<SurfaceTypeDeclaration, ProjectionError> {
     require_kind(node, NodeKind::TypeDeclaration)?;
-    let name_token = direct_tokens(node, tokens)
-        .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
-        .ok_or(ProjectionError::MalformedTree(
-            InternalReason::UnexpectedShape,
-        ))?;
+    let mut names = direct_tokens(node, tokens)
+        .filter(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)));
+    let name_token = names.next().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?;
     let TokenKind::UpperIdentifier(name) = &name_token.kind else {
         return malformed(InternalReason::UnexpectedShape);
     };
@@ -646,11 +664,25 @@ fn project_type_declaration(
     if constructors.is_empty() {
         return malformed(InternalReason::UnexpectedShape);
     }
+    let parameters = names
+        .map(|token| {
+            let TokenKind::UpperIdentifier(text) = &token.kind else {
+                return Err(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ));
+            };
+            Ok(SurfaceName {
+                text: text.clone(),
+                span: token.span,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(SurfaceTypeDeclaration {
         name: SurfaceName {
             text: name.clone(),
             span: name_token.span,
         },
+        parameters,
         constructors,
         span: node_span(source, node, tokens)?,
     })
@@ -1467,7 +1499,30 @@ fn project_type(
                         tasks.push(TypeTask::VisitType(nested));
                     }
                 } else {
-                    projected.push(project_atomic_primitive(node, tokens)?);
+                    let arguments = child_nodes(node)
+                        .filter(|child| child.kind == NodeKind::Type)
+                        .collect::<Vec<_>>();
+                    if arguments.is_empty() {
+                        projected.push(project_atomic_primitive(node, tokens)?);
+                    } else {
+                        let token = direct_tokens(node, tokens)
+                            .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                            .ok_or(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            ))?;
+                        let TokenKind::UpperIdentifier(text) = &token.kind else {
+                            return malformed(InternalReason::UnexpectedShape);
+                        };
+                        tasks.push(TypeTask::FinishApplication {
+                            constructor: SurfaceName {
+                                text: text.clone(),
+                                span: token.span,
+                            },
+                            count: arguments.len(),
+                            span: node_span(source, node, tokens)?,
+                        });
+                        tasks.extend(arguments.into_iter().rev().map(TypeTask::VisitType));
+                    }
                 }
             }
             TypeTask::FinishFunction(span) => {
@@ -1505,6 +1560,27 @@ fn project_type(
                 };
                 projected.span = span;
             }
+            TypeTask::FinishApplication {
+                constructor,
+                count,
+                span,
+            } => {
+                let split =
+                    projected
+                        .len()
+                        .checked_sub(count)
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                let arguments = projected.split_off(split);
+                projected.push(SurfaceType {
+                    kind: SurfaceTypeKind::Application {
+                        constructor,
+                        arguments,
+                    },
+                    span,
+                });
+            }
         }
     }
     if projected.len() != 1 {
@@ -1519,7 +1595,15 @@ enum TypeTask<'a> {
     VisitType(&'a ConcreteNode),
     VisitAtomic(&'a ConcreteNode),
     FinishFunction(Span),
-    FinishTuple { count: usize, span: Span },
+    FinishTuple {
+        count: usize,
+        span: Span,
+    },
+    FinishApplication {
+        constructor: SurfaceName,
+        count: usize,
+        span: Span,
+    },
     ApplyGroupingSpan(Span),
 }
 

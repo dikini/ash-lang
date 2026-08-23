@@ -23,6 +23,10 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md) — Mini-Ash
   closure through rank-1 polymorphism, followed by a distinct Modular Ash
   milestone and core-versus-library analysis.
+- [Mini-Ash closure report](mini-ash/closure.md) — retained dialect inventory,
+  simplification audit, budgets, ownership boundaries, and exclusions.
+- [Rank-1 integration evidence](mini-ash/rank-1-polymorphism/evidence.md) —
+  cross-stage evidence for Mini-Ash's final semantic increment.
 
 ### Surface language, typing, and elaboration
 

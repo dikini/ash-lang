@@ -7,6 +7,12 @@
 > This design note is informative. It does not define current Ash, accept
 > rank-1 polymorphism or module semantics, or accept an architecture.
 
+The Mini-Ash side of this informative trajectory is complete. Its retained
+[closure report](mini-ash/closure.md) and
+[rank-1 integration evidence](mini-ash/rank-1-polymorphism/evidence.md) provide
+the stable input to future Modular Ash design. The specification defines the
+current language.
+
 ## Question
 
 Which retained implementation dialects should follow the data-and-pattern

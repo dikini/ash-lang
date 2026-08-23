@@ -29,6 +29,14 @@ impl FunctionNode {
     pub(super) const fn children(&self) -> [Option<NodeId>; 2] {
         [Some(self.body), None]
     }
+
+    pub(super) fn parameter_mut(&mut self) -> &mut TypedBinder {
+        &mut self.parameter
+    }
+
+    pub(super) fn discard_metadata(self) {
+        self.parameter.discard_metadata();
+    }
 }
 
 /// A strict unary application payload.

@@ -514,6 +514,30 @@ fn t002_operator_operand_relates_the_bool_to_the_operator() {
 }
 
 #[test]
+fn unresolved_inference_is_anonymous_in_source_type_diagnostics() {
+    let operator_text = "type Option<A> =\nNone\n| Some(A)\n\nSome + 1\n";
+    let operator = run_source(source("inferred-operator.ash", operator_text))
+        .expect_err("a constructor function is not an integer operand");
+    let PipelineFailure::Typing(TypeError::Source(operator)) = operator else {
+        panic!("the operator rejection should remain a typed source diagnostic");
+    };
+    assert_eq!(operator.reason, TypeReason::OperatorOperand);
+    assert_eq!(operator.expected.as_deref(), Some("Int"));
+    assert_eq!(operator.found.as_deref(), Some("_ -> Option<_>"));
+    assert!(!operator.render_plain().contains('?'));
+
+    let pattern_text = "{\nlet split = fn(value) {\nlet (left, right) = value\nlet () = value\nleft\n}\nsplit\n}\n";
+    let pattern = run_source(source("inferred-pattern.ash", pattern_text))
+        .expect_err("Unit cannot destructure an inferred tuple");
+    let PipelineFailure::Typing(TypeError::Source(pattern)) = pattern else {
+        panic!("the pattern rejection should remain a typed source diagnostic");
+    };
+    assert_eq!(pattern.reason, TypeReason::PatternMismatch);
+    assert_eq!(pattern.expected.as_deref(), Some("(_, _)"));
+    assert!(!pattern.render_plain().contains('?'));
+}
+
+#[test]
 fn t003_not_applicable_relates_the_function_position_to_the_application() {
     let source = source("t003.ash", T003);
     let error = run_source(source).expect_err("T-003 should fail in typing");
@@ -636,16 +660,17 @@ fn anonymous_function_without_an_annotation_relates_to_the_binding_that_requires
         panic!("fixture should resolve to a block");
     };
     let binding_span = binding(block, 0).span;
+    let ResolvedExprKind::Block(initializer) = &binding(block, 0).initializer.kind else {
+        panic!("fixture initializer should preserve its nested block");
+    };
+    let function_span = initializer.result.span;
     let error = run_source(source).expect_err("the anonymous function cannot synthesize");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("missing function context should remain a typed source diagnostic");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::FunctionNeedsContext);
-    assert_eq!(
-        diagnostic.primary.span(),
-        binding(block, 0).initializer.span
-    );
+    assert_eq!(diagnostic.primary.span(), function_span);
     assert_eq!(diagnostic.related.len(), 1);
     assert_eq!(diagnostic.related[0].span(), binding_span);
     assert_eq!(
@@ -771,4 +796,150 @@ fn nested_block_preserves_the_outer_binding_synthesis_context() {
         diagnostic.help.as_deref(),
         Some("add a function type annotation to this binding")
     );
+}
+
+#[test]
+fn rank_one_resolution_diagnostics_retain_exact_type_sites() {
+    let duplicate_text = "type Pair<A, A> =\n    Pair(Int, Int)\n\n0\n";
+    let duplicate = run_source(source("duplicate-type-parameter.ash", duplicate_text))
+        .expect_err("a declaration cannot repeat one type parameter");
+    let PipelineFailure::Resolution(duplicate) = duplicate else {
+        panic!("duplicate parameters should fail during resolution");
+    };
+    assert_eq!(duplicate.reason, ResolveReason::DuplicateTypeParameter);
+    let header_end = duplicate_text.find(" =").expect("declaration header");
+    let second = duplicate_text[..header_end]
+        .rfind('A')
+        .expect("second type parameter");
+    let first = duplicate_text[..second]
+        .rfind('A')
+        .expect("first type parameter");
+    assert_eq!(duplicate.primary.span().range().start(), offset(second));
+    assert_eq!(duplicate.primary.span().range().end(), offset(second + 1));
+    assert_eq!(duplicate.related.len(), 1);
+    assert_eq!(duplicate.related[0].span().range().start(), offset(first));
+
+    let arity_text =
+        "type Option<A> =\n    None\n    | Some(A)\n\nbad : Option -> Int\nbad _ = 0\n\nbad None\n";
+    let arity = run_source(source("type-argument-count.ash", arity_text))
+        .expect_err("a parameterized nominal must be saturated");
+    let PipelineFailure::Resolution(arity) = arity else {
+        panic!("wrong nominal arity should fail during resolution");
+    };
+    assert_eq!(arity.reason, ResolveReason::TypeArgumentCount);
+    let bare = arity_text.find("Option ->").expect("bare nominal");
+    assert_eq!(arity.primary.span().range().start(), offset(bare));
+    assert_eq!(arity.primary.span().range().end(), offset(bare + 6));
+    assert_eq!(
+        arity.expected.as_deref(),
+        Some("Option with 1 type arguments")
+    );
+    assert_eq!(arity.found.as_deref(), Some("0"));
+
+    let kind_text = "type Bad<A> =\n    Bad(A<Int>)\n\n0\n";
+    let kind = run_source(source("type-kind.ash", kind_text))
+        .expect_err("a kind-Type parameter cannot be applied");
+    let PipelineFailure::Resolution(kind) = kind else {
+        panic!("type kind errors should fail during resolution");
+    };
+    assert_eq!(kind.reason, ResolveReason::TypeKind);
+    let applied = kind_text.find("A<Int>").expect("applied parameter");
+    assert_eq!(kind.primary.span().range().start(), offset(applied));
+    assert_eq!(kind.primary.span().range().end(), offset(applied + 1));
+
+    let unknown_text = "type Wrapped<A> =\n    Wrapped(B)\n\n0\n";
+    let unknown = run_source(source("unknown-type-variable.ash", unknown_text))
+        .expect_err("an undeclared payload type must be rejected");
+    let PipelineFailure::Resolution(unknown) = unknown else {
+        panic!("unknown types should fail during resolution");
+    };
+    assert_eq!(unknown.reason, ResolveReason::UnknownType);
+    let unknown_site = unknown_text.find("(B)").expect("unknown payload") + 1;
+    assert_eq!(unknown.primary.span().range().start(), offset(unknown_site));
+    assert_eq!(
+        unknown.primary.span().range().end(),
+        offset(unknown_site + 1)
+    );
+    assert_eq!(unknown.found.as_deref(), Some("B"));
+}
+
+#[test]
+fn rank_one_inference_diagnostics_retain_exact_categories_and_types() {
+    let rigid_text = "rigid : A -> A\nrigid value = 1\n\n0\n";
+    let rigid = run_source(source("rigid-mismatch.ash", rigid_text))
+        .expect_err("a rigid result variable cannot become Int");
+    let PipelineFailure::Typing(TypeError::Source(rigid)) = rigid else {
+        panic!("rigid mismatches should fail during typing");
+    };
+    assert_eq!(rigid.reason, TypeReason::DefinitionResult);
+    assert_eq!(rigid.expected.as_deref(), Some("A"));
+    assert_eq!(rigid.found.as_deref(), Some("Int"));
+    let literal = rigid_text.find("= 1").expect("result literal") + 2;
+    assert_eq!(rigid.primary.span().range().start(), offset(literal));
+    assert_eq!(rigid.primary.span().range().end(), offset(literal + 1));
+
+    let recursive_text = "loop : A -> Unit\nloop value = loop((value, value))\n\nloop(1)\n";
+    let recursive = run_source(source("polymorphic-recursion.ash", recursive_text))
+        .expect_err("recursive self-use cannot instantiate at another type");
+    let PipelineFailure::Typing(TypeError::Source(recursive)) = recursive else {
+        panic!("polymorphic recursion should fail during typing");
+    };
+    assert_eq!(recursive.reason, TypeReason::PolymorphicRecursion);
+    assert_eq!(recursive.expected.as_deref(), Some("A"));
+    assert_eq!(recursive.found.as_deref(), Some("(A, A)"));
+    let argument_text = "((value, value))";
+    let argument = recursive_text
+        .find(argument_text)
+        .expect("recursive argument");
+    assert_eq!(recursive.primary.span().range().start(), offset(argument));
+    assert_eq!(
+        recursive.primary.span().range().end(),
+        offset(argument + argument_text.len())
+    );
+
+    let infinite_text = "{\nlet omega = fn(value) {\nvalue(value)\n}\nomega\n}\n";
+    let infinite = run_source(source("infinite-type.ash", infinite_text))
+        .expect_err("self-application requires an infinite type");
+    let PipelineFailure::Typing(TypeError::Source(infinite)) = infinite else {
+        panic!("infinite types should fail during typing");
+    };
+    assert_eq!(infinite.reason, TypeReason::InfiniteType);
+    let infinite_argument_text = "(value)";
+    let self_application = infinite_text
+        .rfind(infinite_argument_text)
+        .expect("self-application argument");
+    assert_eq!(
+        infinite.primary.span().range().start(),
+        offset(self_application)
+    );
+    assert_eq!(
+        infinite.primary.span().range().end(),
+        offset(self_application + infinite_argument_text.len())
+    );
+
+    let ambiguous_text = "{\nlet constant = fn(ignored) {\n42\n}\nconstant\n}\n";
+    let ambiguous = run_source(source("ambiguous-type.ash", ambiguous_text))
+        .expect_err("the result leaves the function domain ambiguous");
+    let PipelineFailure::Typing(TypeError::Source(ambiguous)) = ambiguous else {
+        panic!("ambiguous types should fail during typing");
+    };
+    assert_eq!(ambiguous.reason, TypeReason::AmbiguousType);
+    let result_end = ambiguous_text.rfind('}').expect("program result end") + 1;
+    assert_eq!(ambiguous.primary.span().range().start(), 0);
+    assert_eq!(ambiguous.primary.span().range().end(), offset(result_end));
+}
+
+#[test]
+fn unused_global_body_inference_labels_its_causal_initializer() {
+    let text = "type Option<A> =\nNone\n| Some(A)\n\nunused : Unit -> Unit\nunused _ = {\nlet value = None\n()\n}\n\n()\n";
+    let error = run_source(source("unused-global-inference.ash", text))
+        .expect_err("the unused constructor leaves its argument ambiguous");
+    let PipelineFailure::Typing(TypeError::Source(error)) = error else {
+        panic!("unsolved inference should be a source typing diagnostic")
+    };
+    let none_start = text.rfind("None").expect("initializer occurrence");
+
+    assert_eq!(error.reason, TypeReason::AmbiguousType);
+    assert_eq!(error.primary.span().range().start(), offset(none_start));
+    assert_eq!(error.primary.span().range().end(), offset(none_start + 4));
 }

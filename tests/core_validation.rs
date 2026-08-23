@@ -5,11 +5,193 @@ use ash::{
         validate,
     },
     integer::Integer,
-    resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry},
+    resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry, ResolvedTypeVariable},
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
-    types::{ConstructorId, NominalTypeId, Type, same_type},
+    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, same_type},
 };
 use std::sync::Arc;
+
+#[test]
+fn rejects_malformed_explicit_type_operations_and_free_type_variables() {
+    let file = source("explicit type operations");
+    let origin = whole_origin(&file);
+    let parameter = TypeVariableId::new(7);
+
+    let mut builder = CoreBuilder::new();
+    let body = builder.unit(Type::Unit, origin.clone()).expect("unit body");
+    let abstraction = builder
+        .type_abstraction(
+            vec![parameter],
+            body,
+            Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+            origin.clone(),
+        )
+        .expect("unchecked abstraction");
+    let malformed = builder
+        .type_application(
+            abstraction,
+            vec![Type::Int, Type::Bool],
+            Type::Unit,
+            origin.clone(),
+        )
+        .expect("unchecked application");
+    let error = validate(builder.finish(malformed).expect("root"), &[&file])
+        .expect_err("type argument arity must be rechecked");
+    assert_eq!(error.reason(), ValidationReason::TypeOperation);
+
+    let mut builder = CoreBuilder::new();
+    let binder = builder
+        .binder(Type::Variable(parameter), origin.clone())
+        .expect("unchecked parameter binder");
+    let occurrence = builder
+        .variable(binder.id(), Type::Variable(parameter), origin.clone())
+        .expect("unchecked variable");
+    let root = builder
+        .function(
+            binder,
+            occurrence,
+            Type::Function(
+                Box::new(Type::Variable(parameter)),
+                Box::new(Type::Variable(parameter)),
+            ),
+            origin,
+        )
+        .expect("unchecked function");
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("a free Core type variable must not escape");
+    assert_eq!(error.reason(), ValidationReason::TypeScope);
+}
+
+#[test]
+fn rejects_polymorphic_match_domains() {
+    let file = source("polymorphic match domain");
+    let origin = whole_origin(&file);
+    let parameter = TypeVariableId::new(0);
+    let scheme = Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit));
+    let mut builder = CoreBuilder::new();
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("abstraction body");
+    let scrutinee = builder
+        .type_abstraction(vec![parameter], body, scheme.clone(), origin.clone())
+        .expect("unchecked type abstraction");
+    let arm_body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("match arm body");
+    let arm = CoreMatchArm::new(
+        CorePattern::new(scheme, origin.clone(), CorePatternKind::Wildcard),
+        arm_body,
+        origin.clone(),
+    );
+    let root = builder
+        .match_expression(scrutinee, vec![arm], Type::Unit, origin)
+        .expect("unchecked polymorphic match");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("match domains must remain monomorphic");
+
+    assert_eq!(error.reason(), ValidationReason::Pattern);
+}
+
+#[test]
+fn core_construction_charges_type_cells_cumulatively_before_storage() {
+    let file = source("bounded type construction");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let function = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("small node");
+    let error = builder
+        .type_application(
+            function,
+            vec![Type::Int; ash::types::TYPE_WORK_LIMIT],
+            Type::Unit,
+            origin,
+        )
+        .expect_err("cumulative argument admission must stop before storage");
+    assert_eq!(error, BuildError::TypeWorkExceeded);
+}
+
+#[test]
+fn core_construction_charges_forall_quantifiers_before_storage() {
+    let file = source("bounded forall construction");
+    let origin = whole_origin(&file);
+    let parameters = (0..ash::types::TYPE_WORK_LIMIT)
+        .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let mut builder = CoreBuilder::new();
+
+    let error = builder
+        .unit(Type::Forall(parameters, Box::new(Type::Unit)), origin)
+        .expect_err("quantifiers must consume Core's cumulative type budget");
+
+    assert_eq!(error, BuildError::TypeWorkExceeded);
+}
+
+#[test]
+fn core_construction_charges_type_abstraction_binders_before_storage() {
+    let file = source("bounded type abstraction construction");
+    let origin = whole_origin(&file);
+    let parameters = (0..ash::types::TYPE_WORK_LIMIT)
+        .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+        .collect::<Vec<_>>();
+    let mut builder = CoreBuilder::new();
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("small abstraction body");
+
+    let error = builder
+        .type_abstraction(parameters, body, Type::Unit, origin)
+        .expect_err("abstraction binders must consume Core's cumulative type budget");
+
+    assert_eq!(error, BuildError::TypeWorkExceeded);
+}
+
+#[test]
+fn expanded_malformed_type_application_maps_to_validation_resource() {
+    const WIDTH: usize = 700;
+    let file = source("expanded malformed type application");
+    let origin = whole_origin(&file);
+    let type_parameter = TypeVariableId::new(0);
+    let element_type = Type::Variable(type_parameter);
+    let tuple_type = Type::Tuple(vec![element_type.clone(); WIDTH].into_boxed_slice());
+    let function_type =
+        Type::Function(Box::new(element_type.clone()), Box::new(tuple_type.clone()));
+    let mut builder = CoreBuilder::new();
+    let parameter = builder
+        .binder(element_type.clone(), origin.clone())
+        .expect("parameter binder");
+    let occurrence = builder
+        .variable(parameter.id(), element_type, origin.clone())
+        .expect("parameter occurrence");
+    let tuple = builder
+        .tuple(vec![occurrence; WIDTH], tuple_type, origin.clone())
+        .expect("compact tuple body");
+    let function = builder
+        .function(parameter, tuple, function_type.clone(), origin.clone())
+        .expect("polymorphic function body");
+    let abstraction = builder
+        .type_abstraction(
+            vec![type_parameter],
+            function,
+            Type::Forall(
+                vec![type_parameter].into_boxed_slice(),
+                Box::new(function_type),
+            ),
+            origin.clone(),
+        )
+        .expect("unchecked type abstraction");
+    let wide_argument = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+    let root = builder
+        .type_application(abstraction, vec![wide_argument], Type::Unit, origin)
+        .expect("compact malformed type application");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("expanded substitution must stop at the validation budget");
+
+    assert_eq!(error.reason(), ValidationReason::Resource);
+}
 
 #[test]
 fn validates_registry_tuples_constructors_and_structured_matches() {
@@ -102,6 +284,181 @@ fn rejects_malformed_data_registries_and_constructor_annotations() {
     let error = validate(builder.finish(root).expect("root"), &[&file])
         .expect_err("constructor type disagreement");
     assert_eq!(error.reason(), ValidationReason::NodeType);
+}
+
+#[test]
+fn rejects_constructor_payload_variables_outside_the_owner_parameters() {
+    let file = source("parameterized registry payload");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let parameter = TypeVariableId::new(0);
+    let foreign = TypeVariableId::new(1);
+    let registry = Arc::new(
+        ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Wrap".into(),
+                constructors: vec![constructor].into_boxed_slice(),
+                origin: origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner: nominal,
+                spelling: "Wrapped".into(),
+                payload: Some(Type::Variable(foreign)),
+                origin: range_origin(&file, 1, 2),
+            }],
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                origin: range_origin(&file, 2, 3),
+            }],
+        )]),
+    );
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder.unit(Type::Unit, origin).expect("unit root");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("constructor payload variables must belong to their owner");
+
+    assert_eq!(error.reason(), ValidationReason::Registry);
+}
+
+#[test]
+fn rejects_polymorphic_constructor_payloads_in_the_registry() {
+    let file = source("polymorphic registry payload");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let parameter = TypeVariableId::new(0);
+    let registry = Arc::new(ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: nominal,
+            spelling: "Wrap".into(),
+            constructors: vec![constructor].into_boxed_slice(),
+            origin: origin.clone(),
+        }],
+        vec![ResolvedConstructor {
+            id: constructor,
+            owner: nominal,
+            spelling: "Wrapped".into(),
+            payload: Some(Type::Forall(
+                vec![parameter].into_boxed_slice(),
+                Box::new(Type::Variable(parameter)),
+            )),
+            origin: range_origin(&file, 1, 2),
+        }],
+    ));
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder.unit(Type::Unit, origin).expect("unit root");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("constructor payloads must remain monomorphic");
+
+    assert_eq!(error.reason(), ValidationReason::Registry);
+}
+
+#[test]
+fn rejects_registry_type_parameter_identities_out_of_source_order() {
+    let file = source("parameter order");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let registry = Arc::new(
+        ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Pair".into(),
+                constructors: vec![constructor].into_boxed_slice(),
+                origin: origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner: nominal,
+                spelling: "PairValue".into(),
+                payload: None,
+                origin: range_origin(&file, 4, 5),
+            }],
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![
+                ResolvedTypeVariable {
+                    id: TypeVariableId::new(1),
+                    spelling: "A".into(),
+                    origin: range_origin(&file, 1, 2),
+                },
+                ResolvedTypeVariable {
+                    id: TypeVariableId::new(0),
+                    spelling: "B".into(),
+                    origin: range_origin(&file, 2, 3),
+                },
+            ],
+        )]),
+    );
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder.unit(Type::Unit, origin).expect("unit root");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("type-parameter identities must follow source order");
+
+    assert_eq!(error.reason(), ValidationReason::Registry);
+}
+
+#[test]
+fn rejects_nominal_parameters_reused_as_type_abstraction_binders() {
+    let file = source("BoxAValue");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let parameter = TypeVariableId::new(0);
+    let registry = Arc::new(
+        ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Box".into(),
+                constructors: vec![constructor].into_boxed_slice(),
+                origin: origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner: nominal,
+                spelling: "Boxed".into(),
+                payload: Some(Type::Variable(parameter)),
+                origin: range_origin(&file, 4, 9),
+            }],
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                origin: range_origin(&file, 3, 4),
+            }],
+        )]),
+    );
+    let mut builder = CoreBuilder::with_registry(registry);
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("unit abstraction body");
+    let root = builder
+        .type_abstraction(
+            vec![parameter],
+            body,
+            Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+            origin,
+        )
+        .expect("unchecked type abstraction");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("nominal parameters cannot define value-level type abstractions");
+
+    assert_eq!(error.reason(), ValidationReason::TypeOperation);
+    assert_eq!(error.node(), Some(root));
 }
 
 #[test]
@@ -332,6 +689,189 @@ fn rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack() {
 }
 
 #[test]
+fn rejects_and_destroys_overdeep_registry_parameter_origins_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, move || {
+                let file = source("parameter origin bounds");
+                let nominal = NominalTypeId::new(file.id(), 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                let parameter = TypeVariableId::new(0);
+                let origin = whole_origin(&file);
+                let mut deep_parameter_origin = range_origin(&file, 0, 1);
+                for _ in 0..5_000 {
+                    deep_parameter_origin = Origin::Generated {
+                        cause: Box::new(deep_parameter_origin),
+                        reason: GeneratedReason::TypeChecking,
+                    };
+                }
+                let registry = Arc::new(
+                    ResolvedRegistry::new(
+                        vec![ResolvedNominalType {
+                            id: nominal,
+                            spelling: "Bounded".into(),
+                            constructors: vec![constructor].into_boxed_slice(),
+                            origin: origin.clone(),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner: nominal,
+                            spelling: "Make".into(),
+                            payload: Some(Type::Variable(parameter)),
+                            origin: range_origin(&file, 1, 2),
+                        }],
+                    )
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![ResolvedTypeVariable {
+                            id: parameter,
+                            spelling: "A".into(),
+                            origin: deep_parameter_origin,
+                        }],
+                    )]),
+                );
+                let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+                let root = builder.unit(Type::Unit, origin).expect("unit root");
+                let error = validate(builder.finish(root).expect("root"), &[&file])
+                    .expect_err("overdeep parameter origin");
+                assert_eq!(error.reason(), ValidationReason::Registry);
+                drop(registry);
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("parameter-origin rejection and destruction must fit the small stack");
+    });
+}
+
+#[test]
+fn rejects_and_destroys_replaced_registry_parameter_ids_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, move || {
+                let file = source("replaced parameter identity");
+                let nominal = NominalTypeId::new(file.id(), 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                let parameter = TypeVariableId::new(0);
+                let origin = whole_origin(&file);
+                let registry = Arc::new(
+                    ResolvedRegistry::new(
+                        vec![ResolvedNominalType {
+                            id: nominal,
+                            spelling: "Bounded".into(),
+                            constructors: vec![constructor].into_boxed_slice(),
+                            origin: origin.clone(),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner: nominal,
+                            spelling: "Make".into(),
+                            payload: Some(Type::Variable(parameter)),
+                            origin: range_origin(&file, 1, 2),
+                        }],
+                    )
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![
+                            ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "A".into(),
+                                origin: mixed_origin(&file, 5_000),
+                            },
+                            ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "B".into(),
+                                origin: range_origin(&file, 2, 3),
+                            },
+                        ],
+                    )]),
+                );
+                assert_eq!(
+                    registry
+                        .type_variable(parameter)
+                        .map(|parameter| parameter.spelling.as_str()),
+                    Some("B")
+                );
+                let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+                let root = builder.unit(Type::Unit, origin).expect("unit root");
+                let error = validate(builder.finish(root).expect("root"), &[&file])
+                    .expect_err("duplicate parameter identities must be rejected");
+                assert_eq!(error.reason(), ValidationReason::Registry);
+                drop(registry);
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("replaced parameter teardown must fit the small stack");
+    });
+}
+
+#[test]
+fn rejects_and_destroys_replaced_registry_parameter_owners_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, move || {
+                let file = source("replaced parameter owner");
+                let nominal = NominalTypeId::new(file.id(), 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                let first_parameter = TypeVariableId::new(0);
+                let second_parameter = TypeVariableId::new(1);
+                let origin = whole_origin(&file);
+                let registry = Arc::new(
+                    ResolvedRegistry::new(
+                        vec![ResolvedNominalType {
+                            id: nominal,
+                            spelling: "Bounded".into(),
+                            constructors: vec![constructor].into_boxed_slice(),
+                            origin: origin.clone(),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner: nominal,
+                            spelling: "Make".into(),
+                            payload: Some(Type::Variable(first_parameter)),
+                            origin: range_origin(&file, 1, 2),
+                        }],
+                    )
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![ResolvedTypeVariable {
+                            id: first_parameter,
+                            spelling: "A".into(),
+                            origin: mixed_origin(&file, 5_000),
+                        }],
+                    )])
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![ResolvedTypeVariable {
+                            id: second_parameter,
+                            spelling: "B".into(),
+                            origin: range_origin(&file, 2, 3),
+                        }],
+                    )]),
+                );
+                assert_eq!(
+                    registry
+                        .nominal_parameters(nominal)
+                        .and_then(|parameters| parameters.first())
+                        .map(|parameter| parameter.spelling.as_str()),
+                    Some("B")
+                );
+                let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+                let root = builder.unit(Type::Unit, origin).expect("unit root");
+                let error = validate(builder.finish(root).expect("root"), &[&file])
+                    .expect_err("duplicate parameter owners must be rejected");
+                assert_eq!(error.reason(), ValidationReason::Registry);
+                drop(registry);
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("replaced owner teardown must fit the small stack");
+    });
+}
+
+#[test]
 fn rejects_missing_and_redundant_structured_match_arms() {
     let file = source("coverage core");
     let origin = whole_origin(&file);
@@ -532,6 +1072,27 @@ fn generated_origin(source: &SourceFile, depth: usize) -> Origin {
         origin = Origin::Generated {
             cause: Box::new(origin),
             reason: GeneratedReason::TypeChecking,
+        };
+    }
+    origin
+}
+
+fn mixed_origin(source: &SourceFile, depth: usize) -> Origin {
+    let span = source
+        .span(ByteRange::new(0, 1).expect("ordered origin range"))
+        .expect("origin range should belong to source");
+    let mut origin = Origin::Source(span);
+    for index in 0..depth {
+        origin = if index % 2 == 0 {
+            Origin::Generated {
+                cause: Box::new(origin),
+                reason: GeneratedReason::TypeChecking,
+            }
+        } else {
+            Origin::Related {
+                primary: Box::new(origin),
+                related: vec![span],
+            }
         };
     }
     origin

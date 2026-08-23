@@ -5,11 +5,14 @@ describes exactly the implemented language and runtime behavior.
 
 ## Current Ash
 
-Ash currently implements Mini-Ash, a single-file, monomorphic, pure-functional
+Ash currently implements Mini-Ash, a single-file, rank-1, pure-functional
 language. Every accepted file contains zero or more mutually visible global
 nominal type declarations, zero or more mutually visible global function
-definitions, and one result expression. The language includes structural
-tuples, constructor values, typed patterns, exhaustive matches and equations,
+definitions, and one result expression. Nominal declarations may bind
+kind-`Type` parameters. Global function interfaces implicitly quantify their
+free type variables, and unannotated local anonymous-function bindings may
+generalize conservatively. The language also includes structural tuples,
+constructor values, typed patterns, exhaustive matches and equations,
 sequential bindings, and explicit constructor-guarded recursive groups.
 
 The specification is split by concern:

@@ -4,8 +4,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     integer::Integer,
-    source::{Origin, Span},
-    types::{ConstructorId, NominalTypeId, Type},
+    source::{Origin, Span, discard_origin_iteratively},
+    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, discard_type_iteratively},
 };
 
 /// Identifies one binding within a resolved program.
@@ -66,6 +66,8 @@ pub struct ResolvedRegistry {
     constructors: Box<[ResolvedConstructor]>,
     nominal_positions: HashMap<NominalTypeId, usize>,
     constructor_positions: HashMap<ConstructorId, usize>,
+    nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
+    type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
 }
 
 impl ResolvedRegistry {
@@ -87,6 +89,48 @@ impl ResolvedRegistry {
             constructors: constructors.into_boxed_slice(),
             nominal_positions,
             constructor_positions,
+            nominal_parameters: HashMap::new(),
+            type_variables: HashMap::new(),
+        }
+    }
+
+    /// Attaches ordered declaration parameters after nominal identity allocation.
+    #[must_use]
+    pub fn with_type_parameters(
+        mut self,
+        parameters: Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>,
+    ) -> Self {
+        for (owner, parameters) in parameters {
+            for parameter in &parameters {
+                self.insert_type_variable(parameter.clone());
+            }
+            if let Some(replaced) = self
+                .nominal_parameters
+                .insert(owner, parameters.into_boxed_slice())
+            {
+                for parameter in replaced.into_vec() {
+                    discard_origin_iteratively(parameter.origin);
+                }
+            }
+        }
+        self
+    }
+
+    /// Attaches non-nominal type parameters before the registry is published.
+    #[must_use]
+    pub(crate) fn with_additional_type_variables(
+        mut self,
+        parameters: impl IntoIterator<Item = ResolvedTypeVariable>,
+    ) -> Self {
+        for parameter in parameters {
+            self.insert_type_variable(parameter);
+        }
+        self
+    }
+
+    fn insert_type_variable(&mut self, parameter: ResolvedTypeVariable) {
+        if let Some(replaced) = self.type_variables.insert(parameter.id, parameter) {
+            discard_origin_iteratively(replaced.origin);
         }
     }
 
@@ -120,9 +164,44 @@ impl ResolvedRegistry {
             .filter(|constructor| constructor.id == id)
     }
 
+    /// Looks up a declaration type parameter by stable identity.
+    #[must_use]
+    pub fn type_variable(&self, id: TypeVariableId) -> Option<&ResolvedTypeVariable> {
+        self.type_variables.get(&id)
+    }
+
+    /// Returns a nominal declaration's ordered parameters.
+    #[must_use]
+    pub fn nominal_parameters(&self, id: NominalTypeId) -> Option<&[ResolvedTypeVariable]> {
+        self.nominal(id)?;
+        Some(self.nominal_parameters.get(&id).map_or(&[], Box::as_ref))
+    }
+
+    pub(crate) fn nominal_parameter_entries(
+        &self,
+    ) -> impl Iterator<Item = (NominalTypeId, &[ResolvedTypeVariable])> {
+        self.nominal_parameters
+            .iter()
+            .map(|(owner, parameters)| (*owner, parameters.as_ref()))
+    }
+
+    pub(crate) fn type_variable_count(&self) -> usize {
+        self.type_variables.len()
+    }
+
     /// Renders a type with source declaration spellings for nominal identities.
     #[must_use]
     pub fn display_type(&self, ty: &Type) -> String {
+        self.display_type_with_inference(ty, false)
+    }
+
+    /// Renders a source-facing type without exposing elaborator inference identities.
+    #[must_use]
+    pub(crate) fn display_source_type(&self, ty: &Type) -> String {
+        self.display_type_with_inference(ty, true)
+    }
+
+    fn display_type_with_inference(&self, ty: &Type, anonymous_inference: bool) -> String {
         enum Task<'a> {
             Type(&'a Type),
             Text(&'static str),
@@ -142,6 +221,50 @@ impl ResolvedRegistry {
                     } else {
                         output.push_str(&Type::Nominal(*id).to_string());
                     }
+                }
+                Task::Type(Type::Variable(id)) => {
+                    if let Some(variable) = self.type_variable(*id) {
+                        output.push_str(&variable.spelling);
+                    } else {
+                        output.push_str(&Type::Variable(*id).to_string());
+                    }
+                }
+                Task::Type(Type::Inference(id)) => {
+                    if anonymous_inference {
+                        output.push('_');
+                    } else {
+                        output.push_str(&Type::Inference(*id).to_string());
+                    }
+                }
+                Task::Type(Type::AppliedNominal(id, arguments)) => {
+                    if let Some(nominal) = self.nominal(*id) {
+                        output.push_str(&nominal.spelling);
+                    } else {
+                        output.push_str(&Type::Nominal(*id).to_string());
+                    }
+                    output.push('<');
+                    work.push(Task::Text(">"));
+                    for (index, argument) in arguments.iter().enumerate().rev() {
+                        work.push(Task::Type(argument));
+                        if index > 0 {
+                            work.push(Task::Text(", "));
+                        }
+                    }
+                }
+                Task::Type(Type::Forall(parameters, body)) => {
+                    output.push_str("forall ");
+                    for (index, parameter) in parameters.iter().enumerate() {
+                        if index > 0 {
+                            output.push_str(", ");
+                        }
+                        if let Some(variable) = self.type_variable(*parameter) {
+                            output.push_str(&variable.spelling);
+                        } else {
+                            output.push_str(&format!("T{}", parameter.value()));
+                        }
+                    }
+                    output.push_str(". ");
+                    work.push(Task::Type(body));
                 }
                 Task::Type(Type::Tuple(elements)) => {
                     output.push('(');
@@ -170,49 +293,40 @@ impl ResolvedRegistry {
     }
 
     /// Destroys untrusted registry payloads without following host recursion.
-    pub(crate) fn discard_iteratively(self) {
-        let Self {
-            nominals,
-            constructors,
-            nominal_positions,
-            constructor_positions,
-        } = self;
-        drop(nominal_positions);
-        drop(constructor_positions);
+    pub(crate) fn discard_iteratively(mut self) {
+        self.discard_owned_payloads();
+    }
+
+    fn discard_owned_payloads(&mut self) {
+        let nominals = std::mem::take(&mut self.nominals);
+        let constructors = std::mem::take(&mut self.constructors);
+        let nominal_parameters = std::mem::take(&mut self.nominal_parameters);
+        let type_variables = std::mem::take(&mut self.type_variables);
+        self.nominal_positions.clear();
+        self.constructor_positions.clear();
         for nominal in nominals.into_vec() {
-            discard_origin(nominal.origin);
+            discard_origin_iteratively(nominal.origin);
         }
         for constructor in constructors.into_vec() {
             if let Some(payload) = constructor.payload {
-                discard_type(payload);
+                discard_type_iteratively(payload);
             }
-            discard_origin(constructor.origin);
+            discard_origin_iteratively(constructor.origin);
+        }
+        for parameters in nominal_parameters.into_values() {
+            for parameter in parameters.into_vec() {
+                discard_origin_iteratively(parameter.origin);
+            }
+        }
+        for parameter in type_variables.into_values() {
+            discard_origin_iteratively(parameter.origin);
         }
     }
 }
 
-fn discard_type(root: Type) {
-    let mut work = vec![root];
-    while let Some(ty) = work.pop() {
-        match ty {
-            Type::Tuple(elements) => work.extend(elements.into_vec()),
-            Type::Function(domain, codomain) => {
-                work.push(*domain);
-                work.push(*codomain);
-            }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
-        }
-    }
-}
-
-fn discard_origin(root: Origin) {
-    let mut current = root;
-    loop {
-        match current {
-            Origin::Source(_) => return,
-            Origin::Generated { cause, .. } => current = *cause,
-            Origin::Related { primary, .. } => current = *primary,
-        }
+impl Drop for ResolvedRegistry {
+    fn drop(&mut self) {
+        self.discard_owned_payloads();
     }
 }
 
@@ -226,6 +340,17 @@ pub struct ResolvedNominalType {
     /// Constructor identities in declaration order.
     pub constructors: Box<[ConstructorId]>,
     /// Declaration provenance.
+    pub origin: Origin,
+}
+
+/// One resolved source type binder.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedTypeVariable {
+    /// Stable program-local identity.
+    pub id: TypeVariableId,
+    /// Exact source spelling.
+    pub spelling: String,
+    /// Definition provenance.
     pub origin: Origin,
 }
 
@@ -277,6 +402,8 @@ pub enum ResolvedTypeProvenanceNode {
         domain: usize,
         codomain: usize,
     },
+    /// A saturated nominal type application and its argument roots.
+    Application { span: Span, arguments: Box<[usize]> },
 }
 
 impl ResolvedTypeProvenance {
@@ -295,7 +422,8 @@ impl ResolvedTypeProvenance {
         self.nodes.get(self.root).map(|node| match node {
             ResolvedTypeProvenanceNode::Fact(span)
             | ResolvedTypeProvenanceNode::Tuple { span, .. }
-            | ResolvedTypeProvenanceNode::Function { span, .. } => *span,
+            | ResolvedTypeProvenanceNode::Function { span, .. }
+            | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
         })
     }
 
@@ -371,6 +499,8 @@ pub struct ResolvedExternalInterface {
     pub name: Binder,
     /// Declared resolved type.
     pub annotation: ResolvedType,
+    /// Implicit outer type binders in first-occurrence order.
+    pub type_parameters: Box<[ResolvedTypeVariable]>,
     /// Complete interface span.
     pub span: Span,
 }
@@ -406,6 +536,8 @@ pub struct ResolvedInlineOperationalHeader {
     pub parameters: Vec<ResolvedTypedPattern>,
     /// Declared result type.
     pub result_type: ResolvedType,
+    /// Implicit outer type binders in first-occurrence order.
+    pub type_parameters: Box<[ResolvedTypeVariable]>,
     /// Complete header span, excluding the body.
     pub span: Span,
 }
@@ -609,4 +741,63 @@ pub struct ResolvedFunctionExpr {
     pub pattern: ResolvedPattern,
     /// Resolved braced body.
     pub body: ResolvedBlock,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::{ByteRange, GeneratedReason, SourceFile};
+
+    #[test]
+    fn destroys_replaced_additional_type_variables_on_a_small_stack() {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .stack_size(256 * 1024)
+                .spawn_scoped(scope, move || {
+                    let file = SourceFile::new("additional parameter", "parameter")
+                        .expect("test source should fit");
+                    let span = file
+                        .span(ByteRange::new(0, 1).expect("ordered parameter range"))
+                        .expect("parameter range should belong to source");
+                    let mut origin = Origin::Source(span);
+                    for index in 0..5_000 {
+                        origin = if index % 2 == 0 {
+                            Origin::Generated {
+                                cause: Box::new(origin),
+                                reason: GeneratedReason::TypeChecking,
+                            }
+                        } else {
+                            Origin::Related {
+                                primary: Box::new(origin),
+                                related: vec![span],
+                            }
+                        };
+                    }
+                    let parameter = TypeVariableId::new(0);
+                    let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+                        .with_additional_type_variables([
+                            ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "A".into(),
+                                origin,
+                            },
+                            ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "B".into(),
+                                origin: Origin::Source(span),
+                            },
+                        ]);
+                    assert_eq!(
+                        registry
+                            .type_variable(parameter)
+                            .map(|parameter| parameter.spelling.as_str()),
+                        Some("B")
+                    );
+                    drop(registry);
+                })
+                .expect("small-stack thread should start")
+                .join()
+                .expect("replaced additional parameter teardown must fit the small stack");
+        });
+    }
 }

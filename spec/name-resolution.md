@@ -15,14 +15,31 @@ Every constructor receives a stable identity under its owning nominal type.
 Constructors form one file-wide term namespace and must have distinct spellings
 across all declarations. Constructor names do not conflict with ordinary
 lowercase term names because the lexical classes are separate. A type
-occurrence must name a file type or one of `Int`, `Bool`, and `Unit`; an
-uppercase term or pattern occurrence must name a constructor.
+occurrence must name a file type, an in-scope type parameter, or one of `Int`,
+`Bool`, and `Unit`; an uppercase term or pattern occurrence must name a
+constructor.
+
+A parameterized nominal declaration allocates distinct type-parameter
+identities in source order. Those parameters are visible throughout that
+declaration's constructor payloads and nowhere else. A declaration cannot
+repeat a parameter spelling. A parameter shadows a same-spelled nominal type
+inside its declaration. Because every parameter has kind `Type`, applying it
+as a type constructor is rejected with `resolve.type-kind`. A nominal type
+application must supply exactly the declaration's arity; bare and partially
+applied nominal constructors are rejected with
+`resolve.type-argument-count`.
 
 ## Global scope
 
 All global function names in one file form a simultaneous scope. Each global
 body can refer to itself, an earlier global, or a later global. The file result
 uses the same complete global scope.
+
+Each global interface implicitly binds its free uppercase type names in
+first-occurrence order. Those type parameters scope over that global's header,
+patterns, and body. They do not enter another global interface or the file
+result. Thus `identity : A -> A` declares one rank-1 type parameter without
+adding source type-parameter punctuation to the function name.
 
 Two globals cannot have the same name. In an equational definition, the name in
 the external interface must equal the name at the equation head.

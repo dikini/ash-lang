@@ -124,6 +124,13 @@ const VALID_CASES: &[ValidCase] = &[
         expected_type: "Int",
         expected_stdout: "42 : Int\n",
     },
+    ValidCase {
+        id: "local-polymorphic-function",
+        path: "tests/fixtures/first-stratum/valid/local-polymorphic-function.ash",
+        expected_value: "1",
+        expected_type: "Int",
+        expected_stdout: "1 : Int\n",
+    },
 ];
 
 const INVALID_CASES: &[InvalidCase] = &[
@@ -160,7 +167,7 @@ const INVALID_CASES: &[InvalidCase] = &[
         stage: Stage::Parser,
         reason: ExpectedReason::Parser {
             parser: &[ParseReason::PolymorphicHeader],
-            lexical: &[LexReason::UnknownCharacter, LexReason::UnknownCharacter],
+            lexical: &[],
         },
     },
     InvalidCase {

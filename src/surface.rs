@@ -20,6 +20,8 @@ pub struct SurfaceProgram {
 pub struct SurfaceTypeDeclaration {
     /// The declared type spelling.
     pub name: SurfaceName,
+    /// Ordered type parameters, each of kind `Type`.
+    pub parameters: Vec<SurfaceName>,
     /// Its nonempty constructor list.
     pub constructors: Vec<SurfaceConstructorDeclaration>,
     /// The complete declaration span.
@@ -345,6 +347,13 @@ pub enum SurfaceTypeKind {
     Unit,
     /// An unresolved nominal type spelling.
     Named(SurfaceName),
+    /// A named type constructor applied to one or more arguments.
+    Application {
+        /// The constructor spelling.
+        constructor: SurfaceName,
+        /// Nonempty arguments in source order.
+        arguments: Vec<SurfaceType>,
+    },
     /// A structural tuple with at least two elements.
     Tuple(Vec<SurfaceType>),
     /// A unary function type.

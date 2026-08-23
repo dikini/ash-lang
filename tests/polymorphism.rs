@@ -1,0 +1,371 @@
+use ash::{
+    core::{
+        PureComputation, PureExprKind,
+        transform::{fold_literal_primitives, identity_traversal},
+        validate,
+    },
+    driver::run_source,
+    elaborate::Elaborator,
+    eval::evaluate,
+    lexer::lex,
+    parser::{parse, project},
+    resolve::resolve,
+    source::SourceFile,
+};
+
+fn run(text: &str) -> ash::driver::Observation {
+    run_source(SourceFile::new("polymorphism.ash", text).expect("fixture should fit"))
+        .expect("fixture should run")
+}
+
+fn reason(text: &str) -> String {
+    run_source(SourceFile::new("polymorphism-rejection.ash", text).expect("fixture should fit"))
+        .expect_err("fixture should be rejected")
+        .reason_code()
+}
+
+fn elaborated(text: &str) -> ash::core::ValidatedProgram {
+    let source = SourceFile::new("polymorphic-core.ash", text).expect("fixture should fit");
+    let tree = parse(lex(&source).expect("source should lex"));
+    let surface = project(&source, &tree).expect("source should project");
+    let resolved = resolve(&surface).expect("source should resolve");
+    let mut elaborator = Elaborator::for_program(&resolved).expect("Core namespace should fit");
+    let typed = elaborator
+        .synthesize_program(&resolved)
+        .expect("source should elaborate");
+    validate(
+        elaborator.finish(typed.node).expect("Core should finish"),
+        &[&source],
+    )
+    .expect("Core should validate")
+}
+
+#[test]
+fn source_instantiation_is_explicit_in_validated_core() {
+    let program = elaborated("id : A -> A\nid value = value\n\nid(42)\n");
+    let mut work = vec![program.root()];
+    let mut abstractions = 0;
+    let mut applications = 0;
+    while let Some(id) = work.pop() {
+        let node = program.node(id).expect("validated node");
+        match &node.kind {
+            PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+                abstractions += 1;
+                work.push(operation.body());
+            }
+            PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                applications += 1;
+                work.push(operation.function());
+            }
+            kind => {
+                for index in 0..kind.child_count() {
+                    work.push(kind.child_at(index).expect("validated child"));
+                }
+            }
+        }
+    }
+    assert!(abstractions >= 1);
+    assert!(applications >= 1);
+}
+
+#[test]
+fn explicit_type_operations_survive_both_core_transforms_and_erasure() {
+    let source = SourceFile::new(
+        "polymorphic-transform.ash",
+        "id : A -> A\nid value = value\n\nid(40 + 2)\n",
+    )
+    .expect("fixture should fit");
+    let before = {
+        let tree = parse(lex(&source).expect("source should lex"));
+        let surface = project(&source, &tree).expect("source should project");
+        let resolved = resolve(&surface).expect("source should resolve");
+        let mut elaborator = Elaborator::for_program(&resolved).expect("Core namespace should fit");
+        let typed = elaborator
+            .synthesize_program(&resolved)
+            .expect("source should elaborate");
+        validate(
+            elaborator.finish(typed.node).expect("Core should finish"),
+            &[&source],
+        )
+        .expect("Core should validate")
+    };
+    for transformed in [
+        identity_traversal(&before).expect("identity traversal"),
+        fold_literal_primitives(&before).expect("literal folding"),
+    ] {
+        let transformed = validate(transformed, &[&source]).expect("transformed Core validates");
+        assert_eq!(
+            evaluate(&transformed)
+                .expect("transformed Core evaluates")
+                .value
+                .to_string(),
+            "42"
+        );
+    }
+}
+
+#[test]
+fn implicitly_quantified_global_instantiates_at_unrelated_types() {
+    let observation = run("id : A -> A\nid value = value\n\n(id(42), id(true))\n");
+
+    assert_eq!(observation.value_display(), "(42, true)");
+    assert_eq!(observation.type_display(), "(Int, Bool)");
+}
+
+#[test]
+fn polymorphic_global_instantiates_freshly_inside_another_global() {
+    let observation = run(
+        "id : A -> A\nid value = value\n\nrelay : B -> B\nrelay value = id value\n\nrelay(true)\n",
+    );
+
+    assert_eq!(observation.value_display(), "true");
+    assert_eq!(observation.type_display(), "Bool");
+}
+
+#[test]
+fn parameterized_constructors_are_ordinary_polymorphic_values() {
+    let observation = run(
+        "type Option<A> =\nNone\n| Some(A)\n\napply : (A -> B, A) -> B\napply (function, value) = function value\n\napply(Some, 42)\n",
+    );
+
+    assert_eq!(observation.value_display(), "Some(42)");
+    assert_eq!(observation.type_display(), "Option<Int>");
+}
+
+#[test]
+fn solved_result_inference_is_zonked_before_public_observation() {
+    let observation = run(
+        "type Option<A> =\nNone\n| Some(A)\n\n{\nlet value = None\nlet _ : Option<Int> = value\nvalue\n}\n",
+    );
+
+    assert_eq!(observation.value_display(), "None");
+    assert_eq!(observation.type_display(), "Option<Int>");
+}
+
+#[test]
+fn anonymous_function_local_bindings_generalize() {
+    let observation = run("{\nlet id = fn(value) {\nvalue\n}\n(id(42), id(false))\n}\n");
+
+    assert_eq!(observation.value_display(), "(42, false)");
+    assert_eq!(observation.type_display(), "(Int, Bool)");
+}
+
+#[test]
+fn primitive_operands_refine_inferred_function_parameters() {
+    let observation = run("{\nlet increment = fn(value) {\nvalue + 1\n}\nincrement(41)\n}\n");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn nested_anonymous_functions_refine_inferred_codomains() {
+    let observation =
+        run("{\nlet first = fn(left) {\nfn(right) {\nleft\n}\n}\nfirst(42)(false)\n}\n");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn parameter_refinement_updates_a_shared_inferred_codomain() {
+    let observation = run(
+        "apply : (A -> A) -> A -> A\napply function = fn(value) {\nfunction value\n}\n\napply(fn(()) {\n()\n})(())\n",
+    );
+
+    assert_eq!(observation.value_display(), "()");
+    assert_eq!(observation.type_display(), "Unit");
+}
+
+#[test]
+fn unit_and_tuple_patterns_refine_inferred_function_domains() {
+    let observation = run(
+        "{\nlet from_unit = fn(()) {\n42\n}\nlet tuple_first = fn((left, right)) {\nleft\n}\n(from_unit(()), tuple_first((7, false)))\n}\n",
+    );
+
+    assert_eq!(observation.value_display(), "(42, 7)");
+    assert_eq!(observation.type_display(), "(Int, Int)");
+}
+
+#[test]
+fn singleton_constructor_patterns_refine_inferred_function_domains() {
+    let observation = run(
+        "type Identity<A> =\nIdentity(A)\n\n{\nlet unwrap = fn(Identity(value)) {\nvalue\n}\nunwrap(Identity(42))\n}\n",
+    );
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn boolean_patterns_refine_before_function_coverage_rejection() {
+    assert_eq!(
+        reason("{\nlet only_true = fn(true) {\n1\n}\nonly_true\n}\n"),
+        "pattern.refutable-function-domain"
+    );
+}
+
+#[test]
+fn match_patterns_refine_inferred_scrutinee_types_before_coverage() {
+    let observation = run(
+        "{\nlet negate = fn(value) {\nmatch value {\ntrue => false\nfalse => true\n}\n}\nnegate(true)\n}\n",
+    );
+
+    assert_eq!(observation.value_display(), "false");
+    assert_eq!(observation.type_display(), "Bool");
+}
+
+#[test]
+fn local_patterns_refine_inferred_binding_types_before_coverage() {
+    let observation = run("{\nlet consume = fn(value) {\nlet () = value\n42\n}\nconsume(())\n}\n");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn constructor_patterns_instantiate_the_expected_nominal_arguments() {
+    let observation = run(
+        "type Option<A> =\nNone\n| Some(A)\n\nunwrap_or : (A, Option<A>) -> A\nunwrap_or (fallback, None) = fallback\nunwrap_or (_, Some(value)) = value\n\nunwrap_or(0, Some(42))\n",
+    );
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn coverage_substitutes_parameterized_constructor_payloads() {
+    let observation = run(
+        "type Option<A> =\nNone\n| Some(A)\n\nclassify : Option<Bool> -> Int\nclassify None = 0\nclassify (Some true) = 1\nclassify (Some false) = 2\n\nclassify(Some(false))\n",
+    );
+    assert_eq!(observation.value_display(), "2");
+}
+
+#[test]
+fn parameterized_guarded_recursive_data_keeps_runtime_types_erased() {
+    let observation = run(
+        "type Stream<A> =\nCons(A, Stream<A>)\n\n{\nlet rec ones : Stream<Int> = Cons(1, ones)\nones\n}\n",
+    );
+
+    assert_eq!(observation.value_display(), "Cons(1, <cycle>)");
+    assert_eq!(observation.type_display(), "Stream<Int>");
+}
+
+#[test]
+fn duplicate_type_parameters_are_rejected_at_resolution() {
+    assert_eq!(
+        reason("type Pair<A, A> =\nPair(A, A)\n\nPair(1, 2)\n"),
+        "resolve.duplicate-type-parameter"
+    );
+}
+
+#[test]
+fn unknown_type_variables_are_rejected_at_resolution() {
+    assert_eq!(
+        reason("type Wrapped<A> =\nWrapped(B)\n\nWrapped(1)\n"),
+        "resolve.unknown-type"
+    );
+}
+
+#[test]
+fn nominal_type_applications_must_be_saturated() {
+    assert_eq!(
+        reason("type Option<A> =\nNone\n| Some(A)\n\nbad : Option -> Int\nbad _ = 0\n\nbad None\n"),
+        "resolve.type-argument-count"
+    );
+}
+
+#[test]
+fn type_parameters_of_kind_type_cannot_be_applied() {
+    assert_eq!(
+        reason("type Bad<A> =\nBad(A<Int>)\n\nBad(1)\n"),
+        "resolve.type-kind"
+    );
+}
+
+#[test]
+fn application_shaped_local_bindings_remain_monomorphic() {
+    assert_eq!(
+        reason(
+            "make : Unit -> (A -> A)\nmake _ = fn(value) {\nvalue\n}\n\n{\nlet id = make(())\n(id(42), id(false))\n}\n"
+        ),
+        "type.argument"
+    );
+}
+
+#[test]
+fn function_generalization_excludes_inference_shared_with_the_environment() {
+    assert_eq!(
+        reason(
+            "make : Unit -> (A -> A)\nmake _ = fn(value) {\nvalue\n}\n\n{\nlet shared = make(())\nlet get = fn(ignored) {\nshared\n}\n(get(())(42), get(())(false))\n}\n"
+        ),
+        "type.argument"
+    );
+}
+
+#[test]
+fn inferred_polymorphic_recursion_is_rejected() {
+    assert_eq!(
+        reason("loop : A -> Unit\nloop value = loop((value, value))\n\nloop(1)\n"),
+        "type.polymorphic-recursion"
+    );
+}
+
+#[test]
+fn recursive_global_self_uses_apply_the_same_rigid_parameters() {
+    let observation = run("repeat : A -> A\nrepeat value = repeat value\n\n0\n");
+    assert_eq!(observation.value_display(), "0");
+}
+
+#[test]
+fn infinite_inferred_types_are_rejected_by_the_occurs_check() {
+    assert_eq!(
+        reason("{\nlet omega = fn(value) {\nvalue(value)\n}\nomega\n}\n"),
+        "type.infinite"
+    );
+}
+
+#[test]
+fn unresolved_local_function_inference_is_a_source_ambiguity() {
+    assert_eq!(
+        reason("{\nlet constant = fn(ignored) {\n42\n}\nconstant\n}\n"),
+        "type.ambiguous"
+    );
+}
+
+#[test]
+fn discarded_anonymous_function_inference_is_a_source_ambiguity() {
+    assert_eq!(
+        reason("{\nlet _ = fn(value) {\nvalue\n}\n()\n}\n"),
+        "type.ambiguous"
+    );
+}
+
+#[test]
+fn unused_parameterized_constructor_inference_is_a_source_ambiguity() {
+    assert_eq!(
+        reason("type Option<A> =\nNone\n| Some(A)\n\n{\nlet unused = None\n()\n}\n"),
+        "type.ambiguous"
+    );
+}
+
+#[test]
+fn deep_parameter_substitution_completes_on_a_small_stack() {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(scope, || {
+                let mut argument = "Unit".to_owned();
+                for _ in 0..(ash::parser::STRUCTURAL_DEPTH_LIMIT - 4) {
+                    argument = format!("Unit -> {argument}");
+                }
+                let text = format!(
+                    "type Holder<A> =\nHold(Unit -> A)\n\nread : Holder<{argument}> -> Int\nread (Hold function) = 0\n\n0\n"
+                );
+                assert_eq!(run(&text).value_display(), "0");
+            })
+            .expect("small-stack thread should start")
+            .join()
+            .expect("substitution must not consume the host stack");
+    });
+}

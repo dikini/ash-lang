@@ -168,7 +168,7 @@ impl fmt::Display for GeneratedReason {
 }
 
 /// Source provenance retained by parsed and generated compiler nodes.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Origin {
     /// A node corresponds directly to one source span.
     Source(Span),
@@ -186,6 +186,58 @@ pub enum Origin {
         /// The source spans related to the primary origin.
         related: Vec<Span>,
     },
+}
+
+impl Clone for Origin {
+    fn clone(&self) -> Self {
+        enum Frame<'a> {
+            Generated(GeneratedReason),
+            Related(&'a [Span]),
+        }
+
+        let mut current = self;
+        let mut frames = Vec::new();
+        let span = loop {
+            match current {
+                Self::Source(span) => break *span,
+                Self::Generated { cause, reason } => {
+                    frames.push(Frame::Generated(*reason));
+                    current = cause;
+                }
+                Self::Related { primary, related } => {
+                    frames.push(Frame::Related(related));
+                    current = primary;
+                }
+            }
+        };
+
+        let mut cloned = Self::Source(span);
+        for frame in frames.into_iter().rev() {
+            cloned = match frame {
+                Frame::Generated(reason) => Self::Generated {
+                    cause: Box::new(cloned),
+                    reason,
+                },
+                Frame::Related(related) => Self::Related {
+                    primary: Box::new(cloned),
+                    related: related.to_vec(),
+                },
+            };
+        }
+        cloned
+    }
+}
+
+/// Destroys owned provenance without following host-language recursion.
+pub(crate) fn discard_origin_iteratively(root: Origin) {
+    let mut current = root;
+    loop {
+        match current {
+            Origin::Source(_) => return,
+            Origin::Generated { cause, .. } => current = *cause,
+            Origin::Related { primary, .. } => current = *primary,
+        }
+    }
 }
 
 impl Origin {
