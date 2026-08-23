@@ -43,8 +43,11 @@ Execute the linked plan to:
 - The isolated worktree starts from `main` at `f1cf6a1`.
 - `cargo build --locked` and `cargo test --locked --all-targets` pass before
   implementation. The baseline contains 565 passing tests and no failure.
-- The implementation plan records the intended red-green checkpoints. No
-  production implementation has started.
+- The implementation plan records the intended red-green checkpoints.
+- Declarations-only module syntax and import spellings are implemented and
+  committed with focused syntax evidence.
+- Canonical graph loading is implemented with focused loader evidence. Its
+  commit follows this accepted identity and overlapping-root clarification.
 
 ## Verification
 
@@ -66,7 +69,10 @@ compatibility path.
 
 ## Discoveries
 
-None yet.
+- One canonical source may be reached through several configured roots. It has
+  one compilation-local module identity, retains every owning root, and checks
+  relative descendants against every owner. This removes discovery-order
+  dependence without creating route-specific module identities.
 
 ## Deviations
 

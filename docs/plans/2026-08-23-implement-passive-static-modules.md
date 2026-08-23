@@ -202,9 +202,11 @@ pub fn load_module_graph(
 Canonicalize roots and targets before admission. Carry an owning canonical root
 with every pending source. Resolve relative segments from the importing
 directory, reject targets outside the owning root, intern canonical paths once,
-and use an explicit DFS worklist with source-ordered edges. Return dependency
-order and retain the import occurrence on every edge. Add explicit source,
-edge, path-segment, and pending-work budgets.
+and use an explicit DFS worklist with source-ordered edges. When several routes
+reach one canonical source, reuse its identity, retain every owning root, and
+revalidate earlier relative edges against newly discovered owners. Return
+dependency order and retain the import occurrence on every edge. Add explicit
+source, edge, path-segment, and pending-work budgets.
 
 ### Task 3 — Step 4: Run loader tests and witness GREEN
 

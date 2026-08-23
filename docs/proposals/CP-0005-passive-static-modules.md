@@ -76,8 +76,15 @@ retains that root for its relative descendants.
 Paths contain no extension syntax, empty segment, current-directory segment, or
 parent segment. The loader canonicalizes each configured root and target,
 rejects a target outside its owning root, and admits one canonical source once.
-Overlapping named roots and alternate paths to one canonical source do not
-create distinct module identities.
+The canonical source receives one stable identity within the compilation.
+Aliases, alternate paths, and overlapping named roots are routes to that
+identity; they do not create or select distinct module identities.
+
+A canonical source reached through more than one root retains every owning
+root. Each relative descendant must remain inside every retained root.
+Discovering another owner revalidates relative edges already admitted from that
+source. The result therefore does not depend on which route reached the source
+first.
 
 A complete import binds the dependency's public namespace under its alias:
 
@@ -191,7 +198,8 @@ rank-1 rules. Importing does not re-infer or re-generalize an exported scheme.
 
 Term binders, nominal types, and constructors are qualified by their defining
 module identity. Module identity follows the uniquely admitted canonical source
-within one compilation, not an import alias or display path spelling.
+within one compilation, not an import alias, root, route, or display path
+spelling.
 
 ### Entry and execution
 
