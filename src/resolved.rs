@@ -4,8 +4,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     integer::Integer,
-    source::{Origin, Span},
-    types::{ConstructorId, NominalTypeId, Type, TypeVariableId},
+    source::{Origin, Span, discard_origin_iteratively},
+    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, discard_type_iteratively},
 };
 
 /// Identifies one binding within a resolved program.
@@ -289,21 +289,21 @@ impl ResolvedRegistry {
         self.nominal_positions.clear();
         self.constructor_positions.clear();
         for nominal in nominals.into_vec() {
-            discard_origin(nominal.origin);
+            discard_origin_iteratively(nominal.origin);
         }
         for constructor in constructors.into_vec() {
             if let Some(payload) = constructor.payload {
-                discard_type(payload);
+                discard_type_iteratively(payload);
             }
-            discard_origin(constructor.origin);
+            discard_origin_iteratively(constructor.origin);
         }
         for parameters in nominal_parameters.into_values() {
             for parameter in parameters.into_vec() {
-                discard_origin(parameter.origin);
+                discard_origin_iteratively(parameter.origin);
             }
         }
         for parameter in type_variables.into_values() {
-            discard_origin(parameter.origin);
+            discard_origin_iteratively(parameter.origin);
         }
     }
 }
@@ -311,38 +311,6 @@ impl ResolvedRegistry {
 impl Drop for ResolvedRegistry {
     fn drop(&mut self) {
         self.discard_owned_payloads();
-    }
-}
-
-fn discard_type(root: Type) {
-    let mut work = vec![root];
-    while let Some(ty) = work.pop() {
-        match ty {
-            Type::Tuple(elements) => work.extend(elements.into_vec()),
-            Type::Function(domain, codomain) => {
-                work.push(*domain);
-                work.push(*codomain);
-            }
-            Type::AppliedNominal(_, arguments) => work.extend(arguments.into_vec()),
-            Type::Forall(_, body) => work.push(*body),
-            Type::Int
-            | Type::Bool
-            | Type::Unit
-            | Type::Nominal(_)
-            | Type::Variable(_)
-            | Type::Inference(_) => {}
-        }
-    }
-}
-
-fn discard_origin(root: Origin) {
-    let mut current = root;
-    loop {
-        match current {
-            Origin::Source(_) => return,
-            Origin::Generated { cause, .. } => current = *cause,
-            Origin::Related { primary, .. } => current = *primary,
-        }
     }
 }
 

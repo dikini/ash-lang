@@ -44,4 +44,8 @@ impl BindingNode {
     pub(super) fn binder_mut(&mut self) -> &mut TypedBinder {
         &mut self.binder
     }
+
+    pub(super) fn discard_metadata(self) {
+        self.binder.discard_metadata();
+    }
 }

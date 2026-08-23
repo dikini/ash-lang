@@ -1,7 +1,7 @@
 //! Explicit rank-1 type abstraction and application Core payloads.
 
 use super::NodeId;
-use crate::types::{Type, TypeVariableId};
+use crate::types::{Type, TypeVariableId, discard_type_iteratively};
 
 /// A type-erased abstraction over one or more rank-1 type parameters.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,5 +66,11 @@ impl TypeApplicationNode {
             *argument = rewrite(argument)?;
         }
         Ok(())
+    }
+
+    pub(super) fn discard_metadata(self) {
+        for argument in self.arguments.into_vec() {
+            discard_type_iteratively(argument);
+        }
     }
 }

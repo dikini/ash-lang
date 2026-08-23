@@ -25,16 +25,32 @@ impl TypeWorkBudget {
 }
 
 pub(crate) fn charge_type_cells(ty: &Type, budget: &mut TypeWorkBudget) -> Result<(), ()> {
-    let mut work = vec![ty];
-    while let Some(ty) = work.pop() {
+    enum Task<'a> {
+        Visit(&'a Type),
+        Sequence(std::slice::Iter<'a, Type>),
+    }
+    let mut work = vec![Task::Visit(ty)];
+    while let Some(task) = work.pop() {
+        let Task::Visit(ty) = task else {
+            let Task::Sequence(mut remaining) = task else {
+                unreachable!()
+            };
+            if let Some(ty) = remaining.next() {
+                work.push(Task::Sequence(remaining));
+                work.push(Task::Visit(ty));
+            }
+            continue;
+        };
         budget.charge(1)?;
         match ty {
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => work.extend(elements),
-            Type::Function(domain, codomain) => {
-                work.push(codomain);
-                work.push(domain);
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                work.push(Task::Sequence(elements.iter()));
             }
-            Type::Forall(_, body) => work.push(body),
+            Type::Function(domain, codomain) => {
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
+            }
+            Type::Forall(_, body) => work.push(Task::Visit(body)),
             Type::Int
             | Type::Bool
             | Type::Unit
@@ -168,6 +184,42 @@ pub enum Type {
     Function(Box<Type>, Box<Type>),
 }
 
+/// Destroys an owned type without following host-language recursion.
+pub(crate) fn discard_type_iteratively(root: Type) {
+    enum Task {
+        Visit(Type),
+        Sequence(std::vec::IntoIter<Type>),
+    }
+
+    let mut work = vec![Task::Visit(root)];
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Visit(Type::Tuple(elements) | Type::AppliedNominal(_, elements)) => {
+                work.push(Task::Sequence(elements.into_vec().into_iter()));
+            }
+            Task::Visit(Type::Function(domain, codomain)) => {
+                work.push(Task::Visit(*codomain));
+                work.push(Task::Visit(*domain));
+            }
+            Task::Visit(Type::Forall(_, body)) => work.push(Task::Visit(*body)),
+            Task::Visit(
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_),
+            ) => {}
+            Task::Sequence(mut remaining) => {
+                if let Some(ty) = remaining.next() {
+                    work.push(Task::Sequence(remaining));
+                    work.push(Task::Visit(ty));
+                }
+            }
+        }
+    }
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -236,8 +288,22 @@ impl fmt::Display for Type {
 /// type-depth boundary.
 #[must_use]
 pub fn same_type(left: &Type, right: &Type) -> bool {
-    let mut pending = vec![(left, right)];
-    while let Some((left, right)) = pending.pop() {
+    enum Task<'a> {
+        Compare(&'a Type, &'a Type),
+        Sequence(std::iter::Zip<std::slice::Iter<'a, Type>, std::slice::Iter<'a, Type>>),
+    }
+    let mut pending = vec![Task::Compare(left, right)];
+    while let Some(task) = pending.pop() {
+        let Task::Compare(left, right) = task else {
+            let Task::Sequence(mut remaining) = task else {
+                unreachable!()
+            };
+            if let Some((left, right)) = remaining.next() {
+                pending.push(Task::Sequence(remaining));
+                pending.push(Task::Compare(left, right));
+            }
+            continue;
+        };
         match (left, right) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
@@ -246,22 +312,22 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
             (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
                 if left_id == right_id && left.len() == right.len() =>
             {
-                pending.extend(left.iter().zip(right.iter()));
+                pending.push(Task::Sequence(left.iter().zip(right.iter())));
             }
             (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
                 if left_parameters == right_parameters =>
             {
-                pending.push((left, right));
+                pending.push(Task::Compare(left, right));
             }
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
-                pending.extend(left.iter().zip(right.iter()));
+                pending.push(Task::Sequence(left.iter().zip(right.iter())));
             }
             (
                 Type::Function(left_domain, left_codomain),
                 Type::Function(right_domain, right_codomain),
             ) => {
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
+                pending.push(Task::Compare(left_codomain, right_codomain));
+                pending.push(Task::Compare(left_domain, right_domain));
             }
             _ => return false,
         }
@@ -330,6 +396,7 @@ pub(crate) fn substitute_type_variables_with<E>(
 fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, Type>) -> Type {
     enum Task<'a> {
         Visit(&'a Type, bool),
+        Sequence(std::slice::Iter<'a, Type>, bool),
         FinishTuple(usize),
         FinishApplied(NominalTypeId, usize),
         FinishFunction,
@@ -351,21 +418,11 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
             Task::Visit(Type::Inference(identity), _) => rebuilt.push(Type::Inference(*identity)),
             Task::Visit(Type::Tuple(elements), substitute) => {
                 work.push(Task::FinishTuple(elements.len()));
-                work.extend(
-                    elements
-                        .iter()
-                        .rev()
-                        .map(|element| Task::Visit(element, substitute)),
-                );
+                work.push(Task::Sequence(elements.iter(), substitute));
             }
             Task::Visit(Type::AppliedNominal(owner, arguments), substitute) => {
                 work.push(Task::FinishApplied(*owner, arguments.len()));
-                work.extend(
-                    arguments
-                        .iter()
-                        .rev()
-                        .map(|argument| Task::Visit(argument, substitute)),
-                );
+                work.push(Task::Sequence(arguments.iter(), substitute));
             }
             Task::Visit(Type::Function(domain, codomain), substitute) => {
                 work.push(Task::FinishFunction);
@@ -379,6 +436,12 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
                         .iter()
                         .any(|parameter| replacements.contains_key(parameter));
                 work.push(Task::Visit(body, substitute));
+            }
+            Task::Sequence(mut remaining, substitute) => {
+                if let Some(ty) = remaining.next() {
+                    work.push(Task::Sequence(remaining, substitute));
+                    work.push(Task::Visit(ty, substitute));
+                }
             }
             Task::FinishTuple(count) => {
                 let elements = rebuilt.split_off(rebuilt.len() - count);

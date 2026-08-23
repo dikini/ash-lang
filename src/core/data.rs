@@ -2,8 +2,8 @@
 
 use super::{NodeId, TypedBinder};
 use crate::{
-    source::Origin,
-    types::{ConstructorId, Type},
+    source::{Origin, discard_origin_iteratively},
+    types::{ConstructorId, Type, discard_type_iteratively},
 };
 
 /// A strict structural tuple construction.
@@ -100,6 +100,43 @@ impl CorePattern {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn discard_iteratively(self) {
+        enum Task {
+            Visit(CorePattern),
+            Sequence(std::vec::IntoIter<CorePattern>),
+        }
+
+        let mut work = vec![Task::Visit(self)];
+        while let Some(task) = work.pop() {
+            match task {
+                Task::Visit(pattern) => {
+                    discard_type_iteratively(pattern.ty);
+                    discard_origin_iteratively(pattern.origin);
+                    match pattern.kind {
+                        CorePatternKind::Binder(binder) => binder.discard_metadata(),
+                        CorePatternKind::Tuple(elements) => {
+                            work.push(Task::Sequence(elements.into_vec().into_iter()));
+                        }
+                        CorePatternKind::Constructor { payload, .. } => {
+                            if let Some(payload) = payload {
+                                work.push(Task::Visit(*payload));
+                            }
+                        }
+                        CorePatternKind::Wildcard
+                        | CorePatternKind::Boolean(_)
+                        | CorePatternKind::Unit => {}
+                    }
+                }
+                Task::Sequence(mut remaining) => {
+                    if let Some(pattern) = remaining.next() {
+                        work.push(Task::Sequence(remaining));
+                        work.push(Task::Visit(pattern));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -200,5 +237,13 @@ impl MatchNode {
 
     pub(super) fn arms_mut(&mut self) -> &mut [CoreMatchArm] {
         &mut self.arms
+    }
+
+    pub(super) fn discard_metadata(self) {
+        for arm in self.arms.into_vec() {
+            let (pattern, _, origin) = arm.into_parts();
+            pattern.discard_iteratively();
+            discard_origin_iteratively(origin);
+        }
     }
 }

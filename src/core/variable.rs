@@ -1,7 +1,11 @@
 //! Binder definitions and variable occurrences in typed Core.
 
 use super::dialect::{ArenaId, NodeId};
-use crate::{resolved::BinderId, source::Origin, types::Type};
+use crate::{
+    resolved::BinderId,
+    source::{Origin, discard_origin_iteratively},
+    types::{Type, discard_type_iteratively},
+};
 
 /// A typed Core binder definition and opaque capability for its owning arena.
 ///
@@ -58,6 +62,11 @@ impl TypedBinder {
 
     pub(crate) fn replace_type(&mut self, ty: Type) {
         self.ty = ty;
+    }
+
+    pub(super) fn discard_metadata(self) {
+        discard_type_iteratively(self.ty);
+        discard_origin_iteratively(self.origin);
     }
 }
 

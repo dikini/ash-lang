@@ -188,6 +188,18 @@ pub enum Origin {
     },
 }
 
+/// Destroys owned provenance without following host-language recursion.
+pub(crate) fn discard_origin_iteratively(root: Origin) {
+    let mut current = root;
+    loop {
+        match current {
+            Origin::Source(_) => return,
+            Origin::Generated { cause, .. } => current = *cause,
+            Origin::Related { primary, .. } => current = *primary,
+        }
+    }
+}
+
 impl Origin {
     /// Returns the causal source span at the base of this origin.
     #[must_use]

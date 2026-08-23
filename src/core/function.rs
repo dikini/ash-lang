@@ -33,6 +33,10 @@ impl FunctionNode {
     pub(super) fn parameter_mut(&mut self) -> &mut TypedBinder {
         &mut self.parameter
     }
+
+    pub(super) fn discard_metadata(self) {
+        self.parameter.discard_metadata();
+    }
 }
 
 /// A strict unary application payload.

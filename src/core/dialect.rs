@@ -23,8 +23,8 @@ use super::{
 use crate::{
     integer::Integer,
     resolved::{BinderId, ResolvedRegistry},
-    source::{GeneratedReason, Origin, Span},
-    types::{Type, TypeWorkBudget},
+    source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
+    types::{Type, TypeWorkBudget, discard_type_iteratively},
 };
 
 /// Names the closed pure Core dialect selected by Mini-Ash.
@@ -46,50 +46,6 @@ pub const CORE_PAYLOAD_DEPTH_LIMIT: usize = 130;
 
 /// Maximum structured-pattern wrappers admitted into one Core pattern.
 pub const CORE_PATTERN_DEPTH_LIMIT: usize = 33;
-
-pub(super) fn type_depth_within_limit(root: &Type) -> bool {
-    let mut work = vec![(root, 0_usize)];
-    while let Some((ty, depth)) = work.pop() {
-        match ty {
-            Type::Int
-            | Type::Bool
-            | Type::Unit
-            | Type::Nominal(_)
-            | Type::Variable(_)
-            | Type::Inference(_) => {}
-            Type::AppliedNominal(_, arguments) => {
-                let child_depth = depth.saturating_add(1);
-                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
-                    return false;
-                }
-                work.extend(arguments.iter().map(|argument| (argument, child_depth)));
-            }
-            Type::Forall(_, body) => {
-                let child_depth = depth.saturating_add(1);
-                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
-                    return false;
-                }
-                work.push((body, child_depth));
-            }
-            Type::Tuple(elements) => {
-                let child_depth = depth.saturating_add(1);
-                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
-                    return false;
-                }
-                work.extend(elements.iter().map(|element| (element, child_depth)));
-            }
-            Type::Function(domain, codomain) => {
-                let child_depth = depth.saturating_add(1);
-                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
-                    return false;
-                }
-                work.push((codomain, child_depth));
-                work.push((domain, child_depth));
-            }
-        }
-    }
-    true
-}
 
 pub(super) fn origin_depth_within_limit(root: &Origin) -> bool {
     let mut current = root;
@@ -317,6 +273,50 @@ pub struct UnvalidatedProgram {
     pub(super) arena: ArenaId,
     pub(super) nodes: Vec<StoredNode>,
     pub(super) root: NodeId,
+}
+
+impl UnvalidatedProgram {
+    pub(super) fn discard_iteratively(self) {
+        for stored in self.nodes {
+            discard_type_iteratively(stored.ty);
+            if let Some(origin) = stored.origin {
+                discard_origin_iteratively(origin);
+            }
+            match stored.kind {
+                PureExprKind::Value(PureValue::Function(function)) => {
+                    function.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                    binding.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                    group.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                    match_node.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                    operation.discard_metadata();
+                }
+                PureExprKind::Value(
+                    PureValue::Integer(_)
+                    | PureValue::Boolean(_)
+                    | PureValue::Unit(_)
+                    | PureValue::Constructor(_),
+                )
+                | PureExprKind::Variable(_)
+                | PureExprKind::Computation(
+                    PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_)
+                    | PureComputation::TypeAbstraction(_),
+                ) => {}
+            }
+        }
+        if let Ok(registry) = Arc::try_unwrap(self.registry) {
+            registry.discard_iteratively();
+        }
+    }
 }
 
 /// A pure Core arena whose graph, types, scope, dialect, and provenance hold.
