@@ -3659,6 +3659,55 @@ mod tests {
     }
 
     #[test]
+    fn zonking_charges_only_expanded_cells_through_solved_aliases() {
+        let root_alias = InferenceVariableId::new(9);
+        let nested_alias = InferenceVariableId::new(8);
+        let unresolved_leaf = InferenceVariableId::new(1);
+        let result = Type::Tuple(vec![Type::Bool, Type::Unit].into_boxed_slice());
+        let expected = Type::Function(
+            Box::new(Type::Int),
+            Box::new(Type::Function(
+                Box::new(Type::Inference(unresolved_leaf)),
+                Box::new(result.clone()),
+            )),
+        );
+        let solutions = HashMap::from([
+            (
+                root_alias,
+                Type::Function(
+                    Box::new(Type::Int),
+                    Box::new(Type::Function(
+                        Box::new(Type::Inference(nested_alias)),
+                        Box::new(result),
+                    )),
+                ),
+            ),
+            (nested_alias, Type::Inference(unresolved_leaf)),
+        ]);
+        let source = Type::Inference(root_alias);
+        let mut exact_remaining = 7_usize;
+
+        let (zonked, unresolved) = zonk_type_with_status(&source, &solutions, |cells| {
+            exact_remaining = exact_remaining.checked_sub(cells).ok_or(())?;
+            Ok::<(), ()>(())
+        })
+        .expect("seven expanded-result cells should fit exactly");
+
+        assert_eq!(zonked, expected);
+        assert!(unresolved);
+        assert_eq!(exact_remaining, 0);
+
+        let mut short_remaining = 6_usize;
+        let short = zonk_type_with_status(&source, &solutions, |cells| {
+            short_remaining = short_remaining.checked_sub(cells).ok_or(())?;
+            Ok::<(), ()>(())
+        });
+
+        assert_eq!(short, Err(()));
+        assert_eq!(short_remaining, 0);
+    }
+
+    #[test]
     fn finish_rejects_unresolved_inference_without_core_escape() {
         let source = SourceFile::new(
             "unresolved-finish.ash",
