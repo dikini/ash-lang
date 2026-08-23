@@ -48,6 +48,10 @@ Execute the linked plan to:
   committed with focused syntax evidence.
 - Canonical graph loading is implemented and committed with focused loader
   evidence.
+- Import resolution now preserves structured qualifier/member spans, uses
+  compilation- and module-qualified identities, consumes body-free dependency
+  summaries, and produces a declarations-only resolved module plus a distinct
+  unchecked export candidate. Focused Task 4 evidence is green.
 
 ## Verification
 
@@ -85,3 +89,6 @@ compatibility path.
   initial plan. Those consumers must change together to preserve exact
   identities. This expands the implementation boundary without changing
   CP-0005 semantics.
+- Task 4 no longer runs the legacy `tests/resolution.rs` file-result corpus as
+  modular evidence. Those sources are intentionally invalid under the selected
+  declarations-only grammar and remain part of the Task 8 corpus migration.

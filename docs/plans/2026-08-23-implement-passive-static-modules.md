@@ -236,7 +236,6 @@ git commit -m "feat: load canonical module graphs"
 - Modify: `src/eval/machine.rs`
 - Modify: `src/elaborate.rs`
 - Modify: `src/pattern.rs`
-- Modify: `tests/resolution.rs`
 - Modify: `tests/core_validation.rs`
 - Create: `tests/module_resolution.rs`
 
@@ -251,10 +250,17 @@ dependency definitions.
 
 ### Task 4 — Step 2: Run focused resolution tests and witness RED
 
-Run: `cargo test --test module_resolution --test resolution`
+Run:
+
+```text
+cargo test --test module_resolution
+cargo test --lib resolve::module_tests
+```
 
 Expected: FAIL because module-qualified identities and export summaries are
-absent.
+absent. The Mini-Ash file-result fixtures in `tests/resolution.rs` remain a
+corpus-migration boundary for Task 8; they do not define the modular resolver
+root.
 
 ### Task 4 — Step 3: Add module-qualified binder identity and summary data
 
@@ -306,7 +312,12 @@ dependency summary types and origins.
 
 ### Task 4 — Step 5: Run focused tests and witness GREEN
 
-Run: `cargo test --test module_resolution --test resolution`
+Run:
+
+```text
+cargo test --test module_resolution
+cargo test --lib resolve::module_tests
+```
 
 Expected: PASS, including proof that two hidden identities with the same source
 spelling do not compare equal and that an unchecked export candidate cannot be
@@ -315,7 +326,7 @@ supplied as a dependency summary.
 ### Task 4 — Step 6: Commit
 
 ```text
-git add src/resolved.rs src/resolve.rs src/module.rs src/types.rs tests/resolution.rs tests/module_resolution.rs
+git add src/resolved.rs src/resolve.rs src/resolve/module_tests.rs src/module.rs src/types.rs src/surface.rs src/parser/project.rs src/core/dialect.rs src/core/validate.rs src/elaborate.rs src/eval/machine.rs tests/core_validation.rs tests/module_loading.rs tests/modules_syntax.rs tests/parser.rs tests/primitive_vertical.rs tests/module_resolution.rs
 git commit -m "feat: resolve module export boundaries"
 ```
 
