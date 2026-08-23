@@ -1637,6 +1637,9 @@ impl Elaborator {
                         if !matches!(cause, Some(SynthesisCause::Binding(_))) {
                             return Err(function_needs_context(current.span, cause));
                         }
+                        self.type_work.charge(3).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
                         let domain = self.fresh_inference(current.span)?;
                         let codomain = self.fresh_inference(current.span)?;
                         let expected_ty = Type::Function(Box::new(domain), Box::new(codomain));
@@ -2459,6 +2462,9 @@ impl Elaborator {
             nodes.push(typed.node);
             types.push(typed.ty);
         }
+        self.type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let ty = Type::Tuple(types.into_boxed_slice());
         let core_ty = self.clone_type(&ty)?;
         let node = self.builder.tuple(nodes, core_ty, Origin::Source(span))?;
@@ -4908,6 +4914,107 @@ mod tests {
             .expect("the fixture leaves the exact clone size");
         assert_eq!(clone_type_with_budget(&ty, &mut exact), Ok(ty));
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn ordinary_tuple_type_wrapper_requires_one_preallocated_unit() {
+        let source = SourceFile::new("ordinary-tuple-budget.ash", "(1, 2)\n")
+            .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+
+        let mut short =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        short
+            .type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 3)
+            .expect("the fixture leaves only the complete Core type copy");
+        assert_eq!(
+            short.elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression: &resolved.result,
+                    cause: None,
+                },
+                &mut TypeContext::new(),
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+
+        let mut exact =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        exact
+            .type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 4)
+            .expect("the fixture leaves the tuple wrapper and complete Core type copy");
+        let typed = exact
+            .elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression: &resolved.result,
+                    cause: None,
+                },
+                &mut TypeContext::new(),
+            )
+            .expect("the exact retained tuple type cost should fit");
+        assert_eq!(
+            typed.ty,
+            Type::Tuple(vec![Type::Int, Type::Int].into_boxed_slice())
+        );
+        assert_eq!(exact.type_work.charge(1), Err(()));
+    }
+
+    #[test]
+    fn inferred_anonymous_function_type_precharges_three_cells_before_inference_origins() {
+        const EXACT_WORK: usize = 26;
+        let source = SourceFile::new(
+            "inferred-anonymous-function-budget.ash",
+            "fn(value) {\nvalue\n}\n",
+        )
+        .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+
+        let mut short =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        short
+            .type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 2)
+            .expect("the fixture leaves less than one inferred function type");
+        assert_eq!(
+            short.elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression: &resolved.result,
+                    cause: Some(SynthesisCause::Binding(resolved.result.span)),
+                },
+                &mut TypeContext::new(),
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert_eq!(short.next_inference, 0);
+        assert!(short.inference_origins.is_empty());
+
+        let mut exact =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        exact
+            .type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - EXACT_WORK)
+            .expect("the fixture leaves the exact complete synthesis cost");
+        let typed = exact
+            .elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression: &resolved.result,
+                    cause: Some(SynthesisCause::Binding(resolved.result.span)),
+                },
+                &mut TypeContext::new(),
+            )
+            .expect("the exact inferred function type cost should fit");
+        assert!(matches!(typed.ty, Type::Function(_, _)));
+        assert_eq!(exact.type_work.charge(1), Err(()));
     }
 
     #[test]

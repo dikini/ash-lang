@@ -363,6 +363,53 @@ fn rejects_polymorphic_constructor_payloads_in_the_registry() {
 }
 
 #[test]
+fn rejects_registry_type_parameter_identities_out_of_source_order() {
+    let file = source("parameter order");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let registry = Arc::new(
+        ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Pair".into(),
+                constructors: vec![constructor].into_boxed_slice(),
+                origin: origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner: nominal,
+                spelling: "PairValue".into(),
+                payload: None,
+                origin: range_origin(&file, 4, 5),
+            }],
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![
+                ResolvedTypeVariable {
+                    id: TypeVariableId::new(1),
+                    spelling: "A".into(),
+                    origin: range_origin(&file, 1, 2),
+                },
+                ResolvedTypeVariable {
+                    id: TypeVariableId::new(0),
+                    spelling: "B".into(),
+                    origin: range_origin(&file, 2, 3),
+                },
+            ],
+        )]),
+    );
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder.unit(Type::Unit, origin).expect("unit root");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("type-parameter identities must follow source order");
+
+    assert_eq!(error.reason(), ValidationReason::Registry);
+}
+
+#[test]
 fn validates_ten_thousand_constructor_owner_links_without_pairwise_scanning() {
     const WIDTH: u32 = 10_000;
     let file = source(&"x".repeat(WIDTH as usize + 1));

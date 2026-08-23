@@ -38,10 +38,11 @@ Application-shaped bindings and local recursive groups remain monomorphic.
 
 Every generalized definition becomes an explicit Core type abstraction. Every
 polymorphic global or constructor occurrence becomes an explicit Core type
-application. The independent validator rechecks scope, outer scheme shape,
-arity, substitution, types, provenance, handles, and reachability. The evaluator
-then removes either type operation in one transition. It creates no runtime type
-objects and does not change value, heap, or evaluation-order semantics.
+application. The independent validator rechecks registry identity order, scope,
+outer scheme shape, arity, substitution, types, provenance, handles, and
+reachability. The evaluator then removes either type operation in one
+transition. It creates no runtime type objects and does not change value, heap,
+or evaluation-order semantics.
 
 ## Changed composition points
 
@@ -141,11 +142,13 @@ that substitution never visits.
 Ordinary matches precharge progress, unary coverage rows, and final Core arms,
 then move the coverage-owned patterns into Core without an uncharged duplicate.
 Direct function binders and tuple operational domains likewise charge their
-context and provenance metadata before retention. Resolution charges a
-synthesized constructor tuple-payload wrapper in addition to its field types.
-When inference changes a type's function shape, provenance rebuilding charges
-each node during preflight, so an exhausted budget stops before traversing the
-unaffordable suffix.
+context and provenance metadata before retention. Resolution and expression
+elaboration charge synthesized tuple wrappers in addition to the moved field or
+element types. Inferred anonymous-function skeletons separately charge their
+function and inference type cells, inference-origin entries, and provenance
+nodes. When inference changes a type's function shape, provenance rebuilding
+charges each node during preflight, so an exhausted budget stops before
+traversing the unaffordable suffix.
 `deep_parameter_substitution_completes_on_a_small_stack` and the retained deep
 pattern, recursive-group, heap, rendering, and destruction tests run on a 256
 KiB host stack. Type work is cumulative within each stage; repeated

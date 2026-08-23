@@ -341,6 +341,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         }
         let type_variable_count = u32::try_from(registry.type_variable_count())
             .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
+        let mut previous_type_variable_start = None;
         for value in 0..type_variable_count {
             let identity = crate::types::TypeVariableId::new(value);
             let parameter = registry
@@ -354,9 +355,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                 || !origin_depth_within_limit(&parameter.origin)
                 || !valid_upper_spelling(&parameter.spelling)
                 || parameter_range.start() >= parameter_range.end()
+                || previous_type_variable_start
+                    .is_some_and(|previous| parameter_range.start() <= previous)
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
+            previous_type_variable_start = Some(parameter_range.start());
             self.validate_origin(&parameter.origin, self.program.root)?;
         }
         let mut parameter_owners = HashMap::new();

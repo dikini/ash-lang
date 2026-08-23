@@ -27,7 +27,7 @@ while checking that definition and instantiate freshly at ordinary value use
 sites. Source expressions have no explicit type abstraction or application.
 
 An unannotated local binding generalizes only when its initializer is an
-anonymous function. It quantifies solved inference variables not free in the
+anonymous function. It quantifies unsolved inference variables not free in the
 incoming environment. Other unannotated initializers remain monomorphic, and a
 local annotation may use enclosing rigid variables but introduces none.
 
