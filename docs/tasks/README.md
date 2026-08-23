@@ -6,4 +6,6 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No implementation task is currently active.
+- [TASK-0011: Implement Passive Static Modules](TASK-0011-implement-passive-static-modules.md) —
+  replace the single-file Mini-Ash source root with the accepted modular source
+  graph and retain one validated pure Core program.
