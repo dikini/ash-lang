@@ -820,10 +820,22 @@ impl CoreBuilder {
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
         let mut admitted_arguments = Vec::new();
+        let mut first_error = None;
         for argument in arguments {
-            admitted_arguments.push(admit_type(argument, &mut self.type_work)?);
+            match admit_type(argument, &mut self.type_work) {
+                Ok(argument) if first_error.is_none() => admitted_arguments.push(argument),
+                Ok(_) => {}
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
         }
-        self.push(
+        let payloads = admit_payloads(ty, origin, &mut self.type_work);
+        let (ty, origin) = match (first_error, payloads) {
+            (Some(error), _) | (None, Err(error)) => return Err(error),
+            (None, Ok(payloads)) => payloads,
+        };
+        self.push_admitted(
             ty,
             origin,
             PureExprKind::Computation(PureComputation::TypeApplication(TypeApplicationNode::new(
@@ -1240,6 +1252,7 @@ fn admit_payloads(
 
 enum TypeAdmissionTask {
     Visit(Type, usize),
+    VisitSequence(std::vec::IntoIter<Type>, usize),
     FinishFunction,
     FinishTuple(usize),
     FinishAppliedNominal(crate::types::NominalTypeId, usize),
@@ -1259,15 +1272,27 @@ enum TypeToken {
     Forall(Box<[crate::types::TypeVariableId]>),
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static TYPE_ADMISSION_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_type_admission_pending(pending: usize) {
+    TYPE_ADMISSION_PENDING_PEAK.with(|peak| peak.set(peak.get().max(pending)));
+}
+
 fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildError> {
     let mut work = vec![TypeAdmissionTask::Visit(ty, 0)];
     let mut tokens = Vec::new();
     let mut exceeded = false;
+    #[cfg(test)]
+    record_type_admission_pending(work.len());
     while let Some(task) = work.pop() {
-        if matches!(task, TypeAdmissionTask::Visit(_, _)) {
-            type_work
-                .charge(1)
-                .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if matches!(&task, TypeAdmissionTask::Visit(_, _)) && type_work.charge(1).is_err() {
+            work.push(task);
+            discard_type_admission_work(work);
+            return Err(BuildError::TypeWorkExceeded);
         }
         match task {
             TypeAdmissionTask::Visit(Type::Int, _) => tokens.push(TypeToken::Int),
@@ -1287,9 +1312,10 @@ fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildErr
                 exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
                 let count = arguments.len();
                 work.push(TypeAdmissionTask::FinishAppliedNominal(identity, count));
-                for argument in arguments.into_vec().into_iter().rev() {
-                    work.push(TypeAdmissionTask::Visit(argument, child_depth));
-                }
+                work.push(TypeAdmissionTask::VisitSequence(
+                    arguments.into_vec().into_iter(),
+                    child_depth,
+                ));
             }
             TypeAdmissionTask::Visit(Type::Forall(parameters, body), depth) => {
                 let child_depth = depth.saturating_add(1);
@@ -1302,8 +1328,15 @@ fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildErr
                 exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
                 let count = elements.len();
                 work.push(TypeAdmissionTask::FinishTuple(count));
-                for element in elements.into_vec().into_iter().rev() {
-                    work.push(TypeAdmissionTask::Visit(element, child_depth));
+                work.push(TypeAdmissionTask::VisitSequence(
+                    elements.into_vec().into_iter(),
+                    child_depth,
+                ));
+            }
+            TypeAdmissionTask::VisitSequence(mut remaining, depth) => {
+                if let Some(ty) = remaining.next() {
+                    work.push(TypeAdmissionTask::VisitSequence(remaining, depth));
+                    work.push(TypeAdmissionTask::Visit(ty, depth));
                 }
             }
             TypeAdmissionTask::Visit(Type::Function(domain, codomain), depth) => {
@@ -1322,6 +1355,8 @@ fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildErr
                 tokens.push(TypeToken::Forall(parameters));
             }
         }
+        #[cfg(test)]
+        record_type_admission_pending(work.len());
     }
     if exceeded {
         return Err(BuildError::TypeDepthExceeded);
@@ -1372,6 +1407,44 @@ fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildErr
         return Err(BuildError::InvalidPayload);
     }
     Ok(result)
+}
+
+fn discard_type_admission_work(mut work: Vec<TypeAdmissionTask>) {
+    while let Some(task) = work.pop() {
+        match task {
+            TypeAdmissionTask::Visit(ty, depth) => match ty {
+                Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                    work.push(TypeAdmissionTask::VisitSequence(
+                        elements.into_vec().into_iter(),
+                        depth,
+                    ));
+                }
+                Type::Function(domain, codomain) => {
+                    work.push(TypeAdmissionTask::Visit(*codomain, depth));
+                    work.push(TypeAdmissionTask::Visit(*domain, depth));
+                }
+                Type::Forall(_, body) => {
+                    work.push(TypeAdmissionTask::Visit(*body, depth));
+                }
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_) => {}
+            },
+            TypeAdmissionTask::VisitSequence(mut remaining, depth) => {
+                if let Some(ty) = remaining.next() {
+                    work.push(TypeAdmissionTask::VisitSequence(remaining, depth));
+                    work.push(TypeAdmissionTask::Visit(ty, depth));
+                }
+            }
+            TypeAdmissionTask::FinishFunction
+            | TypeAdmissionTask::FinishTuple(_)
+            | TypeAdmissionTask::FinishAppliedNominal(_, _)
+            | TypeAdmissionTask::FinishForall(_) => {}
+        }
+    }
 }
 
 enum OriginAdmissionTask {
@@ -1498,6 +1571,14 @@ mod tests {
         origin
     }
 
+    fn reset_type_admission_pending_peak() {
+        TYPE_ADMISSION_PENDING_PEAK.with(|peak| peak.set(0));
+    }
+
+    fn type_admission_pending_peak() -> usize {
+        TYPE_ADMISSION_PENDING_PEAK.with(std::cell::Cell::get)
+    }
+
     fn nested_pattern(source: &SourceFile, depth: usize) -> CorePattern {
         let origin = generated_origin(source, 0);
         let mut pattern = CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard);
@@ -1553,6 +1634,119 @@ mod tests {
             .expect("pattern admission thread should start")
             .join()
             .expect("pattern admission should fit the small stack");
+    }
+
+    #[test]
+    fn over_budget_type_admission_dismantles_the_remainder_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("core-type-work-boundary".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("type-work.ash", "()").expect("test source");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+
+                assert_eq!(
+                    builder.unit(function_type(crate::types::TYPE_WORK_LIMIT + 1), origin,),
+                    Err(BuildError::TypeWorkExceeded)
+                );
+                assert!(builder.arena.is_none());
+                assert!(builder.nodes.is_empty());
+            })
+            .expect("type-work admission thread should start")
+            .join()
+            .expect("over-budget type admission must fit the small stack");
+    }
+
+    #[test]
+    fn type_application_dismantles_unvisited_arguments_after_resource_failure() {
+        std::thread::Builder::new()
+            .name("core-type-argument-boundary".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("type-arguments.ash", "()").expect("test source");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let function = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("function placeholder");
+                builder
+                    .type_work
+                    .charge(crate::types::TYPE_WORK_LIMIT - 1)
+                    .expect("test setup exhausts the type-work budget");
+                let before = builder.nodes.len();
+
+                assert_eq!(
+                    builder.type_application(
+                        function,
+                        vec![Type::Int, function_type(crate::types::TYPE_WORK_LIMIT + 1),],
+                        Type::Unit,
+                        origin,
+                    ),
+                    Err(BuildError::TypeWorkExceeded)
+                );
+                assert_eq!(builder.nodes.len(), before);
+            })
+            .expect("type-argument admission thread should start")
+            .join()
+            .expect("rejected type arguments must fit the small stack");
+    }
+
+    #[test]
+    fn type_application_dismantles_result_payload_after_argument_failure() {
+        std::thread::Builder::new()
+            .name("core-type-application-result-boundary".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("type-result.ash", "()").expect("test source");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let function = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("function placeholder");
+                builder
+                    .type_work
+                    .charge(crate::types::TYPE_WORK_LIMIT - 1)
+                    .expect("test setup exhausts the type-work budget");
+                let before = builder.nodes.len();
+
+                assert_eq!(
+                    builder.type_application(
+                        function,
+                        vec![Type::Int],
+                        function_type(crate::types::TYPE_WORK_LIMIT + 1),
+                        origin,
+                    ),
+                    Err(BuildError::TypeWorkExceeded)
+                );
+                assert_eq!(builder.nodes.len(), before);
+            })
+            .expect("type-application result admission thread should start")
+            .join()
+            .expect("rejected type-application result must fit the small stack");
+    }
+
+    #[test]
+    fn wide_type_admission_keeps_pending_fan_out_constant() {
+        const WIDTH: usize = 4_096;
+        let mut type_work = TypeWorkBudget::default();
+        type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 2)
+            .expect("test setup leaves two type-work cells");
+        reset_type_admission_pending_peak();
+
+        let error = admit_type(
+            Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice()),
+            &mut type_work,
+        )
+        .expect_err("wide input must exhaust the cumulative budget");
+
+        assert_eq!(error, BuildError::TypeWorkExceeded);
+        assert!(
+            type_admission_pending_peak() <= 3,
+            "wide fan-out retained {} pending tasks",
+            type_admission_pending_peak()
+        );
     }
 
     #[test]
