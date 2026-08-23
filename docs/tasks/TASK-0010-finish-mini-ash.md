@@ -88,6 +88,11 @@ relative links resolve, and the new `sequent` rules have matching prose.
 - Core registry closure includes nominal parameter metadata and requires every
   constructor payload variable to belong to its owner. Constructor payloads
   remain monotypes.
+- Stable Core type-variable identities have one abstraction definition site;
+  two distinct abstraction nodes cannot reuse the same identity.
+- Resource accounting includes temporary retained replacement maps, coverage
+  rows and arms, context entries, and provenance handles. Wide zonking and
+  occurs-check traversal retain constant pending fan-out.
 
 The retained integration and closure reports contain the transferable results
 and boundary audit.

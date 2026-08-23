@@ -2250,14 +2250,28 @@ impl Elaborator {
                             None,
                         ));
                     }
+                    let arm_count = expression.arms.len();
+                    self.type_work
+                        .charge(arm_count.saturating_mul(2))
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    let mut matrix = Vec::new();
+                    matrix.try_reserve(arm_count).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let mut arm_bodies = Vec::new();
+                    arm_bodies.try_reserve(arm_count).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
                     let progress = Box::new(MatchProgress {
                         expression,
                         span,
                         scrutinee,
                         next_arm: 0,
-                        matrix: Vec::new(),
+                        matrix,
                         coverage_budget: UsefulnessBudget::default(),
-                        arms: Vec::with_capacity(expression.arms.len()),
+                        arm_bodies,
                         result_type: expected
                             .map(|(expected, kind)| (expected.ty, expected.provenance, kind)),
                     });
@@ -2266,7 +2280,6 @@ impl Elaborator {
                 ElaborationTask::FinishMatchArm {
                     mut progress,
                     binders,
-                    pattern,
                     row,
                     arm_span,
                 } => {
@@ -2277,21 +2290,38 @@ impl Elaborator {
                         progress.result_type = Some((body.ty, body.provenance, CheckKind::General));
                     }
                     progress.matrix.push(row);
-                    progress.arms.push(CoreMatchArm::new(
-                        pattern,
-                        body.node,
-                        Origin::Source(arm_span),
-                    ));
+                    progress.arm_bodies.push((body.node, arm_span));
                     self.schedule_match_arm(progress, context, &mut tasks)?;
                 }
                 ElaborationTask::FinishMatch(progress) => {
                     let Some((ty, provenance, _)) = progress.result_type else {
                         return Err(invalid_state());
                     };
+                    if progress.matrix.len() != progress.arm_bodies.len() {
+                        return Err(invalid_state());
+                    }
+                    self.type_work
+                        .charge(progress.arm_bodies.len())
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    let mut arms = Vec::new();
+                    arms.try_reserve(progress.arm_bodies.len()).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    for (mut row, (body, arm_span)) in
+                        progress.matrix.into_iter().zip(progress.arm_bodies)
+                    {
+                        let pattern = row.pop().ok_or_else(invalid_state)?;
+                        if !row.is_empty() {
+                            return Err(invalid_state());
+                        }
+                        arms.push(CoreMatchArm::new(pattern, body, Origin::Source(arm_span)));
+                    }
                     let core_ty = self.clone_type(&ty)?;
                     let node = self.builder.match_expression(
                         progress.scrutinee.node,
-                        progress.arms,
+                        arms,
                         core_ty,
                         Origin::Source(progress.span),
                     )?;
@@ -2434,6 +2464,12 @@ impl Elaborator {
             return Ok(());
         };
 
+        self.type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut row = Vec::new();
+        row.try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut binders = Vec::new();
         let checked = self.check_core_pattern(
             &arm.pattern,
@@ -2450,7 +2486,7 @@ impl Elaborator {
                 progress.scrutinee.provenance = TypeProvenance::unknown(&progress.scrutinee.ty);
             }
         }
-        let row = vec![pattern.clone()];
+        row.push(pattern);
         if usefulness_with_budget(
             &progress.matrix,
             &row,
@@ -2488,7 +2524,6 @@ impl Elaborator {
         tasks.push(ElaborationTask::FinishMatchArm {
             progress,
             binders,
-            pattern,
             row,
             arm_span: arm.span,
         });
@@ -2826,6 +2861,8 @@ impl Elaborator {
         }
         let (parameter_binder, retained_pattern, finish_domain, direct_binder) =
             if let ResolvedPatternKind::Binder(source_binder) = &parameter.kind {
+                reserve_context_entry(context, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let context_type = self.clone_type(&domain.ty)?;
                 let binder = self.builder.resolved_binder(
                     source_binder.id,
@@ -3379,7 +3416,6 @@ enum ElaborationTask<'a> {
     FinishMatchArm {
         progress: Box<MatchProgress<'a>>,
         binders: Vec<BinderId>,
-        pattern: CorePattern,
         row: Vec<CorePattern>,
         arm_span: Span,
     },
@@ -3420,7 +3456,7 @@ struct MatchProgress<'a> {
     next_arm: usize,
     matrix: Vec<Vec<CorePattern>>,
     coverage_budget: UsefulnessBudget,
-    arms: Vec<CoreMatchArm>,
+    arm_bodies: Vec<(NodeId, Span)>,
     result_type: Option<(Type, TypeProvenance, CheckKind)>,
 }
 
@@ -3502,7 +3538,7 @@ fn operational_domain(
         [parameter] => ProvenancedType::from_resolved_with_budget(&parameter.annotation, budget),
         parameters => {
             budget
-                .charge(1)
+                .charge(2)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             for parameter in parameters {
                 charge_type_cells(&parameter.annotation.ty, budget)
@@ -4214,6 +4250,11 @@ fn charge_pattern_binder_storage(ty: &Type, budget: &mut TypeWorkBudget) -> Resu
     Ok(())
 }
 
+fn reserve_context_entry(context: &mut TypeContext, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+    budget.charge(1)?;
+    context.binders.try_reserve(1).map_err(|_| ())
+}
+
 fn type_provenance_node_count(ty: &Type) -> usize {
     let mut count = 0_usize;
     let mut work = vec![ty];
@@ -4324,6 +4365,22 @@ enum UnificationFailure {
     Resource,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static ZONK_REBUILD_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static OCCURS_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_zonk_rebuild_pending(pending: usize) {
+    ZONK_REBUILD_PENDING_PEAK.with(|peak| peak.set(peak.get().max(pending)));
+}
+
+#[cfg(test)]
+fn record_occurs_pending(pending: usize) {
+    OCCURS_PENDING_PEAK.with(|peak| peak.set(peak.get().max(pending)));
+}
+
 fn zonk_type_with_status<E>(
     ty: &Type,
     solutions: &HashMap<InferenceVariableId, Type>,
@@ -4377,6 +4434,7 @@ fn zonk_type_with_status<E>(
 fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type {
     enum Task<'a> {
         Visit(&'a Type),
+        VisitSequence(std::slice::Iter<'a, Type>),
         FinishTuple(usize),
         FinishApplied(crate::types::NominalTypeId, usize),
         FinishFunction,
@@ -4386,6 +4444,8 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
     let mut work = vec![Task::Visit(ty)];
     let mut rebuilt = Vec::new();
     while let Some(task) = work.pop() {
+        #[cfg(test)]
+        record_zonk_rebuild_pending(work.len().saturating_add(1));
         match task {
             Task::Visit(Type::Inference(identity)) if solutions.contains_key(identity) => {
                 work.push(Task::Visit(&solutions[identity]));
@@ -4398,11 +4458,11 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
             Task::Visit(Type::Inference(identity)) => rebuilt.push(Type::Inference(*identity)),
             Task::Visit(Type::Tuple(elements)) => {
                 work.push(Task::FinishTuple(elements.len()));
-                work.extend(elements.iter().rev().map(Task::Visit));
+                work.push(Task::VisitSequence(elements.iter()));
             }
             Task::Visit(Type::AppliedNominal(owner, arguments)) => {
                 work.push(Task::FinishApplied(*owner, arguments.len()));
-                work.extend(arguments.iter().rev().map(Task::Visit));
+                work.push(Task::VisitSequence(arguments.iter()));
             }
             Task::Visit(Type::Function(domain, codomain)) => {
                 work.push(Task::FinishFunction);
@@ -4412,6 +4472,12 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
             Task::Visit(Type::Forall(parameters, body)) => {
                 work.push(Task::FinishForall(parameters.clone()));
                 work.push(Task::Visit(body));
+            }
+            Task::VisitSequence(mut remaining) => {
+                if let Some(element) = remaining.next() {
+                    work.push(Task::VisitSequence(remaining));
+                    work.push(Task::Visit(element));
+                }
             }
             Task::FinishTuple(count) => {
                 let elements = rebuilt.split_off(rebuilt.len() - count);
@@ -4440,24 +4506,41 @@ fn type_contains_inference(
     needle: InferenceVariableId,
     solutions: &HashMap<InferenceVariableId, Type>,
 ) -> bool {
-    let mut work = vec![ty];
+    enum Task<'a> {
+        Visit(&'a Type),
+        VisitSequence(std::slice::Iter<'a, Type>),
+    }
+
+    let mut work = vec![Task::Visit(ty)];
     let mut visited = HashSet::new();
-    while let Some(ty) = work.pop() {
+    while let Some(task) = work.pop() {
+        #[cfg(test)]
+        record_occurs_pending(work.len().saturating_add(1));
+        let Task::Visit(ty) = task else {
+            let Task::VisitSequence(mut remaining) = task else {
+                unreachable!()
+            };
+            if let Some(element) = remaining.next() {
+                work.push(Task::VisitSequence(remaining));
+                work.push(Task::Visit(element));
+            }
+            continue;
+        };
         match ty {
             Type::Inference(identity) if *identity == needle => return true,
             Type::Inference(identity) if visited.insert(*identity) => {
                 if let Some(solution) = solutions.get(identity) {
-                    work.push(solution);
+                    work.push(Task::Visit(solution));
                 }
             }
             Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
-                work.extend(elements.iter());
+                work.push(Task::VisitSequence(elements.iter()));
             }
             Type::Function(domain, codomain) => {
-                work.push(codomain);
-                work.push(domain);
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
             }
-            Type::Forall(_, body) => work.push(body),
+            Type::Forall(_, body) => work.push(Task::Visit(body)),
             Type::Int
             | Type::Bool
             | Type::Unit
@@ -4736,6 +4819,42 @@ mod tests {
     }
 
     #[test]
+    fn wide_zonk_rebuilds_keep_pending_fan_out_constant() {
+        const WIDTH: usize = 4_096;
+        let source =
+            SourceFile::new("wide-zonk-pending.ash", "()").expect("the fixture should fit");
+        let owner = crate::types::NominalTypeId::new(source.id(), 0);
+        for ty in [
+            Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice()),
+            Type::AppliedNominal(owner, vec![Type::Int; WIDTH].into_boxed_slice()),
+        ] {
+            ZONK_REBUILD_PENDING_PEAK.with(|peak| peak.set(0));
+            let rebuilt = zonk_type(&ty, &HashMap::new());
+            assert_eq!(rebuilt, ty);
+            let peak = ZONK_REBUILD_PENDING_PEAK.with(std::cell::Cell::get);
+            assert!(peak <= 3, "wide zonk retained {peak} pending tasks");
+        }
+    }
+
+    #[test]
+    fn wide_occurs_checks_keep_pending_fan_out_constant() {
+        const WIDTH: usize = 4_096;
+        let source =
+            SourceFile::new("wide-occurs-pending.ash", "()").expect("the fixture should fit");
+        let owner = crate::types::NominalTypeId::new(source.id(), 0);
+        let needle = InferenceVariableId::new(0);
+        for ty in [
+            Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice()),
+            Type::AppliedNominal(owner, vec![Type::Int; WIDTH].into_boxed_slice()),
+        ] {
+            OCCURS_PENDING_PEAK.with(|peak| peak.set(0));
+            assert!(!type_contains_inference(&ty, needle, &HashMap::new()));
+            let peak = OCCURS_PENDING_PEAK.with(std::cell::Cell::get);
+            assert!(peak <= 2, "wide occurs check retained {peak} pending tasks");
+        }
+    }
+
+    #[test]
     fn retained_type_clones_require_the_exact_preallocation_budget() {
         let ty = Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice());
 
@@ -4751,6 +4870,55 @@ mod tests {
             .expect("the fixture leaves the exact clone size");
         assert_eq!(clone_type_with_budget(&ty, &mut exact), Ok(ty));
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn ordinary_match_precharges_retained_arm_and_matrix_storage() {
+        let source = SourceFile::new(
+            "ordinary-match-budget.ash",
+            "match true {\ntrue => 1\nfalse => 0\n}\n",
+        )
+        .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let mut short =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        short
+            .type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 13)
+            .expect("the fixture leaves one fewer unit than complete match storage requires");
+
+        assert_eq!(
+            short.elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression: &resolved.result,
+                    cause: None,
+                },
+                &mut TypeContext::new(),
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+
+        let mut exact =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        exact
+            .type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 14)
+            .expect("the fixture leaves type copies plus both progress and Core arm storage");
+        let typed = exact
+            .elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression: &resolved.result,
+                    cause: None,
+                },
+                &mut TypeContext::new(),
+            )
+            .expect("the exact retained match cost should fit");
+        assert_eq!(typed.ty, Type::Int);
+        assert_eq!(exact.type_work.charge(1), Err(()));
     }
 
     #[test]
@@ -4837,6 +5005,73 @@ mod tests {
             .charge(crate::types::TYPE_WORK_LIMIT - 11)
             .expect("the fixture leaves two type copies, provenance, and two indexes");
         assert_eq!(charge_pattern_binder_storage(&ty, &mut exact), Ok(()));
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn direct_function_binder_context_entries_require_one_reserved_unit() {
+        let mut context = TypeContext::new();
+        let mut short = TypeWorkBudget::default();
+        short
+            .charge(crate::types::TYPE_WORK_LIMIT)
+            .expect("the fixture exhausts the budget before context storage");
+        assert_eq!(reserve_context_entry(&mut context, &mut short), Err(()));
+        assert_eq!(context.binders.capacity(), 0);
+
+        let mut exact = TypeWorkBudget::default();
+        exact
+            .charge(crate::types::TYPE_WORK_LIMIT - 1)
+            .expect("the fixture leaves exactly one context-entry unit");
+        assert_eq!(reserve_context_entry(&mut context, &mut exact), Ok(()));
+        assert!(context.binders.capacity() >= 1);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn tuple_operational_domains_charge_the_provenance_handle_separately() {
+        let source = SourceFile::new(
+            "tuple-operational-domain-budget.ash",
+            "fn choose(left: Int, right: Bool) -> Int {\nleft\n}\n\nchoose(42, false)\n",
+        )
+        .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let ResolvedDefinitionKind::InlineOperational(operational) = &resolved.definitions[0].kind
+        else {
+            panic!("the fixture should resolve to an operational definition");
+        };
+
+        let mut short = TypeWorkBudget::default();
+        short
+            .charge(crate::types::TYPE_WORK_LIMIT - 3)
+            .expect("the fixture leaves one fewer unit than tuple, annotations, and provenance");
+        assert_eq!(
+            operational_domain(
+                &operational.header.parameters,
+                operational.header.span,
+                &mut short,
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+
+        let mut exact = TypeWorkBudget::default();
+        exact
+            .charge(crate::types::TYPE_WORK_LIMIT - 4)
+            .expect("the fixture leaves tuple, two annotation cells, and provenance");
+        let copied = operational_domain(
+            &operational.header.parameters,
+            operational.header.span,
+            &mut exact,
+        )
+        .expect("the complete retained tuple domain should fit exactly");
+        assert_eq!(
+            copied.ty,
+            Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice())
+        );
+        assert!(copied.provenance.aligns(&copied.ty));
         assert_eq!(exact.charge(1), Err(()));
     }
 

@@ -659,16 +659,26 @@ fn head_types(
                     if parameters.len() != arguments.len() {
                         return Ok(Vec::new());
                     }
-                    let replacements = parameters
-                        .iter()
-                        .zip(arguments)
-                        .map(|(parameter, argument)| (parameter.id, argument.clone()))
-                        .collect::<HashMap<_, _>>();
+                    budget.charge(parameters.len())?;
+                    charge_types(arguments, budget)?;
+                    let mut replacements = HashMap::new();
+                    replacements
+                        .try_reserve(parameters.len())
+                        .map_err(|_| UsefulnessError::WorkLimit)?;
+                    replacements.extend(
+                        parameters
+                            .iter()
+                            .zip(arguments)
+                            .map(|(parameter, argument)| (parameter.id, argument.clone())),
+                    );
                     substitute_type_variables_with(payload, &replacements, |cells| {
                         budget.charge(cells)
                     })?
                 }
-                Type::Nominal(owner) if *owner == constructor.owner => payload.clone(),
+                Type::Nominal(owner) if *owner == constructor.owner => {
+                    charge_types(std::slice::from_ref(payload), budget)?;
+                    payload.clone()
+                }
                 _ => return Ok(Vec::new()),
             };
             Ok(vec![instantiated])
@@ -773,7 +783,46 @@ fn display_pattern(pattern: &WitnessPattern, registry: &ResolvedRegistry) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable};
     use crate::source::{ByteRange, Origin, SourceFile};
+    use crate::types::{NominalTypeId, TypeVariableId};
+
+    fn constructor_registry(
+        parameter_count: usize,
+        payload: Type,
+    ) -> (ResolvedRegistry, ConstructorId, NominalTypeId) {
+        let source = SourceFile::new("coverage-budget.ash", "Wide").expect("test source");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("ordered range"))
+            .expect("test span");
+        let origin = Origin::Source(span);
+        let owner = NominalTypeId::new(source.id(), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let parameters = (0..parameter_count)
+            .map(|index| ResolvedTypeVariable {
+                id: TypeVariableId::new(u32::try_from(index).expect("parameter identity")),
+                spelling: format!("T{index}"),
+                origin: origin.clone(),
+            })
+            .collect();
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: owner,
+                spelling: "Wide".to_owned(),
+                constructors: vec![constructor].into_boxed_slice(),
+                origin: origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner,
+                spelling: "Make".to_owned(),
+                payload: Some(payload),
+                origin,
+            }],
+        )
+        .with_type_parameters(vec![(owner, parameters)]);
+        (registry, constructor, owner)
+    }
 
     fn wildcard(ty: Type, origin: &Origin) -> CorePattern {
         CorePattern::new(ty, origin.clone(), CorePatternKind::Wildcard)
@@ -856,6 +905,78 @@ mod tests {
                 &registry,
                 USEFULNESS_STATE_LIMIT,
                 &mut budget,
+            ),
+            Err(UsefulnessError::WorkLimit)
+        );
+    }
+
+    #[test]
+    fn constructor_head_types_charge_phantom_replacement_storage_at_the_exact_boundary() {
+        const WIDTH: usize = 4_096;
+
+        let (registry, constructor, owner) = constructor_registry(WIDTH, Type::Int);
+        let applied = Type::AppliedNominal(owner, vec![Type::Bool; WIDTH].into_boxed_slice());
+        let required = WIDTH * 2 + 1;
+        let mut exact = UsefulnessBudget {
+            remaining: required,
+        };
+
+        assert_eq!(
+            head_types(
+                Head::Constructor(constructor),
+                &applied,
+                &registry,
+                &mut exact,
+            ),
+            Ok(vec![Type::Int])
+        );
+        assert_eq!(exact.remaining, 0);
+
+        let mut short = UsefulnessBudget {
+            remaining: required - 1,
+        };
+        assert_eq!(
+            head_types(
+                Head::Constructor(constructor),
+                &applied,
+                &registry,
+                &mut short,
+            ),
+            Err(UsefulnessError::WorkLimit)
+        );
+    }
+
+    #[test]
+    fn constructor_head_types_charge_wide_monomorphic_payloads_at_the_exact_boundary() {
+        const WIDTH: usize = 4_096;
+
+        let payload = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+        let (registry, constructor, owner) = constructor_registry(0, payload.clone());
+        let required = WIDTH + 1;
+        let mut exact = UsefulnessBudget {
+            remaining: required,
+        };
+
+        assert_eq!(
+            head_types(
+                Head::Constructor(constructor),
+                &Type::Nominal(owner),
+                &registry,
+                &mut exact,
+            ),
+            Ok(vec![payload])
+        );
+        assert_eq!(exact.remaining, 0);
+
+        let mut short = UsefulnessBudget {
+            remaining: required - 1,
+        };
+        assert_eq!(
+            head_types(
+                Head::Constructor(constructor),
+                &Type::Nominal(owner),
+                &registry,
+                &mut short,
             ),
             Err(UsefulnessError::WorkLimit)
         );

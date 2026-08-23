@@ -316,8 +316,19 @@ Inference variables are compiler facts, not source types. Unification compares
 primitive and nominal identities, descends structurally through applications,
 tuples, and functions, and solves inference variables only with types of kind
 `Type`. The occurs check rejects a solution containing the variable being
-solved with `type.infinite`. If the program result still contains an unsolved
-inference variable, typing rejects it with `type.ambiguous`.
+solved with `type.infinite`. While deriving a complete program, typing
+accumulates the substitution `THETA` and records each allocated inference
+variable's causal origin in allocation order. Successful program typing
+requires every allocated inference variable to occur in the domain of
+`THETA`.
+
+Ambiguity reporting first applies `THETA` to the program result type. If that
+type still contains an inference variable, typing reports `type.ambiguous` at
+the complete result-expression span. This result diagnostic takes precedence
+over allocation origins. Otherwise typing selects the first identity outside
+the domain of `THETA` in allocation order and reports its retained causal
+origin. This second check covers discarded expressions and unused initializers
+whose inference variables cannot appear in the result type.
 
 Global type parameters and generalized local parameters are rigid within their
 definitions. A recursive self-use receives the same rigid arguments rather
@@ -481,8 +492,10 @@ family global-and-program-typing:
     GAMMA_i = GAMMA_G[name_i : definition_type_i]
     for each i, GAMMA_i |-definition definition_i ⇒ name_i : scheme_i
     GAMMA_G |- result ⇒ result_type
+    every inference variable allocated by these premises is in domain(THETA)
+    apply(THETA, result_type) contains no inference variable
     ===>
-    |-program definitions; result ⇒ result_type
+    |-program definitions; result ⇒ apply(THETA, result_type)
 ```
 
 `ordered_free_parameters` returns the free uppercase variables in their first
@@ -498,7 +511,10 @@ rigid parameters and requires the complete group to be exhaustive under the
 shared coverage relation. The definition judgments check parameters and bodies
 but do not determine global visibility. `T-Recursive-Program` establishes all
 global schemes before checking any definition and synthesizes the file type
-from its required result expression. While definition `i` is checked,
+from its required result expression. Its final two premises close inference
+over the whole program, including types inferred only inside discarded
+expressions, and expose the substituted result type. `THETA` is the accumulated
+first-order substitution described above. While definition `i` is checked,
 `GAMMA_i` replaces only its own scheme with the opened monotype. Its recursive
 self-occurrences therefore use the same rigid arguments, while occurrences of
 other globals remain ordinary schemes and instantiate freshly.

@@ -896,6 +896,7 @@ impl<'program, 'source> Validator<'program, 'source> {
     }
 
     fn validate_node_types(&self) -> Result<(), ValidationError> {
+        let mut type_abstraction_definitions = HashMap::new();
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
             match &node.kind {
@@ -909,7 +910,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                     }
                 }
                 PureExprKind::Computation(computation) => {
-                    self.validate_computation(id, node, computation)?;
+                    self.validate_computation(
+                        id,
+                        node,
+                        computation,
+                        &mut type_abstraction_definitions,
+                    )?;
                 }
             }
         }
@@ -960,6 +966,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         id: NodeId,
         node: &StoredNode,
         computation: &PureComputation,
+        type_abstraction_definitions: &mut HashMap<crate::types::TypeVariableId, NodeId>,
     ) -> Result<(), ValidationError> {
         match computation {
             PureComputation::Bind(binding) => {
@@ -1129,16 +1136,13 @@ impl<'program, 'source> Validator<'program, 'source> {
                     ));
                 };
                 self.charge_type_work(abstraction.parameters().len())?;
-                let mut unique = HashSet::new();
-                unique
+                type_abstraction_definitions
                     .try_reserve(abstraction.parameters().len())
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
                 if abstraction.parameters().is_empty()
-                    || !abstraction
-                        .parameters()
-                        .iter()
-                        .copied()
-                        .all(|parameter| unique.insert(parameter))
+                    || !abstraction.parameters().iter().copied().all(|parameter| {
+                        type_abstraction_definitions.insert(parameter, id).is_none()
+                    })
                     || abstraction.parameters() != parameters.as_ref()
                     || !same_type(&body.ty, scheme_body)
                     || matches!(scheme_body.as_ref(), Type::Forall(_, _))
@@ -1167,6 +1171,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                         ValidationReason::TypeOperation,
                         Some(id),
                     ));
+                }
+                for argument in application.arguments() {
+                    self.charge_type_structure(argument)?;
                 }
                 self.charge_type_work(parameters.len())?;
                 let mut replacements = HashMap::new();
@@ -2620,6 +2627,7 @@ mod tests {
                     PureExprKind::Computation(computation) => computation,
                     _ => unreachable!("test abstraction computation"),
                 },
+                &mut HashMap::new(),
             )
             .expect("one abstraction binder fits exactly");
         assert_eq!(
@@ -2632,8 +2640,8 @@ mod tests {
 
         let application_validator = Validator::new(&program, &[&file]);
         application_validator
-            .charge_type_work(TYPE_WORK_LIMIT - 3)
-            .expect("test setup leaves argument, index, and substitution work");
+            .charge_type_work(TYPE_WORK_LIMIT - 4)
+            .expect("test setup leaves argument validation, clone, index, and substitution work");
         application_validator
             .validate_computation(
                 application,
@@ -2642,8 +2650,9 @@ mod tests {
                     PureExprKind::Computation(computation) => computation,
                     _ => unreachable!("test application computation"),
                 },
+                &mut HashMap::new(),
             )
-            .expect("one argument, replacement entry, and result cell fit exactly");
+            .expect("one argument validation, clone, replacement entry, and result fit exactly");
         assert_eq!(
             application_validator
                 .charge_type_work(1)
@@ -2651,6 +2660,183 @@ mod tests {
                 .reason(),
             ValidationReason::Resource
         );
+    }
+
+    #[test]
+    fn phantom_type_application_charges_argument_clones_at_the_exact_boundary() {
+        const WIDTH: usize = 64;
+        const ARGUMENT_CELLS: usize = WIDTH + 1;
+        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 2 + 2;
+        let file = source();
+        let origin = origin(&file);
+        let arena = super::super::dialect::ArenaId::new(106);
+        let parameter = crate::types::TypeVariableId::new(0);
+        let body = NodeId::new(arena, 0);
+        let abstraction = NodeId::new(arena, 1);
+        let application = NodeId::new(arena, 2);
+        let argument = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes: vec![
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Unit,
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        super::super::type_ops::TypeAbstractionNode::new(vec![parameter], body),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Unit,
+                    origin: Some(origin),
+                    kind: PureExprKind::Computation(PureComputation::TypeApplication(
+                        super::super::type_ops::TypeApplicationNode::new(
+                            abstraction,
+                            vec![argument],
+                        ),
+                    )),
+                },
+            ],
+            root: application,
+        };
+        let computation = match &program.nodes[2].kind {
+            PureExprKind::Computation(computation) => computation,
+            _ => unreachable!("test application computation"),
+        };
+
+        let exact_validator = Validator::new(&program, &[&file]);
+        exact_validator
+            .charge_type_work(TYPE_WORK_LIMIT - EXPECTED_WORK)
+            .expect("test setup leaves the exact retained-work allowance");
+        exact_validator
+            .validate_computation(
+                application,
+                &program.nodes[2],
+                computation,
+                &mut HashMap::new(),
+            )
+            .expect("the exact argument-validation and clone allowance fits");
+        assert_eq!(
+            exact_validator
+                .charge_type_work(1)
+                .expect_err("the exact allowance is fully consumed")
+                .reason(),
+            ValidationReason::Resource
+        );
+
+        let short_validator = Validator::new(&program, &[&file]);
+        short_validator
+            .charge_type_work(TYPE_WORK_LIMIT - (EXPECTED_WORK - 1))
+            .expect("test setup leaves one cell less than the retained work");
+        let error = short_validator
+            .validate_computation(
+                application,
+                &program.nodes[2],
+                computation,
+                &mut HashMap::new(),
+            )
+            .expect_err("argument clones must not cross the validation budget");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+    }
+
+    #[test]
+    fn distinct_type_abstractions_cannot_reuse_one_binder_identity() {
+        let file = source();
+        let origin = origin(&file);
+        let arena = super::super::dialect::ArenaId::new(107);
+        let parameter = crate::types::TypeVariableId::new(0);
+        let left_body = NodeId::new(arena, 0);
+        let right_body = NodeId::new(arena, 1);
+        let left_abstraction = NodeId::new(arena, 2);
+        let right_abstraction = NodeId::new(arena, 3);
+        let left = NodeId::new(arena, 4);
+        let right = NodeId::new(arena, 5);
+        let root = NodeId::new(arena, 6);
+        let scheme = Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit));
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes: vec![
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Unit,
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Unit,
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: scheme.clone(),
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        super::super::type_ops::TypeAbstractionNode::new(
+                            vec![parameter],
+                            left_body,
+                        ),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: scheme,
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        super::super::type_ops::TypeAbstractionNode::new(
+                            vec![parameter],
+                            right_body,
+                        ),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Unit,
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Computation(PureComputation::TypeApplication(
+                        super::super::type_ops::TypeApplicationNode::new(
+                            left_abstraction,
+                            vec![Type::Unit],
+                        ),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Unit,
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Computation(PureComputation::TypeApplication(
+                        super::super::type_ops::TypeApplicationNode::new(
+                            right_abstraction,
+                            vec![Type::Unit],
+                        ),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Tuple(vec![Type::Unit, Type::Unit].into_boxed_slice()),
+                    origin: Some(origin),
+                    kind: PureExprKind::Computation(PureComputation::Tuple(
+                        super::super::data::TupleNode::new(vec![left, right]),
+                    )),
+                },
+            ],
+            root,
+        };
+
+        let error = validate(program, &[&file])
+            .expect_err("distinct abstraction nodes must define distinct type-variable identities");
+        assert_eq!(error.reason(), ValidationReason::TypeOperation);
+        assert_eq!(error.node(), Some(right_abstraction));
     }
 
     #[test]

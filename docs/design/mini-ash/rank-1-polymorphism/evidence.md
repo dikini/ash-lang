@@ -84,7 +84,7 @@ count locates the closed sites; it is not an edit count or complexity metric.
 | Constructor patterns and coverage | `constructor_patterns_instantiate_the_expected_nominal_arguments`, `coverage_substitutes_parameterized_constructor_payloads` |
 | Occurs check and ambiguity | `infinite_inferred_types_are_rejected_by_the_occurs_check`, `unresolved_local_function_inference_is_a_source_ambiguity` |
 | Monomorphic recursion | `inferred_polymorphic_recursion_is_rejected`, `recursive_global_self_uses_apply_the_same_rigid_parameters` |
-| Explicit Core facts | `source_instantiation_is_explicit_in_validated_core`, `rejects_constructor_payload_variables_outside_the_owner_parameters`, `rejects_polymorphic_constructor_payloads_in_the_registry`, and malformed type-operation cases in `tests/core_validation.rs` |
+| Explicit Core facts | `source_instantiation_is_explicit_in_validated_core`, `rejects_constructor_payload_variables_outside_the_owner_parameters`, `rejects_polymorphic_constructor_payloads_in_the_registry`, `distinct_type_abstractions_cannot_reuse_one_binder_identity`, and malformed type-operation cases in `tests/core_validation.rs` |
 | Transform preservation and erasure | `explicit_type_operations_survive_both_core_transforms_and_erasure` |
 | Parameterized cyclic data | `parameterized_guarded_recursive_data_keeps_runtime_types_erased` |
 | Source-facing output | `static_semantics_rank_one_polymorphism_is_executable` and `tool_rank_one_example_has_exact_cli_observation` |
@@ -133,6 +133,14 @@ that a compact malformed Core application whose substitution exceeds the
 budget maps to `core.validation.resource`.
 Core type admission, Core validation, and the adjusted match elaboration
 traversal also use explicit work stacks at their admitted depth.
+Wide tuple and applied-nominal zonking and occurs checks retain only
+constant-width pending traversal tasks. Constructor specialization and Core
+type application precharge replacement-map entries and complete argument or
+payload copies, including phantom arguments that substitution never visits.
+Ordinary matches precharge progress, unary coverage rows, and final Core arms,
+then move the coverage-owned patterns into Core without an uncharged duplicate.
+Direct function binders and tuple operational domains likewise charge their
+context and provenance metadata before retention.
 `deep_parameter_substitution_completes_on_a_small_stack` and the retained deep
 pattern, recursive-group, heap, rendering, and destruction tests run on a 256
 KiB host stack. Type work is cumulative within each stage; repeated
