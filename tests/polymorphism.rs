@@ -158,6 +158,16 @@ fn nested_anonymous_functions_refine_inferred_codomains() {
 }
 
 #[test]
+fn parameter_refinement_updates_a_shared_inferred_codomain() {
+    let observation = run(
+        "apply : (A -> A) -> A -> A\napply function = fn(value) {\nfunction value\n}\n\napply(fn(()) {\n()\n})(())\n",
+    );
+
+    assert_eq!(observation.value_display(), "()");
+    assert_eq!(observation.type_display(), "Unit");
+}
+
+#[test]
 fn unit_and_tuple_patterns_refine_inferred_function_domains() {
     let observation = run(
         "{\nlet from_unit = fn(()) {\n42\n}\nlet tuple_first = fn((left, right)) {\nleft\n}\n(from_unit(()), tuple_first((7, false)))\n}\n",

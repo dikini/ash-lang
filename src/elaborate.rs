@@ -896,7 +896,7 @@ impl Elaborator {
                     "this primitive operator requires Int operands",
                 ));
                 diagnostic.expected = Some(Type::Int.to_string());
-                diagnostic.found = Some(self.registry.display_type(&found));
+                diagnostic.found = Some(self.registry.display_source_type(&found));
                 Err(TypeError::Source(Box::new(diagnostic)))
             }
             Err(UnificationFailure::Infinite) => Err(inference_failure(
@@ -2272,7 +2272,7 @@ impl Elaborator {
         let FunctionCheck {
             parameter,
             mut domain,
-            codomain,
+            mut codomain,
             body,
             presentation,
             mut function_type,
@@ -2289,6 +2289,10 @@ impl Elaborator {
         domain.ty = self.zonk(&domain.ty)?;
         if !domain.provenance.aligns(&domain.ty) {
             domain.provenance = TypeProvenance::unknown(&domain.ty);
+        }
+        codomain.ty = self.zonk(&codomain.ty)?;
+        if !codomain.provenance.aligns(&codomain.ty) {
+            codomain.provenance = TypeProvenance::unknown(&codomain.ty);
         }
         function_type.ty = self.zonk(&function_type.ty)?;
         if !function_type.provenance.aligns(&function_type.ty) {
@@ -2914,8 +2918,8 @@ fn check_mismatch(
     match kind {
         CheckKind::General => TypeError::Mismatch(TypeMismatch {
             span,
-            expected_display: registry.display_type(&expected),
-            found_display: registry.display_type(&found),
+            expected_display: registry.display_source_type(&expected),
+            found_display: registry.display_source_type(&found),
             expected: Box::new(expected),
             found: Box::new(found),
         }),
@@ -2936,12 +2940,12 @@ fn check_mismatch(
                     function_span,
                     "this recursive function is checked monomorphically",
                 ));
-                diagnostic.expected = Some(registry.display_type(&expected));
-                diagnostic.found = Some(registry.display_type(&found));
+                diagnostic.expected = Some(registry.display_source_type(&expected));
+                diagnostic.found = Some(registry.display_source_type(&found));
                 return TypeError::Source(Box::new(diagnostic));
             }
-            let expected = registry.display_type(&expected);
-            let found = registry.display_type(&found);
+            let expected = registry.display_source_type(&expected);
+            let found = registry.display_source_type(&found);
             let mut diagnostic = Diagnostic::new(
                 TypeReason::Argument,
                 SourceLabel::new(span, "this argument does not match the function domain"),
@@ -2961,8 +2965,8 @@ fn check_mismatch(
             TypeError::Source(Box::new(diagnostic))
         }
         CheckKind::Definition { result_cause } => {
-            let expected = registry.display_type(&expected);
-            let found = registry.display_type(&found);
+            let expected = registry.display_source_type(&expected);
+            let found = registry.display_source_type(&found);
             let mut diagnostic = Diagnostic::new(
                 TypeReason::DefinitionResult,
                 SourceLabel::new(span, "this function body has the wrong result type"),
@@ -2979,8 +2983,8 @@ fn check_mismatch(
             initializer_span,
             annotation_span,
         } => {
-            let expected = registry.display_type(&expected);
-            let found = registry.display_type(&found);
+            let expected = registry.display_source_type(&expected);
+            let found = registry.display_source_type(&found);
             let mut diagnostic = Diagnostic::new(
                 TypeReason::BindingInitializer,
                 SourceLabel::new(
@@ -3051,7 +3055,7 @@ fn not_applicable(
         "this application requires a function here",
     ));
     diagnostic.expected = Some("function".to_owned());
-    diagnostic.found = Some(registry.display_type(found));
+    diagnostic.found = Some(registry.display_source_type(found));
     TypeError::Source(Box::new(diagnostic))
 }
 
@@ -3060,7 +3064,7 @@ fn equation_interface_not_function(
     equation_name: &crate::resolved::ResolvedOccurrence,
     registry: &ResolvedRegistry,
 ) -> TypeError {
-    let found = registry.display_type(&annotation.ty);
+    let found = registry.display_source_type(&annotation.ty);
     let mut diagnostic = Diagnostic::new(
         TypeReason::EquationInterfaceNotFunction,
         SourceLabel::new(
@@ -3105,7 +3109,7 @@ fn pattern_mismatch(span: Span, expected: &Type, registry: &ResolvedRegistry) ->
         TypeReason::PatternMismatch,
         SourceLabel::new(span, "this pattern does not match its expected type"),
     );
-    diagnostic.expected = Some(registry.display_type(expected));
+    diagnostic.expected = Some(registry.display_source_type(expected));
     TypeError::Source(Box::new(diagnostic))
 }
 

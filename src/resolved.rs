@@ -176,6 +176,16 @@ impl ResolvedRegistry {
     /// Renders a type with source declaration spellings for nominal identities.
     #[must_use]
     pub fn display_type(&self, ty: &Type) -> String {
+        self.display_type_with_inference(ty, false)
+    }
+
+    /// Renders a source-facing type without exposing elaborator inference identities.
+    #[must_use]
+    pub(crate) fn display_source_type(&self, ty: &Type) -> String {
+        self.display_type_with_inference(ty, true)
+    }
+
+    fn display_type_with_inference(&self, ty: &Type, anonymous_inference: bool) -> String {
         enum Task<'a> {
             Type(&'a Type),
             Text(&'static str),
@@ -204,7 +214,11 @@ impl ResolvedRegistry {
                     }
                 }
                 Task::Type(Type::Inference(id)) => {
-                    output.push_str(&Type::Inference(*id).to_string());
+                    if anonymous_inference {
+                        output.push('_');
+                    } else {
+                        output.push_str(&Type::Inference(*id).to_string());
+                    }
                 }
                 Task::Type(Type::AppliedNominal(id, arguments)) => {
                     if let Some(nominal) = self.nominal(*id) {

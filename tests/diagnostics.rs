@@ -514,6 +514,30 @@ fn t002_operator_operand_relates_the_bool_to_the_operator() {
 }
 
 #[test]
+fn unresolved_inference_is_anonymous_in_source_type_diagnostics() {
+    let operator_text = "type Option<A> =\nNone\n| Some(A)\n\nSome + 1\n";
+    let operator = run_source(source("inferred-operator.ash", operator_text))
+        .expect_err("a constructor function is not an integer operand");
+    let PipelineFailure::Typing(TypeError::Source(operator)) = operator else {
+        panic!("the operator rejection should remain a typed source diagnostic");
+    };
+    assert_eq!(operator.reason, TypeReason::OperatorOperand);
+    assert_eq!(operator.expected.as_deref(), Some("Int"));
+    assert_eq!(operator.found.as_deref(), Some("_ -> Option<_>"));
+    assert!(!operator.render_plain().contains('?'));
+
+    let pattern_text = "{\nlet split = fn(value) {\nlet (left, right) = value\nlet () = value\nleft\n}\nsplit\n}\n";
+    let pattern = run_source(source("inferred-pattern.ash", pattern_text))
+        .expect_err("Unit cannot destructure an inferred tuple");
+    let PipelineFailure::Typing(TypeError::Source(pattern)) = pattern else {
+        panic!("the pattern rejection should remain a typed source diagnostic");
+    };
+    assert_eq!(pattern.reason, TypeReason::PatternMismatch);
+    assert_eq!(pattern.expected.as_deref(), Some("(_, _)"));
+    assert!(!pattern.render_plain().contains('?'));
+}
+
+#[test]
 fn t003_not_applicable_relates_the_function_position_to_the_application() {
     let source = source("t003.ash", T003);
     let error = run_source(source).expect_err("T-003 should fail in typing");
