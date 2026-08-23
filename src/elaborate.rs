@@ -713,7 +713,7 @@ impl Elaborator {
         if self.state == ElaboratorState::Poisoned {
             return Err(ElaborationFailure::InvalidState);
         }
-        if self.next_inference > 0 {
+        if self.builder.requires_type_rewrite() {
             let solutions = &self.inference_solutions;
             let type_work = &mut self.type_work;
             self.builder.rewrite_types(|ty| {
@@ -4020,6 +4020,36 @@ mod tests {
         let typed = elaborator
             .synthesize(&resolved.result, &TypeContext::new())
             .expect("standalone synthesis defers whole-program ambiguity");
+
+        assert!(matches!(
+            elaborator.finish(typed.node),
+            Err(ElaborationFailure::Core(BuildError::InvalidPayload))
+        ));
+    }
+
+    #[test]
+    fn finish_rejects_unresolved_inference_supplied_by_public_context() {
+        let source = SourceFile::new(
+            "external-inference-finish.ash",
+            "identity : Int -> Int\nidentity value = value\n\nidentity\n",
+        )
+        .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let ResolvedExprKind::Occurrence(occurrence) = &resolved.result.kind else {
+            panic!("the result should be a resolved occurrence");
+        };
+        let mut context = TypeContext::new();
+        context.insert(
+            occurrence.binder,
+            Type::Inference(InferenceVariableId::new(999)),
+        );
+        let mut elaborator =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let typed = elaborator
+            .synthesize(&resolved.result, &context)
+            .expect("the public context supplies the occurrence type");
 
         assert!(matches!(
             elaborator.finish(typed.node),

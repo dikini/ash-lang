@@ -487,8 +487,10 @@ pub struct CoreBuilder {
     reserved_resolved: HashSet<BinderId>,
     materialized_resolved: HashSet<BinderId>,
     generated_binders: HashSet<BinderId>,
+    inference_binders: HashSet<BinderId>,
     binder_phase_started: bool,
     type_work: TypeWorkBudget,
+    requires_type_rewrite: bool,
 }
 
 impl CoreBuilder {
@@ -502,8 +504,10 @@ impl CoreBuilder {
             reserved_resolved: HashSet::new(),
             materialized_resolved: HashSet::new(),
             generated_binders: HashSet::new(),
+            inference_binders: HashSet::new(),
             binder_phase_started: false,
             type_work: TypeWorkBudget::default(),
+            requires_type_rewrite: false,
         }
     }
 
@@ -554,7 +558,7 @@ impl CoreBuilder {
     /// [`BuildError::ArenaIdExhausted`] without consuming the computed binder
     /// identity when no arena identity remains.
     pub fn binder(&mut self, ty: Type, origin: Origin) -> Result<TypedBinder, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, requires_type_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
         let (id, next) = self.next_binder_candidate()?;
         let arena = self.ensure_arena()?;
         if !self.generated_binders.insert(id) {
@@ -562,6 +566,10 @@ impl CoreBuilder {
         }
         self.next_binder = next;
         self.binder_phase_started = true;
+        if requires_type_rewrite {
+            self.inference_binders.insert(id);
+        }
+        self.requires_type_rewrite |= requires_type_rewrite;
         Ok(TypedBinder::new(arena, id, ty, origin))
     }
 
@@ -581,7 +589,7 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<TypedBinder, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, requires_type_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
         if !self.reserved_resolved.contains(&id) {
             return Err(BuildError::UnreservedResolvedBinder);
         }
@@ -591,6 +599,10 @@ impl CoreBuilder {
         let arena = self.ensure_arena()?;
         self.materialized_resolved.insert(id);
         self.binder_phase_started = true;
+        if requires_type_rewrite {
+            self.inference_binders.insert(id);
+        }
+        self.requires_type_rewrite |= requires_type_rewrite;
         Ok(TypedBinder::new(arena, id, ty, origin))
     }
 
@@ -658,20 +670,24 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let admitted_arms = admit_match_arms(arms, &mut self.type_work);
+        let admitted_arms = admit_match_arms(arms, &mut self.type_work, &self.inference_binders);
         let admitted_result = admit_payloads(ty, origin, &mut self.type_work);
         match (admitted_arms, admitted_result) {
-            (Ok(arms), Ok((ty, origin))) => self.push_admitted(
-                ty,
-                origin,
-                PureExprKind::Computation(PureComputation::Match(MatchNode::new(scrutinee, arms))),
-            ),
-            (Err(arm_error), Ok((ty, origin))) => {
+            (Ok((arms, arm_rewrite)), Ok((ty, origin, result_rewrite))) => self
+                .push_admitted_tracking(
+                    ty,
+                    origin,
+                    PureExprKind::Computation(PureComputation::Match(MatchNode::new(
+                        scrutinee, arms,
+                    ))),
+                    arm_rewrite || result_rewrite,
+                ),
+            (Err(arm_error), Ok((ty, origin, _))) => {
                 discard_type_iteratively(ty);
                 discard_origin_iteratively(origin);
                 Err(arm_error)
             }
-            (Ok(arms), Err(result_error)) => {
+            (Ok((arms, _)), Err(result_error)) => {
                 discard_match_arms(arms);
                 Err(result_error)
             }
@@ -709,14 +725,16 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, result_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
         if self.arena != Some(parameter.arena()) {
             return Err(BuildError::ForeignBinder);
         }
-        self.push_admitted(
+        let binder_rewrite = self.inference_binders.contains(&parameter.id());
+        self.push_admitted_tracking(
             ty,
             origin,
             PureExprKind::Value(PureValue::Function(FunctionNode::new(parameter, body))),
+            binder_rewrite || result_rewrite,
         )
     }
 
@@ -737,11 +755,12 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, result_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
         if self.arena != Some(binder.arena()) {
             return Err(BuildError::ForeignBinder);
         }
-        self.push_admitted(
+        let binder_rewrite = self.inference_binders.contains(&binder.id());
+        self.push_admitted_tracking(
             ty,
             origin,
             PureExprKind::Computation(PureComputation::Bind(BindingNode::new(
@@ -749,6 +768,7 @@ impl CoreBuilder {
                 initializer,
                 body,
             ))),
+            binder_rewrite || result_rewrite,
         )
     }
 
@@ -770,23 +790,27 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, result_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
         if members
             .iter()
             .any(|(binder, _)| self.arena != Some(binder.arena()))
         {
             return Err(BuildError::ForeignBinder);
         }
+        let binder_rewrite = members
+            .iter()
+            .any(|(binder, _)| self.inference_binders.contains(&binder.id()));
         let members = members
             .into_iter()
             .map(|(binder, initializer)| RecursiveBindingMember::new(binder, initializer))
             .collect();
-        self.push_admitted(
+        self.push_admitted_tracking(
             ty,
             origin,
             PureExprKind::Computation(PureComputation::RecursiveBind(RecursiveBindingNode::new(
                 members, body,
             ))),
+            binder_rewrite || result_rewrite,
         )
     }
 
@@ -820,16 +844,17 @@ impl CoreBuilder {
             .charge(parameters.len())
             .map_err(|()| BuildError::TypeWorkExceeded);
         let payloads = admit_payloads(ty, origin, &mut self.type_work);
-        let (ty, origin) = match (parameter_admission, payloads) {
+        let (ty, origin, requires_type_rewrite) = match (parameter_admission, payloads) {
             (Err(error), _) | (Ok(()), Err(error)) => return Err(error),
             (Ok(()), Ok(payloads)) => payloads,
         };
-        self.push_admitted(
+        self.push_admitted_tracking(
             ty,
             origin,
             PureExprKind::Computation(PureComputation::TypeAbstraction(TypeAbstractionNode::new(
                 parameters, body,
             ))),
+            requires_type_rewrite,
         )
     }
 
@@ -843,9 +868,13 @@ impl CoreBuilder {
     ) -> Result<NodeId, BuildError> {
         let mut admitted_arguments = Vec::new();
         let mut first_error = None;
+        let mut argument_rewrite = false;
         for argument in arguments {
-            match admit_type(argument, &mut self.type_work) {
-                Ok(argument) if first_error.is_none() => admitted_arguments.push(argument),
+            match admit_type_with_status(argument, &mut self.type_work, true) {
+                Ok((argument, contains_inference)) if first_error.is_none() => {
+                    argument_rewrite |= contains_inference;
+                    admitted_arguments.push(argument);
+                }
                 Ok(_) => {}
                 Err(error) => {
                     first_error.get_or_insert(error);
@@ -853,17 +882,18 @@ impl CoreBuilder {
             }
         }
         let payloads = admit_payloads(ty, origin, &mut self.type_work);
-        let (ty, origin) = match (first_error, payloads) {
+        let (ty, origin, result_rewrite) = match (first_error, payloads) {
             (Some(error), _) | (None, Err(error)) => return Err(error),
             (None, Ok(payloads)) => payloads,
         };
-        self.push_admitted(
+        self.push_admitted_tracking(
             ty,
             origin,
             PureExprKind::Computation(PureComputation::TypeApplication(TypeApplicationNode::new(
                 function,
                 admitted_arguments,
             ))),
+            argument_rewrite || result_rewrite,
         )
     }
 
@@ -933,9 +963,13 @@ impl CoreBuilder {
         F: FnMut(&Type) -> Result<Type, BuildError>,
     {
         let mut rewrite_type_work = TypeWorkBudget::default();
+        let mut rewritten_requires_type_rewrite = false;
         let mut rewrite_admitted = |ty: &Type| {
             let rewritten = rewrite(ty)?;
-            admit_rewritten_type(rewritten, &mut rewrite_type_work)
+            let (rewritten, contains_inference) =
+                admit_rewritten_type(rewritten, &mut rewrite_type_work)?;
+            rewritten_requires_type_rewrite |= contains_inference;
+            Ok(rewritten)
         };
         for node in &mut self.nodes {
             node.ty = rewrite_admitted(&node.ty)?;
@@ -976,7 +1010,13 @@ impl CoreBuilder {
                 ) => {}
             }
         }
+        self.requires_type_rewrite = rewritten_requires_type_rewrite;
         Ok(())
+    }
+
+    /// Reports whether an admitted Core type still contains inference state.
+    pub(crate) const fn requires_type_rewrite(&self) -> bool {
+        self.requires_type_rewrite
     }
 
     /// Finishes unchecked construction at `root`.
@@ -1004,8 +1044,20 @@ impl CoreBuilder {
     }
 
     fn push(&mut self, ty: Type, origin: Origin, kind: PureExprKind) -> Result<NodeId, BuildError> {
-        let (ty, origin) = admit_payloads(ty, origin, &mut self.type_work)?;
-        self.push_admitted(ty, origin, kind)
+        let (ty, origin, requires_type_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
+        self.push_admitted_tracking(ty, origin, kind, requires_type_rewrite)
+    }
+
+    fn push_admitted_tracking(
+        &mut self,
+        ty: Type,
+        origin: Origin,
+        kind: PureExprKind,
+        requires_type_rewrite: bool,
+    ) -> Result<NodeId, BuildError> {
+        let node = self.push_admitted(ty, origin, kind)?;
+        self.requires_type_rewrite |= requires_type_rewrite;
+        Ok(node)
     }
 
     fn push_admitted(
@@ -1093,15 +1145,18 @@ enum PatternToken {
 fn admit_match_arms(
     arms: Vec<CoreMatchArm>,
     type_work: &mut TypeWorkBudget,
-) -> Result<Vec<CoreMatchArm>, BuildError> {
+    inference_binders: &HashSet<BinderId>,
+) -> Result<(Vec<CoreMatchArm>, bool), BuildError> {
     let mut admitted = Vec::new();
+    let mut requires_type_rewrite = false;
     let mut remaining = arms.into_iter();
     while let Some(arm) = remaining.next() {
         let (pattern, body, origin) = arm.into_parts();
-        let pattern = admit_pattern(pattern, type_work);
+        let pattern = admit_pattern(pattern, type_work, inference_binders);
         let origin = admit_origin(origin);
         match (pattern, origin) {
-            (Ok(pattern), Ok(origin)) => {
+            (Ok((pattern, pattern_rewrite)), Ok(origin)) => {
+                requires_type_rewrite |= pattern_rewrite;
                 admitted.push(CoreMatchArm::new(pattern, body, origin));
                 #[cfg(test)]
                 record_match_arm_retained_capacity(admitted.capacity());
@@ -1112,7 +1167,7 @@ fn admit_match_arms(
                 discard_match_arm_remainder(remaining);
                 return Err(error);
             }
-            (Ok(pattern), Err(error)) => {
+            (Ok((pattern, _)), Err(error)) => {
                 pattern.discard_iteratively();
                 discard_match_arms(admitted);
                 discard_match_arm_remainder(remaining);
@@ -1125,15 +1180,17 @@ fn admit_match_arms(
             }
         }
     }
-    Ok(admitted)
+    Ok((admitted, requires_type_rewrite))
 }
 
 fn admit_pattern(
     pattern: CorePattern,
     type_work: &mut TypeWorkBudget,
-) -> Result<CorePattern, BuildError> {
+    inference_binders: &HashSet<BinderId>,
+) -> Result<(CorePattern, bool), BuildError> {
     let mut work = vec![PatternAdmissionTask::Visit(pattern, 0)];
     let mut tokens = Vec::new();
+    let mut requires_type_rewrite = false;
     #[cfg(test)]
     record_pattern_admission_pending(work.len());
     while let Some(task) = work.pop() {
@@ -1146,7 +1203,7 @@ fn admit_pattern(
                     return Err(BuildError::PatternDepthExceeded);
                 }
                 let CorePattern { ty, origin, kind } = pattern;
-                let (ty, origin) = match admit_payloads(ty, origin, type_work) {
+                let (ty, origin, pattern_rewrite) = match admit_payloads(ty, origin, type_work) {
                     Ok(payloads) => payloads,
                     Err(error) => {
                         discard_pattern_kind(kind);
@@ -1155,8 +1212,10 @@ fn admit_pattern(
                         return Err(error);
                     }
                 };
+                requires_type_rewrite |= pattern_rewrite;
                 match kind {
                     CorePatternKind::Binder(binder) => {
+                        requires_type_rewrite |= inference_binders.contains(&binder.id());
                         tokens.push(PatternToken::Binder(ty, origin, binder));
                     }
                     CorePatternKind::Wildcard => tokens.push(PatternToken::Wildcard(ty, origin)),
@@ -1275,7 +1334,7 @@ fn admit_pattern(
         return Err(BuildError::InvalidPayload);
     };
     if rebuilt.is_empty() {
-        Ok(result)
+        Ok((result, requires_type_rewrite))
     } else {
         result.discard_iteratively();
         discard_patterns(rebuilt);
@@ -1364,11 +1423,11 @@ fn admit_payloads(
     ty: Type,
     origin: Origin,
     type_work: &mut TypeWorkBudget,
-) -> Result<(Type, Origin), BuildError> {
-    let admitted_type = admit_type(ty, type_work);
+) -> Result<(Type, Origin, bool), BuildError> {
+    let admitted_type = admit_type_with_status(ty, type_work, true);
     let admitted_origin = admit_origin(origin);
     match (admitted_type, admitted_origin) {
-        (Ok(ty), Ok(origin)) => Ok((ty, origin)),
+        (Ok((ty, contains_inference)), Ok(origin)) => Ok((ty, origin, contains_inference)),
         (Err(error), Ok(_)) | (Err(error), Err(_)) => Err(error),
         (Ok(_), Err(error)) => Err(error),
     }
@@ -1406,22 +1465,27 @@ fn record_type_admission_pending(pending: usize) {
     TYPE_ADMISSION_PENDING_PEAK.with(|peak| peak.set(peak.get().max(pending)));
 }
 
+#[cfg(test)]
 fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildError> {
-    admit_type_with_accounting(ty, type_work, true)
+    admit_type_with_status(ty, type_work, true).map(|(ty, _)| ty)
 }
 
-fn admit_rewritten_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildError> {
-    admit_type_with_accounting(ty, type_work, false)
+fn admit_rewritten_type(
+    ty: Type,
+    type_work: &mut TypeWorkBudget,
+) -> Result<(Type, bool), BuildError> {
+    admit_type_with_status(ty, type_work, false)
 }
 
-fn admit_type_with_accounting(
+fn admit_type_with_status(
     ty: Type,
     type_work: &mut TypeWorkBudget,
     charge_structure: bool,
-) -> Result<Type, BuildError> {
+) -> Result<(Type, bool), BuildError> {
     let mut work = vec![TypeAdmissionTask::Visit(ty, 0)];
     let mut tokens = Vec::new();
     let mut exceeded = false;
+    let mut contains_inference = false;
     #[cfg(test)]
     record_type_admission_pending(work.len());
     while let Some(task) = work.pop() {
@@ -1444,6 +1508,7 @@ fn admit_type_with_accounting(
                 tokens.push(TypeToken::Variable(identity));
             }
             TypeAdmissionTask::Visit(Type::Inference(identity), _) => {
+                contains_inference = true;
                 tokens.push(TypeToken::Inference(identity));
             }
             TypeAdmissionTask::Visit(Type::AppliedNominal(identity, arguments), depth) => {
@@ -1550,7 +1615,7 @@ fn admit_type_with_accounting(
     if !rebuilt.is_empty() {
         return Err(BuildError::InvalidPayload);
     }
-    Ok(result)
+    Ok((result, contains_inference))
 }
 
 fn discard_type_admission_work(mut work: Vec<TypeAdmissionTask>) {
@@ -1844,7 +1909,7 @@ mod tests {
         reset_pattern_admission_peaks();
 
         assert_eq!(
-            admit_pattern(pattern, &mut budget),
+            admit_pattern(pattern, &mut budget, &HashSet::new()),
             Err(BuildError::TypeWorkExceeded)
         );
         assert!(pattern_admission_pending_peak() <= 3);
@@ -1870,7 +1935,7 @@ mod tests {
         reset_pattern_admission_peaks();
 
         assert_eq!(
-            admit_match_arms(vec![arm; WIDTH], &mut budget),
+            admit_match_arms(vec![arm; WIDTH], &mut budget, &HashSet::new()),
             Err(BuildError::TypeWorkExceeded)
         );
         assert!(match_arm_retained_capacity_peak() <= ALLOWANCE);
@@ -2124,6 +2189,86 @@ mod tests {
             .expect_err("rewritten argument quantifiers must be admitted before storage");
 
         assert_eq!(error, BuildError::TypeWorkExceeded);
+    }
+
+    #[test]
+    fn builder_tracks_inference_in_patterns_and_type_arguments_during_admission() {
+        let source = SourceFile::new("rewrite-status.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let inference = crate::types::InferenceVariableId::new(999);
+        let mut builder = CoreBuilder::new();
+        let scrutinee = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("small scrutinee");
+        let body = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("small arm body");
+        assert!(!builder.requires_type_rewrite());
+
+        let pattern = CorePattern::new(
+            Type::Inference(inference),
+            origin.clone(),
+            CorePatternKind::Wildcard,
+        );
+        let matched = builder
+            .match_expression(
+                scrutinee,
+                vec![CoreMatchArm::new(pattern, body, origin.clone())],
+                Type::Unit,
+                origin.clone(),
+            )
+            .expect("unchecked pattern admission should retain the type");
+        assert!(builder.requires_type_rewrite());
+
+        builder
+            .rewrite_types(|ty| match ty {
+                Type::Inference(_) => Ok(Type::Unit),
+                _ => Ok(ty.clone()),
+            })
+            .expect("rewriting should remove the admitted inference type");
+        assert!(!builder.requires_type_rewrite());
+
+        builder
+            .type_application(
+                matched,
+                vec![Type::Inference(inference)],
+                Type::Unit,
+                origin,
+            )
+            .expect("unchecked type argument admission should retain the type");
+        assert!(builder.requires_type_rewrite());
+    }
+
+    #[test]
+    fn storing_an_inference_binder_restores_rewrite_status_after_rewrite() {
+        let source = SourceFile::new("binder-rewrite-status.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let mut builder = CoreBuilder::new();
+        let binder = builder
+            .binder(
+                Type::Inference(crate::types::InferenceVariableId::new(999)),
+                origin.clone(),
+            )
+            .expect("unchecked binder admission should retain the type");
+        let body = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("small function body");
+        assert!(builder.requires_type_rewrite());
+
+        builder
+            .rewrite_types(|ty| Ok(ty.clone()))
+            .expect("the stored body has no inference type");
+        assert!(!builder.requires_type_rewrite());
+
+        builder
+            .function(
+                binder,
+                body,
+                Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                origin,
+            )
+            .expect("the binder belongs to this arena");
+        assert!(builder.requires_type_rewrite());
     }
 
     #[test]
