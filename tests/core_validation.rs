@@ -591,48 +591,47 @@ fn rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack() {
 
 #[test]
 fn rejects_and_destroys_overdeep_registry_parameter_origins_on_a_small_stack() {
-    let file = source("parameter origin bounds");
-    let nominal = NominalTypeId::new(file.id(), 0);
-    let constructor = ConstructorId::new(nominal, 0);
-    let parameter = TypeVariableId::new(0);
-    let origin = whole_origin(&file);
-    let mut deep_parameter_origin = range_origin(&file, 0, 1);
-    for _ in 0..5_000 {
-        deep_parameter_origin = Origin::Generated {
-            cause: Box::new(deep_parameter_origin),
-            reason: GeneratedReason::TypeChecking,
-        };
-    }
-    let registry = Arc::new(
-        ResolvedRegistry::new(
-            vec![ResolvedNominalType {
-                id: nominal,
-                spelling: "Bounded".into(),
-                constructors: vec![constructor].into_boxed_slice(),
-                origin: origin.clone(),
-            }],
-            vec![ResolvedConstructor {
-                id: constructor,
-                owner: nominal,
-                spelling: "Make".into(),
-                payload: Some(Type::Variable(parameter)),
-                origin: range_origin(&file, 1, 2),
-            }],
-        )
-        .with_type_parameters(vec![(
-            nominal,
-            vec![ResolvedTypeVariable {
-                id: parameter,
-                spelling: "A".into(),
-                origin: deep_parameter_origin,
-            }],
-        )]),
-    );
-
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn_scoped(scope, move || {
+                let file = source("parameter origin bounds");
+                let nominal = NominalTypeId::new(file.id(), 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                let parameter = TypeVariableId::new(0);
+                let origin = whole_origin(&file);
+                let mut deep_parameter_origin = range_origin(&file, 0, 1);
+                for _ in 0..5_000 {
+                    deep_parameter_origin = Origin::Generated {
+                        cause: Box::new(deep_parameter_origin),
+                        reason: GeneratedReason::TypeChecking,
+                    };
+                }
+                let registry = Arc::new(
+                    ResolvedRegistry::new(
+                        vec![ResolvedNominalType {
+                            id: nominal,
+                            spelling: "Bounded".into(),
+                            constructors: vec![constructor].into_boxed_slice(),
+                            origin: origin.clone(),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner: nominal,
+                            spelling: "Make".into(),
+                            payload: Some(Type::Variable(parameter)),
+                            origin: range_origin(&file, 1, 2),
+                        }],
+                    )
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![ResolvedTypeVariable {
+                            id: parameter,
+                            spelling: "A".into(),
+                            origin: deep_parameter_origin,
+                        }],
+                    )]),
+                );
                 let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
                 let root = builder.unit(Type::Unit, origin).expect("unit root");
                 let error = validate(builder.finish(root).expect("root"), &[&file])
