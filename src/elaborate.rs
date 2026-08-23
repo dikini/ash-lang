@@ -713,20 +713,22 @@ impl Elaborator {
         if self.state == ElaboratorState::Poisoned {
             return Err(ElaborationFailure::InvalidState);
         }
-        let solutions = &self.inference_solutions;
-        let type_work = &mut self.type_work;
-        self.builder.rewrite_types(|ty| {
-            let (zonked, unresolved) = zonk_type_with_status(ty, solutions, |cells| {
-                type_work
-                    .charge(cells)
-                    .map_err(|()| BuildError::TypeWorkExceeded)
+        if self.next_inference > 0 {
+            let solutions = &self.inference_solutions;
+            let type_work = &mut self.type_work;
+            self.builder.rewrite_types(|ty| {
+                let (zonked, unresolved) = zonk_type_with_status(ty, solutions, |cells| {
+                    type_work
+                        .charge(cells)
+                        .map_err(|()| BuildError::TypeWorkExceeded)
+                })?;
+                if unresolved {
+                    Err(BuildError::InvalidPayload)
+                } else {
+                    Ok(zonked)
+                }
             })?;
-            if unresolved {
-                Err(BuildError::InvalidPayload)
-            } else {
-                Ok(zonked)
-            }
-        })?;
+        }
         self.builder.finish(root).map_err(Into::into)
     }
 
@@ -1356,7 +1358,21 @@ impl Elaborator {
                 } => match &expression.kind {
                     ResolvedExprKind::Function(function) => {
                         let expected = self.expose_expected_function(expected, expression.span)?;
-                        let (domain, codomain) = expected.function_parts()?;
+                        let (domain_ty, codomain_ty) =
+                            clone_function_parts_with_budget(&expected.ty, &mut self.type_work)
+                                .map_err(|()| {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                })?;
+                        let (domain_provenance, codomain_provenance) =
+                            expected.provenance.function_parts(&expected.ty)?;
+                        let domain = ProvenancedType {
+                            ty: domain_ty,
+                            provenance: domain_provenance,
+                        };
+                        let codomain = ProvenancedType {
+                            ty: codomain_ty,
+                            provenance: codomain_provenance,
+                        };
                         tasks.push(ElaborationTask::CheckFunction {
                             parameter: &function.pattern,
                             domain,
@@ -1720,7 +1736,10 @@ impl Elaborator {
                     )?;
                     let mut pattern = checked.pattern;
                     if checked.inference_changed {
-                        binding_type.ty = pattern.ty.clone();
+                        binding_type.ty = clone_type_with_budget(&pattern.ty, &mut self.type_work)
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
                         if !binding_type.provenance.aligns(&binding_type.ty) {
                             binding_type.provenance = TypeProvenance::unknown(&binding_type.ty);
                         }
@@ -2039,7 +2058,8 @@ impl Elaborator {
         )?;
         let pattern = checked.pattern;
         if checked.inference_changed {
-            progress.scrutinee.ty = pattern.ty.clone();
+            progress.scrutinee.ty = clone_type_with_budget(&pattern.ty, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             if !progress.scrutinee.provenance.aligns(&progress.scrutinee.ty) {
                 progress.scrutinee.provenance = TypeProvenance::unknown(&progress.scrutinee.ty);
             }
@@ -3467,6 +3487,27 @@ pub fn structurally_equal(left: &Type, right: &Type) -> bool {
     same_type(left, right)
 }
 
+fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
+    charge_type_cells(ty, budget)?;
+    Ok(zonk_type(ty, &HashMap::new()))
+}
+
+fn clone_function_parts_with_budget(
+    ty: &Type,
+    budget: &mut TypeWorkBudget,
+) -> Result<(Type, Type), ()> {
+    let Type::Function(domain, codomain) = ty else {
+        return Err(());
+    };
+    charge_type_cells(domain, budget)?;
+    charge_type_cells(codomain, budget)?;
+    let solutions = HashMap::new();
+    Ok((
+        zonk_type(domain, &solutions),
+        zonk_type(codomain, &solutions),
+    ))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UnificationFailure {
     Mismatch,
@@ -3869,6 +3910,50 @@ mod tests {
         assert_eq!(zonked, source);
         assert!(unresolved);
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn retained_type_clones_require_the_exact_preallocation_budget() {
+        let ty = Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice());
+
+        let mut short = TypeWorkBudget::default();
+        short
+            .charge(crate::types::TYPE_WORK_LIMIT - 3)
+            .expect("the fixture leaves one fewer cell than the clone requires");
+        assert_eq!(clone_type_with_budget(&ty, &mut short), Err(()));
+
+        let mut exact = TypeWorkBudget::default();
+        exact
+            .charge(crate::types::TYPE_WORK_LIMIT - 4)
+            .expect("the fixture leaves the exact clone size");
+        assert_eq!(clone_type_with_budget(&ty, &mut exact), Ok(ty));
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn function_part_clones_charge_both_children_but_not_the_outer_arrow() {
+        let domain = Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice());
+        let codomain = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+        let function = Type::Function(Box::new(domain.clone()), Box::new(codomain.clone()));
+
+        let mut short = TypeWorkBudget::default();
+        short
+            .charge(crate::types::TYPE_WORK_LIMIT - 5)
+            .expect("the fixture leaves one fewer cell than both children require");
+        assert_eq!(
+            clone_function_parts_with_budget(&function, &mut short),
+            Err(())
+        );
+
+        let mut exact = TypeWorkBudget::default();
+        exact
+            .charge(crate::types::TYPE_WORK_LIMIT - 6)
+            .expect("the fixture leaves exactly the two child sizes");
+        assert_eq!(
+            clone_function_parts_with_budget(&function, &mut exact),
+            Ok((domain, codomain))
+        );
+        assert_eq!(exact.charge(1), Err(()));
     }
 
     #[test]
