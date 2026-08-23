@@ -98,6 +98,7 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
         ) => {
             let _ = parser.bump();
         }
+        Some(PrimaryForm::Qualified) => grammar::qualified_name(parser, false),
         Some(PrimaryForm::Parenthesized) => parse_parenthesized(parser),
         _ => parser.report(ParseReason::ExpectedOperand, ExpectedForm::Operand),
     }
@@ -179,22 +180,28 @@ fn starts_primary_in(parser: &Parser<'_>, forms: &[PrimaryForm]) -> bool {
 }
 
 fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryForm> {
-    forms.iter().copied().find(|form| {
-        matches!(
-            (form, parser.current()),
+    forms
+        .iter()
+        .copied()
+        .find(|form| match (form, parser.current()) {
             (PrimaryForm::Integer, Some(TokenKind::Integer(_)))
-                | (
-                    PrimaryForm::Boolean,
-                    Some(TokenKind::True | TokenKind::False)
-                )
-                | (PrimaryForm::Identifier, Some(TokenKind::Identifier(_)))
-                | (
-                    PrimaryForm::UpperIdentifier,
-                    Some(TokenKind::UpperIdentifier(_))
-                )
-                | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen))
-        )
-    })
+            | (PrimaryForm::Boolean, Some(TokenKind::True | TokenKind::False))
+            | (PrimaryForm::Identifier, Some(TokenKind::Identifier(_)))
+            | (PrimaryForm::UpperIdentifier, Some(TokenKind::UpperIdentifier(_)))
+            | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen)) => true,
+            (PrimaryForm::Qualified, Some(TokenKind::UpperIdentifier(_))) => {
+                parser
+                    .nth(1)
+                    .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+                    && parser.nth(2).is_some_and(|kind| {
+                        matches!(
+                            kind,
+                            TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                        )
+                    })
+            }
+            _ => false,
+        })
 }
 
 fn consume_repeated_non_associative(

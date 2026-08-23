@@ -55,6 +55,38 @@ fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
     );
 }
 
+#[test]
+fn recognizes_module_tokens_with_exact_spans_and_reserved_word_boundaries() {
+    let source = SourceFile::new(
+        "module-tokens.ash",
+        "import as pub opaque importable as_ pubx opaque_ @ .\n",
+    )
+    .expect("the token source should fit");
+    let lexed = lex(&source).expect("the source should remain representable while lexing");
+    let expected = [
+        (TokenKind::Import, 0, 6),
+        (TokenKind::As, 7, 9),
+        (TokenKind::Pub, 10, 13),
+        (TokenKind::Opaque, 14, 20),
+        (TokenKind::Identifier("importable".into()), 21, 31),
+        (TokenKind::Identifier("as_".into()), 32, 35),
+        (TokenKind::Identifier("pubx".into()), 36, 40),
+        (TokenKind::Identifier("opaque_".into()), 41, 48),
+        (TokenKind::At, 49, 50),
+        (TokenKind::Dot, 51, 52),
+        (TokenKind::LineEnd, 52, 53),
+        (TokenKind::EndOfFile, 53, 53),
+    ];
+
+    assert!(lexed.diagnostics.is_empty());
+    assert_eq!(lexed.tokens.len(), expected.len());
+    for (token, (kind, start, end)) in lexed.tokens.iter().zip(expected) {
+        assert_eq!(token.kind, kind);
+        assert_range(token, start, end);
+        assert_eq!(token.span.source(), source.id());
+    }
+}
+
 fn assert_range(token: &Token, start: u32, end: u32) {
     assert_eq!(token.span.range().start(), start);
     assert_eq!(token.span.range().end(), end);
@@ -247,7 +279,7 @@ fn reports_each_excluded_lexical_form_with_its_exact_span() {
         ("/* no */", LexReason::Comment, 8),
         ("-123", LexReason::NegativeLiteral, 4),
         ("01", LexReason::InvalidIntegerLiteral, 2),
-        ("@", LexReason::UnknownCharacter, 1),
+        ("$", LexReason::UnknownCharacter, 1),
         ("😀", LexReason::UnknownCharacter, 4),
     ];
 
@@ -292,7 +324,7 @@ fn lexical_errors_keep_expected_and_found_forms_as_structured_fields() {
 
 #[test]
 fn collects_independent_lexical_errors_while_always_making_progress() {
-    let source = SourceFile::new("errors.ash", "@\r$😀").expect("the error source should fit");
+    let source = SourceFile::new("errors.ash", "?\r$😀").expect("the error source should fit");
     let lexed = lex(&source).expect("the source should remain representable while lexing");
 
     assert_eq!(

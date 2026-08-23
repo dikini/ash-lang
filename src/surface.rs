@@ -2,7 +2,7 @@
 
 use crate::{integer::Integer, source::Span};
 
-/// One parsed Mini-Ash source file.
+/// The legacy single-file program root retained during the module transition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceProgram {
     /// Nominal type declarations in source order.
@@ -15,9 +15,83 @@ pub struct SurfaceProgram {
     pub span: Span,
 }
 
+/// One parsed Ash module source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceModule {
+    /// Imports in source order.
+    pub imports: Vec<SurfaceImport>,
+    /// Nominal type declarations in source order.
+    pub type_declarations: Vec<SurfaceTypeDeclaration>,
+    /// Global definitions in source order.
+    pub definitions: Vec<SurfaceDefinition>,
+    /// The complete accepted source span.
+    pub span: Span,
+}
+
+/// One source import declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceImport {
+    /// The relative or named-root module path.
+    pub path: SurfaceModulePath,
+    /// The names made visible by the import.
+    pub selection: SurfaceImportSelection,
+    /// The complete import declaration span.
+    pub span: Span,
+}
+
+/// A source module path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceModulePath {
+    /// A path resolved from the importing module's directory.
+    Relative(Vec<SurfaceName>),
+    /// A path resolved from a configured named root.
+    Absolute {
+        /// The configured root name, excluding the leading `@`.
+        root: SurfaceName,
+        /// The nonempty path beneath the named root.
+        segments: Vec<SurfaceName>,
+    },
+}
+
+/// The local names introduced by an import.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceImportSelection {
+    /// The dependency's public namespaces under one module alias.
+    Qualified {
+        /// The local module alias.
+        alias: SurfaceName,
+    },
+    /// Selected public spellings imported without module qualification.
+    Targeted(Vec<SurfaceImportItem>),
+}
+
+/// One selected public spelling and its optional local alias.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceImportItem {
+    /// The spelling selected from the dependency's public namespaces.
+    pub name: SurfaceName,
+    /// The replacement local spelling, when present.
+    pub alias: Option<SurfaceName>,
+    /// The complete selector item span.
+    pub span: Span,
+}
+
+/// Source visibility for one nominal type declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceTypeVisibility {
+    /// Neither the nominal name nor its constructors are exported.
+    Private,
+    /// The nominal name is exported, but its constructors are hidden.
+    PublicOpaque,
+    /// The nominal name and its complete constructor set are exported.
+    PublicTransparent,
+}
+
 /// One source nominal type declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceTypeDeclaration {
+    /// The declaration's module export mode.
+    pub visibility: SurfaceTypeVisibility,
     /// The declared type spelling.
     pub name: SurfaceName,
     /// Ordered type parameters, each of kind `Type`.
@@ -42,13 +116,15 @@ pub struct SurfaceConstructorDeclaration {
 /// A source global definition and its presentation-specific payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceDefinition {
+    /// Whether the global is exported from its defining module.
+    pub public: bool,
     /// The definition presentation.
     pub kind: SurfaceDefinitionKind,
     /// The complete definition span.
     pub span: Span,
 }
 
-/// The closed Mini-Ash global-definition family.
+/// The closed Ash global-definition family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceDefinitionKind {
     /// An external interface followed by an equation.
@@ -121,7 +197,7 @@ pub struct SurfaceExpr {
     pub span: Span,
 }
 
-/// The closed expression family accepted by Mini-Ash.
+/// The closed Ash expression family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceExprKind {
     /// An arbitrary-precision integer literal.
@@ -201,7 +277,7 @@ pub struct SurfaceBlock {
     pub span: Span,
 }
 
-/// The closed local-declaration family accepted by Mini-Ash.
+/// The closed Ash local-declaration family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceLocalDeclaration {
     /// A sequential nonrecursive binding.
@@ -336,7 +412,7 @@ pub struct SurfaceType {
     pub span: Span,
 }
 
-/// The closed Mini-Ash type family.
+/// The closed Ash type family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceTypeKind {
     /// Arbitrary-precision integers.

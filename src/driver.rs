@@ -1,4 +1,4 @@
-//! Reusable, stage-preserving Mini-Ash pipeline orchestration.
+//! Reusable, stage-preserving Ash pipeline orchestration.
 
 use std::{error::Error, fmt, fs, io, path::PathBuf, sync::Arc};
 
@@ -8,10 +8,7 @@ use crate::{
     elaborate::{Elaborator, TypeError},
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
     lexer::{LexReason, lex},
-    parser::{
-        ParseContext, ParseDiagnostic, ParseReason, ProjectionError, ResourceFailure, parse,
-        project,
-    },
+    parser::{ParseDiagnostic, ProjectionError, ResourceFailure, parse, project},
     resolve::{ResolveError, ResolveReason, resolve},
     source::{SourceError, SourceFile},
     types::Type,
@@ -23,7 +20,7 @@ use crate::{
 /// whose captured environment contains structural locations.
 #[derive(Clone, Debug)]
 pub struct Observation {
-    /// The evaluated Mini-Ash value.
+    /// The evaluated Ash value.
     pub value: Value,
     /// The structural type assigned to the program result.
     pub ty: Type,
@@ -192,7 +189,7 @@ impl fmt::Display for FileFailure {
 
 impl Error for FileFailure {}
 
-/// Runs every retained Mini-Ash stage over one admitted source file.
+/// Runs every retained Ash stage over one admitted source file.
 ///
 /// # Errors
 ///
@@ -217,10 +214,9 @@ where
         || !tree.lexical_diagnostics().is_empty()
         || !tree.parse_diagnostics().is_empty()
     {
-        let lexical = tree.lexical_diagnostics().to_vec();
         return Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
-            parser: retained_parser_diagnostics(&lexical, tree.parse_diagnostics()),
-            lexical,
+            lexical: tree.lexical_diagnostics().to_vec(),
+            parser: tree.parse_diagnostics().to_vec(),
             resource: tree.resource_failure(),
         })));
     }
@@ -248,63 +244,6 @@ where
         type_display: Some(type_display),
         _heap: heap,
     })
-}
-
-fn retained_parser_diagnostics(
-    lexical: &[Diagnostic<LexReason>],
-    parser: &[ParseDiagnostic],
-) -> Vec<ParseDiagnostic> {
-    if lexical.is_empty() {
-        return parser.to_vec();
-    }
-
-    parser
-        .iter()
-        .filter(|diagnostic| !is_lexical_missing_result_cascade(lexical, diagnostic))
-        .cloned()
-        .collect()
-}
-
-fn is_lexical_missing_result_cascade(
-    lexical: &[Diagnostic<LexReason>],
-    diagnostic: &ParseDiagnostic,
-) -> bool {
-    if diagnostic.reason != ParseReason::ExpectedResult {
-        return false;
-    }
-
-    let result_region_start = diagnostic
-        .context
-        .iter()
-        .filter_map(|context| match context {
-            ParseContext::PrecedingGlobalComplete { line_end, .. } => Some(line_end.range().end()),
-            ParseContext::Synchronization { .. } => None,
-        })
-        .max()
-        .unwrap_or(0);
-    let missing_result_start = diagnostic.primary.span().range().start();
-
-    // Only a rejected lexeme shaped like an expression can occupy the missing
-    // result position. Trivia and punctuation failures cannot cause P-001.
-    lexical.iter().any(|failure| {
-        let start = failure.primary.span().range().start();
-        is_expression_shaped_lexical_failure(failure.reason)
-            && start >= result_region_start
-            && start <= missing_result_start
-    })
-}
-
-const fn is_expression_shaped_lexical_failure(reason: LexReason) -> bool {
-    match reason {
-        LexReason::UnicodeIdentifier
-        | LexReason::NegativeLiteral
-        | LexReason::InvalidIntegerLiteral
-        | LexReason::InvalidIdentifier => true,
-        LexReason::BareCarriageReturn
-        | LexReason::ByteOrderMark
-        | LexReason::Comment
-        | LexReason::UnknownCharacter => false,
-    }
 }
 
 /// Reads one path as UTF-8 and runs the complete retained pipeline.

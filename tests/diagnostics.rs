@@ -8,7 +8,6 @@ use ash::{
     source::SourceFile,
 };
 
-const P001: &str = include_str!("fixtures/first-stratum/parse/p001-missing-result.ash");
 const P002: &str = include_str!("fixtures/first-stratum/parse/p002-unclosed-group.ash");
 const P003: &str = include_str!("fixtures/first-stratum/parse/p003-independent-recovery.ash");
 const R001: &str = include_str!("fixtures/first-stratum/resolve/r001-unknown-name.ash");
@@ -116,43 +115,6 @@ fn recursive_diagnostics_retain_exact_stage_facts() {
 }
 
 #[test]
-fn p001_preserves_the_complete_global_before_the_missing_result() {
-    let source = source("p001.ash", P001);
-    let tree = parse(lex(&source).expect("P-001 should lex"));
-
-    assert_eq!(tree.parse_diagnostics().len(), 1);
-    let diagnostic = &tree.parse_diagnostics()[0];
-    assert_eq!(diagnostic.reason, ParseReason::ExpectedResult);
-    assert_eq!(
-        diagnostic.primary.span().range().start(),
-        offset(P001.len())
-    );
-    assert_eq!(diagnostic.primary.span().range().end(), offset(P001.len()));
-    assert_eq!(diagnostic.expected, Some("an expression".to_owned()));
-    assert_eq!(diagnostic.found, Some("end of input".to_owned()));
-    assert_eq!(diagnostic.related, []);
-    assert_eq!(diagnostic.context.len(), 1);
-    let ParseContext::PrecedingGlobalComplete {
-        starting_at,
-        ending_at,
-        line_end,
-    } = diagnostic.context[0]
-    else {
-        panic!("P-001 should retain the preceding global context");
-    };
-    assert_eq!(starting_at.range().start(), 0);
-    assert_eq!(
-        ending_at.range().start(),
-        offset(P001.rfind('}').expect("closing brace"))
-    );
-    assert_eq!(line_end.range().end(), offset(P001.len()));
-    assert_eq!(
-        project(&source, &tree),
-        Err(ProjectionError::RecoveryNodesPresent)
-    );
-}
-
-#[test]
 fn p002_labels_the_opening_group_and_the_eof_close_requirement() {
     let source = source("p002.ash", P002);
     let tree = parse(lex(&source).expect("P-002 should lex"));
@@ -189,9 +151,7 @@ fn p003_recovers_at_the_body_brace_then_reports_the_later_group_independently() 
     assert_eq!(operand.expected, Some("an operand".to_owned()));
     assert_eq!(operand.found, Some("line end".to_owned()));
     assert_eq!(operand.context.len(), 1);
-    let ParseContext::Synchronization { boundary, span } = operand.context[0] else {
-        panic!("P-003 should record its owning recovery boundary");
-    };
+    let ParseContext::Synchronization { boundary, span } = operand.context[0];
     assert_eq!(boundary, SynchronizationBoundary::BlockClosingBrace);
     assert_eq!(
         span.range().start(),

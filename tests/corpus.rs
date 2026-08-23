@@ -135,15 +135,6 @@ const VALID_CASES: &[ValidCase] = &[
 
 const INVALID_CASES: &[InvalidCase] = &[
     InvalidCase {
-        id: "P-001",
-        path: "tests/fixtures/first-stratum/parse/p001-missing-result.ash",
-        stage: Stage::Parser,
-        reason: ExpectedReason::Parser {
-            parser: &[ParseReason::ExpectedResult],
-            lexical: &[],
-        },
-    },
-    InvalidCase {
         id: "P-002",
         path: "tests/fixtures/first-stratum/parse/p002-unclosed-group.ash",
         stage: Stage::Parser,
@@ -436,7 +427,7 @@ fn assert_source_reason(case: &InvalidCase, failure: &PipelineFailure) {
 
 #[test]
 fn bare_carriage_return_is_a_structured_lexical_rejection() {
-    let source = SourceFile::new("bare-cr.ash", "1\r2")
+    let source = SourceFile::new("bare-cr.ash", "\rmain : Unit -> Int\nmain () = 1\n")
         .expect("the excluded source should fit the source model");
     let failure = run_source(source).expect_err("bare CR must not reach evaluation");
     let PipelineFailure::Syntax(actual) = failure else {
@@ -455,8 +446,11 @@ fn bare_carriage_return_is_a_structured_lexical_rejection() {
 
 #[test]
 fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
-    let source = SourceFile::new("mixed-syntax.ash", "@\n(1\n")
-        .expect("the mixed invalid source should fit the source model");
+    let source = SourceFile::new(
+        "mixed-syntax.ash",
+        "$\nmain : Unit -> Bool\nmain () = true == false == true\n",
+    )
+    .expect("the mixed invalid source should fit the source model");
     let failure = run_source(source).expect_err("invalid source must not reach evaluation");
     let PipelineFailure::Syntax(actual) = failure else {
         panic!("the mixed source should fail in the syntax pipeline");
@@ -476,14 +470,14 @@ fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
             .iter()
             .map(|item| item.reason)
             .collect::<Vec<_>>(),
-        vec![ParseReason::UnclosedGroup]
+        vec![ParseReason::RepeatedEquality]
     );
 }
 
 #[test]
-fn a_missing_result_after_a_complete_global_survives_an_earlier_lexical_failure() {
-    let text = "@\nfn identity(value : Int) -> Int {\n    value\n}\n";
-    let source = SourceFile::new("mixed-missing-result.ash", text)
+fn a_complete_module_retains_an_independent_lexical_failure() {
+    let text = "$\nfn identity(value : Int) -> Int {\n    value\n}\n";
+    let source = SourceFile::new("mixed-module.ash", text)
         .expect("the mixed invalid source should fit the source model");
     let failure = run_source(source).expect_err("invalid source must not reach evaluation");
     let PipelineFailure::Syntax(actual) = failure else {
@@ -498,29 +492,22 @@ fn a_missing_result_after_a_complete_global_survives_an_earlier_lexical_failure(
             .collect::<Vec<_>>(),
         vec![LexReason::UnknownCharacter]
     );
-    assert_eq!(
-        actual
-            .parser
-            .iter()
-            .map(|item| item.reason)
-            .collect::<Vec<_>>(),
-        vec![ParseReason::ExpectedResult]
-    );
+    assert!(actual.parser.is_empty());
 }
 
 #[test]
-fn an_excluded_result_after_a_complete_global_has_only_its_lexical_reason() {
-    for (result, expected) in [
+fn a_lexically_rejected_line_after_complete_declarations_has_only_its_lexical_reason() {
+    for (line, expected) in [
         ("-1\n", LexReason::NegativeLiteral),
         ("café\n", LexReason::UnicodeIdentifier),
         ("01\n", LexReason::InvalidIntegerLiteral),
     ] {
-        let text = format!("identity : Int -> Int\nidentity value = value\n\n{result}");
-        let source = SourceFile::new("excluded-result.ash", text)
+        let text = format!("identity : Int -> Int\nidentity value = value\n\n{line}");
+        let source = SourceFile::new("excluded-module-line.ash", text)
             .expect("the excluded source should fit the source model");
         let failure = run_source(source).expect_err("invalid source must not reach evaluation");
         let PipelineFailure::Syntax(actual) = failure else {
-            panic!("the excluded result should fail in the syntax pipeline");
+            panic!("the excluded line should fail in the syntax pipeline");
         };
 
         assert_eq!(
@@ -531,20 +518,20 @@ fn an_excluded_result_after_a_complete_global_has_only_its_lexical_reason() {
                 .collect::<Vec<_>>(),
             vec![expected]
         );
-        assert!(actual.parser.is_empty(), "result: {result:?}");
+        assert!(actual.parser.is_empty(), "line: {line:?}");
     }
 }
 
 #[test]
-fn a_non_expression_lexical_tail_does_not_hide_a_missing_result() {
+fn a_lexically_rejected_tail_does_not_create_a_parser_diagnostic() {
     for (tail, expected) in [
-        ("// no result\n", LexReason::Comment),
+        ("// unavailable comment\n", LexReason::Comment),
         ("\u{feff}\n", LexReason::ByteOrderMark),
         ("\r", LexReason::BareCarriageReturn),
-        ("@\n", LexReason::UnknownCharacter),
+        ("$\n", LexReason::UnknownCharacter),
     ] {
         let text = format!("fn identity(value : Int) -> Int {{\n    value\n}}\n\n{tail}");
-        let source = SourceFile::new("missing-result-after-trivia.ash", text)
+        let source = SourceFile::new("rejected-module-tail.ash", text)
             .expect("the excluded source should fit the source model");
         let failure = run_source(source).expect_err("invalid source must not reach evaluation");
         let PipelineFailure::Syntax(actual) = failure else {
@@ -559,27 +546,19 @@ fn a_non_expression_lexical_tail_does_not_hide_a_missing_result() {
                 .collect::<Vec<_>>(),
             vec![expected]
         );
-        assert_eq!(
-            actual
-                .parser
-                .iter()
-                .map(|item| item.reason)
-                .collect::<Vec<_>>(),
-            vec![ParseReason::ExpectedResult],
-            "tail: {tail:?}"
-        );
+        assert!(actual.parser.is_empty(), "tail: {tail:?}");
     }
 }
 
 #[test]
-fn an_expression_shaped_failure_on_the_definition_line_does_not_hide_a_missing_result() {
+fn a_lexically_rejected_definition_tail_does_not_create_a_parser_diagnostic() {
     for (tail, expected) in [
         ("-1", LexReason::NegativeLiteral),
         ("café", LexReason::UnicodeIdentifier),
         ("01", LexReason::InvalidIntegerLiteral),
     ] {
         let text = format!("identity : Int -> Int\nidentity value = value {tail}\n");
-        let source = SourceFile::new("missing-result-after-definition.ash", text)
+        let source = SourceFile::new("rejected-definition-tail.ash", text)
             .expect("the excluded source should fit the source model");
         let failure = run_source(source).expect_err("invalid source must not reach evaluation");
         let PipelineFailure::Syntax(actual) = failure else {
@@ -594,14 +573,6 @@ fn an_expression_shaped_failure_on_the_definition_line_does_not_hide_a_missing_r
                 .collect::<Vec<_>>(),
             vec![expected]
         );
-        assert_eq!(
-            actual
-                .parser
-                .iter()
-                .map(|item| item.reason)
-                .collect::<Vec<_>>(),
-            vec![ParseReason::ExpectedResult],
-            "tail: {tail:?}"
-        );
+        assert!(actual.parser.is_empty(), "tail: {tail:?}");
     }
 }

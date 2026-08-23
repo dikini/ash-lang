@@ -7,10 +7,12 @@ use crate::{
         ApplicationExpr, BinaryExpr, EquationalGlobal, FunctionExpr, FunctionType,
         InlineOperationalGlobal, SurfaceBinder, SurfaceBinding, SurfaceBlock,
         SurfaceConstructorDeclaration, SurfaceDefinition, SurfaceDefinitionKind, SurfaceEquation,
-        SurfaceExpr, SurfaceExprKind, SurfaceExternalInterface, SurfaceInlineOperationalHeader,
-        SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr, SurfaceName, SurfacePattern,
-        SurfacePatternKind, SurfaceProgram, SurfaceRecursiveGroup, SurfaceRecursiveMember,
-        SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypedPattern,
+        SurfaceExpr, SurfaceExprKind, SurfaceExternalInterface, SurfaceImport, SurfaceImportItem,
+        SurfaceImportSelection, SurfaceInlineOperationalHeader, SurfaceLocalDeclaration,
+        SurfaceMatchArm, SurfaceMatchExpr, SurfaceModule, SurfaceModulePath, SurfaceName,
+        SurfacePattern, SurfacePatternKind, SurfaceProgram, SurfaceRecursiveGroup,
+        SurfaceRecursiveMember, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
+        SurfaceTypeVisibility, SurfaceTypedPattern,
     },
 };
 
@@ -43,6 +45,27 @@ pub fn project(
     source: &SourceFile,
     tree: &ConcreteTree,
 ) -> Result<SurfaceProgram, ProjectionError> {
+    let (root, tokens) = validated_root(source, tree)?;
+    project_program(source, root, tokens)
+}
+
+/// Projects a complete, recovery-free module tree to surface syntax.
+///
+/// # Errors
+///
+/// Returns the same resource, recovery, and structural failures as [`project`].
+pub fn project_module(
+    source: &SourceFile,
+    tree: &ConcreteTree,
+) -> Result<SurfaceModule, ProjectionError> {
+    let (root, tokens) = validated_root(source, tree)?;
+    project_surface_module(source, root, tokens)
+}
+
+fn validated_root<'tree>(
+    source: &SourceFile,
+    tree: &'tree ConcreteTree,
+) -> Result<(&'tree ConcreteNode, &'tree [Token]), ProjectionError> {
     if let Some(failure) = tree.resource_failure {
         return Err(ProjectionError::ResourceLimit(failure));
     }
@@ -72,7 +95,7 @@ pub fn project(
     ))?;
     validate_node_shape(root, &tree.tokens)?;
     validate_concrete_token_coverage(root, tree.tokens.len())?;
-    project_program(source, root, &tree.tokens)
+    Ok((root, &tree.tokens))
 }
 
 fn validate_concrete_token_coverage(
@@ -193,6 +216,68 @@ fn validate_node_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), Proj
 fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), ProjectionError> {
     let mut shape = ShapeCursor::new(node, tokens);
     match node.kind {
+        NodeKind::Module => {
+            while shape.peek_node_is(NodeKind::ImportDeclaration) {
+                shape.node(NodeKind::ImportDeclaration)?;
+                shape.token(&TokenKind::LineEnd)?;
+            }
+            while shape.peek_node_is(NodeKind::TypeDeclaration)
+                || shape.peek_node_is(NodeKind::EquationalGlobal)
+                || shape.peek_node_is(NodeKind::InlineOperationalGlobal)
+            {
+                shape.any_node()?;
+                shape.token(&TokenKind::LineEnd)?;
+            }
+            shape.token(&TokenKind::EndOfFile)?;
+        }
+        NodeKind::ImportDeclaration => {
+            shape.token(&TokenKind::Import)?;
+            shape.node(NodeKind::ModulePath)?;
+            if shape.peek_token_is(&TokenKind::As) {
+                shape.token(&TokenKind::As)?;
+                shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            } else {
+                shape.token(&TokenKind::LeftParen)?;
+                shape.node(NodeKind::ImportItem)?;
+                while shape.peek_token_is(&TokenKind::Comma) {
+                    shape.token(&TokenKind::Comma)?;
+                    shape.node(NodeKind::ImportItem)?;
+                }
+                shape.token(&TokenKind::RightParen)?;
+            }
+        }
+        NodeKind::ModulePath => {
+            let absolute = shape.peek_token_is(&TokenKind::At);
+            if absolute {
+                shape.token(&TokenKind::At)?;
+            }
+            shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+            if absolute {
+                shape.token(&TokenKind::Dot)?;
+                shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+            }
+            while shape.peek_token_is(&TokenKind::Dot) {
+                shape.token(&TokenKind::Dot)?;
+                shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+            }
+        }
+        NodeKind::ImportItem => {
+            shape.token_matching(|kind| {
+                matches!(
+                    kind,
+                    TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                )
+            })?;
+            if shape.peek_token_is(&TokenKind::As) {
+                shape.token(&TokenKind::As)?;
+                shape.token_matching(|kind| {
+                    matches!(
+                        kind,
+                        TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                    )
+                })?;
+            }
+        }
         NodeKind::Program => {
             while shape.peek_node_is(NodeKind::TypeDeclaration) {
                 shape.node(NodeKind::TypeDeclaration)?;
@@ -209,6 +294,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::EndOfFile)?;
         }
         NodeKind::TypeDeclaration => {
+            if shape.peek_token_is(&TokenKind::Pub) {
+                shape.token(&TokenKind::Pub)?;
+                shape.optional_token(&TokenKind::Opaque)?;
+            }
             shape.token(&TokenKind::Type)?;
             shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
             if shape.peek_token_is(&TokenKind::Less) {
@@ -242,6 +331,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             }
         }
         NodeKind::EquationalGlobal => {
+            shape.optional_token(&TokenKind::Pub)?;
             shape.node(NodeKind::ExternalInterface)?;
             shape.token(&TokenKind::LineEnd)?;
             shape.node(NodeKind::Equation)?;
@@ -265,6 +355,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.expression()?;
         }
         NodeKind::InlineOperationalGlobal => {
+            shape.optional_token(&TokenKind::Pub)?;
             shape.node(NodeKind::InlineOperationalHeader)?;
             shape.node(NodeKind::Block)?;
         }
@@ -361,6 +452,8 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         NodeKind::PrimaryExpression => {
             if shape.peek_node_is(NodeKind::ParenthesizedExpression) {
                 shape.node(NodeKind::ParenthesizedExpression)?;
+            } else if shape.peek_node_is(NodeKind::QualifiedName) {
+                shape.node(NodeKind::QualifiedName)?;
             } else {
                 shape.token_matching(|kind| {
                     matches!(
@@ -420,7 +513,11 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             }
         }
         NodeKind::ConstructorPattern => {
-            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            if shape.peek_node_is(NodeKind::QualifiedName) {
+                shape.node(NodeKind::QualifiedName)?;
+            } else {
+                shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            }
             if shape.peek_token_is(&TokenKind::LeftParen) {
                 shape.token(&TokenKind::LeftParen)?;
                 if shape.peek_node_is(NodeKind::TuplePattern) {
@@ -462,15 +559,19 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             if shape.peek_node_is(NodeKind::ParenthesizedType) {
                 shape.node(NodeKind::ParenthesizedType)?;
             } else {
-                shape.token_matching(|kind| {
-                    matches!(
-                        kind,
-                        TokenKind::IntType
-                            | TokenKind::BoolType
-                            | TokenKind::UnitType
-                            | TokenKind::UpperIdentifier(_)
-                    )
-                })?;
+                if shape.peek_node_is(NodeKind::QualifiedName) {
+                    shape.node(NodeKind::QualifiedName)?;
+                } else {
+                    shape.token_matching(|kind| {
+                        matches!(
+                            kind,
+                            TokenKind::IntType
+                                | TokenKind::BoolType
+                                | TokenKind::UnitType
+                                | TokenKind::UpperIdentifier(_)
+                        )
+                    })?;
+                }
                 if shape.peek_token_is(&TokenKind::Less) {
                     shape.token(&TokenKind::Less)?;
                     shape.node(NodeKind::Type)?;
@@ -499,6 +600,16 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.token(&TokenKind::Comma)?;
                 shape.node(NodeKind::Type)?;
             }
+        }
+        NodeKind::QualifiedName => {
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            shape.token(&TokenKind::Dot)?;
+            shape.token_matching(|kind| {
+                matches!(
+                    kind,
+                    TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                )
+            })?;
         }
         NodeKind::Error => return malformed(InternalReason::UnexpectedShape),
     }
@@ -643,12 +754,131 @@ fn project_program(
     })
 }
 
+fn project_surface_module(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceModule, ProjectionError> {
+    require_kind(node, NodeKind::Module)?;
+    let mut imports = Vec::new();
+    let mut type_declarations = Vec::new();
+    let mut definitions = Vec::new();
+    for child in child_nodes(node) {
+        match child.kind {
+            NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?),
+            NodeKind::TypeDeclaration => {
+                type_declarations.push(project_type_declaration(source, child, tokens)?);
+            }
+            NodeKind::EquationalGlobal | NodeKind::InlineOperationalGlobal => {
+                definitions.push(project_definition(source, child, tokens)?);
+            }
+            _ => return malformed(InternalReason::UnexpectedShape),
+        }
+    }
+    Ok(SurfaceModule {
+        imports,
+        type_declarations,
+        definitions,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_import(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceImport, ProjectionError> {
+    require_kind(node, NodeKind::ImportDeclaration)?;
+    let path_node = only_child_of_kind(node, NodeKind::ModulePath)?;
+    let mut path_names = direct_tokens(path_node, tokens)
+        .filter_map(|token| match &token.kind {
+            TokenKind::Identifier(text) => Some(SurfaceName {
+                text: text.clone(),
+                span: token.span,
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let absolute = direct_tokens(path_node, tokens).any(|token| token.kind == TokenKind::At);
+    let path = if absolute {
+        if path_names.len() < 2 {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        let root = path_names.remove(0);
+        SurfaceModulePath::Absolute {
+            root,
+            segments: path_names,
+        }
+    } else {
+        if path_names.is_empty() {
+            return malformed(InternalReason::UnexpectedShape);
+        }
+        SurfaceModulePath::Relative(path_names)
+    };
+
+    let items = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::ImportItem)
+        .map(|item| project_import_item(source, item, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    let selection = if items.is_empty() {
+        let alias_token = direct_tokens(node, tokens)
+            .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        SurfaceImportSelection::Qualified {
+            alias: surface_name(alias_token)?,
+        }
+    } else {
+        SurfaceImportSelection::Targeted(items)
+    };
+    Ok(SurfaceImport {
+        path,
+        selection,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_import_item(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceImportItem, ProjectionError> {
+    require_kind(node, NodeKind::ImportItem)?;
+    let mut names = direct_tokens(node, tokens).filter(|token| {
+        matches!(
+            token.kind,
+            TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+        )
+    });
+    let name = surface_name(names.next().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?)?;
+    let alias = names.next().map(surface_name).transpose()?;
+    if names.next().is_some() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(SurfaceImportItem {
+        name,
+        alias,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
 fn project_type_declaration(
     source: &SourceFile,
     node: &ConcreteNode,
     tokens: &[Token],
 ) -> Result<SurfaceTypeDeclaration, ProjectionError> {
     require_kind(node, NodeKind::TypeDeclaration)?;
+    let public = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub);
+    let opaque = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Opaque);
+    let visibility = match (public, opaque) {
+        (false, false) => SurfaceTypeVisibility::Private,
+        (true, false) => SurfaceTypeVisibility::PublicTransparent,
+        (true, true) => SurfaceTypeVisibility::PublicOpaque,
+        (false, true) => return malformed(InternalReason::UnexpectedShape),
+    };
     let mut names = direct_tokens(node, tokens)
         .filter(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)));
     let name_token = names.next().ok_or(ProjectionError::MalformedTree(
@@ -678,6 +908,7 @@ fn project_type_declaration(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(SurfaceTypeDeclaration {
+        visibility,
         name: SurfaceName {
             text: name.clone(),
             span: name_token.span,
@@ -721,6 +952,7 @@ fn project_definition(
     node: &ConcreteNode,
     tokens: &[Token],
 ) -> Result<SurfaceDefinition, ProjectionError> {
+    let public = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub);
     let kind = match node.kind {
         NodeKind::EquationalGlobal => {
             let interface = only_child_of_kind(node, NodeKind::ExternalInterface)?;
@@ -782,6 +1014,7 @@ fn project_definition(
         _ => return malformed(InternalReason::UnexpectedShape),
     };
     Ok(SurfaceDefinition {
+        public,
         kind,
         span: node_span(source, node, tokens)?,
     })
@@ -906,6 +1139,14 @@ fn project_expression(
                         optional_child_of_kind(node, NodeKind::ParenthesizedExpression)?
                     {
                         schedule_group(source, group, tokens, &mut tasks, &mut projected)?;
+                    } else if let Some(name) =
+                        optional_child_of_kind(node, NodeKind::QualifiedName)?
+                    {
+                        let name = project_qualified_name(source, name, tokens)?;
+                        projected.push(SurfaceExpr {
+                            span: name.span,
+                            kind: SurfaceExprKind::Name(name),
+                        });
                     } else {
                         projected.push(project_primitive(node, tokens)?);
                     }
@@ -1370,6 +1611,52 @@ fn project_binder(node: &ConcreteNode, tokens: &[Token]) -> Result<SurfaceBinder
     })
 }
 
+fn surface_name(token: &Token) -> Result<SurfaceName, ProjectionError> {
+    let text = match &token.kind {
+        TokenKind::Identifier(text) | TokenKind::UpperIdentifier(text) => text.clone(),
+        _ => return malformed(InternalReason::UnexpectedShape),
+    };
+    Ok(SurfaceName {
+        text,
+        span: token.span,
+    })
+}
+
+fn project_qualified_name(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceName, ProjectionError> {
+    require_kind(node, NodeKind::QualifiedName)?;
+    let mut names = direct_tokens(node, tokens).filter(|token| {
+        matches!(
+            token.kind,
+            TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+        )
+    });
+    let qualifier = surface_name(names.next().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?)?;
+    let member = surface_name(names.next().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?)?;
+    if names.next().is_some() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    let span = node_span(source, node, tokens)?;
+    let mut text = String::with_capacity(
+        qualifier
+            .text
+            .len()
+            .saturating_add(member.text.len())
+            .saturating_add(1),
+    );
+    text.push_str(&qualifier.text);
+    text.push('.');
+    text.push_str(&member.text);
+    Ok(SurfaceName { text, span })
+}
+
 fn project_typed_pattern(
     source: &SourceFile,
     node: &ConcreteNode,
@@ -1404,13 +1691,17 @@ fn project_pattern(
     } else if let Some(tuple) = optional_child_of_kind(node, NodeKind::TuplePattern)? {
         SurfacePatternKind::Tuple(project_pattern_children(source, tuple, tokens)?)
     } else if let Some(constructor) = optional_child_of_kind(node, NodeKind::ConstructorPattern)? {
-        let name_token = direct_tokens(constructor, tokens)
-            .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
-            .ok_or(ProjectionError::MalformedTree(
-                InternalReason::UnexpectedShape,
-            ))?;
-        let TokenKind::UpperIdentifier(name) = &name_token.kind else {
-            return malformed(InternalReason::UnexpectedShape);
+        let name = if let Some(qualified) =
+            optional_child_of_kind(constructor, NodeKind::QualifiedName)?
+        {
+            project_qualified_name(source, qualified, tokens)?
+        } else {
+            let token = direct_tokens(constructor, tokens)
+                .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+            surface_name(token)?
         };
         let payload = if let Some(tuple) =
             optional_child_of_kind(constructor, NodeKind::TuplePattern)?
@@ -1424,13 +1715,7 @@ fn project_pattern(
                 .map(|payload| project_pattern(source, payload, tokens).map(Box::new))
                 .transpose()?
         };
-        SurfacePatternKind::Constructor {
-            name: SurfaceName {
-                text: name.clone(),
-                span: name_token.span,
-            },
-            payload,
-        }
+        SurfacePatternKind::Constructor { name, payload }
     } else if let Some(inner) = optional_child_of_kind(node, NodeKind::Pattern)? {
         let mut inner = project_pattern(source, inner, tokens)?;
         inner.span = span;
@@ -1502,22 +1787,31 @@ fn project_type(
                     let arguments = child_nodes(node)
                         .filter(|child| child.kind == NodeKind::Type)
                         .collect::<Vec<_>>();
+                    let qualified = optional_child_of_kind(node, NodeKind::QualifiedName)?
+                        .map(|name| project_qualified_name(source, name, tokens))
+                        .transpose()?;
                     if arguments.is_empty() {
-                        projected.push(project_atomic_primitive(node, tokens)?);
+                        if let Some(name) = qualified {
+                            projected.push(SurfaceType {
+                                span: name.span,
+                                kind: SurfaceTypeKind::Named(name),
+                            });
+                        } else {
+                            projected.push(project_atomic_primitive(node, tokens)?);
+                        }
                     } else {
-                        let token = direct_tokens(node, tokens)
-                            .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
-                            .ok_or(ProjectionError::MalformedTree(
-                                InternalReason::UnexpectedShape,
-                            ))?;
-                        let TokenKind::UpperIdentifier(text) = &token.kind else {
-                            return malformed(InternalReason::UnexpectedShape);
+                        let constructor = if let Some(name) = qualified {
+                            name
+                        } else {
+                            let token = direct_tokens(node, tokens)
+                                .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                                .ok_or(ProjectionError::MalformedTree(
+                                    InternalReason::UnexpectedShape,
+                                ))?;
+                            surface_name(token)?
                         };
                         tasks.push(TypeTask::FinishApplication {
-                            constructor: SurfaceName {
-                                text: text.clone(),
-                                span: token.span,
-                            },
+                            constructor,
                             count: arguments.len(),
                             span: node_span(source, node, tokens)?,
                         });
@@ -1818,7 +2112,8 @@ mod tests {
     use super::*;
 
     fn parsed(text: &str) -> (SourceFile, ConcreteTree) {
-        let source = SourceFile::new("shape.ash", text).expect("the shape fixture should fit");
+        let source = SourceFile::new("shape.ash", format!("main : Unit\nmain () = {text}\n"))
+            .expect("the shape fixture should fit");
         let lexed = lex(&source).expect("the shape fixture should lex");
         (source, parse(lexed))
     }
@@ -1854,7 +2149,7 @@ mod tests {
         function.children.push(ConcreteElement::Node(pattern));
 
         assert_eq!(
-            project(&source, &tree),
+            project_module(&source, &tree),
             Err(ProjectionError::MalformedTree(
                 InternalReason::UnexpectedShape
             ))
@@ -1873,7 +2168,7 @@ mod tests {
         }));
 
         assert_eq!(
-            project(&source, &tree),
+            project_module(&source, &tree),
             Err(ProjectionError::MalformedTree(
                 InternalReason::UnexpectedShape
             ))
@@ -1901,7 +2196,7 @@ mod tests {
         *index = 0;
 
         assert_eq!(
-            project(&source, &tree),
+            project_module(&source, &tree),
             Err(ProjectionError::MalformedTree(
                 InternalReason::DuplicateToken
             ))
@@ -1928,7 +2223,7 @@ mod tests {
             .push(ConcreteElement::Node(nested));
 
         assert_eq!(
-            project(&source, &tree),
+            project_module(&source, &tree),
             Err(ProjectionError::ResourceLimit(
                 ResourceFailure::StructuralDepth {
                     limit: STRUCTURAL_DEPTH_LIMIT
@@ -1979,7 +2274,7 @@ mod tests {
                 .stack_size(256 * 1024)
                 .spawn_scoped(scope, || {
                     let (source, tree) = nested_group_tree(STRUCTURAL_DEPTH_LIMIT);
-                    project_program(
+                    project_surface_module(
                         &source,
                         tree.root().expect("the tree has one root"),
                         tree.tokens(),

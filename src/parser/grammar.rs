@@ -22,6 +22,7 @@ pub(super) enum PrimaryForm {
     Integer,
     Boolean,
     Identifier,
+    Qualified,
     UpperIdentifier,
     Parenthesized,
 }
@@ -118,8 +119,8 @@ pub(super) struct ParserDialect {
     atomic_types: &'static [AtomicTypeForm],
 }
 
-/// The sole closed assembly of syntax forms selected for Mini-Ash.
-const MINI_ASH_DIALECT: ParserDialect = ParserDialect {
+/// The sole closed assembly of syntax forms selected for Ash modules.
+const MODULAR_ASH_DIALECT: ParserDialect = ParserDialect {
     global_definitions: &[
         GlobalDefinitionForm::Equational,
         GlobalDefinitionForm::InlineOperational,
@@ -134,6 +135,7 @@ const MINI_ASH_DIALECT: ParserDialect = ParserDialect {
             PrimaryForm::Integer,
             PrimaryForm::Boolean,
             PrimaryForm::Identifier,
+            PrimaryForm::Qualified,
             PrimaryForm::UpperIdentifier,
             PrimaryForm::Parenthesized,
         ],
@@ -180,44 +182,22 @@ const MINI_ASH_DIALECT: ParserDialect = ParserDialect {
 };
 
 pub(super) const fn selected_dialect() -> &'static ParserDialect {
-    &MINI_ASH_DIALECT
+    &MODULAR_ASH_DIALECT
 }
 
-pub(super) fn program(parser: &mut Parser<'_>) {
-    parser.start(NodeKind::Program);
-    let mut preceding_global_end = None;
-    while parser.at(&TokenKind::Type) {
-        type_declaration(parser);
+pub(super) fn module(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Module);
+    while parser.at(&TokenKind::Import) {
+        import_declaration(parser);
         if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
             break;
         }
     }
-    while starts_global(parser) {
-        let global_start = parser.current_span();
-        let diagnostics_before = parser.diagnostic_count();
-        global_definition(parser);
-        let completed_global = if parser.diagnostic_count() == diagnostics_before {
-            global_start.zip(parser.previous_span())
-        } else {
-            None
-        };
+    while starts_module_declaration(parser) {
+        module_declaration(parser);
         if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
             break;
         }
-        if let (Some((start, end)), Some(line_end)) = (completed_global, parser.previous_span()) {
-            preceding_global_end = Some((start, end, line_end));
-        }
-    }
-
-    if starts_expression(parser) {
-        let recovery_start = parser.pending_recovery_count();
-        expression(parser);
-        resolve_line_or_eof(parser, recovery_start);
-    } else {
-        parser.report_expected_result(preceding_global_end);
-    }
-    if parser.at(&TokenKind::LineEnd) {
-        let _ = parser.bump();
     }
     if parser.at(&TokenKind::EndOfFile) {
         let _ = parser.bump();
@@ -234,9 +214,114 @@ pub(super) fn program(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
+fn import_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ImportDeclaration);
+    let _ = parser.bump();
+    module_path(parser);
+    if parser.at(&TokenKind::As) {
+        let _ = parser.bump();
+        expect_upper_identifier(parser);
+    } else if parser.at(&TokenKind::LeftParen) {
+        let _ = parser.bump();
+        import_item(parser);
+        while parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            import_item(parser);
+        }
+        let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    parser.finish();
+}
+
+fn module_path(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ModulePath);
+    let absolute = parser.at(&TokenKind::At);
+    if absolute {
+        let _ = parser.bump();
+    }
+    expect_lower_identifier(parser);
+    if absolute {
+        let _ = parser.expect(&TokenKind::Dot, ExpectedForm::Identifier);
+        expect_lower_identifier(parser);
+    }
+    while parser.at(&TokenKind::Dot) {
+        let _ = parser.bump();
+        expect_lower_identifier(parser);
+    }
+    parser.finish();
+}
+
+fn import_item(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ImportItem);
+    expect_import_name(parser);
+    if parser.at(&TokenKind::As) {
+        let _ = parser.bump();
+        expect_import_name(parser);
+    }
+    parser.finish();
+}
+
+fn expect_import_name(parser: &mut Parser<'_>) {
+    if matches!(
+        parser.current(),
+        Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+    ) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+}
+
+fn expect_lower_identifier(parser: &mut Parser<'_>) {
+    if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+}
+
+fn expect_upper_identifier(parser: &mut Parser<'_>) {
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+}
+
+fn starts_module_declaration(parser: &Parser<'_>) -> bool {
+    parser.at(&TokenKind::Type)
+        || starts_global(parser)
+        || parser.at(&TokenKind::Pub)
+            && matches!(
+                parser.nth(1),
+                Some(
+                    TokenKind::Type | TokenKind::Opaque | TokenKind::Fn | TokenKind::Identifier(_)
+                )
+            )
+}
+
+fn module_declaration(parser: &mut Parser<'_>) {
+    if parser.at(&TokenKind::Type)
+        || parser.at(&TokenKind::Pub)
+            && matches!(parser.nth(1), Some(TokenKind::Type | TokenKind::Opaque))
+    {
+        type_declaration(parser);
+    } else {
+        global_definition(parser);
+    }
+}
+
 fn type_declaration(parser: &mut Parser<'_>) {
     parser.start(NodeKind::TypeDeclaration);
-    let _ = parser.bump();
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+        if parser.at(&TokenKind::Opaque) {
+            let _ = parser.bump();
+        }
+    }
+    let _ = parser.expect(&TokenKind::Type, ExpectedForm::Type);
     if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
         let _ = parser.bump();
     } else {
@@ -314,17 +399,18 @@ fn global_definition(parser: &mut Parser<'_>) {
 }
 
 fn global_definition_form(parser: &Parser<'_>) -> Option<GlobalDefinitionForm> {
+    let offset = usize::from(parser.at(&TokenKind::Pub));
     selected_dialect()
         .global_definitions
         .iter()
         .copied()
         .find(|form| match form {
             GlobalDefinitionForm::Equational => matches!(
-                (parser.current(), parser.nth(1)),
+                (parser.nth(offset), parser.nth(offset.saturating_add(1))),
                 (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon))
             ),
             GlobalDefinitionForm::InlineOperational => matches!(
-                (parser.current(), parser.nth(1)),
+                (parser.nth(offset), parser.nth(offset.saturating_add(1))),
                 (Some(TokenKind::Fn), Some(TokenKind::Identifier(_)))
             ),
         })
@@ -332,6 +418,9 @@ fn global_definition_form(parser: &Parser<'_>) -> Option<GlobalDefinitionForm> {
 
 fn equational_global(parser: &mut Parser<'_>) {
     parser.start(NodeKind::EquationalGlobal);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
     parser.start(NodeKind::ExternalInterface);
     let name = match parser.current() {
         Some(TokenKind::Identifier(name)) => Some(name.clone()),
@@ -395,6 +484,9 @@ fn equation(parser: &mut Parser<'_>) {
 
 fn inline_operational_global(parser: &mut Parser<'_>) {
     parser.start(NodeKind::InlineOperationalGlobal);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
     parser.start(NodeKind::InlineOperationalHeader);
     let _ = parser.bump();
     binder(parser);
@@ -525,7 +617,7 @@ fn block(parser: &mut Parser<'_>) {
     if starts_expression(parser) {
         expression(parser);
     } else {
-        parser.report(ParseReason::ExpectedResult, ExpectedForm::Expression);
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Expression);
     }
     if parser.at(&TokenKind::LineEnd) {
         let _ = parser.bump();
@@ -755,7 +847,14 @@ fn starts_pattern(parser: &Parser<'_>) -> bool {
 
 fn constructor_pattern(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
     parser.start(NodeKind::ConstructorPattern);
-    let _ = parser.bump();
+    if parser
+        .nth(1)
+        .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+    {
+        qualified_name(parser, true);
+    } else {
+        let _ = parser.bump();
+    }
     if parser.at(&TokenKind::LeftParen) {
         let _ = parser.bump();
         let tuple_start = parser.event_position();
@@ -830,7 +929,14 @@ fn atomic_type(parser: &mut Parser<'_>) {
             }
         }
         Some(AtomicTypeForm::Nominal) => {
-            let _ = parser.bump();
+            if parser
+                .nth(1)
+                .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+            {
+                qualified_name(parser, true);
+            } else {
+                let _ = parser.bump();
+            }
             if parser.at(&TokenKind::Less) {
                 type_arguments(parser);
             }
@@ -868,6 +974,18 @@ fn atomic_type_form(parser: &Parser<'_>) -> Option<AtomicTypeForm> {
         })
 }
 
+pub(super) fn qualified_name(parser: &mut Parser<'_>, uppercase_member: bool) {
+    parser.start(NodeKind::QualifiedName);
+    expect_upper_identifier(parser);
+    let _ = parser.expect(&TokenKind::Dot, ExpectedForm::Identifier);
+    if uppercase_member {
+        expect_upper_identifier(parser);
+    } else {
+        expect_import_name(parser);
+    }
+    parser.finish();
+}
+
 fn parenthesized_type(parser: &mut Parser<'_>) {
     parser.start(NodeKind::ParenthesizedType);
     let opening = parser.current_span();
@@ -903,6 +1021,8 @@ fn starts_expression(parser: &Parser<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::{lexer::lex, source::SourceFile};
+
     use super::*;
 
     mod mock_nested_feature {
@@ -965,5 +1085,19 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_block_without_its_result_reports_an_expected_expression() {
+        let source = SourceFile::new("missing-block-result.ash", "main : Unit\nmain () = {\n}\n")
+            .expect("the parser fixture should fit");
+        let tree = super::super::parse(lex(&source).expect("the parser fixture should lex"));
+
+        let diagnostic = tree
+            .parse_diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.expected.as_deref() == Some("an expression"))
+            .expect("the missing block result should require an expression");
+        assert_eq!(diagnostic.reason, ParseReason::ExpectedForm);
     }
 }

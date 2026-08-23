@@ -12,7 +12,7 @@ use std::ops::Deref;
 pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
-pub use project::{ProjectionError, project};
+pub use project::{ProjectionError, project, project_module};
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
@@ -36,6 +36,14 @@ pub(super) const MATCH_STRUCTURAL_WEIGHT: usize = 32;
 /// The grammar role of one concrete node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeKind {
+    /// A complete declarations-only module source.
+    Module,
+    /// One source import declaration.
+    ImportDeclaration,
+    /// A relative or named-root dotted module path.
+    ModulePath,
+    /// One selected public spelling and its optional local alias.
+    ImportItem,
     /// A complete source file.
     Program,
     /// A nominal type declaration.
@@ -106,6 +114,8 @@ pub enum NodeKind {
     ParenthesizedType,
     /// A structural tuple type.
     TupleType,
+    /// A module-qualified type or constructor occurrence.
+    QualifiedName,
     /// Rejected syntax retained until projection fails.
     Error,
 }
@@ -148,8 +158,6 @@ pub enum ExpectedForm {
 /// A parser-owned reason retained independently from rendering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseReason {
-    /// The file has no required final result expression.
-    ExpectedResult,
     /// A grammar form was absent.
     ExpectedForm,
     /// An operand was absent after an operator.
@@ -173,15 +181,6 @@ pub enum ParseReason {
 /// A parser recovery fact retained independently from rendered prose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseContext {
-    /// Parsing completed one global before discovering the missing file result.
-    PrecedingGlobalComplete {
-        /// The first source token of the completed global.
-        starting_at: Span,
-        /// The final source token of the completed global.
-        ending_at: Span,
-        /// The logical line boundary consumed after the completed global.
-        line_end: Span,
-    },
     /// Recovery synchronized at an owning grammar boundary.
     Synchronization {
         /// The kind of grammar boundary used for synchronization.
@@ -200,7 +199,7 @@ pub enum SynchronizationBoundary {
     BlockClosingBrace,
     /// The closing parenthesis owned by the current grouped expression.
     ParenthesisClosing,
-    /// End of input owned by the current program or incomplete nested form.
+    /// End of input owned by the current module or incomplete nested form.
     EndOfFile,
 }
 
@@ -232,7 +231,6 @@ impl Deref for ParseDiagnostic {
 impl fmt::Display for ParseReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::ExpectedResult => "parse.expected-result",
             Self::ExpectedForm => "parse.expected-form",
             Self::ExpectedOperand => "parse.expected-operand",
             Self::UnclosedGroup => "parse.unclosed-group",
@@ -266,7 +264,7 @@ pub fn parse(lexed: Lexed) -> ConcreteTree {
             syntax_budget,
             syntax_work_exhausted: false,
         };
-        grammar::program(&mut parser);
+        grammar::module(&mut parser);
         (
             parser.events,
             parser.diagnostics,
@@ -427,35 +425,8 @@ impl Parser<'_> {
             .map(|token| token.span)
     }
 
-    fn previous_span(&self) -> Option<Span> {
-        self.position
-            .checked_sub(1)
-            .and_then(|position| self.tokens.get(position))
-            .map(|token| token.span)
-    }
-
-    fn report_expected_result(&mut self, preceding_global: Option<(Span, Span, Span)>) {
-        let before = self.diagnostics.len();
-        self.report(ParseReason::ExpectedResult, ExpectedForm::Expression);
-        if let (Some((starting_at, ending_at, line_end)), Some(diagnostic)) =
-            (preceding_global, self.diagnostics.get_mut(before))
-        {
-            diagnostic
-                .context
-                .push(ParseContext::PrecedingGlobalComplete {
-                    starting_at,
-                    ending_at,
-                    line_end,
-                });
-        }
-    }
-
     fn pending_recovery_count(&self) -> usize {
         self.pending_recoveries.len()
-    }
-
-    fn diagnostic_count(&self) -> usize {
-        self.diagnostics.len()
     }
 
     fn mark_pending_recovery(&mut self, diagnostic_index: usize) {
@@ -600,6 +571,10 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::And => "and",
         TokenKind::Type => "type",
         TokenKind::Match => "match",
+        TokenKind::Import => "import",
+        TokenKind::As => "as",
+        TokenKind::Pub => "pub",
+        TokenKind::Opaque => "opaque",
         TokenKind::IntType => "Int",
         TokenKind::BoolType => "Bool",
         TokenKind::UnitType => "Unit",
@@ -619,6 +594,8 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Less => "<",
         TokenKind::Greater => ">",
         TokenKind::Semicolon => ";",
+        TokenKind::At => "@",
+        TokenKind::Dot => ".",
         TokenKind::LineEnd => "line end",
         TokenKind::EndOfFile => "end of input",
     }
@@ -626,19 +603,16 @@ fn token_name(kind: &TokenKind) -> &'static str {
 
 const fn primary_message(reason: ParseReason) -> &'static str {
     match reason {
-        ParseReason::ExpectedResult => "the file requires a final result expression",
         ParseReason::ExpectedForm => "required syntax is missing",
         ParseReason::ExpectedOperand => "the operator requires a right operand",
         ParseReason::UnclosedGroup => "the opening parenthesis is not closed",
         ParseReason::RepeatedEquality => "equality is non-associative",
-        ParseReason::PolymorphicHeader => {
-            "explicit value type parameters are not available in Mini-Ash"
-        }
+        ParseReason::PolymorphicHeader => "explicit value type parameters are not available in Ash",
         ParseReason::ExpectedRecursiveMember => {
             "the recursive delimiter requires another binding member"
         }
         ParseReason::UnexpectedAnd => "and is only accepted within a recursive binding group",
-        ParseReason::Semicolon => "semicolons are not available in Mini-Ash",
+        ParseReason::Semicolon => "semicolons are not available in Ash",
         ParseReason::UnexpectedToken => "token is not accepted at this grammar position",
     }
 }
