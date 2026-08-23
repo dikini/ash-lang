@@ -446,35 +446,62 @@ checked.
 
 ```sequent
 family global-and-program-typing:
-  T-Equational-Global :=
+  T-Equational-Clause :=
     patterns ⇐ domains => bindings
     useful(previous_clauses, patterns, domains)
     GAMMA, bindings |- body ⇐ codomain
     ===>
     GAMMA |-clause name patterns = body ⇐ Function(domains, codomain)
 
+  T-Equational-Global :=
+    ordered_free_parameters(interface) = parameters
+    definition_type = Function(domains, codomain)
+    scheme = forall parameters. definition_type
+    parameters are rigid while checking clauses
+    for each clause, GAMMA |-clause clause ⇐ definition_type
+    exhaustive(clauses, domains)
+    ===>
+    GAMMA |-definition interface; clauses ⇒ name : scheme
+
   T-Operational-Global :=
+    ordered_free_parameters(header) = parameters
+    definition_type = Function(domain, codomain)
+    scheme = forall parameters. definition_type
+    definition = fn name(header_pattern : domain) -> codomain { body }
+    parameters are rigid while checking the header and body
     header_pattern ⇐ domain => bindings
     exhaustive([header_pattern], domain)
     GAMMA, bindings |- body ⇐ codomain
     ===>
-    GAMMA |-definition fn name(header_pattern : domain) -> codomain { body } ⇒ name : Function(domain, codomain)
+    GAMMA |-definition definition ⇒ name : scheme
 
   T-Recursive-Program :=
     scheme_i = forall free_parameters_i. definition_type_i
     GAMMA_G = { name_i : scheme_i | 1 <= i <= n }
-    for each i, GAMMA_G |-definition definition_i ⇒ name_i : scheme_i
+    GAMMA_i = GAMMA_G[name_i : definition_type_i]
+    for each i, GAMMA_i |-definition definition_i ⇒ name_i : scheme_i
     GAMMA_G |- result ⇒ result_type
     ===>
     |-program definitions; result ⇒ result_type
 ```
 
-The complete equational group must also be exhaustive under the shared
-coverage relation. The definition judgments check parameters and bodies but do
-not determine global visibility. `T-Recursive-Program` establishes all global
-schemes and synthesizes the file type from its required result expression.
-Each body checks with its own parameters rigid, and recursive uses obey the
-monomorphic-recursion rule above.
+`ordered_free_parameters` returns the free uppercase variables in their first
+occurrence order. Those variables enter an implicit rigid type-variable scope
+for the clause, header, pattern, and body premises. The global conclusion closes
+that scope by abstracting the checked function type into one outer scheme. An
+empty parameter sequence therefore produces the corresponding monomorphic
+scheme.
+
+`T-Equational-Clause` checks one clause against the monotype opened from the
+interface. `T-Equational-Global` checks every contiguous clause under the same
+rigid parameters and requires the complete group to be exhaustive under the
+shared coverage relation. The definition judgments check parameters and bodies
+but do not determine global visibility. `T-Recursive-Program` establishes all
+global schemes before checking any definition and synthesizes the file type
+from its required result expression. While definition `i` is checked,
+`GAMMA_i` replaces only its own scheme with the opened monotype. Its recursive
+self-occurrences therefore use the same rigid arguments, while occurrences of
+other globals remain ordinary schemes and instantiate freshly.
 Semicolons in these judgments separate semantic fields and are not source
 punctuation. Resolution has already ensured global-name freshness and
 equational name agreement. For `T-Operational-Global`, one typed source
