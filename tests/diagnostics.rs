@@ -904,3 +904,18 @@ fn rank_one_inference_diagnostics_retain_exact_categories_and_types() {
     assert_eq!(ambiguous.primary.span().range().start(), 0);
     assert_eq!(ambiguous.primary.span().range().end(), offset(result_end));
 }
+
+#[test]
+fn unused_global_body_inference_labels_its_causal_initializer() {
+    let text = "type Option<A> =\nNone\n| Some(A)\n\nunused : Unit -> Unit\nunused _ = {\nlet value = None\n()\n}\n\n()\n";
+    let error = run_source(source("unused-global-inference.ash", text))
+        .expect_err("the unused constructor leaves its argument ambiguous");
+    let PipelineFailure::Typing(TypeError::Source(error)) = error else {
+        panic!("unsolved inference should be a source typing diagnostic")
+    };
+    let none_start = text.rfind("None").expect("initializer occurrence");
+
+    assert_eq!(error.reason, TypeReason::AmbiguousType);
+    assert_eq!(error.primary.span().range().start(), offset(none_start));
+    assert_eq!(error.primary.span().range().end(), offset(none_start + 4));
+}

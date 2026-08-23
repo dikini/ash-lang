@@ -52,6 +52,26 @@ fn data_and_pattern_resolution_allocates_file_wide_identities_and_pattern_binder
 }
 
 #[test]
+fn implicit_global_parameters_preserve_free_name_order_and_exclude_nominals() {
+    let program = resolve_valid(
+        "type Option<A> =\nNone\n| Some(A)\n\nfn select(left : Option<B>, right : C) -> B {\n()\n}\n\n()\n",
+    );
+    let ResolvedDefinitionKind::InlineOperational(definition) = &program.definitions[0].kind else {
+        panic!("expected operational definition");
+    };
+
+    assert_eq!(
+        definition
+            .header
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["B", "C"]
+    );
+}
+
+#[test]
 fn data_namespaces_report_stable_resolution_reasons() {
     let cases = [
         (

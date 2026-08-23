@@ -251,6 +251,22 @@ fn unresolved_local_function_inference_is_a_source_ambiguity() {
 }
 
 #[test]
+fn discarded_anonymous_function_inference_is_a_source_ambiguity() {
+    assert_eq!(
+        reason("{\nlet _ = fn(value) {\nvalue\n}\n()\n}\n"),
+        "type.ambiguous"
+    );
+}
+
+#[test]
+fn unused_parameterized_constructor_inference_is_a_source_ambiguity() {
+    assert_eq!(
+        reason("type Option<A> =\nNone\n| Some(A)\n\n{\nlet unused = None\n()\n}\n"),
+        "type.ambiguous"
+    );
+}
+
+#[test]
 fn deep_parameter_substitution_completes_on_a_small_stack() {
     std::thread::scope(|scope| {
         std::thread::Builder::new()

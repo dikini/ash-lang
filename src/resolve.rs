@@ -1,6 +1,11 @@
 //! Lexical name resolution for recovery-free surface syntax.
 
-use std::{collections::HashMap, fmt, ops::Deref, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    ops::Deref,
+    sync::Arc,
+};
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
@@ -893,21 +898,29 @@ impl Resolver {
         definition: &crate::surface::SurfaceDefinition,
     ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
         let mut names = Vec::new();
+        let mut seen = HashSet::new();
         match &definition.kind {
             SurfaceDefinitionKind::Equational(equational) => {
                 collect_free_type_names(
                     &equational.interface.annotation,
                     &self.type_names,
+                    &mut seen,
                     &mut names,
                 );
             }
             SurfaceDefinitionKind::InlineOperational(operational) => {
                 for parameter in &operational.header.parameters {
-                    collect_free_type_names(&parameter.annotation, &self.type_names, &mut names);
+                    collect_free_type_names(
+                        &parameter.annotation,
+                        &self.type_names,
+                        &mut seen,
+                        &mut names,
+                    );
                 }
                 collect_free_type_names(
                     &operational.header.result_type,
                     &self.type_names,
+                    &mut seen,
                     &mut names,
                 );
             }
@@ -1471,18 +1484,17 @@ fn type_argument_count(
     diagnostic.into()
 }
 
-fn collect_free_type_names(
-    root: &SurfaceType,
+fn collect_free_type_names<'a>(
+    root: &'a SurfaceType,
     nominals: &HashMap<String, NominalTypeId>,
+    seen: &mut HashSet<&'a str>,
     output: &mut Vec<crate::surface::SurfaceName>,
 ) {
     let mut work = vec![root];
     while let Some(ty) = work.pop() {
         match &ty.kind {
             SurfaceTypeKind::Named(name) => {
-                if !nominals.contains_key(&name.text)
-                    && !output.iter().any(|known| known.text == name.text)
-                {
+                if !nominals.contains_key(&name.text) && seen.insert(&name.text) {
                     output.push(name.clone());
                 }
             }
@@ -1490,9 +1502,7 @@ fn collect_free_type_names(
                 constructor,
                 arguments,
             } => {
-                if !nominals.contains_key(&constructor.text)
-                    && !output.iter().any(|known| known.text == constructor.text)
-                {
+                if !nominals.contains_key(&constructor.text) && seen.insert(&constructor.text) {
                     output.push(constructor.clone());
                 }
                 work.extend(arguments.iter().rev());
@@ -1511,6 +1521,7 @@ fn collect_free_type_names(
 mod tests {
     use super::*;
     use crate::source::{ByteRange, SourceFile};
+    use crate::surface::{SurfaceName, SurfaceTypeKind};
     use crate::{
         lexer::lex,
         parser::{parse, project},
@@ -1556,5 +1567,72 @@ mod tests {
             assert_eq!(error.reason, ResolveReason::UnknownName);
             assert_eq!(resolver.scopes.len(), initial_scope_count);
         }
+    }
+
+    #[test]
+    fn distinct_interface_variables_follow_the_indexed_linear_reference() {
+        fn distinct_variables(count: usize, span: crate::source::Span) -> SurfaceType {
+            SurfaceType {
+                kind: SurfaceTypeKind::Tuple(
+                    (0..count)
+                        .map(|index| SurfaceType {
+                            kind: SurfaceTypeKind::Named(SurfaceName {
+                                text: format!("A{index}"),
+                                span,
+                            }),
+                            span,
+                        })
+                        .collect(),
+                ),
+                span,
+            }
+        }
+
+        fn collection_time(annotation: &SurfaceType) -> (std::time::Duration, Vec<SurfaceName>) {
+            let started = std::time::Instant::now();
+            let mut output = Vec::new();
+            collect_free_type_names(
+                annotation,
+                &HashMap::new(),
+                &mut HashSet::new(),
+                &mut output,
+            );
+            (started.elapsed(), output)
+        }
+
+        fn indexed_reference(annotation: &SurfaceType) -> (std::time::Duration, Vec<SurfaceName>) {
+            let SurfaceTypeKind::Tuple(elements) = &annotation.kind else {
+                unreachable!("the fixture is a tuple")
+            };
+            let started = std::time::Instant::now();
+            let mut seen = HashSet::new();
+            let mut output = Vec::new();
+            for element in elements {
+                let SurfaceTypeKind::Named(name) = &element.kind else {
+                    unreachable!("every fixture element is named")
+                };
+                if seen.insert(name.text.as_str()) {
+                    output.push(name.clone());
+                }
+            }
+            (started.elapsed(), output)
+        }
+
+        let source =
+            SourceFile::new("free-type-scaling.ash", "x").expect("the scaling fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let annotation = distinct_variables(12_000, span);
+
+        let (reference_time, expected) = indexed_reference(&annotation);
+        let (collection_time, found) = collection_time(&annotation);
+
+        assert_eq!(found, expected);
+        assert!(
+            collection_time
+                < reference_time.saturating_mul(4) + std::time::Duration::from_millis(20),
+            "free-name collection took {collection_time:?}; the indexed reference took {reference_time:?}"
+        );
     }
 }

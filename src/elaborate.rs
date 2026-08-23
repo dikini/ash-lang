@@ -561,6 +561,7 @@ pub struct Elaborator {
     registry: Arc<ResolvedRegistry>,
     state: ElaboratorState,
     next_inference: u32,
+    inference_origins: Vec<Span>,
     next_generated_type_variable: u32,
     inference_solutions: HashMap<InferenceVariableId, Type>,
     monomorphic_recursive: HashSet<BinderId>,
@@ -582,6 +583,7 @@ impl Elaborator {
             registry,
             state: ElaboratorState::Ready,
             next_inference: 0,
+            inference_origins: Vec::new(),
             next_generated_type_variable: u32::MAX,
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
@@ -604,6 +606,7 @@ impl Elaborator {
             registry,
             state: ElaboratorState::Ready,
             next_inference: 0,
+            inference_origins: Vec::new(),
             next_generated_type_variable: u32::MAX,
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
@@ -727,12 +730,13 @@ impl Elaborator {
         self.builder.finish(root).map_err(Into::into)
     }
 
-    fn fresh_inference(&mut self) -> Result<Type, TypeError> {
+    fn fresh_inference(&mut self, origin: Span) -> Result<Type, TypeError> {
         let identity = InferenceVariableId::new(self.next_inference);
         self.next_inference = self
             .next_inference
             .checked_add(1)
             .ok_or_else(invalid_state)?;
+        self.inference_origins.push(origin);
         Ok(Type::Inference(identity))
     }
 
@@ -749,6 +753,7 @@ impl Elaborator {
         &mut self,
         fact: &TypeFact,
         rigid: bool,
+        origin: Span,
     ) -> Result<(Type, Vec<Type>), TypeError> {
         if fact.quantified.is_empty() {
             self.charge_type(&fact.ty)?;
@@ -760,7 +765,7 @@ impl Elaborator {
             let argument = if rigid {
                 Type::Variable(*binder)
             } else {
-                self.fresh_inference()?
+                self.fresh_inference(origin)?
             };
             replacements.insert(*binder, argument.clone());
             arguments.push(argument);
@@ -990,6 +995,24 @@ impl Elaborator {
                 "this result does not determine every inferred type",
             ));
         }
+        let ambiguous = (0..self.next_inference).find(|identity| {
+            !self
+                .inference_solutions
+                .contains_key(&InferenceVariableId::new(*identity))
+        });
+        if let Some(identity) = ambiguous {
+            let index = usize::try_from(identity).map_err(|_| invalid_state())?;
+            let origin = self
+                .inference_origins
+                .get(index)
+                .copied()
+                .ok_or_else(invalid_state)?;
+            return Err(inference_failure(
+                TypeReason::AmbiguousType,
+                origin,
+                "this expression does not determine every inferred type",
+            ));
+        }
         if !globals.is_empty() {
             let members = globals
                 .into_iter()
@@ -1079,7 +1102,7 @@ impl Elaborator {
                             .cloned()
                             .ok_or_else(invalid_state)?;
                         let rigid = self.monomorphic_recursive.contains(&occurrence.binder);
-                        let (ty, arguments) = self.instantiate(&fact, rigid)?;
+                        let (ty, arguments) = self.instantiate(&fact, rigid, current.span)?;
                         let provenance = fact.provenance.clone();
                         let scheme = if fact.quantified.is_empty() {
                             fact.ty.clone()
@@ -1141,7 +1164,7 @@ impl Elaborator {
                                 .collect::<Vec<_>>()
                                 .into_boxed_slice(),
                         };
-                        let (ty, arguments) = self.instantiate(&fact, false)?;
+                        let (ty, arguments) = self.instantiate(&fact, false, current.span)?;
                         let core_scheme = if fact.quantified.is_empty() {
                             fact.ty.clone()
                         } else {
@@ -1205,8 +1228,8 @@ impl Elaborator {
                         if !matches!(cause, Some(SynthesisCause::Binding(_))) {
                             return Err(function_needs_context(current.span, cause));
                         }
-                        let domain = self.fresh_inference()?;
-                        let codomain = self.fresh_inference()?;
+                        let domain = self.fresh_inference(current.span)?;
+                        let codomain = self.fresh_inference(current.span)?;
                         let expected = ProvenancedType::unknown(Type::Function(
                             Box::new(domain),
                             Box::new(codomain),
@@ -1397,8 +1420,8 @@ impl Elaborator {
                     let mut function = values.pop().ok_or_else(invalid_state)?;
                     let mut function_ty = self.zonk(&function.ty)?;
                     if matches!(function_ty, Type::Inference(_)) {
-                        let domain = self.fresh_inference()?;
-                        let codomain = self.fresh_inference()?;
+                        let domain = self.fresh_inference(function_span)?;
+                        let codomain = self.fresh_inference(function_span)?;
                         let exposed = Type::Function(Box::new(domain), Box::new(codomain));
                         self.unify(&function_ty, &exposed)
                             .map_err(|failure| match failure {
@@ -1545,6 +1568,7 @@ impl Elaborator {
                     let mut initializer = values.pop().ok_or_else(invalid_state)?;
                     let mut generalized = Vec::new();
                     if expected.is_none()
+                        && matches!(binding.pattern.kind, ResolvedPatternKind::Binder(_))
                         && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
                     {
                         let inferred = self.zonk(&initializer.ty)?;
