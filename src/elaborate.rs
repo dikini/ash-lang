@@ -834,6 +834,105 @@ impl Elaborator {
         Ok(())
     }
 
+    fn expose_expected_function(
+        &mut self,
+        expected: ProvenancedType,
+        span: Span,
+    ) -> Result<ProvenancedType, TypeError> {
+        let expected_ty = self.zonk(&expected.ty)?;
+        match expected_ty {
+            Type::Function(_, _) => {
+                let provenance = if expected.provenance.aligns(&expected_ty) {
+                    expected.provenance
+                } else {
+                    TypeProvenance::unknown(&expected_ty)
+                };
+                Ok(ProvenancedType {
+                    ty: expected_ty,
+                    provenance,
+                })
+            }
+            Type::Inference(_) => {
+                self.type_work
+                    .charge(3)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let domain = self.fresh_inference(span)?;
+                let codomain = self.fresh_inference(span)?;
+                let exposed = Type::Function(Box::new(domain), Box::new(codomain));
+                self.unify(&expected_ty, &exposed)
+                    .map_err(|failure| match failure {
+                        UnificationFailure::Infinite => inference_failure(
+                            TypeReason::InfiniteType,
+                            span,
+                            "this function context would require an infinite type",
+                        ),
+                        UnificationFailure::Mismatch => function_needs_context(span, None),
+                        UnificationFailure::Resource => {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        }
+                    })?;
+                Ok(ProvenancedType::unknown(exposed))
+            }
+            _ => Err(function_needs_context(span, None)),
+        }
+    }
+
+    fn require_integer(
+        &mut self,
+        operand: &TypedNode,
+        operand_span: Span,
+        operator_span: Span,
+    ) -> Result<(), TypeError> {
+        match self.unify(&operand.ty, &Type::Int) {
+            Ok(()) => Ok(()),
+            Err(UnificationFailure::Mismatch) => {
+                let found = self.zonk(&operand.ty)?;
+                let mut diagnostic = Diagnostic::new(
+                    TypeReason::OperatorOperand,
+                    SourceLabel::new(operand_span, "this operand is not an Int"),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    operator_span,
+                    "this primitive operator requires Int operands",
+                ));
+                diagnostic.expected = Some(Type::Int.to_string());
+                diagnostic.found = Some(self.registry.display_type(&found));
+                Err(TypeError::Source(Box::new(diagnostic)))
+            }
+            Err(UnificationFailure::Infinite) => Err(inference_failure(
+                TypeReason::InfiniteType,
+                operand_span,
+                "this primitive operand would require an infinite type",
+            )),
+            Err(UnificationFailure::Resource) => Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted,
+            )),
+        }
+    }
+
+    fn refine_pattern_expected(
+        &mut self,
+        expected: &Type,
+        required: &Type,
+        span: Span,
+    ) -> Result<Type, TypeError> {
+        match self.unify(expected, required) {
+            Ok(()) => self.zonk(required),
+            Err(UnificationFailure::Mismatch) => {
+                let expected = self.zonk(expected)?;
+                Err(pattern_mismatch(span, &expected, &self.registry))
+            }
+            Err(UnificationFailure::Infinite) => Err(inference_failure(
+                TypeReason::InfiniteType,
+                span,
+                "this pattern would require an infinite type",
+            )),
+            Err(UnificationFailure::Resource) => Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted,
+            )),
+        }
+    }
+
     fn elaborate_program(&mut self, program: &ResolvedProgram) -> Result<TypedNode, TypeError> {
         let mut context = TypeContext::new();
         let mut globals = Vec::with_capacity(program.definitions.len());
@@ -1252,9 +1351,7 @@ impl Elaborator {
                     kind,
                 } => match &expression.kind {
                     ResolvedExprKind::Function(function) => {
-                        if !matches!(expected.ty, Type::Function(_, _)) {
-                            return Err(function_needs_context(expression.span, None));
-                        }
+                        let expected = self.expose_expected_function(expected, expression.span)?;
                         let (domain, codomain) = expected.function_parts()?;
                         tasks.push(ElaborationTask::CheckFunction {
                             parameter: &function.pattern,
@@ -1526,7 +1623,7 @@ impl Elaborator {
                     left_span,
                 } => {
                     let left = values.pop().ok_or_else(invalid_state)?;
-                    require_integer(&left, left_span, operator_span, &self.registry)?;
+                    self.require_integer(&left, left_span, operator_span)?;
                     tasks.push(ElaborationTask::AfterRight {
                         primitive,
                         whole_span,
@@ -1547,7 +1644,7 @@ impl Elaborator {
                     right_span,
                 } => {
                     let right = values.pop().ok_or_else(invalid_state)?;
-                    require_integer(&right, right_span, operator_span, &self.registry)?;
+                    self.require_integer(&right, right_span, operator_span)?;
                     let ty = match primitive {
                         Primitive::Add | Primitive::Multiply => Type::Int,
                         Primitive::Equal => Type::Bool,
@@ -1982,6 +2079,7 @@ impl Elaborator {
         binders: &mut Vec<BinderId>,
         binder_reason: GeneratedReason,
     ) -> Result<CorePattern, TypeError> {
+        let mut expected = self.zonk(expected)?;
         let kind = match &pattern.kind {
             ResolvedPatternKind::Binder(binder) => {
                 let typed = self.builder.resolved_binder(
@@ -1996,7 +2094,7 @@ impl Elaborator {
                     .insert_with_provenance(
                         binder.id,
                         expected.clone(),
-                        TypeProvenance::unknown(expected),
+                        TypeProvenance::unknown(&expected),
                     )?
                     .is_some()
                 {
@@ -2006,16 +2104,33 @@ impl Elaborator {
                 CorePatternKind::Binder(typed)
             }
             ResolvedPatternKind::Wildcard => CorePatternKind::Wildcard,
-            ResolvedPatternKind::Boolean(value) if matches!(expected, Type::Bool) => {
+            ResolvedPatternKind::Boolean(value) => {
+                expected = self.refine_pattern_expected(&expected, &Type::Bool, pattern.span)?;
                 CorePatternKind::Boolean(*value)
             }
-            ResolvedPatternKind::Unit if matches!(expected, Type::Unit) => CorePatternKind::Unit,
+            ResolvedPatternKind::Unit => {
+                expected = self.refine_pattern_expected(&expected, &Type::Unit, pattern.span)?;
+                CorePatternKind::Unit
+            }
             ResolvedPatternKind::Tuple(patterns) => {
-                let Type::Tuple(types) = expected else {
-                    return Err(pattern_mismatch(pattern.span, expected, &self.registry));
+                if matches!(expected, Type::Inference(_)) {
+                    self.type_work
+                        .charge(patterns.len().saturating_add(1))
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    let mut types = Vec::with_capacity(patterns.len());
+                    for _ in patterns {
+                        types.push(self.fresh_inference(pattern.span)?);
+                    }
+                    let required = Type::Tuple(types.into_boxed_slice());
+                    expected = self.refine_pattern_expected(&expected, &required, pattern.span)?;
+                }
+                let Type::Tuple(types) = &expected else {
+                    return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
                 };
                 if patterns.len() != types.len() {
-                    return Err(pattern_mismatch(pattern.span, expected, &self.registry));
+                    return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
                 }
                 let mut checked = Vec::with_capacity(patterns.len());
                 for (pattern, ty) in patterns.iter().zip(types) {
@@ -2034,16 +2149,38 @@ impl Elaborator {
                 payload,
                 ..
             } => {
-                let (owner, arguments): (_, &[Type]) = match expected {
-                    Type::Nominal(owner) => (*owner, &[]),
-                    Type::AppliedNominal(owner, arguments) => (*owner, arguments),
-                    _ => return Err(pattern_mismatch(pattern.span, expected, &self.registry)),
-                };
                 let Some(info) = self.registry.constructor(*constructor) else {
                     return Err(invalid_state());
                 };
                 let info_owner = info.owner;
                 let declared_payload = info.payload.clone();
+                if matches!(expected, Type::Inference(_)) {
+                    let parameter_count = self
+                        .registry
+                        .nominal_parameters(info_owner)
+                        .ok_or_else(invalid_state)?
+                        .len();
+                    self.type_work
+                        .charge(parameter_count.saturating_add(1))
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    let required = if parameter_count == 0 {
+                        Type::Nominal(info_owner)
+                    } else {
+                        let mut arguments = Vec::with_capacity(parameter_count);
+                        for _ in 0..parameter_count {
+                            arguments.push(self.fresh_inference(pattern.span)?);
+                        }
+                        Type::AppliedNominal(info_owner, arguments.into_boxed_slice())
+                    };
+                    expected = self.refine_pattern_expected(&expected, &required, pattern.span)?;
+                }
+                let (owner, arguments): (_, &[Type]) = match &expected {
+                    Type::Nominal(owner) => (*owner, &[]),
+                    Type::AppliedNominal(owner, arguments) => (*owner, arguments),
+                    _ => return Err(pattern_mismatch(pattern.span, &expected, &self.registry)),
+                };
                 let parameters = self
                     .registry
                     .nominal_parameters(owner)
@@ -2091,10 +2228,9 @@ impl Elaborator {
                     payload: checked_payload,
                 }
             }
-            _ => return Err(pattern_mismatch(pattern.span, expected, &self.registry)),
         };
         Ok(CorePattern::new(
-            expected.clone(),
+            expected,
             Origin::Source(pattern.span),
             kind,
         ))
@@ -2122,11 +2258,11 @@ impl Elaborator {
     ) -> Result<(), TypeError> {
         let FunctionCheck {
             parameter,
-            domain,
+            mut domain,
             codomain,
             body,
             presentation,
-            function_type,
+            mut function_type,
             body_check,
         } = check;
         let mut pattern_binders = Vec::new();
@@ -2137,6 +2273,14 @@ impl Elaborator {
             &mut pattern_binders,
             GeneratedReason::FunctionLowering,
         )?;
+        domain.ty = self.zonk(&domain.ty)?;
+        if !domain.provenance.aligns(&domain.ty) {
+            domain.provenance = TypeProvenance::unknown(&domain.ty);
+        }
+        function_type.ty = self.zonk(&function_type.ty)?;
+        if !function_type.provenance.aligns(&function_type.ty) {
+            function_type.provenance = TypeProvenance::unknown(&function_type.ty);
+        }
         let (parameter_binder, retained_pattern) = match &pattern.kind {
             CorePatternKind::Binder(binder) => (binder.clone(), None),
             _ => (
@@ -2937,28 +3081,6 @@ fn schedule_left<'a>(
         expression: &binary.left,
         cause: Some(SynthesisCause::Operator(binary.operator_span)),
     });
-}
-
-fn require_integer(
-    operand: &TypedNode,
-    operand_span: Span,
-    operator_span: Span,
-    registry: &ResolvedRegistry,
-) -> Result<(), TypeError> {
-    if structurally_equal(&operand.ty, &Type::Int) {
-        return Ok(());
-    }
-    let mut diagnostic = Diagnostic::new(
-        TypeReason::OperatorOperand,
-        SourceLabel::new(operand_span, "this operand is not an Int"),
-    );
-    diagnostic.related.push(SourceLabel::new(
-        operator_span,
-        "this primitive operator requires Int operands",
-    ));
-    diagnostic.expected = Some(Type::Int.to_string());
-    diagnostic.found = Some(registry.display_type(&operand.ty));
-    Err(TypeError::Source(Box::new(diagnostic)))
 }
 
 fn invalid_state() -> TypeError {

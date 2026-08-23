@@ -141,6 +141,51 @@ fn anonymous_function_local_bindings_generalize() {
 }
 
 #[test]
+fn primitive_operands_refine_inferred_function_parameters() {
+    let observation = run("{\nlet increment = fn(value) {\nvalue + 1\n}\nincrement(41)\n}\n");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn nested_anonymous_functions_refine_inferred_codomains() {
+    let observation =
+        run("{\nlet first = fn(left) {\nfn(right) {\nleft\n}\n}\nfirst(42)(false)\n}\n");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn unit_and_tuple_patterns_refine_inferred_function_domains() {
+    let observation = run(
+        "{\nlet from_unit = fn(()) {\n42\n}\nlet tuple_first = fn((left, right)) {\nleft\n}\n(from_unit(()), tuple_first((7, false)))\n}\n",
+    );
+
+    assert_eq!(observation.value_display(), "(42, 7)");
+    assert_eq!(observation.type_display(), "(Int, Int)");
+}
+
+#[test]
+fn singleton_constructor_patterns_refine_inferred_function_domains() {
+    let observation = run(
+        "type Identity<A> =\nIdentity(A)\n\n{\nlet unwrap = fn(Identity(value)) {\nvalue\n}\nunwrap(Identity(42))\n}\n",
+    );
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn boolean_patterns_refine_before_function_coverage_rejection() {
+    assert_eq!(
+        reason("{\nlet only_true = fn(true) {\n1\n}\nonly_true\n}\n"),
+        "pattern.refutable-function-domain"
+    );
+}
+
+#[test]
 fn constructor_patterns_instantiate_the_expected_nominal_arguments() {
     let observation = run(
         "type Option<A> =\nNone\n| Some(A)\n\nunwrap_or : (A, Option<A>) -> A\nunwrap_or (fallback, None) = fallback\nunwrap_or (_, Some(value)) = value\n\nunwrap_or(0, Some(42))\n",
