@@ -1,8 +1,8 @@
 # Rank-1 Polymorphism Integration Evidence
 
 This report records implementation evidence for Mini-Ash's rank-1 increment.
-It does not define Ash semantics. The [normative specification](../../../../spec/README.md)
-owns the language after the increment merges.
+It does not define Ash semantics. The
+[normative specification](../../../../spec/README.md) owns the language.
 
 ## Scope
 
@@ -18,8 +18,9 @@ The work starts from `main` at `9e7a5e0` and is isolated on
 - `8195e6f`, which bounds cumulative type work across the pipeline.
 
 The specification, executable documentation, and closure audit follow those
-checkpoints on the same branch. Intermediate commits are unsigned. Integration
-still requires review and explicit approval.
+checkpoints on the same branch. Intermediate commits are unsigned. Iterative
+review completed without actionable findings, and the user explicitly approved
+integration.
 
 ## Causal semantic model
 
@@ -212,5 +213,5 @@ Markdown lint passes for every changed document with `MD013` disabled because
 the repository's artifact metadata, tables, and formal rules intentionally
 contain long lines. Manual checks confirm new relative links, artifact
 authority, `ebnf` and `sequent` fence syntax with matching prose, closed Core
-consumer coverage, ownership release boundaries, and every CP-0004 evidence
-item.
+consumer coverage, ownership release boundaries, and every accepted-proposal
+evidence item.
