@@ -802,7 +802,16 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        self.push(
+        let parameter_admission = self
+            .type_work
+            .charge(parameters.len())
+            .map_err(|()| BuildError::TypeWorkExceeded);
+        let payloads = admit_payloads(ty, origin, &mut self.type_work);
+        let (ty, origin) = match (parameter_admission, payloads) {
+            (Err(error), _) | (Ok(()), Err(error)) => return Err(error),
+            (Ok(()), Ok(payloads)) => payloads,
+        };
+        self.push_admitted(
             ty,
             origin,
             PureExprKind::Computation(PureComputation::TypeAbstraction(TypeAbstractionNode::new(
@@ -902,31 +911,42 @@ impl CoreBuilder {
     }
 
     /// Rewrites every stored type before unchecked Core leaves elaboration.
+    ///
+    /// The rewrite callback owns cumulative structural construction work. Core
+    /// rechecks depth and cumulatively charges the quantifier identities added
+    /// to rewritten storage.
     pub(crate) fn rewrite_types<F>(&mut self, mut rewrite: F) -> Result<(), BuildError>
     where
         F: FnMut(&Type) -> Result<Type, BuildError>,
     {
+        let mut rewrite_type_work = TypeWorkBudget::default();
+        let mut rewrite_admitted = |ty: &Type| {
+            let rewritten = rewrite(ty)?;
+            admit_rewritten_type(rewritten, &mut rewrite_type_work)
+        };
         for node in &mut self.nodes {
-            node.ty = rewrite(&node.ty)?;
+            node.ty = rewrite_admitted(&node.ty)?;
             match &mut node.kind {
                 PureExprKind::Value(PureValue::Function(function)) => {
-                    function.parameter_mut().rewrite_type(&mut rewrite)?;
+                    function
+                        .parameter_mut()
+                        .rewrite_type(&mut rewrite_admitted)?;
                 }
                 PureExprKind::Computation(PureComputation::Bind(binding)) => {
-                    binding.binder_mut().rewrite_type(&mut rewrite)?;
+                    binding.binder_mut().rewrite_type(&mut rewrite_admitted)?;
                 }
                 PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
                     for member in group.members_mut() {
-                        member.binder_mut().rewrite_type(&mut rewrite)?;
+                        member.binder_mut().rewrite_type(&mut rewrite_admitted)?;
                     }
                 }
                 PureExprKind::Computation(PureComputation::Match(match_expression)) => {
                     for arm in match_expression.arms_mut() {
-                        arm.pattern_mut().rewrite_types(&mut rewrite)?;
+                        arm.pattern_mut().rewrite_types(&mut rewrite_admitted)?;
                     }
                 }
                 PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
-                    application.rewrite_types(&mut rewrite)?;
+                    application.rewrite_types(&mut rewrite_admitted)?;
                 }
                 PureExprKind::Value(
                     PureValue::Integer(_)
@@ -1283,13 +1303,28 @@ fn record_type_admission_pending(pending: usize) {
 }
 
 fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildError> {
+    admit_type_with_accounting(ty, type_work, true)
+}
+
+fn admit_rewritten_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildError> {
+    admit_type_with_accounting(ty, type_work, false)
+}
+
+fn admit_type_with_accounting(
+    ty: Type,
+    type_work: &mut TypeWorkBudget,
+    charge_structure: bool,
+) -> Result<Type, BuildError> {
     let mut work = vec![TypeAdmissionTask::Visit(ty, 0)];
     let mut tokens = Vec::new();
     let mut exceeded = false;
     #[cfg(test)]
     record_type_admission_pending(work.len());
     while let Some(task) = work.pop() {
-        if matches!(&task, TypeAdmissionTask::Visit(_, _)) && type_work.charge(1).is_err() {
+        if charge_structure
+            && matches!(&task, TypeAdmissionTask::Visit(_, _))
+            && type_work.charge(1).is_err()
+        {
             work.push(task);
             discard_type_admission_work(work);
             return Err(BuildError::TypeWorkExceeded);
@@ -1320,6 +1355,11 @@ fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildErr
             TypeAdmissionTask::Visit(Type::Forall(parameters, body), depth) => {
                 let child_depth = depth.saturating_add(1);
                 exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                if type_work.charge(parameters.len()).is_err() {
+                    work.push(TypeAdmissionTask::Visit(*body, child_depth));
+                    discard_type_admission_work(work);
+                    return Err(BuildError::TypeWorkExceeded);
+                }
                 work.push(TypeAdmissionTask::FinishForall(parameters));
                 work.push(TypeAdmissionTask::Visit(*body, child_depth));
             }
@@ -1747,6 +1787,173 @@ mod tests {
             "wide fan-out retained {} pending tasks",
             type_admission_pending_peak()
         );
+    }
+
+    #[test]
+    fn forall_quantifiers_consume_the_exact_admission_budget() {
+        let mut type_work = TypeWorkBudget::default();
+        type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 4)
+            .expect("test setup leaves four type-work cells");
+        let parameters = vec![
+            crate::types::TypeVariableId::new(0),
+            crate::types::TypeVariableId::new(1),
+        ]
+        .into_boxed_slice();
+
+        admit_type(
+            Type::Forall(parameters, Box::new(Type::Unit)),
+            &mut type_work,
+        )
+        .expect("one forall cell, two quantifiers, and one body cell fit exactly");
+        assert_eq!(
+            admit_type(Type::Unit, &mut type_work),
+            Err(BuildError::TypeWorkExceeded)
+        );
+    }
+
+    #[test]
+    fn type_abstraction_binders_consume_the_exact_builder_budget() {
+        let source = SourceFile::new("type-abstraction.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let parameters = vec![
+            crate::types::TypeVariableId::new(0),
+            crate::types::TypeVariableId::new(1),
+        ];
+        let mut builder = CoreBuilder::new();
+        let body = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("small body");
+        builder
+            .type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 4)
+            .expect("test setup leaves three cells after the body");
+
+        builder
+            .type_abstraction(parameters, body, Type::Unit, origin.clone())
+            .expect("two binders and one result type fit exactly");
+        assert_eq!(
+            builder.unit(Type::Unit, origin),
+            Err(BuildError::TypeWorkExceeded)
+        );
+    }
+
+    #[test]
+    fn type_application_arguments_charge_quantifiers_at_the_exact_boundary() {
+        let source = SourceFile::new("type-application.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let parameters = vec![
+            crate::types::TypeVariableId::new(0),
+            crate::types::TypeVariableId::new(1),
+        ]
+        .into_boxed_slice();
+        let mut builder = CoreBuilder::new();
+        let function = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("small function placeholder");
+        builder
+            .type_work
+            .charge(crate::types::TYPE_WORK_LIMIT - 6)
+            .expect("test setup leaves five cells after the function");
+
+        builder
+            .type_application(
+                function,
+                vec![Type::Forall(parameters, Box::new(Type::Unit))],
+                Type::Unit,
+                origin.clone(),
+            )
+            .expect("the argument scheme and result fit exactly");
+        assert_eq!(
+            builder.unit(Type::Unit, origin),
+            Err(BuildError::TypeWorkExceeded)
+        );
+    }
+
+    #[test]
+    fn rewritten_forall_quantifiers_cross_the_same_admission_boundary() {
+        let source = SourceFile::new("rewrite.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let parameters = (0..=crate::types::TYPE_WORK_LIMIT)
+            .map(|index| {
+                crate::types::TypeVariableId::new(u32::try_from(index).expect("parameter identity"))
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let mut builder = CoreBuilder::new();
+        builder.unit(Type::Unit, origin).expect("small stored node");
+        let mut replacement = Some(Type::Forall(parameters, Box::new(Type::Unit)));
+
+        let error = builder
+            .rewrite_types(|_| Ok(replacement.take().expect("one stored type")))
+            .expect_err("rewritten quantifiers must be admitted before storage");
+
+        assert_eq!(error, BuildError::TypeWorkExceeded);
+    }
+
+    #[test]
+    fn rewritten_type_application_arguments_charge_quantifiers() {
+        let source = SourceFile::new("rewrite-argument.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let parameters = (0..=crate::types::TYPE_WORK_LIMIT)
+            .map(|index| {
+                crate::types::TypeVariableId::new(u32::try_from(index).expect("parameter identity"))
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let mut builder = CoreBuilder::new();
+        let function = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("small function placeholder");
+        builder
+            .type_application(function, vec![Type::Int], Type::Unit, origin)
+            .expect("small type application");
+        let mut replacement = Some(Type::Forall(parameters, Box::new(Type::Unit)));
+        let mut visited = 0_usize;
+
+        let error = builder
+            .rewrite_types(|ty| {
+                visited += 1;
+                if visited == 3 {
+                    Ok(replacement.take().expect("one application argument"))
+                } else {
+                    Ok(ty.clone())
+                }
+            })
+            .expect_err("rewritten argument quantifiers must be admitted before storage");
+
+        assert_eq!(error, BuildError::TypeWorkExceeded);
+    }
+
+    #[test]
+    fn quantifier_failures_dismantle_unadmitted_types_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("core-quantifier-boundary".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("quantifiers.ash", "()").expect("test source");
+                let origin = generated_origin(&source, 0);
+                let parameters = vec![
+                    crate::types::TypeVariableId::new(0),
+                    crate::types::TypeVariableId::new(1),
+                ];
+                let mut builder = CoreBuilder::new();
+                let body = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("small abstraction body");
+                builder
+                    .type_work
+                    .charge(crate::types::TYPE_WORK_LIMIT - 2)
+                    .expect("test setup leaves one type-work cell after the body");
+
+                assert_eq!(
+                    builder.type_abstraction(parameters, body, function_type(50_000), origin,),
+                    Err(BuildError::TypeWorkExceeded)
+                );
+            })
+            .expect("quantifier admission thread should start")
+            .join()
+            .expect("quantifier rejection must fit the small stack");
     }
 
     #[test]

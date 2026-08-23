@@ -113,6 +113,42 @@ fn core_construction_charges_type_cells_cumulatively_before_storage() {
 }
 
 #[test]
+fn core_construction_charges_forall_quantifiers_before_storage() {
+    let file = source("bounded forall construction");
+    let origin = whole_origin(&file);
+    let parameters = (0..ash::types::TYPE_WORK_LIMIT)
+        .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let mut builder = CoreBuilder::new();
+
+    let error = builder
+        .unit(Type::Forall(parameters, Box::new(Type::Unit)), origin)
+        .expect_err("quantifiers must consume Core's cumulative type budget");
+
+    assert_eq!(error, BuildError::TypeWorkExceeded);
+}
+
+#[test]
+fn core_construction_charges_type_abstraction_binders_before_storage() {
+    let file = source("bounded type abstraction construction");
+    let origin = whole_origin(&file);
+    let parameters = (0..ash::types::TYPE_WORK_LIMIT)
+        .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+        .collect::<Vec<_>>();
+    let mut builder = CoreBuilder::new();
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("small abstraction body");
+
+    let error = builder
+        .type_abstraction(parameters, body, Type::Unit, origin)
+        .expect_err("abstraction binders must consume Core's cumulative type budget");
+
+    assert_eq!(error, BuildError::TypeWorkExceeded);
+}
+
+#[test]
 fn expanded_malformed_type_application_maps_to_validation_resource() {
     const WIDTH: usize = 700;
     let file = source("expanded malformed type application");

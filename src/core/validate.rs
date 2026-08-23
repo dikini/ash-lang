@@ -417,8 +417,14 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.extend(arguments.iter().map(|argument| (argument, false)));
                 }
                 Type::Forall(parameters, body) if allow_scheme => {
-                    let unique = parameters.iter().copied().collect::<HashSet<_>>();
-                    if parameters.is_empty() || unique.len() != parameters.len() {
+                    self.charge_type_work(parameters.len())?;
+                    let mut unique = HashSet::with_capacity(parameters.len());
+                    if parameters.is_empty()
+                        || !parameters
+                            .iter()
+                            .copied()
+                            .all(|parameter| unique.insert(parameter))
+                    {
                         return Ok(false);
                     }
                     work.push((body, false));
@@ -505,7 +511,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.push(codomain);
                     work.push(domain);
                 }
-                Type::Forall(_, body) => work.push(body),
+                Type::Forall(parameters, body) => {
+                    self.charge_type_work(parameters.len())?;
+                    work.push(body);
+                }
                 Type::Int
                 | Type::Bool
                 | Type::Unit
@@ -966,13 +975,14 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Some(id),
                     ));
                 };
-                let unique = abstraction
-                    .parameters()
-                    .iter()
-                    .copied()
-                    .collect::<HashSet<_>>();
+                self.charge_type_work(abstraction.parameters().len())?;
+                let mut unique = HashSet::with_capacity(abstraction.parameters().len());
                 if abstraction.parameters().is_empty()
-                    || unique.len() != abstraction.parameters().len()
+                    || !abstraction
+                        .parameters()
+                        .iter()
+                        .copied()
+                        .all(|parameter| unique.insert(parameter))
                     || abstraction.parameters() != parameters.as_ref()
                     || !same_type(&body.ty, scheme_body)
                     || matches!(scheme_body.as_ref(), Type::Forall(_, _))
@@ -1002,11 +1012,14 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Some(id),
                     ));
                 }
-                let replacements = parameters
-                    .iter()
-                    .zip(application.arguments())
-                    .map(|(parameter, argument)| (*parameter, argument.clone()))
-                    .collect();
+                self.charge_type_work(parameters.len())?;
+                let mut replacements = HashMap::with_capacity(parameters.len());
+                replacements.extend(
+                    parameters
+                        .iter()
+                        .zip(application.arguments())
+                        .map(|(parameter, argument)| (*parameter, argument.clone())),
+                );
                 let instantiated = substitute_type_variables_with(body, &replacements, |cells| {
                     self.charge_type_work(cells)
                 })?;
@@ -1275,6 +1288,20 @@ impl<'program, 'source> Validator<'program, 'source> {
     fn validate_type_scopes(&self) -> Result<(), ValidationError> {
         let mut scheduled = vec![false; self.program.nodes.len()];
         let mut requirements = vec![None; self.program.nodes.len()];
+        let mut remaining_uses = vec![0_usize; self.program.nodes.len()];
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            let id = node_id(self.program.arena, index)?;
+            for child_index in 0..node.kind.child_count() {
+                let child = node
+                    .kind
+                    .child_at(child_index)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(id)))?;
+                let child_index = self.index(child)?;
+                remaining_uses[child_index] = remaining_uses[child_index]
+                    .checked_add(1)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            }
+        }
         let mut work = vec![ScopeAnalysisTask::Enter(self.program.root)];
         while let Some(task) = work.pop() {
             match task {
@@ -1297,45 +1324,44 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let node = self.node(id)?;
                     let mut free = HashSet::new();
                     self.charge_type_structure(&node.ty)?;
-                    collect_free_type_variables(&node.ty, &mut free);
+                    self.collect_free_type_variables(&node.ty, &mut free)?;
                     for child_index in 0..node.kind.child_count() {
                         let child = node.kind.child_at(child_index).ok_or_else(|| {
                             ValidationError::new(ValidationReason::TypeScope, Some(id))
                         })?;
-                        let child_index = self.index(child)?;
-                        let child_free = requirements
-                            .get(child_index)
-                            .and_then(Option::as_ref)
-                            .ok_or_else(|| {
-                                ValidationError::new(ValidationReason::TypeScope, Some(id))
-                            })?;
-                        free.extend(child_free);
+                        let child_free = self.take_type_scope_requirements(
+                            &mut requirements,
+                            &mut remaining_uses,
+                            child,
+                            id,
+                        )?;
+                        self.merge_type_scope_requirements(&mut free, child_free)?;
                     }
                     match &node.kind {
                         PureExprKind::Value(PureValue::Function(function)) => {
                             self.charge_type_structure(function.parameter().ty())?;
-                            collect_free_type_variables(function.parameter().ty(), &mut free);
+                            self.collect_free_type_variables(function.parameter().ty(), &mut free)?;
                         }
                         PureExprKind::Computation(PureComputation::Bind(binding)) => {
                             self.charge_type_structure(binding.binder().ty())?;
-                            collect_free_type_variables(binding.binder().ty(), &mut free);
+                            self.collect_free_type_variables(binding.binder().ty(), &mut free)?;
                         }
                         PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
                             for member in group.members() {
                                 self.charge_type_structure(member.binder().ty())?;
-                                collect_free_type_variables(member.binder().ty(), &mut free);
+                                self.collect_free_type_variables(member.binder().ty(), &mut free)?;
                             }
                         }
                         PureExprKind::Computation(PureComputation::Match(match_node)) => {
                             for arm in match_node.arms() {
                                 self.charge_pattern_type_structure(arm.pattern())?;
-                                collect_pattern_type_variables(arm.pattern(), &mut free);
+                                self.collect_pattern_type_variables(arm.pattern(), &mut free)?;
                             }
                         }
                         PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
                             for argument in operation.arguments() {
                                 self.charge_type_structure(argument)?;
-                                collect_free_type_variables(argument, &mut free);
+                                self.collect_free_type_variables(argument, &mut free)?;
                             }
                         }
                         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
@@ -1372,6 +1398,147 @@ impl<'program, 'source> Validator<'program, 'source> {
                 Some(self.program.root),
             ))
         }
+    }
+
+    fn take_type_scope_requirements(
+        &self,
+        requirements: &mut [Option<HashSet<crate::types::TypeVariableId>>],
+        remaining_uses: &mut [usize],
+        child: NodeId,
+        parent: NodeId,
+    ) -> Result<HashSet<crate::types::TypeVariableId>, ValidationError> {
+        let child_index = self.index(child)?;
+        let remaining = remaining_uses
+            .get_mut(child_index)
+            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
+        *remaining = remaining
+            .checked_sub(1)
+            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
+        let requirement = requirements
+            .get_mut(child_index)
+            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
+        if *remaining == 0 {
+            return requirement
+                .take()
+                .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)));
+        }
+        let requirement = requirement
+            .as_ref()
+            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
+        self.charge_type_work(requirement.len())?;
+        let mut cloned = HashSet::new();
+        cloned
+            .try_reserve(requirement.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(parent)))?;
+        cloned.extend(requirement.iter().copied());
+        Ok(cloned)
+    }
+
+    fn merge_type_scope_requirements(
+        &self,
+        target: &mut HashSet<crate::types::TypeVariableId>,
+        mut incoming: HashSet<crate::types::TypeVariableId>,
+    ) -> Result<(), ValidationError> {
+        if target.is_empty() {
+            *target = incoming;
+            return Ok(());
+        }
+        if target.len() < incoming.len() {
+            std::mem::swap(target, &mut incoming);
+        }
+        for variable in incoming {
+            self.retain_type_scope_requirement(target, variable)?;
+        }
+        Ok(())
+    }
+
+    fn retain_type_scope_requirement(
+        &self,
+        output: &mut HashSet<crate::types::TypeVariableId>,
+        variable: crate::types::TypeVariableId,
+    ) -> Result<(), ValidationError> {
+        if output.contains(&variable) {
+            return Ok(());
+        }
+        self.charge_type_work(1)?;
+        output
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        output.insert(variable);
+        Ok(())
+    }
+
+    fn collect_free_type_variables(
+        &self,
+        ty: &Type,
+        output: &mut HashSet<crate::types::TypeVariableId>,
+    ) -> Result<(), ValidationError> {
+        enum Task<'a> {
+            Visit(&'a Type),
+            Sequence(std::slice::Iter<'a, Type>),
+        }
+
+        let mut discovered = HashSet::new();
+        let mut quantified = Vec::new();
+        let mut work = vec![Task::Visit(ty)];
+        while let Some(task) = work.pop() {
+            match task {
+                Task::Visit(Type::Variable(variable)) => {
+                    self.retain_type_scope_requirement(&mut discovered, *variable)?;
+                }
+                Task::Visit(Type::Tuple(elements) | Type::AppliedNominal(_, elements)) => {
+                    work.push(Task::Sequence(elements.iter()));
+                }
+                Task::Visit(Type::Function(domain, codomain)) => {
+                    work.push(Task::Visit(codomain));
+                    work.push(Task::Visit(domain));
+                }
+                Task::Visit(Type::Forall(parameters, body)) => {
+                    quantified.push(parameters.as_ref());
+                    work.push(Task::Visit(body));
+                }
+                Task::Visit(
+                    Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_),
+                ) => {}
+                Task::Sequence(mut remaining) => {
+                    if let Some(ty) = remaining.next() {
+                        work.push(Task::Sequence(remaining));
+                        work.push(Task::Visit(ty));
+                    }
+                }
+            }
+        }
+        for parameters in quantified {
+            for parameter in parameters {
+                discovered.remove(parameter);
+            }
+        }
+        self.merge_type_scope_requirements(output, discovered)
+    }
+
+    fn collect_pattern_type_variables(
+        &self,
+        pattern: &CorePattern,
+        output: &mut HashSet<crate::types::TypeVariableId>,
+    ) -> Result<(), ValidationError> {
+        let mut work = vec![pattern];
+        while let Some(pattern) = work.pop() {
+            self.collect_free_type_variables(&pattern.ty, output)?;
+            match &pattern.kind {
+                CorePatternKind::Binder(binder) => {
+                    self.collect_free_type_variables(binder.ty(), output)?;
+                }
+                CorePatternKind::Tuple(elements) => work.extend(elements),
+                CorePatternKind::Constructor { payload, .. } => {
+                    if let Some(payload) = payload.as_deref() {
+                        work.push(payload);
+                    }
+                }
+                CorePatternKind::Wildcard | CorePatternKind::Boolean(_) | CorePatternKind::Unit => {
+                }
+            }
+        }
+        Ok(())
     }
 
     fn analyze_free_binders(&self) -> Result<ScopeAnalysis, ValidationError> {
@@ -1563,57 +1730,6 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
         .map_err(|_| ValidationError::new(ValidationReason::NodeBounds, None))
 }
 
-fn collect_free_type_variables(ty: &Type, output: &mut HashSet<crate::types::TypeVariableId>) {
-    let mut bound = Vec::new();
-    let mut discovered = HashSet::new();
-    let mut work = vec![ty];
-    while let Some(ty) = work.pop() {
-        match ty {
-            Type::Variable(variable) => {
-                discovered.insert(*variable);
-            }
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
-                work.extend(elements);
-            }
-            Type::Function(domain, codomain) => {
-                work.push(codomain);
-                work.push(domain);
-            }
-            Type::Forall(parameters, body) => {
-                bound.extend(parameters.iter().copied());
-                work.push(body);
-            }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
-        }
-    }
-    for variable in bound {
-        discovered.remove(&variable);
-    }
-    output.extend(discovered);
-}
-
-fn collect_pattern_type_variables(
-    pattern: &CorePattern,
-    output: &mut HashSet<crate::types::TypeVariableId>,
-) {
-    let mut work = vec![pattern];
-    while let Some(pattern) = work.pop() {
-        collect_free_type_variables(&pattern.ty, output);
-        match &pattern.kind {
-            CorePatternKind::Binder(binder) => {
-                collect_free_type_variables(binder.ty(), output);
-            }
-            CorePatternKind::Tuple(elements) => work.extend(elements),
-            CorePatternKind::Constructor { payload, .. } => {
-                if let Some(payload) = payload.as_deref() {
-                    work.push(payload);
-                }
-            }
-            CorePatternKind::Wildcard | CorePatternKind::Boolean(_) | CorePatternKind::Unit => {}
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1651,6 +1767,341 @@ mod tests {
 
         let error = validate(program, &[&file]).expect_err("type work must be bounded");
         assert_eq!(error.reason(), ValidationReason::Resource);
+    }
+
+    #[test]
+    fn oversized_malformed_forall_maps_directly_to_validation_resource() {
+        let file = source();
+        let arena = super::super::dialect::ArenaId::new(100);
+        let parameters = (0..crate::types::TYPE_WORK_LIMIT)
+            .map(|index| {
+                crate::types::TypeVariableId::new(u32::try_from(index).expect("parameter identity"))
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes: vec![StoredNode {
+                dialect: DialectId::PURE,
+                ty: Type::Forall(parameters, Box::new(Type::Unit)),
+                origin: Some(origin(&file)),
+                kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+            }],
+            root: NodeId::new(arena, 0),
+        };
+
+        let error = validate(program, &[&file]).expect_err("quantifier work must be bounded");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+    }
+
+    #[test]
+    fn type_scope_analysis_charges_retained_free_variables() {
+        let file = source();
+        let arena = super::super::dialect::ArenaId::new(101);
+        let parameter = crate::types::TypeVariableId::new(0);
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes: vec![
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Variable(parameter),
+                    origin: Some(origin(&file)),
+                    kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Forall(
+                        vec![parameter].into_boxed_slice(),
+                        Box::new(Type::Variable(parameter)),
+                    ),
+                    origin: Some(origin(&file)),
+                    kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        super::super::type_ops::TypeAbstractionNode::new(
+                            vec![parameter],
+                            NodeId::new(arena, 0),
+                        ),
+                    )),
+                },
+            ],
+            root: NodeId::new(arena, 1),
+        };
+        let validator = Validator::new(&program, &[&file]);
+        validator
+            .charge_type_work(TYPE_WORK_LIMIT - 3)
+            .expect("test setup leaves the old structural allowance");
+
+        let error = validator
+            .validate_type_scopes()
+            .expect_err("retained type-scope requirements must be charged");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+    }
+
+    #[test]
+    fn linear_type_scope_chain_uses_the_exact_proportional_budget() {
+        const WIDTH: usize = 4_096;
+        const EXPECTED_WORK: usize = 5 * WIDTH + 2;
+        let file = source();
+        let origin = origin(&file);
+        let arena = super::super::dialect::ArenaId::new(104);
+        let parameters = (0..WIDTH)
+            .map(|index| {
+                crate::types::TypeVariableId::new(u32::try_from(index).expect("parameter identity"))
+            })
+            .collect::<Vec<_>>();
+        let mut nodes = vec![StoredNode {
+            dialect: DialectId::PURE,
+            ty: Type::Unit,
+            origin: Some(origin.clone()),
+            kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+        }];
+        for (index, parameter) in parameters.iter().copied().enumerate() {
+            nodes.push(StoredNode {
+                dialect: DialectId::PURE,
+                ty: Type::Unit,
+                origin: Some(origin.clone()),
+                kind: PureExprKind::Computation(PureComputation::TypeApplication(
+                    super::super::type_ops::TypeApplicationNode::new(
+                        NodeId::new(arena, u32::try_from(index).expect("previous node identity")),
+                        vec![Type::Variable(parameter)],
+                    ),
+                )),
+            });
+        }
+        let body = NodeId::new(arena, u32::try_from(WIDTH).expect("body identity"));
+        let root = NodeId::new(arena, u32::try_from(WIDTH + 1).expect("root node identity"));
+        nodes.push(StoredNode {
+            dialect: DialectId::PURE,
+            ty: Type::Forall(parameters.clone().into_boxed_slice(), Box::new(Type::Unit)),
+            origin: Some(origin),
+            kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                super::super::type_ops::TypeAbstractionNode::new(parameters, body),
+            )),
+        });
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes,
+            root,
+        };
+        let validator = Validator::new(&program, &[&file]);
+        validator
+            .charge_type_work(TYPE_WORK_LIMIT - EXPECTED_WORK)
+            .expect("test setup leaves the exact proportional allowance");
+
+        validator
+            .validate_type_scopes()
+            .expect("the linear scope chain fits its proportional allowance");
+        assert_eq!(
+            validator
+                .charge_type_work(1)
+                .expect_err("scope traversal consumed its exact allowance")
+                .reason(),
+            ValidationReason::Resource
+        );
+    }
+
+    #[test]
+    fn type_scope_requirements_handle_shared_and_nested_abstractions() {
+        let file = source();
+        let origin = origin(&file);
+        let arena = super::super::dialect::ArenaId::new(105);
+        let parameter = crate::types::TypeVariableId::new(0);
+        let outer_parameter = crate::types::TypeVariableId::new(1);
+        let occurrence = NodeId::new(arena, 0);
+        let inner = NodeId::new(arena, 1);
+        let left = NodeId::new(arena, 2);
+        let right = NodeId::new(arena, 3);
+        let root = NodeId::new(arena, 4);
+        let scheme = Type::Forall(
+            vec![parameter].into_boxed_slice(),
+            Box::new(Type::Variable(parameter)),
+        );
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes: vec![
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Variable(parameter),
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: scheme.clone(),
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        super::super::type_ops::TypeAbstractionNode::new(
+                            vec![parameter],
+                            occurrence,
+                        ),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Forall(
+                        vec![outer_parameter].into_boxed_slice(),
+                        Box::new(Type::Unit),
+                    ),
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        super::super::type_ops::TypeAbstractionNode::new(
+                            vec![outer_parameter],
+                            inner,
+                        ),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: scheme,
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        super::super::type_ops::TypeAbstractionNode::new(
+                            vec![parameter],
+                            occurrence,
+                        ),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Tuple(vec![Type::Unit, Type::Unit].into_boxed_slice()),
+                    origin: Some(origin),
+                    kind: PureExprKind::Computation(PureComputation::Tuple(
+                        super::super::data::TupleNode::new(vec![left, right]),
+                    )),
+                },
+            ],
+            root,
+        };
+
+        Validator::new(&program, &[&file])
+            .validate_type_scopes()
+            .expect("both paths to the shared occurrence bind its type identity");
+    }
+
+    #[test]
+    fn forall_validation_charges_the_exact_quantifier_boundary() {
+        let file = source();
+        let arena = super::super::dialect::ArenaId::new(102);
+        let parameters = vec![
+            crate::types::TypeVariableId::new(0),
+            crate::types::TypeVariableId::new(1),
+        ]
+        .into_boxed_slice();
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes: vec![StoredNode {
+                dialect: DialectId::PURE,
+                ty: Type::Unit,
+                origin: Some(origin(&file)),
+                kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+            }],
+            root: NodeId::new(arena, 0),
+        };
+        let validator = Validator::new(&program, &[&file]);
+        validator
+            .charge_type_work(TYPE_WORK_LIMIT - 4)
+            .expect("test setup leaves four type-work cells");
+
+        assert!(
+            validator
+                .valid_type(Some(&Type::Forall(parameters, Box::new(Type::Unit))))
+                .expect("the exact quantifier boundary validates")
+        );
+        let error = validator
+            .valid_type(Some(&Type::Unit))
+            .expect_err("the exact boundary leaves no uncharged work");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+    }
+
+    #[test]
+    fn type_operation_validation_charges_binders_and_application_index_entries() {
+        let file = source();
+        let origin = origin(&file);
+        let arena = super::super::dialect::ArenaId::new(103);
+        let parameter = crate::types::TypeVariableId::new(0);
+        let body = NodeId::new(arena, 0);
+        let abstraction = NodeId::new(arena, 1);
+        let application = NodeId::new(arena, 2);
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena,
+            nodes: vec![
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Unit,
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+                    origin: Some(origin.clone()),
+                    kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        super::super::type_ops::TypeAbstractionNode::new(vec![parameter], body),
+                    )),
+                },
+                StoredNode {
+                    dialect: DialectId::PURE,
+                    ty: Type::Unit,
+                    origin: Some(origin),
+                    kind: PureExprKind::Computation(PureComputation::TypeApplication(
+                        super::super::type_ops::TypeApplicationNode::new(
+                            abstraction,
+                            vec![Type::Int],
+                        ),
+                    )),
+                },
+            ],
+            root: application,
+        };
+
+        let abstraction_validator = Validator::new(&program, &[&file]);
+        abstraction_validator
+            .charge_type_work(TYPE_WORK_LIMIT - 1)
+            .expect("test setup leaves one abstraction-binder entry");
+        abstraction_validator
+            .validate_computation(
+                abstraction,
+                &program.nodes[1],
+                match &program.nodes[1].kind {
+                    PureExprKind::Computation(computation) => computation,
+                    _ => unreachable!("test abstraction computation"),
+                },
+            )
+            .expect("one abstraction binder fits exactly");
+        assert_eq!(
+            abstraction_validator
+                .charge_type_work(1)
+                .expect_err("the binder consumed the remaining work")
+                .reason(),
+            ValidationReason::Resource
+        );
+
+        let application_validator = Validator::new(&program, &[&file]);
+        application_validator
+            .charge_type_work(TYPE_WORK_LIMIT - 3)
+            .expect("test setup leaves argument, index, and substitution work");
+        application_validator
+            .validate_computation(
+                application,
+                &program.nodes[2],
+                match &program.nodes[2].kind {
+                    PureExprKind::Computation(computation) => computation,
+                    _ => unreachable!("test application computation"),
+                },
+            )
+            .expect("one argument, replacement entry, and result cell fit exactly");
+        assert_eq!(
+            application_validator
+                .charge_type_work(1)
+                .expect_err("type application consumed the remaining work")
+                .reason(),
+            ValidationReason::Resource
+        );
     }
 
     #[test]
