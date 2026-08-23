@@ -3456,8 +3456,9 @@ fn zonk_type_with_status<E>(
                 work.push(ChargeTask::Visit(codomain));
                 work.push(ChargeTask::Visit(domain));
             }
-            ChargeTask::Visit(Type::Forall(_, body)) => {
+            ChargeTask::Visit(Type::Forall(parameters, body)) => {
                 charge(1)?;
+                charge(parameters.len())?;
                 work.push(ChargeTask::Visit(body));
             }
             ChargeTask::Visit(
@@ -3778,6 +3779,35 @@ mod tests {
 
         assert_eq!(result, Err(()));
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn zonking_charges_forall_quantifiers_before_cloning_them() {
+        const WIDTH: usize = 4_096;
+        const EXACT_WORK: usize = WIDTH + 2;
+        let parameters = (0..WIDTH)
+            .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let source = Type::Forall(parameters, Box::new(Type::Unit));
+
+        let mut short_remaining = EXACT_WORK - 1;
+        let short = zonk_type_with_status(&source, &HashMap::new(), |cells| {
+            short_remaining = short_remaining.checked_sub(cells).ok_or(())?;
+            Ok::<(), ()>(())
+        });
+        assert!(matches!(short, Err(())));
+        assert_eq!(short_remaining, 0);
+
+        let mut exact_remaining = EXACT_WORK;
+        let (zonked, unresolved) = zonk_type_with_status(&source, &HashMap::new(), |cells| {
+            exact_remaining = exact_remaining.checked_sub(cells).ok_or(())?;
+            Ok::<(), ()>(())
+        })
+        .expect("the wrapper, quantifiers, and body fit exactly");
+        assert_eq!(zonked, source);
+        assert!(!unresolved);
+        assert_eq!(exact_remaining, 0);
     }
 
     #[test]
