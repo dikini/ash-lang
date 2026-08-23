@@ -9,8 +9,8 @@ use std::{
 
 use crate::{
     core::{
-        BuildError, CoreBuilder, CoreMatchArm, CorePattern, CorePatternKind, NodeId, Primitive,
-        TypedBinder, UnvalidatedProgram,
+        BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
+        CorePatternKind, NodeId, Primitive, TypedBinder, UnvalidatedProgram,
     },
     diagnostic::{Diagnostic, SourceLabel},
     pattern::{
@@ -3543,19 +3543,19 @@ fn validate_and_charge_public_monotype(
     budget: &mut TypeWorkBudget,
 ) -> Result<(), PublicTypeAdmissionError> {
     enum Task<'a> {
-        Visit(&'a Type),
-        Sequence(std::slice::Iter<'a, Type>),
+        Visit(&'a Type, usize),
+        Sequence(std::slice::Iter<'a, Type>, usize),
     }
 
-    let mut work = vec![Task::Visit(ty)];
+    let mut work = vec![Task::Visit(ty, 0)];
     while let Some(task) = work.pop() {
-        let Task::Visit(ty) = task else {
-            let Task::Sequence(mut remaining) = task else {
+        let Task::Visit(ty, depth) = task else {
+            let Task::Sequence(mut remaining, depth) = task else {
                 unreachable!("public type admission task is closed")
             };
             if let Some(next) = remaining.next() {
-                work.push(Task::Sequence(remaining));
-                work.push(Task::Visit(next));
+                work.push(Task::Sequence(remaining, depth));
+                work.push(Task::Visit(next, depth));
             }
             continue;
         };
@@ -3564,11 +3564,19 @@ fn validate_and_charge_public_monotype(
             .map_err(|()| PublicTypeAdmissionError::Resource)?;
         match ty {
             Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
-                work.push(Task::Sequence(elements.iter()));
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return Err(PublicTypeAdmissionError::Invalid);
+                }
+                work.push(Task::Sequence(elements.iter(), child_depth));
             }
             Type::Function(domain, codomain) => {
-                work.push(Task::Visit(codomain));
-                work.push(Task::Visit(domain));
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return Err(PublicTypeAdmissionError::Invalid);
+                }
+                work.push(Task::Visit(codomain, child_depth));
+                work.push(Task::Visit(domain, child_depth));
             }
             Type::Inference(_) | Type::Forall(_, _) => {
                 return Err(PublicTypeAdmissionError::Invalid);
@@ -3923,6 +3931,14 @@ mod tests {
         source::SourceFile,
     };
 
+    fn nested_function_type(depth: usize) -> Type {
+        let mut ty = Type::Unit;
+        for _ in 0..depth {
+            ty = Type::Function(Box::new(Type::Unit), Box::new(ty));
+        }
+        ty
+    }
+
     fn static_rule_outcome(
         left: &Type,
         right: &Type,
@@ -4020,6 +4036,26 @@ mod tests {
             .expect("the fixture leaves the exact clone size");
         assert_eq!(clone_type_with_budget(&ty, &mut exact), Ok(ty));
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn public_monotype_admission_enforces_the_exact_core_payload_depth() {
+        let accepted = nested_function_type(CORE_PAYLOAD_DEPTH_LIMIT);
+        let rejected = nested_function_type(CORE_PAYLOAD_DEPTH_LIMIT + 1);
+        let mut accepted_budget = TypeWorkBudget::default();
+        let mut rejected_budget = TypeWorkBudget::default();
+
+        assert_eq!(
+            validate_and_charge_public_monotype(&accepted, &mut accepted_budget),
+            Ok(())
+        );
+        assert_eq!(
+            validate_and_charge_public_monotype(&rejected, &mut rejected_budget),
+            Err(PublicTypeAdmissionError::Invalid)
+        );
+
+        crate::types::discard_type_iteratively(accepted);
+        crate::types::discard_type_iteratively(rejected);
     }
 
     #[test]
@@ -4374,6 +4410,55 @@ mod tests {
             elaborator.check(&resolved.result, &expected, &TypeContext::new()),
             Err(TypeError::Internal(ElaborationFailure::InvalidState))
         );
+    }
+
+    #[test]
+    fn public_deep_types_reject_before_clone_and_drop_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("public-type-depth-boundary".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 10_000;
+                let source = SourceFile::new("external-deep-type.ash", "42\n")
+                    .expect("the fixture should fit");
+                let tree = parse(lex(&source).expect("the fixture should lex"));
+                let surface = project(&source, &tree).expect("the fixture should project");
+                let resolved = resolve(&surface).expect("the fixture should resolve");
+
+                let expected = nested_function_type(DEPTH);
+                let mut checking = Elaborator::new();
+                let check_result = checking.check(&resolved.result, &expected, &TypeContext::new());
+                crate::types::discard_type_iteratively(expected);
+                assert_eq!(
+                    check_result,
+                    Err(TypeError::Internal(ElaborationFailure::InvalidState))
+                );
+
+                let binder = BinderId::new(0);
+                let mut context = TypeContext::new();
+                context.insert(binder, nested_function_type(DEPTH));
+                let mut synthesizing = Elaborator::new();
+                TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
+                let synthesize_result = synthesizing.synthesize(&resolved.result, &context);
+                let clone_count = TYPE_CONTEXT_CLONES.with(std::cell::Cell::get);
+                let TypeFact {
+                    ty,
+                    provenance,
+                    quantified,
+                } = context.binders.remove(&binder).expect("the fact exists");
+                crate::types::discard_type_iteratively(ty);
+                drop(provenance);
+                drop(quantified);
+
+                assert_eq!(
+                    synthesize_result,
+                    Err(TypeError::Internal(ElaborationFailure::InvalidState))
+                );
+                assert_eq!(clone_count, 0);
+            })
+            .expect("the depth-boundary thread should start")
+            .join()
+            .expect("public type depth rejection must fit the small stack");
     }
 
     #[test]
