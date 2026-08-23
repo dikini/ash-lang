@@ -133,6 +133,16 @@ fn parameterized_constructors_are_ordinary_polymorphic_values() {
 }
 
 #[test]
+fn solved_result_inference_is_zonked_before_public_observation() {
+    let observation = run(
+        "type Option<A> =\nNone\n| Some(A)\n\n{\nlet value = None\nlet _ : Option<Int> = value\nvalue\n}\n",
+    );
+
+    assert_eq!(observation.value_display(), "None");
+    assert_eq!(observation.type_display(), "Option<Int>");
+}
+
+#[test]
 fn anonymous_function_local_bindings_generalize() {
     let observation = run("{\nlet id = fn(value) {\nvalue\n}\n(id(42), id(false))\n}\n");
 

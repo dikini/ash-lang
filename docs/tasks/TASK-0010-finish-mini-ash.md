@@ -93,6 +93,9 @@ relative links resolve, and the new `sequent` rules have matching prose.
 - Resource accounting includes temporary retained replacement maps, coverage
   rows and arms, context entries, and provenance handles. Wide zonking and
   occurs-check traversal retain constant pending fan-out.
+- Successful whole-program inference retains its zonked result before the
+  driver constructs source-facing type output; later Core rewriting is not the
+  owner of that public type.
 
 The retained integration and closure reports contain the transferable results
 and boundary audit.

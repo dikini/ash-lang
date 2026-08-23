@@ -1468,20 +1468,29 @@ impl<'program, 'source> Validator<'program, 'source> {
                     if parameters.len() != arguments.len() {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     }
-                    let replacements = parameters
-                        .iter()
-                        .zip(arguments)
-                        .map(|(parameter, argument)| (parameter.id, argument.clone()))
-                        .collect();
-                    let payload_type = info
-                        .payload
-                        .as_ref()
-                        .map(|payload| {
-                            substitute_type_variables_with(payload, &replacements, |cells| {
-                                self.charge_type_work(cells)
-                            })
-                        })
-                        .transpose()?;
+                    let payload_type = if let Some(payload) = info.payload.as_ref() {
+                        self.charge_type_work(parameters.len())?;
+                        for argument in arguments {
+                            self.charge_type_structure(argument)?;
+                        }
+                        let mut replacements = HashMap::new();
+                        replacements.try_reserve(parameters.len()).map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(node))
+                        })?;
+                        replacements.extend(
+                            parameters
+                                .iter()
+                                .zip(arguments)
+                                .map(|(parameter, argument)| (parameter.id, argument.clone())),
+                        );
+                        Some(substitute_type_variables_with(
+                            payload,
+                            &replacements,
+                            |cells| self.charge_type_work(cells),
+                        )?)
+                    } else {
+                        None
+                    };
                     match (payload_type, payload.as_deref()) {
                         (None, None) => {}
                         (Some(payload_type), Some(payload_pattern)) => work.push(Task::Visit(
@@ -2744,6 +2753,95 @@ mod tests {
                 &mut HashMap::new(),
             )
             .expect_err("argument clones must not cross the validation budget");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+    }
+
+    #[test]
+    fn constructor_pattern_substitutions_precharge_phantom_argument_clones() {
+        const WIDTH: usize = 64;
+        const ROOT_TYPE_CELLS: usize = WIDTH + 1;
+        const REPLACEMENT_STORAGE: usize = WIDTH * 2;
+        const PAYLOAD_WORK: usize = 2;
+        const EXACT_WORK: usize = ROOT_TYPE_CELLS + REPLACEMENT_STORAGE + PAYLOAD_WORK;
+
+        let file = source();
+        let node_origin = origin(&file);
+        let arena = super::super::dialect::ArenaId::new(108);
+        let owner = crate::types::NominalTypeId::new(file.id(), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let parameters = (0..WIDTH)
+            .map(|index| crate::resolved::ResolvedTypeVariable {
+                id: crate::types::TypeVariableId::new(
+                    u32::try_from(index).expect("parameter identity"),
+                ),
+                spelling: format!("T{index}"),
+                origin: node_origin.clone(),
+            })
+            .collect();
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![crate::resolved::ResolvedNominalType {
+                id: owner,
+                spelling: "Wide".into(),
+                constructors: vec![constructor].into_boxed_slice(),
+                origin: node_origin.clone(),
+            }],
+            vec![crate::resolved::ResolvedConstructor {
+                id: constructor,
+                owner,
+                spelling: "Make".into(),
+                payload: Some(Type::Int),
+                origin: node_origin.clone(),
+            }],
+        )
+        .with_type_parameters(vec![(owner, parameters)]);
+        let expected = Type::AppliedNominal(owner, vec![Type::Bool; WIDTH].into_boxed_slice());
+        let pattern = CorePattern::new(
+            expected.clone(),
+            node_origin.clone(),
+            CorePatternKind::Constructor {
+                constructor,
+                payload: Some(Box::new(CorePattern::new(
+                    Type::Int,
+                    node_origin.clone(),
+                    CorePatternKind::Wildcard,
+                ))),
+            },
+        );
+        let program = UnvalidatedProgram {
+            registry: Arc::new(registry),
+            arena,
+            nodes: vec![StoredNode {
+                dialect: DialectId::PURE,
+                ty: Type::Unit,
+                origin: Some(node_origin),
+                kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+            }],
+            root: NodeId::new(arena, 0),
+        };
+        let node = program.root;
+
+        let exact = Validator::new(&program, &[&file]);
+        exact
+            .charge_type_work(TYPE_WORK_LIMIT - EXACT_WORK)
+            .expect("test setup leaves the exact complete allowance");
+        exact
+            .validate_pattern(&pattern, &expected, node)
+            .expect("the exact pattern and substitution allowance fits");
+        assert_eq!(
+            exact
+                .charge_type_work(1)
+                .expect_err("the exact allowance is fully consumed")
+                .reason(),
+            ValidationReason::Resource
+        );
+
+        let preflight_short = Validator::new(&program, &[&file]);
+        preflight_short
+            .charge_type_work(TYPE_WORK_LIMIT - (ROOT_TYPE_CELLS + REPLACEMENT_STORAGE - 1))
+            .expect("test setup leaves one cell fewer than replacement preflight");
+        let error = preflight_short
+            .validate_pattern(&pattern, &expected, node)
+            .expect_err("replacement clones must be rejected before allocation");
         assert_eq!(error.reason(), ValidationReason::Resource);
     }
 

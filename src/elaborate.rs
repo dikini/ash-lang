@@ -1319,13 +1319,17 @@ impl Elaborator {
             },
             &mut context,
         )?;
-        let (_, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
+        let (zonked_result, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
         if result_is_ambiguous {
             return Err(inference_failure(
                 TypeReason::AmbiguousType,
                 program.result.span,
                 "this result does not determine every inferred type",
             ));
+        }
+        result.ty = zonked_result;
+        if !result.provenance.aligns(&result.ty) {
+            result.provenance = TypeProvenance::unknown(&result.ty);
         }
         let ambiguous = (0..self.next_inference).find(|identity| {
             !self

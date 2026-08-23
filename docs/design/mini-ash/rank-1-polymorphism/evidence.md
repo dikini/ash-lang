@@ -87,7 +87,7 @@ count locates the closed sites; it is not an edit count or complexity metric.
 | Explicit Core facts | `source_instantiation_is_explicit_in_validated_core`, `rejects_constructor_payload_variables_outside_the_owner_parameters`, `rejects_polymorphic_constructor_payloads_in_the_registry`, `distinct_type_abstractions_cannot_reuse_one_binder_identity`, and malformed type-operation cases in `tests/core_validation.rs` |
 | Transform preservation and erasure | `explicit_type_operations_survive_both_core_transforms_and_erasure` |
 | Parameterized cyclic data | `parameterized_guarded_recursive_data_keeps_runtime_types_erased` |
-| Source-facing output | `static_semantics_rank_one_polymorphism_is_executable` and `tool_rank_one_example_has_exact_cli_observation` |
+| Source-facing output | `static_semantics_rank_one_polymorphism_is_executable`, `tool_rank_one_example_has_exact_cli_observation`, and `solved_result_inference_is_zonked_before_public_observation` |
 
 The existing monomorphic parser, resolution, typing, Core, transform,
 evaluation, diagnostics, recursion, data, coverage, resource, and CLI suites
@@ -134,9 +134,10 @@ budget maps to `core.validation.resource`.
 Core type admission, Core validation, and the adjusted match elaboration
 traversal also use explicit work stacks at their admitted depth.
 Wide tuple and applied-nominal zonking and occurs checks retain only
-constant-width pending traversal tasks. Constructor specialization and Core
-type application precharge replacement-map entries and complete argument or
-payload copies, including phantom arguments that substitution never visits.
+constant-width pending traversal tasks. Constructor specialization, Core type
+application, and Core constructor-pattern validation precharge replacement-map
+entries and complete argument or payload copies, including phantom arguments
+that substitution never visits.
 Ordinary matches precharge progress, unary coverage rows, and final Core arms,
 then move the coverage-owned patterns into Core without an uncharged duplicate.
 Direct function binders and tuple operational domains likewise charge their
@@ -168,6 +169,9 @@ construction with a boundary-specific internal resource result.
   that recursive self boundary.
 - Cumulative accounting must charge traversed type cells, including rejected
   malformed Core, before materializing proportional replacement structure.
+- Whole-program inference closure must return the substituted result type;
+  rewriting Core during finalization is too late for a public observation that
+  already retained the elaborator's result type.
 
 The architecture mutation harness in `tests/architecture.rs` was updated with
 the two new closed computation cases. Its mock feature still changes only the
