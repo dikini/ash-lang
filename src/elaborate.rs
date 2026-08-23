@@ -619,10 +619,11 @@ impl Elaborator {
     /// # Errors
     ///
     /// Returns a structured source error when a primitive operand is not an
-    /// integer, or a structured internal failure when Core construction fails.
-    /// The failing call preserves that original error and poisons this
-    /// elaborator; later synthesis, checking, and completion return an internal
-    /// invalid-state error so partially emitted Core cannot escape.
+    /// integer, or a structured internal failure when the public context is not
+    /// a bounded monotype context or Core construction fails. The failing call
+    /// preserves that original error and poisons this elaborator; later
+    /// synthesis, checking, and completion return an internal invalid-state
+    /// error so partially emitted Core cannot escape.
     pub fn synthesize(
         &mut self,
         expression: &ResolvedExpr,
@@ -630,6 +631,10 @@ impl Elaborator {
     ) -> Result<TypedNode, TypeError> {
         if self.state == ElaboratorState::Poisoned {
             return Err(invalid_state());
+        }
+        if let Err(error) = self.admit_public_context(context) {
+            self.state = ElaboratorState::Poisoned;
+            return Err(error);
         }
         let mut context = context.clone();
         let result = self.elaborate_expression_with_context(
@@ -649,7 +654,8 @@ impl Elaborator {
     ///
     /// # Errors
     ///
-    /// Returns the synthesis failure, or [`TypeError::Mismatch`] when the
+    /// Returns the synthesis failure, an internal failure when either public
+    /// type input is not a bounded monotype, or [`TypeError::Mismatch`] when the
     /// synthesized and expected type structures differ. Any failure poisons
     /// this elaborator after preserving the original error from this call.
     pub fn check(
@@ -660,6 +666,13 @@ impl Elaborator {
     ) -> Result<TypedNode, TypeError> {
         if self.state == ElaboratorState::Poisoned {
             return Err(invalid_state());
+        }
+        if let Err(error) = self
+            .admit_public_monotype(expected)
+            .and_then(|()| self.admit_public_context(context))
+        {
+            self.state = ElaboratorState::Poisoned;
+            return Err(error);
         }
         let mut context = context.clone();
         let result = self.elaborate_expression_with_context(
@@ -793,6 +806,25 @@ impl Elaborator {
     fn charge_type(&mut self, ty: &Type) -> Result<(), TypeError> {
         charge_type_cells(ty, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn admit_public_context(&mut self, context: &TypeContext) -> Result<(), TypeError> {
+        for fact in context.binders.values() {
+            if !fact.quantified.is_empty() {
+                return Err(invalid_state());
+            }
+            self.admit_public_monotype(&fact.ty)?;
+        }
+        Ok(())
+    }
+
+    fn admit_public_monotype(&mut self, ty: &Type) -> Result<(), TypeError> {
+        validate_and_charge_public_monotype(ty, &mut self.type_work).map_err(|error| match error {
+            PublicTypeAdmissionError::Invalid => invalid_state(),
+            PublicTypeAdmissionError::Resource => {
+                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+            }
+        })
     }
 
     fn unify(&mut self, left: &Type, right: &Type) -> Result<(), UnificationFailure> {
@@ -3487,6 +3519,53 @@ pub fn structurally_equal(left: &Type, right: &Type) -> bool {
     same_type(left, right)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublicTypeAdmissionError {
+    Invalid,
+    Resource,
+}
+
+fn validate_and_charge_public_monotype(
+    ty: &Type,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), PublicTypeAdmissionError> {
+    enum Task<'a> {
+        Visit(&'a Type),
+        Sequence(std::slice::Iter<'a, Type>),
+    }
+
+    let mut work = vec![Task::Visit(ty)];
+    while let Some(task) = work.pop() {
+        let Task::Visit(ty) = task else {
+            let Task::Sequence(mut remaining) = task else {
+                unreachable!("public type admission task is closed")
+            };
+            if let Some(next) = remaining.next() {
+                work.push(Task::Sequence(remaining));
+                work.push(Task::Visit(next));
+            }
+            continue;
+        };
+        budget
+            .charge(1)
+            .map_err(|()| PublicTypeAdmissionError::Resource)?;
+        match ty {
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                work.push(Task::Sequence(elements.iter()));
+            }
+            Type::Function(domain, codomain) => {
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
+            }
+            Type::Inference(_) | Type::Forall(_, _) => {
+                return Err(PublicTypeAdmissionError::Invalid);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
+        }
+    }
+    Ok(())
+}
+
 fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
     charge_type_cells(ty, budget)?;
     Ok(zonk_type(ty, &HashMap::new()))
@@ -3957,6 +4036,61 @@ mod tests {
     }
 
     #[test]
+    fn retained_forall_clones_charge_quantifier_identities_before_allocation() {
+        let parameters = vec![
+            TypeVariableId::new(0),
+            TypeVariableId::new(1),
+            TypeVariableId::new(2),
+        ]
+        .into_boxed_slice();
+        let ty = Type::Forall(parameters, Box::new(Type::Int));
+
+        let mut short = TypeWorkBudget::default();
+        short
+            .charge(crate::types::TYPE_WORK_LIMIT - 4)
+            .expect("the fixture leaves one fewer cell than the retained clone requires");
+        assert_eq!(clone_type_with_budget(&ty, &mut short), Err(()));
+
+        let mut exact = TypeWorkBudget::default();
+        exact
+            .charge(crate::types::TYPE_WORK_LIMIT - 5)
+            .expect("the fixture leaves the wrapper, binder identities, and body");
+        assert_eq!(clone_type_with_budget(&ty, &mut exact), Ok(ty));
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn function_part_clones_charge_forall_domain_binders() {
+        let parameters = vec![
+            TypeVariableId::new(0),
+            TypeVariableId::new(1),
+            TypeVariableId::new(2),
+        ]
+        .into_boxed_slice();
+        let domain = Type::Forall(parameters, Box::new(Type::Int));
+        let function = Type::Function(Box::new(domain.clone()), Box::new(Type::Bool));
+
+        let mut short = TypeWorkBudget::default();
+        short
+            .charge(crate::types::TYPE_WORK_LIMIT - 5)
+            .expect("the fixture leaves one fewer cell than both retained children require");
+        assert_eq!(
+            clone_function_parts_with_budget(&function, &mut short),
+            Err(())
+        );
+
+        let mut exact = TypeWorkBudget::default();
+        exact
+            .charge(crate::types::TYPE_WORK_LIMIT - 6)
+            .expect("the fixture leaves the exact two-child clone cost");
+        assert_eq!(
+            clone_function_parts_with_budget(&function, &mut exact),
+            Ok((domain, Type::Bool))
+        );
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
     fn zonking_charges_only_expanded_cells_through_solved_aliases() {
         let root_alias = InferenceVariableId::new(9);
         let nested_alias = InferenceVariableId::new(8);
@@ -4028,7 +4162,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_rejects_unresolved_inference_supplied_by_public_context() {
+    fn public_synthesis_rejects_unresolved_inference_before_context_clone() {
         let source = SourceFile::new(
             "external-inference-finish.ash",
             "identity : Int -> Int\nidentity value = value\n\nidentity\n",
@@ -4047,14 +4181,116 @@ mod tests {
         );
         let mut elaborator =
             Elaborator::for_program(&resolved).expect("the binder namespace should fit");
-        let typed = elaborator
-            .synthesize(&resolved.result, &context)
-            .expect("the public context supplies the occurrence type");
+        TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
-        assert!(matches!(
-            elaborator.finish(typed.node),
-            Err(ElaborationFailure::Core(BuildError::InvalidPayload))
-        ));
+        assert_eq!(
+            elaborator.synthesize(&resolved.result, &context),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+        TYPE_CONTEXT_CLONES.with(|clones| assert_eq!(clones.get(), 0));
+    }
+
+    #[test]
+    fn public_context_inference_cannot_alias_a_fresh_private_solution() {
+        let source = SourceFile::new(
+            "external-inference-collision.ash",
+            "external : Int -> Int\nexternal value = value\n\n{\nlet increment = fn(value) {\nvalue + 1\n}\nexternal\n}\n",
+        )
+        .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let ResolvedExprKind::Block(block) = &resolved.result.kind else {
+            panic!("the result should be a block");
+        };
+        let ResolvedExprKind::Occurrence(occurrence) = &block.result.kind else {
+            panic!("the block result should be a resolved occurrence");
+        };
+        let mut context = TypeContext::new();
+        context.insert(
+            occurrence.binder,
+            Type::Inference(InferenceVariableId::new(0)),
+        );
+        let mut elaborator =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+
+        assert_eq!(
+            elaborator.synthesize(&resolved.result, &context),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+    }
+
+    #[test]
+    fn public_synthesis_charges_a_wide_context_type_before_context_clone() {
+        let source = SourceFile::new(
+            "external-wide-context.ash",
+            "identity : Int -> Int\nidentity value = value\n\nidentity\n",
+        )
+        .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let ResolvedExprKind::Occurrence(occurrence) = &resolved.result.kind else {
+            panic!("the result should be a resolved occurrence");
+        };
+        let mut context = TypeContext::new();
+        context.insert(
+            occurrence.binder,
+            Type::Tuple(vec![Type::Int; crate::types::TYPE_WORK_LIMIT].into_boxed_slice()),
+        );
+        let mut elaborator =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
+
+        assert_eq!(
+            elaborator.synthesize(&resolved.result, &context),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        TYPE_CONTEXT_CLONES.with(|clones| assert_eq!(clones.get(), 0));
+    }
+
+    #[test]
+    fn public_check_rejects_inference_in_the_expected_type() {
+        let source = SourceFile::new("external-expected-inference.ash", "42\n")
+            .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let mut elaborator = Elaborator::new();
+
+        assert_eq!(
+            elaborator.check(
+                &resolved.result,
+                &Type::Inference(InferenceVariableId::new(0)),
+                &TypeContext::new(),
+            ),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+    }
+
+    #[test]
+    fn public_check_rejects_wide_higher_rank_expected_type_before_clone() {
+        let source = SourceFile::new("external-higher-rank.ash", "fn(value) {\n42\n}\n")
+            .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let parameters = (0..crate::types::TYPE_WORK_LIMIT)
+            .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let expected = Type::Function(
+            Box::new(Type::Forall(parameters, Box::new(Type::Int))),
+            Box::new(Type::Int),
+        );
+        let mut elaborator = Elaborator::new();
+
+        assert_eq!(
+            elaborator.check(&resolved.result, &expected, &TypeContext::new()),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
     }
 
     #[test]

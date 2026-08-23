@@ -50,7 +50,10 @@ pub(crate) fn charge_type_cells(ty: &Type, budget: &mut TypeWorkBudget) -> Resul
                 work.push(Task::Visit(codomain));
                 work.push(Task::Visit(domain));
             }
-            Type::Forall(_, body) => work.push(Task::Visit(body)),
+            Type::Forall(parameters, body) => {
+                budget.charge(parameters.len())?;
+                work.push(Task::Visit(body));
+            }
             Type::Int
             | Type::Bool
             | Type::Unit
