@@ -716,17 +716,15 @@ impl Elaborator {
         let solutions = &self.inference_solutions;
         let type_work = &mut self.type_work;
         self.builder.rewrite_types(|ty| {
-            let zonked = zonk_type_with(ty, solutions, |cells| {
+            let (zonked, unresolved) = zonk_type_with_status(ty, solutions, |cells| {
                 type_work
                     .charge(cells)
                     .map_err(|()| BuildError::TypeWorkExceeded)
             })?;
-            let unresolved = collect_unsolved_inference(&zonked, type_work)
-                .map_err(|()| BuildError::TypeWorkExceeded)?;
-            if unresolved.is_empty() {
-                Ok(zonked)
-            } else {
+            if unresolved {
                 Err(BuildError::InvalidPayload)
+            } else {
+                Ok(zonked)
             }
         })?;
         self.builder.finish(root).map_err(Into::into)
@@ -780,7 +778,11 @@ impl Elaborator {
     }
 
     fn zonk(&mut self, ty: &Type) -> Result<Type, TypeError> {
-        zonk_type_with(ty, &self.inference_solutions, |cells| {
+        self.zonk_with_status(ty).map(|(ty, _)| ty)
+    }
+
+    fn zonk_with_status(&mut self, ty: &Type) -> Result<(Type, bool), TypeError> {
+        zonk_type_with_status(ty, &self.inference_solutions, |cells| {
             self.type_work.charge(cells)
         })
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
@@ -990,10 +992,8 @@ impl Elaborator {
             },
             &mut context,
         )?;
-        let result_type = self.zonk(&result.ty)?;
-        let result_variables = collect_unsolved_inference(&result_type, &mut self.type_work)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        if !result_variables.is_empty() {
+        let (_, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
+        if result_is_ambiguous {
             return Err(inference_failure(
                 TypeReason::AmbiguousType,
                 program.result.span,
@@ -3291,17 +3291,18 @@ enum UnificationFailure {
     Resource,
 }
 
-fn zonk_type_with<E>(
+fn zonk_type_with_status<E>(
     ty: &Type,
     solutions: &HashMap<InferenceVariableId, Type>,
     mut charge: impl FnMut(usize) -> Result<(), E>,
-) -> Result<Type, E> {
+) -> Result<(Type, bool), E> {
     enum ChargeTask<'a> {
         Visit(&'a Type),
         Slice(std::slice::Iter<'a, Type>),
     }
 
     let mut work = vec![ChargeTask::Visit(ty)];
+    let mut unresolved = false;
     while let Some(task) = work.pop() {
         match task {
             ChargeTask::Visit(Type::Inference(identity)) if solutions.contains_key(identity) => {
@@ -3321,13 +3322,12 @@ fn zonk_type_with<E>(
                 work.push(ChargeTask::Visit(body));
             }
             ChargeTask::Visit(
-                Type::Int
-                | Type::Bool
-                | Type::Unit
-                | Type::Nominal(_)
-                | Type::Variable(_)
-                | Type::Inference(_),
+                Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_),
             ) => charge(1)?,
+            ChargeTask::Visit(Type::Inference(_)) => {
+                charge(1)?;
+                unresolved = true;
+            }
             ChargeTask::Slice(mut remaining) => {
                 if let Some(element) = remaining.next() {
                     work.push(ChargeTask::Slice(remaining));
@@ -3337,7 +3337,7 @@ fn zonk_type_with<E>(
         }
     }
 
-    Ok(zonk_type(ty, solutions))
+    Ok((zonk_type(ty, solutions), unresolved))
 }
 
 fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type {
@@ -3632,13 +3632,52 @@ mod tests {
         )]);
         let mut remaining = 128_usize;
 
-        let result = zonk_type_with(&source, &solutions, |cells| {
+        let result = zonk_type_with_status(&source, &solutions, |cells| {
             remaining = remaining.checked_sub(cells).ok_or(())?;
             Ok(())
         });
 
         assert_eq!(result, Err(()));
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn zonking_reports_unsolved_inference_during_its_charged_pass() {
+        let inference = InferenceVariableId::new(0);
+        let source = Type::Function(Box::new(Type::Inference(inference)), Box::new(Type::Int));
+        let mut remaining = 3_usize;
+
+        let (zonked, unresolved) = zonk_type_with_status(&source, &HashMap::new(), |cells| {
+            remaining = remaining.checked_sub(cells).ok_or(())?;
+            Ok::<(), ()>(())
+        })
+        .expect("the exact expanded type should fit");
+
+        assert_eq!(zonked, source);
+        assert!(unresolved);
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn finish_rejects_unresolved_inference_without_core_escape() {
+        let source = SourceFile::new(
+            "unresolved-finish.ash",
+            "{\nlet _ = fn(value) {\nvalue\n}\n()\n}\n",
+        )
+        .expect("the fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let surface = project(&source, &tree).expect("the fixture should project");
+        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let mut elaborator =
+            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let typed = elaborator
+            .synthesize(&resolved.result, &TypeContext::new())
+            .expect("standalone synthesis defers whole-program ambiguity");
+
+        assert!(matches!(
+            elaborator.finish(typed.node),
+            Err(ElaborationFailure::Core(BuildError::InvalidPayload))
+        ));
     }
 
     #[test]
