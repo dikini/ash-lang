@@ -143,7 +143,7 @@ pub struct ModuleId {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum ModuleIdNamespace {
     Admitted,
-    LegacySource,
+    DirectCoreSource,
 }
 
 impl ModuleId {
@@ -183,7 +183,7 @@ impl ModuleId {
 impl From<SourceId> for ModuleId {
     fn from(source: SourceId) -> Self {
         Self {
-            namespace: ModuleIdNamespace::LegacySource,
+            namespace: ModuleIdNamespace::DirectCoreSource,
             graph: 0,
             value: source.value(),
         }
@@ -194,7 +194,7 @@ impl fmt::Display for ModuleId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.namespace {
             ModuleIdNamespace::Admitted => write!(formatter, "{}:{}", self.graph, self.value),
-            ModuleIdNamespace::LegacySource => write!(formatter, "legacy:{}", self.value),
+            ModuleIdNamespace::DirectCoreSource => write!(formatter, "source:{}", self.value),
         }
     }
 }
@@ -1135,8 +1135,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_source_identity_cannot_collide_with_admitted_module() {
-        let source = SourceFile::new("legacy", "x").expect("test source");
+    fn direct_core_source_identity_cannot_collide_with_admitted_module() {
+        let source = SourceFile::new("direct-core", "x").expect("test source");
 
         assert_ne!(
             ModuleId::from(source.id()),

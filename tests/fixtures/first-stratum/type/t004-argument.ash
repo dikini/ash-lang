@@ -1,4 +1,5 @@
 identity : Int -> Int
 identity value = value
 
-identity true
+main : Unit -> Int
+main () = identity true

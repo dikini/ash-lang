@@ -21,8 +21,8 @@ use crate::{
         BinderId, CheckedGlobalScheme, CheckedModule, ExportSummary, ResolvedBinding,
         ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
         ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleProgram, ResolvedPattern,
-        ResolvedPatternKind, ResolvedProgram, ResolvedRecursiveGroup, ResolvedRegistry,
-        ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry, ResolvedType,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
@@ -619,7 +619,7 @@ impl Drop for CheckedSchemeBuffer {
     }
 }
 
-/// The one bidirectional typed elaborator for resolved Mini-Ash syntax.
+/// The one bidirectional typed elaborator for resolved Ash syntax.
 #[derive(Debug)]
 #[must_use]
 pub struct Elaborator {
@@ -657,30 +657,6 @@ impl Elaborator {
             type_work: TypeWorkBudget::default(),
             base_context: TypeContext::new(),
         }
-    }
-
-    /// Starts an elaborator after reserving every resolver-assigned binder.
-    ///
-    /// # Errors
-    ///
-    /// Returns a Core construction failure if the complete namespace cannot be
-    /// reserved before elaboration starts.
-    pub fn for_program(program: &ResolvedProgram) -> Result<Self, ElaborationFailure> {
-        let registry = Arc::clone(&program.registry);
-        let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
-        builder.reserve_resolved_binders(resolved_binders(program))?;
-        Ok(Self {
-            builder,
-            registry,
-            state: ElaboratorState::Ready,
-            next_inference: 0,
-            inference_origins: Vec::new(),
-            next_generated_type_variable: u32::MAX,
-            inference_solutions: HashMap::new(),
-            monomorphic_recursive: HashSet::new(),
-            type_work: TypeWorkBudget::default(),
-            base_context: TypeContext::new(),
-        })
     }
 
     fn for_module(module: &ResolvedModule) -> Result<Self, TypeError> {
@@ -847,31 +823,6 @@ impl Elaborator {
             },
             &mut context,
         );
-        if result.is_err() {
-            self.state = ElaboratorState::Poisoned;
-        }
-        result
-    }
-
-    /// Elaborates file-wide recursive global definitions and the required result.
-    ///
-    /// Every declared global monotype enters the typing context before any body
-    /// is checked. The resulting functions form one recursive Core group around
-    /// the file result.
-    ///
-    /// # Errors
-    ///
-    /// Returns a structured source typing error or Core construction failure.
-    /// Any failure poisons the elaborator so partially emitted global Core
-    /// cannot be selected as a program root.
-    pub fn synthesize_program(
-        &mut self,
-        program: &ResolvedProgram,
-    ) -> Result<TypedNode, TypeError> {
-        if self.state == ElaboratorState::Poisoned {
-            return Err(invalid_state());
-        }
-        let result = self.elaborate_program(program);
         if result.is_err() {
             self.state = ElaboratorState::Poisoned;
         }
@@ -1328,10 +1279,6 @@ impl Elaborator {
                 ElaborationFailure::TypeResourceExhausted,
             )),
         }
-    }
-
-    fn elaborate_program(&mut self, program: &ResolvedProgram) -> Result<TypedNode, TypeError> {
-        self.elaborate_definition_group(&program.definitions, &program.result, program.span)
     }
 
     fn elaborate_module_program(
@@ -4995,14 +4942,6 @@ fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError
     )))
 }
 
-fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
-    let mut binders = Vec::new();
-    let mut expressions = vec![&program.result];
-    collect_definition_binders(&program.definitions, &mut binders, &mut expressions);
-    collect_expression_binders(&mut binders, expressions);
-    binders
-}
-
 fn resolved_module_binders(module: &ResolvedModule) -> Vec<BinderId> {
     let mut binders = Vec::new();
     let mut expressions = Vec::new();
@@ -5126,13 +5065,91 @@ fn collect_pattern_binders(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
     use super::*;
     use crate::{
-        lexer::lex,
-        parser::{parse, project},
-        resolve::resolve,
+        module::{ModuleRoots, load_module_graph},
+        resolve::resolve_module,
         source::{ByteRange, SourceFile},
     };
+
+    static MODULE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    struct ModuleFixtureFile(PathBuf);
+
+    impl ModuleFixtureFile {
+        fn write(display_path: &str, text: &str) -> Self {
+            let id = MODULE_FIXTURE_IDS.fetch_add(1, Ordering::Relaxed);
+            let label = Path::new(display_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("fixture.ash");
+            let path = std::env::temp_dir()
+                .join(format!("ash-elaborate-{}-{id}-{label}", std::process::id(),));
+            fs::write(&path, text).expect("the module fixture should be writable");
+            Self(path)
+        }
+    }
+
+    impl Drop for ModuleFixtureFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    fn resolved_module_fixture(
+        display_path: &str,
+        declarations: &str,
+        result_type: &str,
+        result: &str,
+    ) -> ResolvedModule {
+        let separator = if !declarations.is_empty() && !declarations.ends_with('\n') {
+            "\n"
+        } else {
+            ""
+        };
+        let text = format!(
+            "{declarations}{separator}test_result : Unit -> {result_type}\ntest_result () = {result}\n"
+        );
+        let file = ModuleFixtureFile::write(display_path, &text);
+        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
+            .expect("the module fixture should load");
+        let loaded = graph
+            .module(graph.entry())
+            .expect("the module fixture should retain its entry");
+        assert!(loaded.dependencies().is_empty());
+        let resolved = resolve_module(loaded, &[]).expect("the module fixture should resolve");
+        let wrapper = resolved
+            .definitions()
+            .last()
+            .expect("the module fixture should retain its result wrapper");
+        let ResolvedDefinitionKind::Equational(wrapper) = &wrapper.kind else {
+            panic!("the module fixture result should be equational");
+        };
+        assert_eq!(wrapper.interface.name.spelling, "test_result");
+        assert_eq!(wrapper.equations.len(), 1);
+        resolved
+    }
+
+    fn fixture_result(module: &ResolvedModule) -> &ResolvedExpr {
+        let wrapper = module
+            .definitions()
+            .last()
+            .expect("the module fixture should retain its result wrapper");
+        let ResolvedDefinitionKind::Equational(wrapper) = &wrapper.kind else {
+            panic!("the module fixture result should be equational");
+        };
+        &wrapper
+            .equations
+            .first()
+            .expect("the module fixture should retain one result body")
+            .body
+    }
 
     fn nested_function_type(depth: usize) -> Type {
         let mut ty = Type::Unit;
@@ -5279,14 +5296,10 @@ mod tests {
 
     #[test]
     fn ordinary_tuple_type_wrapper_requires_one_preallocated_unit() {
-        let source = SourceFile::new("ordinary-tuple-budget.ash", "(1, 2)\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved =
+            resolved_module_fixture("ordinary-tuple-budget.ash", "", "(Int, Int)", "(1, 2)");
 
-        let mut short =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         short
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 3)
@@ -5294,7 +5307,7 @@ mod tests {
         assert_eq!(
             short.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
+                    expression: fixture_result(&resolved),
                     cause: None,
                 },
                 &mut TypeContext::new(),
@@ -5304,8 +5317,7 @@ mod tests {
             ))
         );
 
-        let mut exact =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         exact
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 4)
@@ -5313,7 +5325,7 @@ mod tests {
         let typed = exact
             .elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
+                    expression: fixture_result(&resolved),
                     cause: None,
                 },
                 &mut TypeContext::new(),
@@ -5329,17 +5341,14 @@ mod tests {
     #[test]
     fn inferred_anonymous_function_type_precharges_three_cells_before_inference_origins() {
         const EXACT_WORK: usize = 26;
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "inferred-anonymous-function-budget.ash",
-            "fn(value) {\nvalue\n}\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+            "",
+            "A -> A",
+            "fn(value) {\nvalue\n}",
+        );
 
-        let mut short =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         short
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 2)
@@ -5347,8 +5356,8 @@ mod tests {
         assert_eq!(
             short.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
-                    cause: Some(SynthesisCause::Binding(resolved.result.span)),
+                    expression: fixture_result(&resolved),
+                    cause: Some(SynthesisCause::Binding(fixture_result(&resolved).span)),
                 },
                 &mut TypeContext::new(),
             ),
@@ -5359,8 +5368,7 @@ mod tests {
         assert_eq!(short.next_inference, 0);
         assert!(short.inference_origins.is_empty());
 
-        let mut exact =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         exact
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - EXACT_WORK)
@@ -5368,8 +5376,8 @@ mod tests {
         let typed = exact
             .elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
-                    cause: Some(SynthesisCause::Binding(resolved.result.span)),
+                    expression: fixture_result(&resolved),
+                    cause: Some(SynthesisCause::Binding(fixture_result(&resolved).span)),
                 },
                 &mut TypeContext::new(),
             )
@@ -5380,16 +5388,13 @@ mod tests {
 
     #[test]
     fn ordinary_match_precharges_retained_arm_and_matrix_storage() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "ordinary-match-budget.ash",
-            "match true {\ntrue => 1\nfalse => 0\n}\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let mut short =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            "",
+            "Int",
+            "match true {\ntrue => 1\nfalse => 0\n}",
+        );
+        let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         short
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 13)
@@ -5398,7 +5403,7 @@ mod tests {
         assert_eq!(
             short.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
+                    expression: fixture_result(&resolved),
                     cause: None,
                 },
                 &mut TypeContext::new(),
@@ -5408,8 +5413,7 @@ mod tests {
             ))
         );
 
-        let mut exact =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         exact
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 14)
@@ -5417,7 +5421,7 @@ mod tests {
         let typed = exact
             .elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
+                    expression: fixture_result(&resolved),
                     cause: None,
                 },
                 &mut TypeContext::new(),
@@ -5462,15 +5466,13 @@ mod tests {
 
     #[test]
     fn resolved_type_copies_precharge_type_and_provenance_storage() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "resolved-type-copy.ash",
-            "identity : Int -> Bool\nidentity value = false\n\n0\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedDefinitionKind::Equational(equational) = &resolved.definitions[0].kind else {
+            "identity : Int -> Bool\nidentity value = false\n",
+            "Int",
+            "0",
+        );
+        let ResolvedDefinitionKind::Equational(equational) = &resolved.definitions()[0].kind else {
             panic!("the fixture should resolve to an equational definition");
         };
         let annotation = &equational.interface.annotation;
@@ -5563,15 +5565,14 @@ mod tests {
 
     #[test]
     fn tuple_operational_domains_charge_the_provenance_handle_separately() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "tuple-operational-domain-budget.ash",
-            "fn choose(left: Int, right: Bool) -> Int {\nleft\n}\n\nchoose(42, false)\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedDefinitionKind::InlineOperational(operational) = &resolved.definitions[0].kind
+            "fn choose(left: Int, right: Bool) -> Int {\nleft\n}\n",
+            "Int",
+            "choose(42, false)",
+        );
+        let ResolvedDefinitionKind::InlineOperational(operational) =
+            &resolved.definitions()[0].kind
         else {
             panic!("the fixture should resolve to an operational definition");
         };
@@ -5683,12 +5684,13 @@ mod tests {
     #[test]
     fn wide_polymorphic_occurrence_fails_before_instantiation_allocation() {
         const WIDTH: usize = 4_096;
-        let source = SourceFile::new("wide-occurrence-budget.ash", "fn(value) {\nvalue\n}\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedExprKind::Function(function) = &resolved.result.kind else {
+        let resolved = resolved_module_fixture(
+            "wide-occurrence-budget.ash",
+            "",
+            "A -> A",
+            "fn(value) {\nvalue\n}",
+        );
+        let ResolvedExprKind::Function(function) = &fixture_result(&resolved).kind else {
             panic!("the fixture result should be a function");
         };
         let ResolvedPatternKind::Binder(parameter) = &function.pattern.kind else {
@@ -5708,7 +5710,7 @@ mod tests {
             },
         );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         elaborator
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - (WIDTH * 3 - 1))
@@ -5937,18 +5939,16 @@ mod tests {
 
     #[test]
     fn finish_rejects_unresolved_inference_without_core_escape() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "unresolved-finish.ash",
-            "{\nlet _ = fn(value) {\nvalue\n}\n()\n}\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+            "",
+            "Unit",
+            "{\nlet _ = fn(value) {\nvalue\n}\n()\n}",
+        );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         let typed = elaborator
-            .synthesize(&resolved.result, &TypeContext::new())
+            .synthesize(fixture_result(&resolved), &TypeContext::new())
             .expect("standalone synthesis defers whole-program ambiguity");
 
         assert!(matches!(
@@ -5959,15 +5959,13 @@ mod tests {
 
     #[test]
     fn public_synthesis_rejects_unresolved_inference_before_context_clone() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "external-inference-finish.ash",
-            "identity : Int -> Int\nidentity value = value\n\nidentity\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedExprKind::Occurrence(occurrence) = &resolved.result.kind else {
+            "identity : Int -> Int\nidentity value = value\n",
+            "Int -> Int",
+            "identity",
+        );
+        let ResolvedExprKind::Occurrence(occurrence) = &fixture_result(&resolved).kind else {
             panic!("the result should be a resolved occurrence");
         };
         let mut context = TypeContext::new();
@@ -5976,11 +5974,11 @@ mod tests {
             Type::Inference(InferenceVariableId::new(999)),
         );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         assert_eq!(
-            elaborator.synthesize(&resolved.result, &context),
+            elaborator.synthesize(fixture_result(&resolved), &context),
             Err(TypeError::Internal(ElaborationFailure::InvalidState))
         );
         TYPE_CONTEXT_CLONES.with(|clones| assert_eq!(clones.get(), 0));
@@ -5988,15 +5986,13 @@ mod tests {
 
     #[test]
     fn public_context_inference_cannot_alias_a_fresh_private_solution() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "external-inference-collision.ash",
-            "external : Int -> Int\nexternal value = value\n\n{\nlet increment = fn(value) {\nvalue + 1\n}\nexternal\n}\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedExprKind::Block(block) = &resolved.result.kind else {
+            "external : Int -> Int\nexternal value = value\n",
+            "Int -> Int",
+            "{\nlet increment = fn(value) {\nvalue + 1\n}\nexternal\n}",
+        );
+        let ResolvedExprKind::Block(block) = &fixture_result(&resolved).kind else {
             panic!("the result should be a block");
         };
         let ResolvedExprKind::Occurrence(occurrence) = &block.result.kind else {
@@ -6008,25 +6004,23 @@ mod tests {
             Type::Inference(InferenceVariableId::new(0)),
         );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
 
         assert_eq!(
-            elaborator.synthesize(&resolved.result, &context),
+            elaborator.synthesize(fixture_result(&resolved), &context),
             Err(TypeError::Internal(ElaborationFailure::InvalidState))
         );
     }
 
     #[test]
     fn public_synthesis_charges_a_wide_context_type_before_context_clone() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "external-wide-context.ash",
-            "identity : Int -> Int\nidentity value = value\n\nidentity\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedExprKind::Occurrence(occurrence) = &resolved.result.kind else {
+            "identity : Int -> Int\nidentity value = value\n",
+            "Int -> Int",
+            "identity",
+        );
+        let ResolvedExprKind::Occurrence(occurrence) = &fixture_result(&resolved).kind else {
             panic!("the result should be a resolved occurrence");
         };
         let mut context = TypeContext::new();
@@ -6035,11 +6029,11 @@ mod tests {
             Type::Tuple(vec![Type::Int; crate::types::TYPE_WORK_LIMIT].into_boxed_slice()),
         );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         assert_eq!(
-            elaborator.synthesize(&resolved.result, &context),
+            elaborator.synthesize(fixture_result(&resolved), &context),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             ))
@@ -6049,11 +6043,7 @@ mod tests {
 
     #[test]
     fn public_context_resource_precedes_invalid_type_independent_of_insertion_order() {
-        let source =
-            SourceFile::new("public-context-order.ash", "42\n").expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved = resolved_module_fixture("public-context-order.ash", "", "Int", "42");
 
         for round in 0..16_u32 {
             let first_id = BinderId::new(round * 2);
@@ -6077,7 +6067,7 @@ mod tests {
             TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
             assert_eq!(
-                elaborator.synthesize(&resolved.result, &context),
+                elaborator.synthesize(fixture_result(&resolved), &context),
                 Err(TypeError::Internal(
                     ElaborationFailure::TypeResourceExhausted
                 ))
@@ -6088,11 +6078,8 @@ mod tests {
 
     #[test]
     fn public_context_resource_precedes_invalid_quantification() {
-        let source = SourceFile::new("public-context-quantification.ash", "42\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved =
+            resolved_module_fixture("public-context-quantification.ash", "", "Int", "42");
         let mut context = TypeContext::new();
         context.insert(BinderId::new(0), Type::Unit);
         context.insert(BinderId::new(1), Type::Unit);
@@ -6109,7 +6096,7 @@ mod tests {
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         assert_eq!(
-            elaborator.synthesize(&resolved.result, &context),
+            elaborator.synthesize(fixture_result(&resolved), &context),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             ))
@@ -6119,16 +6106,12 @@ mod tests {
 
     #[test]
     fn public_check_rejects_inference_in_the_expected_type() {
-        let source = SourceFile::new("external-expected-inference.ash", "42\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved = resolved_module_fixture("external-expected-inference.ash", "", "Int", "42");
         let mut elaborator = Elaborator::new();
 
         assert_eq!(
             elaborator.check(
-                &resolved.result,
+                fixture_result(&resolved),
                 &Type::Inference(InferenceVariableId::new(0)),
                 &TypeContext::new(),
             ),
@@ -6138,11 +6121,12 @@ mod tests {
 
     #[test]
     fn public_check_rejects_wide_higher_rank_expected_type_before_clone() {
-        let source = SourceFile::new("external-higher-rank.ash", "fn(value) {\n42\n}\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved = resolved_module_fixture(
+            "external-higher-rank.ash",
+            "",
+            "A -> Int",
+            "fn(value) {\n42\n}",
+        );
         let parameters = (0..crate::types::TYPE_WORK_LIMIT)
             .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
             .collect::<Vec<_>>()
@@ -6154,7 +6138,7 @@ mod tests {
         let mut elaborator = Elaborator::new();
 
         assert_eq!(
-            elaborator.check(&resolved.result, &expected, &TypeContext::new()),
+            elaborator.check(fixture_result(&resolved), &expected, &TypeContext::new()),
             Err(TypeError::Internal(ElaborationFailure::InvalidState))
         );
     }
@@ -6166,15 +6150,12 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(|| {
                 const DEPTH: usize = 10_000;
-                let source = SourceFile::new("external-deep-type.ash", "42\n")
-                    .expect("the fixture should fit");
-                let tree = parse(lex(&source).expect("the fixture should lex"));
-                let surface = project(&source, &tree).expect("the fixture should project");
-                let resolved = resolve(&surface).expect("the fixture should resolve");
+                let resolved = resolved_module_fixture("external-deep-type.ash", "", "Int", "42");
 
                 let expected = nested_function_type(DEPTH);
                 let mut checking = Elaborator::new();
-                let check_result = checking.check(&resolved.result, &expected, &TypeContext::new());
+                let check_result =
+                    checking.check(fixture_result(&resolved), &expected, &TypeContext::new());
                 crate::types::discard_type_iteratively(expected);
                 assert_eq!(
                     check_result,
@@ -6186,7 +6167,8 @@ mod tests {
                 context.insert(binder, nested_function_type(DEPTH));
                 let mut synthesizing = Elaborator::new();
                 TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
-                let synthesize_result = synthesizing.synthesize(&resolved.result, &context);
+                let synthesize_result =
+                    synthesizing.synthesize(fixture_result(&resolved), &context);
                 let clone_count = TYPE_CONTEXT_CLONES.with(std::cell::Cell::get);
                 let TypeFact {
                     ty,
@@ -6267,13 +6249,13 @@ mod tests {
 
     #[test]
     fn a_shape_mismatch_poisoning_prevents_later_elaboration() {
-        let source = SourceFile::new("mismatched-provenance.ash", "fn(value) {\n    value\n}\n")
-            .expect("test source should fit");
-        let lexed = lex(&source).expect("test source should lex");
-        let tree = parse(lexed);
-        let surface = project(&source, &tree).expect("test source should project");
-        let program = resolve(&surface).expect("test source should resolve");
-        let ResolvedExprKind::Function(function) = &program.result.kind else {
+        let program = resolved_module_fixture(
+            "mismatched-provenance.ash",
+            "",
+            "A -> A",
+            "fn(value) {\n    value\n}",
+        );
+        let ResolvedExprKind::Function(function) = &fixture_result(&program).kind else {
             panic!("expected an anonymous function");
         };
         let ResolvedPatternKind::Binder(parameter) = &function.pattern.kind else {
@@ -6289,7 +6271,7 @@ mod tests {
             },
         );
         let mut elaborator =
-            Elaborator::for_program(&program).expect("binder reservation should fit");
+            Elaborator::for_module(&program).expect("binder reservation should fit");
 
         assert_eq!(
             elaborator.synthesize(&function.body.result, &context),
@@ -6311,36 +6293,34 @@ mod tests {
             writeln!(text, "f{index} value = f{} value", index - 1)
                 .expect("writing to a String cannot fail");
         }
-        text.push_str("f31 42\n");
-        let source = SourceFile::new("sequential-globals.ash", text).expect("source should fit");
-        let lexed = lex(&source).expect("test source should lex");
-        let tree = parse(lexed);
-        let surface = project(&source, &tree).expect("test source should project");
-        let program = resolve(&surface).expect("test source should resolve");
+        let program = resolved_module_fixture("sequential-globals.ash", &text, "Int", "f31 42");
         let mut elaborator =
-            Elaborator::for_program(&program).expect("binder reservation should fit");
+            Elaborator::for_module(&program).expect("binder reservation should fit");
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         elaborator
-            .synthesize_program(&program)
+            .check_module_bodies(&program)
             .expect("recursive globals should elaborate");
 
-        TYPE_CONTEXT_CLONES.with(|clones| assert_eq!(clones.get(), 0));
+        TYPE_CONTEXT_CLONES.with(|clones| {
+            assert_eq!(
+                clones.get(),
+                1,
+                "the fixed base context may be cloned once, independent of global count"
+            );
+        });
     }
 
     #[test]
     fn successful_function_work_restores_parameter_and_block_scopes() {
-        let source = SourceFile::new(
+        let program = resolved_module_fixture(
             "restored-function-scope.ash",
-            "fn(parameter) {\n    let local = parameter\n    local\n}\n",
-        )
-        .expect("source should fit");
-        let lexed = lex(&source).expect("test source should lex");
-        let tree = parse(lexed);
-        let surface = project(&source, &tree).expect("test source should project");
-        let program = resolve(&surface).expect("test source should resolve");
+            "",
+            "A -> A",
+            "fn(parameter) {\n    let local = parameter\n    local\n}",
+        );
         let mut elaborator =
-            Elaborator::for_program(&program).expect("binder reservation should fit");
+            Elaborator::for_module(&program).expect("binder reservation should fit");
         let mut context = TypeContext::new();
         let expected =
             ProvenancedType::unknown(Type::Function(Box::new(Type::Int), Box::new(Type::Int)));
@@ -6348,7 +6328,7 @@ mod tests {
         elaborator
             .elaborate_expression_with_context(
                 ElaborationTask::Check {
-                    expression: &program.result,
+                    expression: fixture_result(&program),
                     expected,
                     kind: CheckKind::General,
                 },

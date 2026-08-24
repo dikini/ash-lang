@@ -2,19 +2,6 @@
 
 use crate::{integer::Integer, source::Span};
 
-/// The legacy single-file program root retained during the module transition.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SurfaceProgram {
-    /// Nominal type declarations in source order.
-    pub type_declarations: Vec<SurfaceTypeDeclaration>,
-    /// Global definitions in source order.
-    pub definitions: Vec<SurfaceDefinition>,
-    /// The required final result expression.
-    pub result: SurfaceExpr,
-    /// The complete accepted source span.
-    pub span: Span,
-}
-
 /// One parsed Ash module source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceModule {

@@ -1,40 +1,89 @@
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 use ash::{
     core::{Primitive, PureComputation, PureExprKind, PureValue, validate},
     elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason},
     eval::{TraceEvent, Value, evaluate},
     integer::Integer,
-    lexer::lex,
-    parser::{parse, project},
-    resolve::resolve,
-    resolved::{ResolvedExpr, ResolvedProgram},
+    module::{ModuleRoots, load_module_graph},
+    resolve::resolve_module,
+    resolved::{ResolvedDefinitionKind, ResolvedExpr},
     source::{Origin, SourceFile},
     types::Type,
 };
 
-fn resolved(source: &SourceFile) -> ResolvedProgram {
-    let lexed = lex(source).expect("test source should lex");
-    assert!(lexed.diagnostics.is_empty());
-    let tree = parse(lexed);
-    assert!(tree.parse_diagnostics().is_empty());
-    let surface = project(source, &tree).expect("test source should project");
-    resolve(&surface).expect("test source should resolve")
+static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct TempModule(PathBuf);
+
+impl TempModule {
+    fn write(source: &str) -> Self {
+        let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ash-primitive-vertical-{}-{id}.ash",
+            std::process::id()
+        ));
+        fs::write(&path, source).expect("module fixture should be writable");
+        Self(path)
+    }
+}
+
+impl Drop for TempModule {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+fn resolved(text: &str) -> (SourceFile, ResolvedExpr) {
+    let module = TempModule::write(&format!("main : Unit -> Unit\nmain () = {text}"));
+    let graph =
+        load_module_graph(&module.0, &ModuleRoots::empty()).expect("module fixture should load");
+    let loaded = graph
+        .module(graph.entry())
+        .expect("entry module should be retained");
+    let source = loaded.source().clone();
+    let resolved = resolve_module(loaded, &[]).expect("module fixture should resolve");
+    let definition = resolved
+        .definitions()
+        .iter()
+        .find(|definition| {
+            matches!(
+                &definition.kind,
+                ResolvedDefinitionKind::Equational(global)
+                    if global.interface.name.spelling == "main"
+            )
+        })
+        .expect("module fixture should retain main");
+    let ResolvedDefinitionKind::Equational(main) = &definition.kind else {
+        unreachable!("the selected definition is equational")
+    };
+    let expression = main
+        .equations
+        .first()
+        .expect("main should have one equation")
+        .body
+        .clone();
+    (source, expression)
 }
 
 fn elaborate_expression(
     text: &str,
 ) -> (
     SourceFile,
-    ResolvedProgram,
+    ResolvedExpr,
     Elaborator,
     ash::elaborate::TypedNode,
 ) {
-    let source = SourceFile::new("primitive.ash", text).expect("test source should fit");
-    let program = resolved(&source);
-    let mut elaborator = Elaborator::for_program(&program).expect("binder reservation should fit");
+    let (source, expression) = resolved(text);
+    let mut elaborator = Elaborator::new();
     let typed = elaborator
-        .synthesize(&program.result, &TypeContext::new())
+        .synthesize(&expression, &TypeContext::new())
         .expect("test expression should synthesize");
-    (source, program, elaborator, typed)
+    (source, expression, elaborator, typed)
 }
 
 #[test]
@@ -63,17 +112,16 @@ fn primitive_rules_synthesize_their_structural_result_types() {
 
 #[test]
 fn check_uses_the_named_structural_equality_rule() {
-    let source = SourceFile::new("check.ash", "1\n").expect("test source should fit");
-    let program = resolved(&source);
-    let mut elaborator = Elaborator::for_program(&program).expect("binder reservation should fit");
+    let (_, expression) = resolved("1\n");
+    let mut elaborator = Elaborator::new();
 
     let checked = elaborator
-        .check(&program.result, &Type::Int, &TypeContext::new())
+        .check(&expression, &Type::Int, &TypeContext::new())
         .expect("Int should check against Int");
     assert_eq!(checked.ty, Type::Int);
 
     let error = elaborator
-        .check(&program.result, &Type::Bool, &TypeContext::new())
+        .check(&expression, &Type::Bool, &TypeContext::new())
         .expect_err("Int must not check against Bool");
     let TypeError::Mismatch(mismatch) = error else {
         panic!("expected a structural type mismatch");
@@ -84,64 +132,61 @@ fn check_uses_the_named_structural_equality_rule() {
 
 #[test]
 fn operator_operand_errors_identify_the_incorrect_left_operand() {
-    let source = SourceFile::new("left.ash", "true + 1\n").expect("test source should fit");
-    let program = resolved(&source);
-    let mut elaborator = Elaborator::for_program(&program).expect("binder reservation should fit");
+    let (_, expression) = resolved("true + 1\n");
+    let mut elaborator = Elaborator::new();
 
     let error = elaborator
-        .synthesize(&program.result, &TypeContext::new())
+        .synthesize(&expression, &TypeContext::new())
         .expect_err("Boolean addition must be rejected");
     let TypeError::Source(diagnostic) = error else {
         panic!("expected a source type diagnostic");
     };
+    let ash::resolved::ResolvedExprKind::Add(operation) = &expression.kind else {
+        panic!("expected resolved addition")
+    };
 
     assert_eq!(diagnostic.reason, TypeReason::OperatorOperand);
-    assert_eq!(diagnostic.primary.span().range().start(), 0);
-    assert_eq!(diagnostic.primary.span().range().end(), 4);
+    assert_eq!(diagnostic.primary.span(), operation.left.span);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span().range().start(), 5);
-    assert_eq!(diagnostic.related[0].span().range().end(), 6);
+    assert_eq!(diagnostic.related[0].span(), operation.operator_span);
     assert_eq!(diagnostic.expected.as_deref(), Some("Int"));
     assert_eq!(diagnostic.found.as_deref(), Some("Bool"));
 }
 
 #[test]
 fn operator_operand_errors_identify_the_incorrect_right_operand() {
-    let source = SourceFile::new("right.ash", "1 + true\n").expect("test source should fit");
-    let program = resolved(&source);
-    let mut elaborator = Elaborator::for_program(&program).expect("binder reservation should fit");
+    let (_, expression) = resolved("1 + true\n");
+    let mut elaborator = Elaborator::new();
 
     let error = elaborator
-        .synthesize(&program.result, &TypeContext::new())
+        .synthesize(&expression, &TypeContext::new())
         .expect_err("Boolean addition must be rejected");
     let TypeError::Source(diagnostic) = error else {
         panic!("expected a source type diagnostic");
     };
+    let ash::resolved::ResolvedExprKind::Add(operation) = &expression.kind else {
+        panic!("expected resolved addition")
+    };
 
     assert_eq!(diagnostic.reason, TypeReason::OperatorOperand);
-    assert_eq!(diagnostic.primary.span().range().start(), 4);
-    assert_eq!(diagnostic.primary.span().range().end(), 8);
+    assert_eq!(diagnostic.primary.span(), operation.right.span);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span().range().start(), 2);
-    assert_eq!(diagnostic.related[0].span().range().end(), 3);
+    assert_eq!(diagnostic.related[0].span(), operation.operator_span);
     assert_eq!(diagnostic.expected.as_deref(), Some("Int"));
     assert_eq!(diagnostic.found.as_deref(), Some("Bool"));
 }
 
 #[test]
 fn source_type_failure_poisoning_prevents_partial_core_escape() {
-    let accepted_source = SourceFile::new("accepted.ash", "1\n").expect("test source should fit");
-    let accepted = resolved(&accepted_source);
-    let rejected_source =
-        SourceFile::new("rejected.ash", "true + 1\n").expect("test source should fit");
-    let rejected = resolved(&rejected_source);
+    let (_, accepted) = resolved("1\n");
+    let (_, rejected) = resolved("true + 1\n");
     let mut elaborator = Elaborator::new();
     let prior = elaborator
-        .synthesize(&accepted.result, &TypeContext::new())
+        .synthesize(&accepted, &TypeContext::new())
         .expect("the first expression should synthesize");
 
     let error = elaborator
-        .synthesize(&rejected.result, &TypeContext::new())
+        .synthesize(&rejected, &TypeContext::new())
         .expect_err("the operator failure should be preserved");
     let TypeError::Source(diagnostic) = error else {
         panic!("expected the original source diagnostic");
@@ -149,7 +194,7 @@ fn source_type_failure_poisoning_prevents_partial_core_escape() {
     assert_eq!(diagnostic.reason, TypeReason::OperatorOperand);
 
     assert!(matches!(
-        elaborator.synthesize(&accepted.result, &TypeContext::new()),
+        elaborator.synthesize(&accepted, &TypeContext::new()),
         Err(TypeError::Internal(ElaborationFailure::InvalidState))
     ));
     assert!(matches!(
@@ -160,15 +205,14 @@ fn source_type_failure_poisoning_prevents_partial_core_escape() {
 
 #[test]
 fn check_mismatch_poisoning_prevents_partial_core_escape() {
-    let source = SourceFile::new("mismatch.ash", "1\n").expect("test source should fit");
-    let program = resolved(&source);
-    let mut elaborator = Elaborator::for_program(&program).expect("binder reservation should fit");
+    let (_, expression) = resolved("1\n");
+    let mut elaborator = Elaborator::new();
     let prior = elaborator
-        .synthesize(&program.result, &TypeContext::new())
+        .synthesize(&expression, &TypeContext::new())
         .expect("the first expression should synthesize");
 
     let error = elaborator
-        .check(&program.result, &Type::Bool, &TypeContext::new())
+        .check(&expression, &Type::Bool, &TypeContext::new())
         .expect_err("the structural mismatch should be preserved");
     let TypeError::Mismatch(mismatch) = error else {
         panic!("expected the original structural mismatch");
@@ -177,7 +221,7 @@ fn check_mismatch_poisoning_prevents_partial_core_escape() {
     assert_eq!(mismatch.found(), &Type::Int);
 
     assert!(matches!(
-        elaborator.check(&program.result, &Type::Int, &TypeContext::new()),
+        elaborator.check(&expression, &Type::Int, &TypeContext::new()),
         Err(TypeError::Internal(ElaborationFailure::InvalidState))
     ));
     assert!(matches!(
@@ -189,7 +233,7 @@ fn check_mismatch_poisoning_prevents_partial_core_escape() {
 #[test]
 fn elaboration_preserves_arbitrary_precision_and_causal_origins() {
     let text = "340282366920938463463374607431768211456 + 1\n";
-    let (source, program, elaborator, typed) = elaborate_expression(text);
+    let (source, expression, elaborator, typed) = elaborate_expression(text);
     let validated = validate(
         elaborator
             .finish(typed.node)
@@ -200,15 +244,12 @@ fn elaboration_preserves_arbitrary_precision_and_causal_origins() {
 
     let root = validated.node(validated.root()).expect("validated root");
     assert_eq!(root.ty, Type::Int);
-    assert_eq!(root.origin.primary_span(), program.result.span);
+    assert_eq!(root.origin.primary_span(), expression.span);
     let PureExprKind::Computation(PureComputation::Primitive(operation)) = &root.kind else {
         panic!("expected primitive Core");
     };
     assert_eq!(operation.primitive(), Primitive::Add);
-    assert_eq!(
-        root.origin.related_spans(),
-        &[operation_span(&program.result)]
-    );
+    assert_eq!(root.origin.related_spans(), &[operation_span(&expression)]);
 
     let left = validated
         .node(operation.left())
@@ -233,11 +274,10 @@ fn operation_span(expression: &ResolvedExpr) -> ash::source::Span {
 }
 
 fn validated_expression(text: &str) -> ash::core::ValidatedProgram {
-    let source = SourceFile::new("machine.ash", text).expect("test source should fit");
-    let program = resolved(&source);
-    let mut elaborator = Elaborator::for_program(&program).expect("binder reservation should fit");
+    let (source, expression) = resolved(text);
+    let mut elaborator = Elaborator::new();
     let typed = elaborator
-        .synthesize(&program.result, &TypeContext::new())
+        .synthesize(&expression, &TypeContext::new())
         .expect("test expression should synthesize");
     validate(
         elaborator.finish(typed.node).expect("root should finish"),

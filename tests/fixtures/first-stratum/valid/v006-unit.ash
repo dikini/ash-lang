@@ -1,1 +1,2 @@
-()
+main : Unit -> Unit
+main () = ()

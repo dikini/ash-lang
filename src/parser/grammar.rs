@@ -195,7 +195,7 @@ pub(super) fn module(parser: &mut Parser<'_>) {
     }
     while starts_module_declaration(parser) {
         module_declaration(parser);
-        if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
+        if !expect_declaration_line_end(parser) {
             break;
         }
     }
@@ -212,6 +212,15 @@ pub(super) fn module(parser: &mut Parser<'_>) {
         parser.consume_rest();
     }
     parser.finish();
+}
+
+fn expect_declaration_line_end(parser: &mut Parser<'_>) -> bool {
+    let recovered_expression_group = parser.take_recovered_expression_group_boundary();
+    if recovered_expression_group && parser.at(&TokenKind::EndOfFile) {
+        true
+    } else {
+        parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd)
+    }
 }
 
 fn import_declaration(parser: &mut Parser<'_>) {

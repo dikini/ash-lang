@@ -262,7 +262,7 @@ impl NominalTypeId {
     }
 }
 
-/// A structural Mini-Ash type.
+/// A structural Ash type.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Type {
     /// Arbitrary-precision integers.

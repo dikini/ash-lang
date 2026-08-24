@@ -21,17 +21,16 @@ use crate::{
         ResolvedFunctionExpr, ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
         ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr, ResolvedModule,
         ResolvedNominalType, ResolvedOccurrence, ResolvedPattern, ResolvedPatternKind,
-        ResolvedProgram, ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry,
-        ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
+        ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry, ResolvedType,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
         ResolvedTypedPattern, WithheldExport, WithheldExportKind, WithheldNamespace,
     },
     source::Origin,
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr,
         SurfaceExprKind, SurfaceImportSelection, SurfaceLocalDeclaration, SurfaceModule,
-        SurfacePattern, SurfacePatternKind, SurfaceProgram, SurfaceRecursiveGroup,
-        SurfaceReference, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
-        SurfaceTypeVisibility,
+        SurfacePattern, SurfacePatternKind, SurfaceRecursiveGroup, SurfaceReference, SurfaceType,
+        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeVisibility,
     },
     types::{
         ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, charge_type_cells,
@@ -147,17 +146,6 @@ impl fmt::Display for ResolveError {
 }
 
 impl std::error::Error for ResolveError {}
-
-/// Resolves all binding and occurrence spellings in a recovery-free program.
-///
-/// # Errors
-///
-/// Returns a structured failure when a name is not in scope, a global
-/// definition violates the accepted name rules, the binder identity domain is
-/// exhausted, or an internal scope invariant is lost.
-pub fn resolve(program: &SurfaceProgram) -> Result<ResolvedProgram, ResolveError> {
-    Resolver::new(ModuleId::from(program.span.source())).resolve_program(program)
-}
 
 /// One source import edge paired with its checked dependency summary.
 #[derive(Clone, Copy, Debug)]
@@ -969,21 +957,6 @@ impl Resolver {
         );
         diagnostic.found = Some(reference.member().text.clone());
         Err(diagnostic.into())
-    }
-
-    fn resolve_program(
-        mut self,
-        program: &SurfaceProgram,
-    ) -> Result<ResolvedProgram, ResolveError> {
-        let (registry, definitions) =
-            self.resolve_declarations(&program.type_declarations, &program.definitions)?;
-        let result = self.resolve_expr(&program.result)?;
-        Ok(ResolvedProgram {
-            registry,
-            definitions,
-            result,
-            span: program.span,
-        })
     }
 
     fn resolve_declarations(
@@ -2463,11 +2436,11 @@ mod module_tests;
 mod tests {
     use super::*;
     use crate::source::{ByteRange, SourceFile};
-    use crate::surface::{SurfaceName, SurfaceTypeKind};
+    use crate::surface::{SurfaceDefinitionKind, SurfaceName, SurfaceTypeKind};
     use crate::types::TYPE_WORK_LIMIT;
     use crate::{
         lexer::lex,
-        parser::{parse, project},
+        parser::{parse, project_module},
     };
 
     #[test]
@@ -2491,20 +2464,27 @@ mod tests {
     #[test]
     fn failed_nested_and_recursive_resolution_restore_the_scope_stack() {
         for (name, text) in [
-            ("scope-error.ash", "fn(value) {\n{\nmissing\n}\n}\n"),
+            (
+                "scope-error.ash",
+                "main : Unit -> Unit\nmain () = fn(value) {\n{\nmissing\n}\n}\n",
+            ),
             (
                 "recursive-scope-error.ash",
-                "{\nlet rec repeat : Unit -> Int = fn(ignored) {\nmissing\n}\nrepeat ()\n}\n",
+                "main : Unit -> Int\nmain () = {\nlet rec repeat : Unit -> Int = fn(ignored) {\nmissing\n}\nrepeat ()\n}\n",
             ),
         ] {
             let source = SourceFile::new(name, text).expect("the scope fixture should fit");
             let tree = parse(lex(&source).expect("the fixture should lex"));
-            let program = project(&source, &tree).expect("the fixture should project");
+            let module = project_module(&source, &tree).expect("the fixture should project");
+            let SurfaceDefinitionKind::Equational(main) = &module.definitions[0].kind else {
+                panic!("the fixture should expose an equational main");
+            };
+            let body = &main.equations[0].body;
             let mut resolver = Resolver::new(ModuleId::new(0));
             let initial_scope_count = resolver.scopes.len();
 
             let error = resolver
-                .resolve_expr(&program.result)
+                .resolve_expr(body)
                 .expect_err("the nested unknown name should fail");
 
             assert_eq!(error.reason, ResolveReason::UnknownName);
@@ -2568,12 +2548,12 @@ mod tests {
     fn constructor_tuple_payloads_charge_the_synthesized_wrapper_exactly() {
         let source = SourceFile::new(
             "constructor-tuple-budget.ash",
-            "type Pair =\nPair(Int, Int)\n\n()\n",
+            "type Pair =\nPair(Int, Int)\n",
         )
         .expect("the budget fixture should fit");
         let tree = parse(lex(&source).expect("the fixture should lex"));
-        let program = project(&source, &tree).expect("the fixture should project");
-        let second_field_span = program.type_declarations[0].constructors[0].fields[1].span;
+        let module = project_module(&source, &tree).expect("the fixture should project");
+        let second_field_span = module.type_declarations[0].constructors[0].fields[1].span;
 
         let mut exact = Resolver::new(ModuleId::new(0));
         exact
@@ -2581,7 +2561,7 @@ mod tests {
             .charge(TYPE_WORK_LIMIT - 3)
             .expect("the fixture leaves the wrapper and two field cells");
         let registry = exact
-            .resolve_registry(&program.type_declarations)
+            .resolve_registry(&module.type_declarations)
             .expect("the exact constructor payload allowance should fit");
         assert_eq!(
             registry.constructors()[0].payload,
@@ -2595,7 +2575,7 @@ mod tests {
             .charge(TYPE_WORK_LIMIT - 2)
             .expect("the fixture leaves one cell fewer than the retained payload");
         let error = short
-            .resolve_registry(&program.type_declarations)
+            .resolve_registry(&module.type_declarations)
             .expect_err("the tuple wrapper must consume the remaining budget");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range(), second_field_span.range());

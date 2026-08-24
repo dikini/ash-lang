@@ -2,4 +2,5 @@ fn identity<a>(value : Int) -> Int {
     value
 }
 
-identity
+main : Unit -> Int
+main () = 1

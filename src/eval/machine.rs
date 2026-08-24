@@ -1,4 +1,4 @@
-//! Loop-driven control transitions for the pure Mini-Ash machine.
+//! Loop-driven control transitions for the pure Ash machine.
 
 use std::{error::Error, fmt, sync::Arc};
 
@@ -1033,13 +1033,10 @@ mod tests {
             validate,
             variable::VariableNode,
         },
-        elaborate::Elaborator,
         integer::Integer,
-        lexer::lex,
-        parser::{parse, project},
-        resolve::resolve,
+        resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry},
         source::{ByteRange, Origin, SourceFile},
-        types::{Type, TypeVariableId},
+        types::{ConstructorId, NominalTypeId, Type, TypeVariableId},
     };
 
     struct TransitionOwner {
@@ -1413,20 +1410,71 @@ mod tests {
 
     #[test]
     fn recursive_data_initializers_store_each_slot_before_entering_the_next() {
-        let source = SourceFile::new(
-            "recursive-data-order.ash",
-            "type Flag =\nFirst\n| Second\n\n{\nlet rec first : Flag = First\nand second : Flag = Second\nfirst\n}\n",
-        )
-        .expect("test source");
-        let tree = parse(lex(&source).expect("source should lex"));
-        let surface = project(&source, &tree).expect("source should project");
-        let resolved = resolve(&surface).expect("source should resolve");
-        let mut elaborator = Elaborator::for_program(&resolved).expect("reserve binders");
-        let typed = elaborator
-            .synthesize_program(&resolved)
-            .expect("source should elaborate");
+        let source = SourceFile::new("recursive-data-order.ash", "Flag First Second group")
+            .expect("test source");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("ordered range"))
+                .expect("source span")
+        };
+        let origin = Origin::Source(span(0, 23));
+        let nominal = NominalTypeId::new(source.id(), 0);
+        let first_constructor = ConstructorId::new(nominal, 0);
+        let second_constructor = ConstructorId::new(nominal, 1);
+        let registry = Arc::new(ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Flag".into(),
+                constructors: vec![first_constructor, second_constructor].into_boxed_slice(),
+                origin: Origin::Source(span(0, 17)),
+            }],
+            vec![
+                ResolvedConstructor {
+                    id: first_constructor,
+                    owner: nominal,
+                    spelling: "First".into(),
+                    payload: None,
+                    origin: Origin::Source(span(5, 10)),
+                },
+                ResolvedConstructor {
+                    id: second_constructor,
+                    owner: nominal,
+                    spelling: "Second".into(),
+                    payload: None,
+                    origin: Origin::Source(span(11, 17)),
+                },
+            ],
+        ));
+        let nominal_type = Type::Nominal(nominal);
+        let mut builder = CoreBuilder::with_registry(registry);
+        let first_binder = builder
+            .binder(nominal_type.clone(), origin.clone())
+            .expect("first recursive binder should fit");
+        let second_binder = builder
+            .binder(nominal_type.clone(), origin.clone())
+            .expect("second recursive binder should fit");
+        let first_initializer = builder
+            .constructor(first_constructor, nominal_type.clone(), origin.clone())
+            .expect("first constructor should fit");
+        let second_initializer = builder
+            .constructor(second_constructor, nominal_type.clone(), origin.clone())
+            .expect("second constructor should fit");
+        let body = builder
+            .variable(first_binder.id(), nominal_type.clone(), origin.clone())
+            .expect("recursive body should fit");
+        let root = builder
+            .recursive_binding(
+                vec![
+                    (first_binder, first_initializer),
+                    (second_binder, second_initializer),
+                ],
+                body,
+                nominal_type,
+                origin,
+            )
+            .expect("recursive group should fit");
         let validated = validate(
-            elaborator.finish(typed.node).expect("Core should finish"),
+            builder.finish(root).expect("Core should finish"),
             &[&source],
         )
         .expect("Core should validate");
@@ -1519,20 +1567,50 @@ mod tests {
 
     #[test]
     fn returned_closure_retains_the_heap_for_captured_structural_values() {
-        let source = SourceFile::new(
-            "returned-structural-capture.ash",
-            "{\nlet pair = (20, 22)\nlet keep : Unit -> (Int, Int) = fn(ignored) {\npair\n}\nkeep\n}\n",
-        )
-        .expect("test source");
-        let tree = parse(lex(&source).expect("source should lex"));
-        let surface = project(&source, &tree).expect("source should project");
-        let resolved = resolve(&surface).expect("source should resolve");
-        let mut elaborator = Elaborator::for_program(&resolved).expect("reserve binders");
-        let typed = elaborator
-            .synthesize_program(&resolved)
-            .expect("source should elaborate");
+        let source = SourceFile::new("returned-structural-capture.ash", "pair keep ignored")
+            .expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 17).expect("ordered range"))
+                .expect("source span"),
+        );
+        let tuple_type = Type::Tuple(vec![Type::Int, Type::Int].into_boxed_slice());
+        let function_type = Type::Function(Box::new(Type::Unit), Box::new(tuple_type.clone()));
+        let mut builder = CoreBuilder::new();
+        let pair = builder
+            .binder(tuple_type.clone(), origin.clone())
+            .expect("pair binder should fit");
+        let ignored = builder
+            .binder(Type::Unit, origin.clone())
+            .expect("function parameter should fit");
+        let left = builder
+            .integer(
+                Integer::parse_decimal("20").expect("valid integer"),
+                Type::Int,
+                origin.clone(),
+            )
+            .expect("left tuple element should fit");
+        let right = builder
+            .integer(
+                Integer::parse_decimal("22").expect("valid integer"),
+                Type::Int,
+                origin.clone(),
+            )
+            .expect("right tuple element should fit");
+        let initializer = builder
+            .tuple(vec![left, right], tuple_type.clone(), origin.clone())
+            .expect("tuple initializer should fit");
+        let body = builder
+            .variable(pair.id(), tuple_type, origin.clone())
+            .expect("captured pair occurrence should fit");
+        let function = builder
+            .function(ignored, body, function_type.clone(), origin.clone())
+            .expect("returned closure should fit");
+        let root = builder
+            .binding(pair, initializer, function, function_type, origin)
+            .expect("capturing binding should fit");
         let validated = validate(
-            elaborator.finish(typed.node).expect("Core should finish"),
+            builder.finish(root).expect("Core should finish"),
             &[&source],
         )
         .expect("Core should validate");

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use ash::{
     core::{
-        CoreBuilder, MiniAshPureDialect, NodeId, Primitive, PureComputation, PureExprKind,
-        PureValue, TypedExpr, ValidatedProgram,
+        AshPureDialect, CoreBuilder, NodeId, Primitive, PureComputation, PureExprKind, PureValue,
+        TypedExpr, ValidatedProgram,
         binding::BindingNode,
         data::{ConstructorNode, MatchNode, TupleNode},
         function::{ApplicationNode, FunctionNode},
@@ -19,6 +19,50 @@ use ash::{
     source::{ByteRange, Origin, SourceFile},
     types::Type,
 };
+
+const DRIVER_SOURCE: &str = include_str!("../src/driver.rs");
+const PARSER_EXPORTS: &str = include_str!("../src/parser/mod.rs");
+const PARSER_GRAMMAR: &str = include_str!("../src/parser/grammar.rs");
+const PARSER_PROJECTION: &str = include_str!("../src/parser/project.rs");
+
+#[test]
+fn current_source_exposes_only_the_modular_source_pipeline() {
+    assert!(
+        !DRIVER_SOURCE.contains("run_source("),
+        "the current driver must not retain the historical file-result pipeline"
+    );
+    let projection_exports = PARSER_EXPORTS
+        .lines()
+        .find(|line| line.trim_start().starts_with("pub use project::{"))
+        .expect("the parser should publish its modular projection boundary");
+    assert!(
+        !projection_exports
+            .trim_start_matches("pub use project::{")
+            .trim_end_matches("};")
+            .split(',')
+            .any(|export| export.trim() == "project"),
+        "the current parser must not export the historical program projection"
+    );
+    assert!(
+        !PARSER_EXPORTS.contains("Program,")
+            && !PARSER_PROJECTION.contains("SurfaceProgram")
+            && !PARSER_PROJECTION.contains("pub fn project(")
+            && !PARSER_PROJECTION.contains("fn project_program("),
+        "the current parser must not retain a historical file-result root"
+    );
+    assert!(
+        PARSER_EXPORTS.contains("grammar::module(&mut parser);"),
+        "the public parser must enter the declarations-only module grammar"
+    );
+    assert!(
+        PARSER_GRAMMAR.contains("&MODULAR_ASH_DIALECT"),
+        "the selected grammar must be Modular Ash"
+    );
+    assert!(
+        !PARSER_GRAMMAR.contains("MINI_ASH_DIALECT"),
+        "the current parser must not retain a Mini-Ash grammar selector"
+    );
+}
 
 trait OperationFamily {
     type Operation;
@@ -530,7 +574,7 @@ fn representative_program() -> Representative {
 
 #[test]
 fn pure_dialect_is_named_and_has_no_inhabited_operation_family() {
-    assert_eq!(MiniAshPureDialect::NAME, "mini-ash.pure");
+    assert_eq!(AshPureDialect::NAME, "ash.pure");
 
     let (program, root) = primitive_program();
     let pure = Computation::<PureOperations>::Pure {

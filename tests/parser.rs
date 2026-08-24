@@ -858,11 +858,7 @@ fn accepted_parser_cases_have_focused_reasons_and_primary_spans() {
             .iter()
             .map(|diagnostic| diagnostic.reason)
             .collect::<Vec<_>>(),
-        vec![
-            ParseReason::ExpectedOperand,
-            ParseReason::UnclosedGroup,
-            ParseReason::ExpectedForm,
-        ]
+        vec![ParseReason::ExpectedOperand, ParseReason::UnclosedGroup]
     );
     assert_eq!(
         two_failures.parse_diagnostics()[0]

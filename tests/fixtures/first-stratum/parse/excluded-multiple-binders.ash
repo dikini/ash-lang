@@ -1,4 +1,5 @@
 add : Int -> Int
 add left right = left
 
-add
+main : Unit -> Int -> Int
+main () = add

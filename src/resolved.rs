@@ -86,19 +86,6 @@ pub struct ResolvedOccurrence {
     pub origin: Origin,
 }
 
-/// One resolved Mini-Ash source file.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedProgram {
-    /// Immutable nominal and constructor registry.
-    pub registry: Arc<ResolvedRegistry>,
-    /// Resolved global definitions in source order.
-    pub definitions: Vec<ResolvedDefinition>,
-    /// Required final result expression.
-    pub result: ResolvedExpr,
-    /// Complete accepted source span.
-    pub span: Span,
-}
-
 /// One declarations-only module after name resolution.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ResolvedModule {

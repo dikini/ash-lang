@@ -10,9 +10,9 @@ use crate::{
         SurfaceExpr, SurfaceExprKind, SurfaceExternalInterface, SurfaceImport, SurfaceImportItem,
         SurfaceImportSelection, SurfaceInlineOperationalHeader, SurfaceLocalDeclaration,
         SurfaceMatchArm, SurfaceMatchExpr, SurfaceModule, SurfaceModulePath, SurfaceName,
-        SurfacePattern, SurfacePatternKind, SurfaceProgram, SurfaceQualifiedName,
-        SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference, SurfaceType,
-        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeVisibility, SurfaceTypedPattern,
+        SurfacePattern, SurfacePatternKind, SurfaceQualifiedName, SurfaceRecursiveGroup,
+        SurfaceRecursiveMember, SurfaceReference, SurfaceType, SurfaceTypeDeclaration,
+        SurfaceTypeKind, SurfaceTypeVisibility, SurfaceTypedPattern,
     },
 };
 
@@ -31,7 +31,7 @@ pub enum ProjectionError {
     MalformedTree(InternalReason),
 }
 
-/// Projects a complete, recovery-free concrete tree to surface syntax.
+/// Projects a complete, recovery-free module tree to surface syntax.
 ///
 /// # Errors
 ///
@@ -41,19 +41,6 @@ pub enum ProjectionError {
 /// diagnostics, missing forms, or error events remain. Returns
 /// [`ProjectionError::MalformedTree`] for incomplete or inconsistent concrete
 /// structure.
-pub fn project(
-    source: &SourceFile,
-    tree: &ConcreteTree,
-) -> Result<SurfaceProgram, ProjectionError> {
-    let (root, tokens) = validated_root(source, tree)?;
-    project_program(source, root, tokens)
-}
-
-/// Projects a complete, recovery-free module tree to surface syntax.
-///
-/// # Errors
-///
-/// Returns the same resource, recovery, and structural failures as [`project`].
 pub fn project_module(
     source: &SourceFile,
     tree: &ConcreteTree,
@@ -277,21 +264,6 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                     )
                 })?;
             }
-        }
-        NodeKind::Program => {
-            while shape.peek_node_is(NodeKind::TypeDeclaration) {
-                shape.node(NodeKind::TypeDeclaration)?;
-                shape.token(&TokenKind::LineEnd)?;
-            }
-            while shape.peek_node_is(NodeKind::EquationalGlobal)
-                || shape.peek_node_is(NodeKind::InlineOperationalGlobal)
-            {
-                shape.any_node()?;
-                shape.token(&TokenKind::LineEnd)?;
-            }
-            shape.expression()?;
-            shape.optional_token(&TokenKind::LineEnd)?;
-            shape.token(&TokenKind::EndOfFile)?;
         }
         NodeKind::TypeDeclaration => {
             if shape.peek_token_is(&TokenKind::Pub) {
@@ -714,44 +686,6 @@ impl<'a> ShapeCursor<'a> {
             malformed(InternalReason::UnexpectedShape)
         }
     }
-}
-
-fn project_program(
-    source: &SourceFile,
-    node: &ConcreteNode,
-    tokens: &[Token],
-) -> Result<SurfaceProgram, ProjectionError> {
-    require_kind(node, NodeKind::Program)?;
-    let mut type_declarations = Vec::new();
-    let mut definitions = Vec::new();
-    let mut result = None;
-    for child in child_nodes(node) {
-        match child.kind {
-            NodeKind::TypeDeclaration => {
-                type_declarations.push(project_type_declaration(source, child, tokens)?);
-            }
-            NodeKind::EquationalGlobal | NodeKind::InlineOperationalGlobal => {
-                definitions.push(project_definition(source, child, tokens)?);
-            }
-            kind if is_expression_kind(kind) => {
-                if result.is_some() {
-                    return malformed(InternalReason::UnexpectedShape);
-                }
-                result = Some(project_expression(source, child, tokens)?);
-            }
-            NodeKind::Error => return malformed(InternalReason::UnexpectedShape),
-            _ => return malformed(InternalReason::UnexpectedShape),
-        }
-    }
-    let result = result.ok_or(ProjectionError::MalformedTree(
-        InternalReason::UnexpectedShape,
-    ))?;
-    Ok(SurfaceProgram {
-        type_declarations,
-        definitions,
-        result,
-        span: node_span(source, node, tokens)?,
-    })
 }
 
 fn project_surface_module(

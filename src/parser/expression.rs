@@ -148,15 +148,22 @@ fn parse_parenthesized(parser: &mut Parser<'_>) {
         );
         let _ = parser.bump();
     } else {
-        if parser.at(&TokenKind::RightBrace) {
+        let recovered_at_owner_boundary = if parser.at(&TokenKind::RightBrace) {
             parser.resolve_pending_at_current(
                 recovery_start,
                 SynchronizationBoundary::BlockClosingBrace,
             );
+            true
         } else if parser.at(&TokenKind::EndOfFile) {
             parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
-        }
+            true
+        } else {
+            false
+        };
         report_unclosed_group(parser, opening);
+        if recovered_at_owner_boundary {
+            parser.mark_recovered_expression_group_boundary();
+        }
     }
     parser.finish();
 }
@@ -312,6 +319,7 @@ mod tests {
             events: Vec::new(),
             diagnostics: Vec::new(),
             pending_recoveries: Vec::new(),
+            recovered_expression_group_boundary: false,
             nesting_depth: 0,
             resource_failure: None,
             syntax_budget: crate::syntax_resource::SyntaxBudget::default(),

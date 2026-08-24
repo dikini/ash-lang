@@ -6,11 +6,11 @@ use std::{
 };
 
 use ash::{
-    driver::{PipelineFailure, run_source},
+    driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
     elaborate::{TypeError, TypeReason},
     lexer::LexReason,
+    module::{LoadGraphError, ModuleRoots},
     resolve::ResolveReason,
-    source::SourceFile,
 };
 
 const V001: &str = include_str!("fixtures/first-stratum/valid/v001-precedence.ash");
@@ -23,6 +23,18 @@ const RECURSIVE_GLOBAL: &str = include_str!("fixtures/recursion/valid/global-mut
 const RECURSIVE_LOCAL: &str = include_str!("fixtures/recursion/valid/local-mutual.ash");
 const UNSAFE_RECURSIVE_INITIALIZER: &str =
     include_str!("fixtures/recursion/type/unsafe-initializer.ash");
+const DOCUMENTED_V001: &str = "1 + 2 * 3\n";
+const DOCUMENTED_V002_EQUATIONAL: &str =
+    "increment : Int -> Int\nincrement value = value + 1\n\nincrement 41\n";
+const DOCUMENTED_V002_OPERATIONAL: &str =
+    "fn increment(value : Int) -> Int {\n    value + 1\n}\n\nincrement 41\n";
+const DOCUMENTED_V003: &str = "{\n    let value = 1\n    let value = value + 1\n    value\n}\n";
+const DOCUMENTED_V004: &str = "{\n    let offset = 40\n    let add_offset : Int -> Int = fn(value) {\n        value + offset\n    }\n    add_offset 2\n}\n";
+const DOCUMENTED_V008: &str = "increment : Int -> Int\nincrement value = value + 1\n\nfn double(value : Int) -> Int {\n    value * 2\n}\n\ndouble (increment 20)\n";
+const DOCUMENTED_RECURSIVE_GLOBAL: &str = "first : Unit -> Int\nfirst ignored = second ()\n\nfn second(ignored : Unit) -> Int {\n    let retain : Unit -> Int = fn(value) {\n        first value\n    }\n    42\n}\n\nfirst ()\n";
+const DOCUMENTED_RECURSIVE_LOCAL: &str = "{\n    let rec first : Unit -> Int = fn(ignored) {\n        second ()\n    }\n    and second : Unit -> Int = fn(ignored) {\n        let retain : Unit -> Int = fn(value) {\n            first value\n        }\n        42\n    }\n    first ()\n}\n";
+const DOCUMENTED_UNSAFE_RECURSIVE_INITIALIZER: &str =
+    "{\n    let rec value : Int = 1\n    value\n}\n";
 const CURRIED_EQUATIONAL: &str =
     "add : Int -> Int -> Int\nadd left = fn(right) {\n    left + right\n}\n\nadd 20 22\n";
 const CONTEXTUAL_BLOCK: &str = "{\n    let constant : Unit -> Int = {\n        fn(ignored) {\n            1\n        }\n    }\n    constant ()\n}\n";
@@ -39,6 +51,23 @@ const TREE_PRESENTATIONS: &str = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tr
 const HIGHER_ORDER_CONSTRUCTOR: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmatch build Wrap {\n    Wrap(value) => value\n}\n";
 const CYCLIC_STREAM: &str = "type Stream =\n    Next(Int, Stream)\n\n{\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
 const RANK_ONE_POLYMORPHISM: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\n{\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
+
+const CURRIED_EQUATIONAL_MODULE: &str = "add : Int -> Int -> Int\nadd left = fn(right) {\n    left + right\n}\n\nmain : Unit -> Int\nmain () = add 20 22\n";
+const CONTEXTUAL_BLOCK_MODULE: &str = "main : Unit -> Int\nmain () = {\n    let constant : Unit -> Int = {\n        fn(ignored) {\n            1\n        }\n    }\n    constant ()\n}\n";
+const HIGHER_ORDER_OPERATIONAL_MODULE: &str = "fn add(left : Int) -> Int -> Int {\n    fn(right) {\n        left + right\n    }\n}\n\nmain : Unit -> Int\nmain () = add 20 22\n";
+const FUNCTION_RESULT_MODULE: &str = "identity : Int -> Int\nidentity value = value\n\nmain : Unit -> (Int -> Int)\nmain () = identity\n";
+const COMMENT_REJECTION_MODULE: &str =
+    "// comments are not in Mini-Ash\nmain : Unit -> Int\nmain () = 1\n";
+const UNKNOWN_NAME_REJECTION_MODULE: &str = "main : Unit -> Int\nmain () = missing 1\n";
+const TYPE_REJECTION_MODULE: &str = "main : Unit -> Int\nmain () = true + 1\n";
+const IRREFUTABLE_TUPLE_MODULE: &str =
+    "main : Unit -> Int\nmain () = {\n    let (left, right) = (20, 22)\n    left + right\n}\n";
+const OPERATIONAL_TUPLE_PATTERN_MODULE: &str = "fn add((left, right) : (Int, Int)) -> Int {\n    left + right\n}\n\nmain : Unit -> Int\nmain () = add(20, 22)\n";
+const CONTEXTUAL_MATCH_MODULE: &str = "fn choose(flag : Bool) -> Int -> Int {\n    match flag {\n        true => fn(value) {\n            value + 1\n        }\n        false => fn(value) {\n            value * 2\n        }\n    }\n}\n\nmain : Unit -> Int\nmain () = choose true 41\n";
+const TREE_PRESENTATIONS_MODULE: &str = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn size_match(tree : Tree) -> Int {\n    match tree {\n        Tip(value) => 1\n        Fork(left, right) => size_match left + size_match right\n    }\n}\n\nmain : Unit -> Int\nmain () = size (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))\n";
+const HIGHER_ORDER_CONSTRUCTOR_MODULE: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmain : Unit -> Int\nmain () = match build Wrap {\n    Wrap(value) => value\n}\n";
+const CYCLIC_STREAM_MODULE: &str = "type Stream =\n    Next(Int, Stream)\n\nmain : Unit -> Stream\nmain () = {\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
+const RANK_ONE_POLYMORPHISM_MODULE: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\nmain : Unit -> (Option<Int>, Bool)\nmain () = {\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -72,8 +101,12 @@ struct TempFile {
 
 impl TempFile {
     fn write(text: &str) -> Self {
+        Self::write_named("source.ash", text)
+    }
+
+    fn write_named(name: &str, text: &str) -> Self {
         let directory = TempDirectory::create();
-        let path = directory.0.join("source.ash");
+        let path = directory.0.join(name);
         let owned = Self {
             _directory: directory,
             path,
@@ -94,8 +127,27 @@ impl Drop for TempFile {
 }
 
 fn run(name: &str, text: &str) -> Result<ash::driver::Observation, PipelineFailure> {
-    let source = SourceFile::new(name, text).expect("a specification example should fit");
-    run_source(source)
+    let source = TempFile::write_named(name, text);
+    match run_path(RunConfiguration {
+        entry: source.path.clone(),
+        roots: ModuleRoots::empty(),
+    }) {
+        Ok(observation) => Ok(observation),
+        Err(FileFailure::Pipeline(failure)) => Err(failure),
+        Err(FileFailure::Graph(LoadGraphError::Syntax(failure))) => {
+            Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
+                lexical: failure.lexical,
+                parser: failure.parser,
+                resource: failure.resource,
+            })))
+        }
+        Err(FileFailure::Graph(LoadGraphError::Projection { error, .. })) => {
+            Err(PipelineFailure::Projection(error))
+        }
+        Err(FileFailure::Graph(LoadGraphError::SourceModel { error, .. }))
+        | Err(FileFailure::Source(error)) => Err(PipelineFailure::SourceModel(error)),
+        Err(failure) => panic!("the specification module reached an input failure: {failure}"),
+    }
 }
 
 fn assert_observation(name: &str, text: &str, value: &str, ty: &str) {
@@ -116,25 +168,25 @@ fn assert_documented(path: &str, source: &str) {
 #[test]
 fn syntax_equational_global_example_v002_is_executable() {
     assert_observation("spec-v002-equational.ash", V002_EQUATIONAL, "42", "Int");
-    assert_documented("spec/syntax.md", V002_EQUATIONAL);
+    assert_documented("spec/syntax.md", DOCUMENTED_V002_EQUATIONAL);
 }
 
 #[test]
 fn syntax_inline_operational_global_example_v002_is_executable() {
     assert_observation("spec-v002-operational.ash", V002_OPERATIONAL, "42", "Int");
-    assert_documented("spec/syntax.md", V002_OPERATIONAL);
+    assert_documented("spec/syntax.md", DOCUMENTED_V002_OPERATIONAL);
 }
 
 #[test]
 fn syntax_local_recursive_group_example_is_executable() {
     assert_observation("spec-local-recursion.ash", RECURSIVE_LOCAL, "42", "Int");
-    assert_documented("spec/syntax.md", RECURSIVE_LOCAL);
+    assert_documented("spec/syntax.md", DOCUMENTED_RECURSIVE_LOCAL);
 }
 
 #[test]
 fn resolution_global_recursive_scope_example_is_executable() {
     assert_observation("spec-global-recursion.ash", RECURSIVE_GLOBAL, "42", "Int");
-    assert_documented("spec/name-resolution.md", RECURSIVE_GLOBAL);
+    assert_documented("spec/name-resolution.md", DOCUMENTED_RECURSIVE_GLOBAL);
 }
 
 #[test]
@@ -145,13 +197,16 @@ fn static_semantics_rejects_unsafe_recursive_initialization() {
         panic!("unsafe recursive initialization should fail during typing")
     };
     assert_eq!(actual.reason, TypeReason::UnsafeRecursiveRoot);
-    assert_documented("spec/static-semantics.md", UNSAFE_RECURSIVE_INITIALIZER);
+    assert_documented(
+        "spec/static-semantics.md",
+        DOCUMENTED_UNSAFE_RECURSIVE_INITIALIZER,
+    );
 }
 
 #[test]
 fn dynamic_recursive_group_example_is_executable() {
     assert_observation("spec-dynamic-recursion.ash", RECURSIVE_LOCAL, "42", "Int");
-    assert_documented("spec/dynamic-semantics.md", RECURSIVE_LOCAL);
+    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_RECURSIVE_LOCAL);
 }
 
 #[test]
@@ -163,14 +218,14 @@ fn tool_recursive_example_has_exact_cli_observation() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"42 : Int\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", RECURSIVE_GLOBAL);
+    assert_documented("docs/tools/ash.md", DOCUMENTED_RECURSIVE_GLOBAL);
 }
 
 #[test]
 fn syntax_curried_equational_example_is_executable() {
     assert_observation(
         "spec-curried-equational.ash",
-        CURRIED_EQUATIONAL,
+        CURRIED_EQUATIONAL_MODULE,
         "42",
         "Int",
     );
@@ -179,7 +234,7 @@ fn syntax_curried_equational_example_is_executable() {
 
 #[test]
 fn lexical_comment_rejection_example_has_its_documented_reason() {
-    let failure = run("spec-comment-rejection.ash", COMMENT_REJECTION)
+    let failure = run("spec-comment-rejection.ash", COMMENT_REJECTION_MODULE)
         .expect_err("comments are outside this lexical structure");
     let PipelineFailure::Syntax(actual) = failure else {
         panic!("the comment example should fail during syntax processing");
@@ -197,7 +252,7 @@ fn lexical_comment_rejection_example_has_its_documented_reason() {
 
 #[test]
 fn resolution_unknown_name_example_has_its_documented_reason() {
-    let failure = run("spec-unknown-name.ash", UNKNOWN_NAME_REJECTION)
+    let failure = run("spec-unknown-name.ash", UNKNOWN_NAME_REJECTION_MODULE)
         .expect_err("an unresolved occurrence should be rejected");
     let PipelineFailure::Resolution(actual) = failure else {
         panic!("the unknown-name example should fail during resolution");
@@ -208,7 +263,7 @@ fn resolution_unknown_name_example_has_its_documented_reason() {
 
 #[test]
 fn static_semantics_operand_example_has_its_documented_reason() {
-    let failure = run("spec-operator-operand.ash", TYPE_REJECTION)
+    let failure = run("spec-operator-operand.ash", TYPE_REJECTION_MODULE)
         .expect_err("a Boolean addition operand should be rejected");
     let PipelineFailure::Typing(TypeError::Source(actual)) = failure else {
         panic!("the operand example should fail during typing");
@@ -219,7 +274,12 @@ fn static_semantics_operand_example_has_its_documented_reason() {
 
 #[test]
 fn static_semantics_contextual_block_example_is_executable() {
-    assert_observation("spec-contextual-block.ash", CONTEXTUAL_BLOCK, "1", "Int");
+    assert_observation(
+        "spec-contextual-block.ash",
+        CONTEXTUAL_BLOCK_MODULE,
+        "1",
+        "Int",
+    );
     assert_documented("spec/static-semantics.md", CONTEXTUAL_BLOCK);
 }
 
@@ -227,7 +287,7 @@ fn static_semantics_contextual_block_example_is_executable() {
 fn static_semantics_higher_order_operational_example_is_executable() {
     assert_observation(
         "spec-higher-order-operational.ash",
-        HIGHER_ORDER_OPERATIONAL,
+        HIGHER_ORDER_OPERATIONAL_MODULE,
         "42",
         "Int",
     );
@@ -236,7 +296,12 @@ fn static_semantics_higher_order_operational_example_is_executable() {
 
 #[test]
 fn static_semantics_irrefutable_tuple_binding_is_executable() {
-    assert_observation("spec-irrefutable-tuple.ash", IRREFUTABLE_TUPLE, "42", "Int");
+    assert_observation(
+        "spec-irrefutable-tuple.ash",
+        IRREFUTABLE_TUPLE_MODULE,
+        "42",
+        "Int",
+    );
     assert_documented("spec/static-semantics.md", IRREFUTABLE_TUPLE);
 }
 
@@ -244,7 +309,7 @@ fn static_semantics_irrefutable_tuple_binding_is_executable() {
 fn static_semantics_operational_tuple_pattern_is_executable() {
     assert_observation(
         "spec-operational-tuple-pattern.ash",
-        OPERATIONAL_TUPLE_PATTERN,
+        OPERATIONAL_TUPLE_PATTERN_MODULE,
         "42",
         "Int",
     );
@@ -253,7 +318,12 @@ fn static_semantics_operational_tuple_pattern_is_executable() {
 
 #[test]
 fn static_semantics_contextual_match_checks_function_arms() {
-    assert_observation("spec-contextual-match.ash", CONTEXTUAL_MATCH, "42", "Int");
+    assert_observation(
+        "spec-contextual-match.ash",
+        CONTEXTUAL_MATCH_MODULE,
+        "42",
+        "Int",
+    );
     assert_documented("spec/static-semantics.md", CONTEXTUAL_MATCH);
 }
 
@@ -261,7 +331,7 @@ fn static_semantics_contextual_match_checks_function_arms() {
 fn static_semantics_rank_one_polymorphism_is_executable() {
     assert_observation(
         "spec-rank-one-polymorphism.ash",
-        RANK_ONE_POLYMORPHISM,
+        RANK_ONE_POLYMORPHISM_MODULE,
         "(Some(42), false)",
         "(Option<Int>, Bool)",
     );
@@ -272,7 +342,7 @@ fn static_semantics_rank_one_polymorphism_is_executable() {
 fn elaboration_tree_presentations_are_equivalent() {
     assert_observation(
         "spec-tree-presentations.ash",
-        TREE_PRESENTATIONS,
+        TREE_PRESENTATIONS_MODULE,
         "4",
         "Int",
     );
@@ -283,7 +353,7 @@ fn elaboration_tree_presentations_are_equivalent() {
 fn elaboration_payload_constructor_is_higher_order() {
     assert_observation(
         "spec-higher-order-constructor.ash",
-        HIGHER_ORDER_CONSTRUCTOR,
+        HIGHER_ORDER_CONSTRUCTOR_MODULE,
         "42",
         "Int",
     );
@@ -294,7 +364,7 @@ fn elaboration_payload_constructor_is_higher_order() {
 fn dynamic_cyclic_data_observation_is_finite() {
     assert_observation(
         "spec-cyclic-stream.ash",
-        CYCLIC_STREAM,
+        CYCLIC_STREAM_MODULE,
         "Next(1, <cycle>)",
         "Stream",
     );
@@ -304,31 +374,31 @@ fn dynamic_cyclic_data_observation_is_finite() {
 #[test]
 fn dynamic_binding_derivation_example_v003_is_executable() {
     assert_observation("spec-v003.ash", V003, "2", "Int");
-    assert_documented("spec/dynamic-semantics.md", V003);
+    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V003);
 }
 
 #[test]
 fn dynamic_primitive_derivation_example_v001_is_executable() {
     assert_observation("spec-v001.ash", V001, "7", "Int");
-    assert_documented("spec/dynamic-semantics.md", V001);
+    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V001);
 }
 
 #[test]
 fn dynamic_application_derivation_example_v002_is_executable() {
     assert_observation("spec-v002.ash", V002_EQUATIONAL, "42", "Int");
-    assert_documented("spec/dynamic-semantics.md", V002_EQUATIONAL);
+    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V002_EQUATIONAL);
 }
 
 #[test]
 fn dynamic_capture_derivation_example_v004_is_executable() {
     assert_observation("spec-v004.ash", V004, "42", "Int");
-    assert_documented("spec/dynamic-semantics.md", V004);
+    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V004);
 }
 
 #[test]
 fn dynamic_nested_application_derivation_example_v008_is_executable() {
     assert_observation("spec-v008.ash", V008, "42", "Int");
-    assert_documented("spec/dynamic-semantics.md", V008);
+    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V008);
 }
 
 #[test]
@@ -340,7 +410,7 @@ fn tool_success_example_has_exact_cli_observation() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"42 : Int\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", V008);
+    assert_documented("docs/tools/ash.md", DOCUMENTED_V008);
 }
 
 #[test]
@@ -372,7 +442,7 @@ fn tool_example_temp_source_requires_exclusive_directory_ownership() {
 
 #[test]
 fn tool_function_result_uses_opaque_rendering() {
-    let source = TempFile::write(FUNCTION_RESULT);
+    let source = TempFile::write(FUNCTION_RESULT_MODULE);
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
         .arg(source.path())
         .output()
@@ -386,7 +456,7 @@ fn tool_function_result_uses_opaque_rendering() {
 
 #[test]
 fn tool_cyclic_data_uses_structural_rendering() {
-    let source = TempFile::write(CYCLIC_STREAM);
+    let source = TempFile::write(CYCLIC_STREAM_MODULE);
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
         .arg(source.path())
         .output()
@@ -400,7 +470,7 @@ fn tool_cyclic_data_uses_structural_rendering() {
 
 #[test]
 fn tool_rank_one_example_has_exact_cli_observation() {
-    let source = TempFile::write(RANK_ONE_POLYMORPHISM);
+    let source = TempFile::write(RANK_ONE_POLYMORPHISM_MODULE);
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
         .arg(source.path())
         .output()

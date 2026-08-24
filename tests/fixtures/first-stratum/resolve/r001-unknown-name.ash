@@ -1,1 +1,2 @@
-missing 1
+main : Unit -> Int
+main () = missing 1

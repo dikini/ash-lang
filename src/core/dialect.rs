@@ -1,4 +1,4 @@
-//! Closed assembly of the named pure Mini-Ash Core dialect.
+//! Closed assembly of the named pure Ash Core dialect.
 
 use std::{
     collections::HashSet,
@@ -27,13 +27,13 @@ use crate::{
     types::{Type, TypeWorkBudget, discard_type_iteratively},
 };
 
-/// Names the closed pure Core dialect selected by Mini-Ash.
+/// Names the closed pure Core dialect selected by Ash.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MiniAshPureDialect;
+pub struct AshPureDialect;
 
-impl MiniAshPureDialect {
+impl AshPureDialect {
     /// Stable compiler-facing name of the selected Core dialect.
-    pub const NAME: &'static str = "mini-ash.pure";
+    pub const NAME: &'static str = "ash.pure";
 }
 
 /// Maximum recursive Type or Origin wrappers admitted into Core storage.
@@ -121,7 +121,7 @@ const fn checked_add_one(value: u32) -> Option<u32> {
     value.checked_add(1)
 }
 
-/// A typed expression in the pure Mini-Ash dialect.
+/// A typed expression in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypedExpr {
     /// The structural result type.
@@ -132,7 +132,7 @@ pub struct TypedExpr {
     pub kind: PureExprKind,
 }
 
-/// The closed expression families in the pure Mini-Ash dialect.
+/// The closed expression families in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PureExprKind {
     /// A value node.
@@ -212,7 +212,7 @@ fn fixed_child_at<const N: usize>(children: [Option<NodeId>; N], index: usize) -
     children.into_iter().flatten().nth(index)
 }
 
-/// The closed value families in the pure Mini-Ash dialect.
+/// The closed value families in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PureValue {
     /// An arbitrary-precision integer.
@@ -227,7 +227,7 @@ pub enum PureValue {
     Constructor(ConstructorNode),
 }
 
-/// The closed computation families in the pure Mini-Ash dialect.
+/// The closed computation families in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PureComputation {
     /// A sequential nonrecursive binding.
@@ -252,7 +252,7 @@ pub enum PureComputation {
 pub(super) struct DialectId(&'static str);
 
 impl DialectId {
-    pub(super) const PURE: Self = Self(MiniAshPureDialect::NAME);
+    pub(super) const PURE: Self = Self(AshPureDialect::NAME);
 
     #[cfg(test)]
     pub(super) const FOREIGN: Self = Self("test.foreign");

@@ -3,7 +3,7 @@
 use super::dialect::NodeId;
 use crate::types::Type;
 
-/// A primitive operation implemented directly by Mini-Ash.
+/// A primitive operation implemented directly by Ash.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Primitive {
     /// Integer addition.

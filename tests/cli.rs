@@ -63,13 +63,6 @@ impl Drop for TempFile {
     }
 }
 
-fn modular_fixture(source: &str, result: &str, result_type: &str) -> Vec<u8> {
-    let declarations = source
-        .strip_suffix(result)
-        .expect("the retained fixture should end in its result expression");
-    format!("{declarations}main : Unit -> {result_type}\nmain () = {result}").into_bytes()
-}
-
 fn ash(arguments: &[&Path]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ash"))
         .args(arguments)
@@ -79,10 +72,8 @@ fn ash(arguments: &[&Path]) -> Output {
 
 #[test]
 fn v001_fixture_prints_exactly_one_value_and_type_line() {
-    let source = TempFile::write(&modular_fixture(
-        include_str!("fixtures/first-stratum/valid/v001-precedence.ash"),
-        "1 + 2 * 3\n",
-        "Int",
+    let source = TempFile::write(include_bytes!(
+        "fixtures/first-stratum/valid/v001-precedence.ash"
     ));
     let output = ash(&[source.path()]);
 
@@ -220,13 +211,8 @@ fn assert_source_failure(source: &[u8], category: &str, labels: &[&str]) {
 
 #[test]
 fn parse_failure_reports_the_primary_and_recovery_labels() {
-    let source = modular_fixture(
-        include_str!("fixtures/first-stratum/parse/p003-independent-recovery.ash"),
-        "increment (41\n",
-        "Int",
-    );
     assert_source_failure(
-        &source,
+        include_bytes!("fixtures/first-stratum/parse/p003-independent-recovery.ash"),
         "parse.expected-operand",
         &[
             "the operator requires a right operand",
@@ -239,13 +225,8 @@ fn parse_failure_reports_the_primary_and_recovery_labels() {
 
 #[test]
 fn resolution_failure_reports_both_duplicate_definitions() {
-    let source = modular_fixture(
-        include_str!("fixtures/first-stratum/resolve/r002-duplicate-global.ash"),
-        "value 1\n",
-        "Int",
-    );
     assert_source_failure(
-        &source,
+        include_bytes!("fixtures/first-stratum/resolve/r002-duplicate-global.ash"),
         "resolve.duplicate-global",
         &[
             "this global name is already defined",
@@ -257,13 +238,8 @@ fn resolution_failure_reports_both_duplicate_definitions() {
 
 #[test]
 fn type_failure_reports_the_argument_and_declared_domain() {
-    let source = modular_fixture(
-        include_str!("fixtures/first-stratum/type/t004-argument.ash"),
-        "identity true\n",
-        "Int",
-    );
     assert_source_failure(
-        &source,
+        include_bytes!("fixtures/first-stratum/type/t004-argument.ash"),
         "type.argument",
         &[
             "this argument does not match the function domain",
@@ -276,13 +252,8 @@ fn type_failure_reports_the_argument_and_declared_domain() {
 
 #[test]
 fn annotated_binding_failure_reports_the_initializer_and_annotation() {
-    let source = modular_fixture(
-        include_str!("fixtures/first-stratum/type/binding-initializer.ash"),
-        include_str!("fixtures/first-stratum/type/binding-initializer.ash"),
-        "Bool",
-    );
     assert_source_failure(
-        &source,
+        include_bytes!("fixtures/first-stratum/type/binding-initializer.ash"),
         "type.binding-initializer",
         &[
             "this initializer has type Int",

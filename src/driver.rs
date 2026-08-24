@@ -3,16 +3,16 @@
 use std::{collections::HashMap, error::Error, fmt, io, path::PathBuf, sync::Arc};
 
 use crate::{
-    core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate, validate_modules},
+    core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate_modules},
     diagnostic::{Diagnostic, SourceLabel},
     elaborate::{Elaborator, TypeError, check_module, link_modules},
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
-    lexer::{LexReason, lex},
+    lexer::LexReason,
     module::{LoadGraphError, ModuleId, ModuleRoots, load_module_graph},
-    parser::{ParseDiagnostic, ProjectionError, ResourceFailure, parse, project},
-    resolve::{DependencyExports, ResolveError, ResolveReason, resolve, resolve_module},
+    parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
+    resolve::{DependencyExports, ResolveError, ResolveReason, resolve_module},
     resolved::{ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence},
-    source::{SourceError, SourceFile, Span},
+    source::{SourceError, SourceFile, SourceId, Span},
     types::Type,
 };
 
@@ -303,63 +303,6 @@ impl fmt::Display for FileFailure {
 
 impl Error for FileFailure {}
 
-/// Runs every retained Ash stage over one admitted source file.
-///
-/// # Errors
-///
-/// Returns a stage-specific failure without allowing recovery-bearing syntax,
-/// unchecked Core, or a pending feature to bypass its owning stage.
-pub fn run_source(source: SourceFile) -> Result<Observation, PipelineFailure> {
-    run_source_with_consumers(source, validate, evaluate)
-}
-
-fn run_source_with_consumers<V, E>(
-    source: SourceFile,
-    validator: V,
-    evaluator: E,
-) -> Result<Observation, PipelineFailure>
-where
-    V: FnOnce(UnvalidatedProgram, &[&SourceFile]) -> Result<ValidatedProgram, ValidationError>,
-    E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
-{
-    let lexed = lex(&source).map_err(PipelineFailure::SourceModel)?;
-    let tree = parse(lexed);
-    if tree.resource_failure().is_some()
-        || !tree.lexical_diagnostics().is_empty()
-        || !tree.parse_diagnostics().is_empty()
-    {
-        return Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
-            lexical: tree.lexical_diagnostics().to_vec(),
-            parser: tree.parse_diagnostics().to_vec(),
-            resource: tree.resource_failure(),
-        })));
-    }
-    let surface = project(&source, &tree).map_err(PipelineFailure::Projection)?;
-    drop(tree);
-    let resolved = resolve(&surface).map_err(PipelineFailure::Resolution)?;
-    drop(surface);
-    let registry = std::sync::Arc::clone(&resolved.registry);
-    let mut elaborator = Elaborator::for_program(&resolved)
-        .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
-    let typed = elaborator
-        .synthesize_program(&resolved)
-        .map_err(PipelineFailure::Typing)?;
-    let ty = typed.ty;
-    let type_display = registry.display_type(&ty);
-    let unchecked = elaborator
-        .finish(typed.node)
-        .map_err(|failure| PipelineFailure::Typing(TypeError::Internal(failure)))?;
-    let validated = validator(unchecked, &[&source]).map_err(PipelineFailure::Validation)?;
-    let evaluation = evaluator(&validated).map_err(PipelineFailure::Runtime)?;
-    let (value, heap) = evaluation.into_observation_parts();
-    Ok(Observation {
-        value,
-        ty,
-        type_display: Some(type_display),
-        _heap: heap,
-    })
-}
-
 /// Loads, checks, links, validates, and evaluates one modular Ash graph.
 ///
 /// # Errors
@@ -367,6 +310,22 @@ where
 /// Returns a structured input, source-model, compiler, source-rejection, or
 /// runtime failure.
 pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFailure> {
+    run_path_with_consumers(configuration, validate_modules, evaluate)
+}
+
+fn run_path_with_consumers<V, E>(
+    configuration: RunConfiguration,
+    validator: V,
+    evaluator: E,
+) -> Result<Observation, FileFailure>
+where
+    V: FnOnce(
+        UnvalidatedProgram,
+        &[&SourceFile],
+        &[(ModuleId, SourceId)],
+    ) -> Result<ValidatedProgram, ValidationError>,
+    E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
+{
     let graph = load_module_graph(&configuration.entry, &configuration.roots)
         .map_err(FileFailure::Graph)?;
     let mut checked: Vec<crate::resolved::CheckedModule> =
@@ -484,10 +443,10 @@ pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFail
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let validated = validate_modules(unchecked, &sources, &module_sources)
+    let validated = validator(unchecked, &sources, &module_sources)
         .map_err(PipelineFailure::Validation)
         .map_err(FileFailure::Pipeline)?;
-    let evaluation = evaluate(&validated)
+    let evaluation = evaluator(&validated)
         .map_err(PipelineFailure::Runtime)
         .map_err(FileFailure::Pipeline)?;
     let (value, heap) = evaluation.into_observation_parts();
@@ -540,10 +499,56 @@ const fn projection_reason(error: ProjectionError) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::{
+        cell::Cell,
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     use super::*;
     use crate::types::{InferenceVariableId, TypeVariableId};
+
+    static TEST_SOURCE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    struct TestSource(PathBuf);
+
+    impl TestSource {
+        fn write(text: &str) -> Self {
+            loop {
+                let id = TEST_SOURCE_IDS.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir()
+                    .join(format!("ash-driver-unit-{}-{id}.ash", std::process::id()));
+                match fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                {
+                    Ok(mut file) => {
+                        use std::io::Write as _;
+                        file.write_all(text.as_bytes())
+                            .expect("the modular fixture should be writable");
+                        return Self(path);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("the modular fixture should be creatable: {error}"),
+                }
+            }
+        }
+
+        fn configuration(&self) -> RunConfiguration {
+            RunConfiguration {
+                entry: self.0.clone(),
+                roots: ModuleRoots::empty(),
+            }
+        }
+    }
+
+    impl Drop for TestSource {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
 
     #[test]
     fn entry_result_closure_walks_every_nested_type() {
@@ -569,13 +574,12 @@ mod tests {
 
     #[test]
     fn injected_validation_failure_stops_before_evaluation() {
-        let source =
-            SourceFile::new("validation-injection.ash", "1\n").expect("the test source should fit");
+        let source = TestSource::write("main : Unit -> Int\nmain () = 1\n");
         let evaluation_called = Cell::new(false);
 
-        let failure = run_source_with_consumers(
-            source,
-            |unchecked, _| validate(unchecked, &[]),
+        let failure = run_path_with_consumers(
+            source.configuration(),
+            |unchecked, _, _| validate_modules(unchecked, &[], &[]),
             |_| {
                 evaluation_called.set(true);
                 panic!("evaluation must not run after validation fails")
@@ -583,7 +587,7 @@ mod tests {
         )
         .expect_err("omitting the admitted source must fail provenance validation");
 
-        let PipelineFailure::Validation(error) = failure else {
+        let FileFailure::Pipeline(PipelineFailure::Validation(error)) = failure else {
             panic!("the injected validator failure should retain its stage");
         };
         assert_eq!(error.reason(), crate::core::ValidationReason::Provenance);
@@ -592,13 +596,17 @@ mod tests {
 
     #[test]
     fn returned_closure_observation_retains_its_captured_structural_heap() {
-        let source = SourceFile::new(
-            "observed-structural-capture.ash",
-            "{\nlet pair = (20, 22)\nlet keep : Unit -> (Int, Int) = fn(ignored) {\npair\n}\nkeep\n}\n",
-        )
-        .expect("the test source should fit");
+        let source = TestSource::write(concat!(
+            "main : Unit -> Unit -> (Int, Int)\n",
+            "main () = {\n",
+            "let pair = (20, 22)\n",
+            "fn(ignored) {\n",
+            "pair\n",
+            "}\n",
+            "}\n",
+        ));
 
-        let observation = run_source(source).expect("the closure should evaluate");
+        let observation = run_path(source.configuration()).expect("the closure should evaluate");
 
         assert!(matches!(observation.value, Value::Function(_)));
         assert_eq!(observation._heap.cell_count(), 1);

@@ -12,7 +12,7 @@ use std::ops::Deref;
 pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
-pub use project::{ProjectionError, project, project_module};
+pub use project::{ProjectionError, project_module};
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
@@ -44,8 +44,6 @@ pub enum NodeKind {
     ModulePath,
     /// One selected public spelling and its optional local alias.
     ImportItem,
-    /// A complete source file.
-    Program,
     /// A nominal type declaration.
     TypeDeclaration,
     /// One constructor declaration under a nominal type.
@@ -259,6 +257,7 @@ pub fn parse(lexed: Lexed) -> ConcreteTree {
             events: Vec::new(),
             diagnostics: Vec::new(),
             pending_recoveries: Vec::new(),
+            recovered_expression_group_boundary: false,
             nesting_depth: 0,
             resource_failure: None,
             syntax_budget,
@@ -295,6 +294,7 @@ pub(crate) struct Parser<'tokens> {
     events: Vec<Event>,
     diagnostics: Vec<ParseDiagnostic>,
     pending_recoveries: Vec<usize>,
+    recovered_expression_group_boundary: bool,
     nesting_depth: usize,
     resource_failure: Option<ResourceFailure>,
     syntax_budget: SyntaxBudget,
@@ -427,6 +427,14 @@ impl Parser<'_> {
 
     fn pending_recovery_count(&self) -> usize {
         self.pending_recoveries.len()
+    }
+
+    fn mark_recovered_expression_group_boundary(&mut self) {
+        self.recovered_expression_group_boundary = true;
+    }
+
+    fn take_recovered_expression_group_boundary(&mut self) -> bool {
+        std::mem::take(&mut self.recovered_expression_group_boundary)
     }
 
     fn mark_pending_recovery(&mut self, diagnostic_index: usize) {

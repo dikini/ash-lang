@@ -2,4 +2,5 @@ fn increment(value : Int) -> Int {
     value +
 }
 
-increment (41
+main : Unit -> Int
+main () = increment (41

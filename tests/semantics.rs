@@ -1,21 +1,100 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use ash::{
     core::{
         CoreBuilder, NodeId, Primitive, PureComputation, PureExprKind, PureValue,
         transform::{fold_literal_primitives, identity_traversal},
-        validate,
+        validate, validate_modules,
     },
-    driver::run_source,
-    elaborate::Elaborator,
+    driver::{Observation, RunConfiguration, run_path},
+    elaborate::{Elaborator, check_module, link_modules},
     eval::{TraceEvent, evaluate},
-    lexer::lex,
-    parser::{parse, project},
+    module::{ModuleGraph, ModuleRoots, load_module_graph},
     render,
-    resolve::resolve,
+    resolve::{DependencyExports, resolve_module},
+    resolved::{
+        CheckedModule, ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
+    },
     source::{GeneratedReason, Origin, SourceFile},
     types::Type,
 };
+
+static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct TempFile(PathBuf);
+
+impl TempFile {
+    fn write(text: &str) -> Self {
+        let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("ash-semantics-{}-{id}.ash", std::process::id()));
+        fs::write(&path, text).expect("test module should be writable");
+        Self(path)
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+struct ModuleFixture {
+    file: TempFile,
+    graph: ModuleGraph,
+}
+
+impl ModuleFixture {
+    fn load(text: &str) -> Self {
+        let file = TempFile::write(text);
+        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
+            .expect("single-module fixture should load");
+        Self { file, graph }
+    }
+
+    fn run(&self) -> Observation {
+        run_path(RunConfiguration {
+            entry: self.file.0.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("module should run")
+    }
+
+    fn sources(&self) -> Vec<&SourceFile> {
+        self.graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect()
+    }
+
+    fn module_sources(&self) -> Vec<(ash::module::ModuleId, ash::source::SourceId)> {
+        self.graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect()
+    }
+}
+
+struct ElaboratedModule {
+    fixture: ModuleFixture,
+    program: ash::core::ValidatedProgram,
+}
+
+impl ElaboratedModule {
+    fn revalidate(&self, program: ash::core::UnvalidatedProgram) -> ash::core::ValidatedProgram {
+        let sources = self.fixture.sources();
+        let module_sources = self.fixture.module_sources();
+        validate_modules(program, &sources, &module_sources)
+            .expect("transformed module Core should validate independently")
+    }
+}
 
 fn assert_exact_core(
     before: &ash::core::ValidatedProgram,
@@ -97,6 +176,18 @@ fn assert_exact_core(
                 work.push((before.right(), after.right()));
                 work.push((before.left(), after.left()));
             }
+            (
+                PureExprKind::Computation(PureComputation::Match(before)),
+                PureExprKind::Computation(PureComputation::Match(after)),
+            ) => {
+                assert_eq!(after.arms().len(), before.arms().len());
+                for (before_arm, after_arm) in before.arms().iter().zip(after.arms()) {
+                    assert_eq!(after_arm.pattern(), before_arm.pattern());
+                    assert_eq!(after_arm.origin(), before_arm.origin());
+                    work.push((before_arm.body(), after_arm.body()));
+                }
+                work.push((before.scrutinee(), after.scrutinee()));
+            }
             _ => panic!("identity changed a closed Core feature"),
         }
     }
@@ -105,25 +196,98 @@ fn assert_exact_core(
     forward
 }
 
-fn elaborated(source: &SourceFile) -> ash::core::ValidatedProgram {
-    let lexed = lex(source).expect("test source should lex");
-    assert!(lexed.diagnostics.is_empty());
-    let tree = parse(lexed);
-    assert!(tree.parse_diagnostics().is_empty());
-    let surface = project(source, &tree).expect("test source should project");
-    let resolved = resolve(&surface).expect("test source should resolve");
+fn check_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
+    let mut checked = Vec::<CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|dependency| dependency.module() == edge.target())
+                    .expect("dependency order should publish the target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("checked summary should authenticate its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies).expect("module should resolve");
+        drop(dependencies);
+        checked.push(check_module(resolved).expect("module should check"));
+    }
+    checked
+}
+
+fn elaborated(text: &str) -> ElaboratedModule {
+    let fixture = ModuleFixture::load(text);
+    let checked = check_graph(&fixture.graph);
+    let entry = checked
+        .iter()
+        .find(|module| module.module() == fixture.graph.entry())
+        .expect("checked graph should retain its entry");
+    let main = entry
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "main")
+        .expect("entry should declare main");
+    let span = main.origin.primary_span();
+    let result = ResolvedExpr {
+        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+            function: Box::new(ResolvedExpr {
+                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                    binder: main.binder,
+                    spelling: "main".to_owned(),
+                    origin: main.origin.clone(),
+                }),
+                span,
+            }),
+            argument: Box::new(ResolvedExpr {
+                kind: ResolvedExprKind::Unit,
+                span,
+            }),
+        }),
+        span,
+    };
+    let linked = link_modules(checked, fixture.graph.entry(), result)
+        .expect("checked module graph should link");
     let mut elaborator =
-        Elaborator::for_program(&resolved).expect("binder namespace should fit Core");
+        Elaborator::for_module_program(&linked).expect("binder namespace should fit Core");
     let typed = elaborator
-        .synthesize_program(&resolved)
-        .expect("test source should elaborate");
-    validate(
-        elaborator
-            .finish(typed.node)
-            .expect("elaborated root should finish"),
-        &[source],
-    )
-    .expect("elaborated Core should validate")
+        .synthesize_module_program(&linked)
+        .expect("test module should elaborate");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("elaborated root should finish");
+    let sources = fixture.sources();
+    let module_sources = fixture.module_sources();
+    let program = validate_modules(unchecked, &sources, &module_sources)
+        .expect("elaborated module Core should validate");
+    ElaboratedModule { fixture, program }
+}
+
+fn linked_main_body(program: &ash::core::ValidatedProgram) -> NodeId {
+    let root = program.node(program.root()).expect("linked module root");
+    let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &root.kind else {
+        panic!("expected one linked module group");
+    };
+    let main = program
+        .node(
+            group
+                .members()
+                .last()
+                .expect("module should contain main")
+                .initializer(),
+        )
+        .expect("main initializer");
+    let PureExprKind::Value(PureValue::Function(main)) = &main.kind else {
+        panic!("main should lower to a function");
+    };
+    let body = program.node(main.body()).expect("main function body");
+    let PureExprKind::Computation(PureComputation::Match(body)) = &body.kind else {
+        panic!("equational main should lower its Unit pattern to a match");
+    };
+    assert_eq!(body.arms().len(), 1);
+    body.arms()[0].body()
 }
 
 fn recursive_machine_core() -> (SourceFile, ash::core::ValidatedProgram) {
@@ -227,14 +391,18 @@ fn recursive_machine_evaluates_mutual_function_templates() {
 
 #[test]
 fn recursive_machine_evaluates_a_self_reference() {
-    let source = SourceFile::new(
-        "recursive-self.ash",
-        "{\nlet rec self : Unit -> Int = fn(ignored) {\nlet retain : Unit -> Int = self\n42\n}\nself ()\n}\n",
-    )
-    .expect("test source should fit");
-    let program = elaborated(&source);
+    let module = elaborated(concat!(
+        "main : Unit -> Int\n",
+        "main () = {\n",
+        "let rec self : Unit -> Int = fn(ignored) {\n",
+        "let retain : Unit -> Int = self\n",
+        "42\n",
+        "}\n",
+        "self ()\n",
+        "}\n",
+    ));
 
-    let evaluation = evaluate(&program).expect("recursive self lookup should evaluate");
+    let evaluation = evaluate(&module.program).expect("recursive self lookup should evaluate");
 
     assert_eq!(evaluation.value.to_string(), "42");
 }
@@ -262,24 +430,27 @@ fn identity_traversal_preserves_recursive_groups() {
 
 #[test]
 fn recursive_group_survives_literal_folding_and_independent_validation() {
-    let source = SourceFile::new(
-        "recursive-fold.ash",
-        "{\nlet rec answer : Unit -> Int = fn(ignored) {\n20 + 22\n}\nanswer ()\n}\n",
-    )
-    .expect("test source should fit");
-    let before = elaborated(&source);
-    let after = validate(
-        fold_literal_primitives(&before).expect("recursive Core should transform"),
-        &[&source],
-    )
-    .expect("transformed recursive Core should validate independently");
+    let before = elaborated(concat!(
+        "main : Unit -> Int\n",
+        "main () = {\n",
+        "let rec answer : Unit -> Int = fn(ignored) {\n",
+        "20 + 22\n",
+        "}\n",
+        "answer ()\n",
+        "}\n",
+    ));
+    let after = before.revalidate(
+        fold_literal_primitives(&before.program).expect("recursive Core should transform"),
+    );
 
-    let root = after.node(after.root()).expect("recursive root");
+    let root = after
+        .node(linked_main_body(&after))
+        .expect("local recursive root");
     assert!(matches!(
         root.kind,
         PureExprKind::Computation(PureComputation::RecursiveBind(_))
     ));
-    assert!(after.node_count() < before.node_count());
+    assert!(after.node_count() < before.program.node_count());
     assert_eq!(
         evaluate(&after)
             .expect("folded recursive Core should evaluate")
@@ -297,36 +468,57 @@ fn arbitrary_precision_observations_and_traces_exceed_unsigned_machine_width() {
     const SQUARE: &str =
         "115792089237316195423570985008687907853269984665640564039457584007913129639936";
     for (name, text, expected_value, expected_type, expected_trace_len) in [
-        ("literal", format!("{BIG}\n"), BIG, "Int", 1),
-        ("sum", format!("{BIG} + {BIG}\n"), DOUBLE, "Int", 3),
-        ("product", format!("{BIG} * {BIG}\n"), SQUARE, "Int", 3),
-        ("equality", format!("{BIG} == {BIG}\n"), "true", "Bool", 3),
+        (
+            "literal",
+            format!("main : Unit -> Int\nmain () = {BIG}\n"),
+            BIG,
+            "Int",
+            7,
+        ),
+        (
+            "sum",
+            format!("main : Unit -> Int\nmain () = {BIG} + {BIG}\n"),
+            DOUBLE,
+            "Int",
+            9,
+        ),
+        (
+            "product",
+            format!("main : Unit -> Int\nmain () = {BIG} * {BIG}\n"),
+            SQUARE,
+            "Int",
+            9,
+        ),
+        (
+            "equality",
+            format!("main : Unit -> Bool\nmain () = {BIG} == {BIG}\n"),
+            "true",
+            "Bool",
+            9,
+        ),
         (
             "inequality",
-            format!("{BIG} == {NEXT}\n"),
+            format!("main : Unit -> Bool\nmain () = {BIG} == {NEXT}\n"),
             "false",
             "Bool",
-            3,
+            9,
         ),
     ] {
-        let observation = run_source(
-            SourceFile::new(format!("{name}-output.ash"), text.clone())
-                .expect("test source should fit"),
-        )
-        .expect("arbitrary-precision program should run");
-        assert_eq!(observation.value.to_string(), expected_value);
-        assert_eq!(observation.ty.to_string(), expected_type);
+        let fixture = ModuleFixture::load(&text);
+        let observation = fixture.run();
+        assert_eq!(observation.value.to_string(), expected_value, "{name}");
+        assert_eq!(observation.ty.to_string(), expected_type, "{name}");
         assert_eq!(
             render::observation(&observation),
-            format!("{expected_value} : {expected_type}\n")
+            format!("{expected_value} : {expected_type}\n"),
+            "{name}"
         );
 
-        let source =
-            SourceFile::new(format!("{name}-trace.ash"), text).expect("test source should fit");
-        let program = elaborated(&source);
-        let evaluation = evaluate(&program).expect("validated Core should evaluate");
-        assert_eq!(evaluation.value.to_string(), expected_value);
-        assert_eq!(evaluation.trace.len(), expected_trace_len);
+        let module = elaborated(&text);
+        let program = &module.program;
+        let evaluation = evaluate(program).expect("validated Core should evaluate");
+        assert_eq!(evaluation.value.to_string(), expected_value, "{name}");
+        assert_eq!(evaluation.trace.len(), expected_trace_len, "{name}");
         let traced_integer_values = evaluation
             .trace
             .iter()
@@ -340,27 +532,30 @@ fn arbitrary_precision_observations_and_traces_exceed_unsigned_machine_width() {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(traced_integer_values.iter().any(|value| value == BIG));
+        assert!(
+            traced_integer_values.iter().any(|value| value == BIG),
+            "{name}"
+        );
     }
 }
 
 #[test]
 fn literal_addition_folds_with_exact_type_and_causal_generated_origin() {
-    let source = SourceFile::new("fold.ash", "20 + 22\n").expect("test source should fit");
-    let before = elaborated(&source);
+    let before = elaborated("main : Unit -> Int\nmain () = 20 + 22\n");
     let operation_origin = before
-        .node(before.root())
+        .program
+        .node(linked_main_body(&before.program))
         .expect("validated root")
         .origin
         .clone();
 
-    let after = validate(
-        fold_literal_primitives(&before).expect("validated Core should transform"),
-        &[&source],
-    )
-    .expect("folded output should independently validate");
+    let after = before.revalidate(
+        fold_literal_primitives(&before.program).expect("validated Core should transform"),
+    );
 
-    let root = after.node(after.root()).expect("validated root");
+    let root = after
+        .node(linked_main_body(&after))
+        .expect("validated root");
     assert_eq!(root.ty, ash::types::Type::Int);
     let Origin::Generated { cause, reason } = &root.origin else {
         panic!("folded literal should have a generated origin")
@@ -373,16 +568,16 @@ fn literal_addition_folds_with_exact_type_and_causal_generated_origin() {
     };
     assert_eq!(value.value().to_string(), "42");
 
-    let before_evaluation = evaluate(&before).expect("validated input should evaluate");
+    let before_evaluation = evaluate(&before.program).expect("validated input should evaluate");
     let after_evaluation = evaluate(&after).expect("validated transform should evaluate");
     assert_eq!(
         after_evaluation.value.to_string(),
         before_evaluation.value.to_string()
     );
     // Folding removes the operation and operand entries while preserving the
-    // final observation. Trace node identities are implementation-local.
-    assert_eq!(before_evaluation.trace.len(), 3);
-    assert_eq!(after_evaluation.trace.len(), 1);
+    // linked main call and final observation. Trace node identities are local.
+    assert_eq!(before_evaluation.trace.len(), 9);
+    assert_eq!(after_evaluation.trace.len(), 7);
 }
 
 #[test]
@@ -406,32 +601,26 @@ fn generated_provenance_reasons_have_stable_plain_names() {
 
 #[test]
 fn literal_multiplication_folds_but_integer_equality_remains_a_primitive() {
-    let multiplication_source =
-        SourceFile::new("multiply.ash", "6 * 7\n").expect("test source should fit");
-    let multiplication = elaborated(&multiplication_source);
-    let folded = validate(
-        fold_literal_primitives(&multiplication).expect("validated Core should transform"),
-        &[&multiplication_source],
-    )
-    .expect("folded output should validate");
-    let PureExprKind::Value(PureValue::Integer(value)) =
-        &folded.node(folded.root()).expect("validated root").kind
+    let multiplication = elaborated("main : Unit -> Int\nmain () = 6 * 7\n");
+    let folded = multiplication.revalidate(
+        fold_literal_primitives(&multiplication.program).expect("validated Core should transform"),
+    );
+    let PureExprKind::Value(PureValue::Integer(value)) = &folded
+        .node(linked_main_body(&folded))
+        .expect("validated root")
+        .kind
     else {
         panic!("literal multiplication should fold")
     };
     assert_eq!(value.value().to_string(), "42");
 
-    let equality_source =
-        SourceFile::new("equal.ash", "42 == 42\n").expect("test source should fit");
-    let equality = elaborated(&equality_source);
-    let unchanged = validate(
-        fold_literal_primitives(&equality).expect("validated Core should transform"),
-        &[&equality_source],
-    )
-    .expect("non-folded output should validate");
+    let equality = elaborated("main : Unit -> Bool\nmain () = 42 == 42\n");
+    let unchanged = equality.revalidate(
+        fold_literal_primitives(&equality.program).expect("validated Core should transform"),
+    );
     assert!(matches!(
         unchanged
-            .node(unchanged.root())
+            .node(linked_main_body(&unchanged))
             .expect("validated root")
             .kind,
         PureExprKind::Computation(PureComputation::Primitive(_))
@@ -440,17 +629,18 @@ fn literal_multiplication_folds_but_integer_equality_remains_a_primitive() {
 
 #[test]
 fn identity_traversal_preserves_exact_types_origins_and_primitive_structure() {
-    let source = SourceFile::new("identity.ash", "1 + 2\n").expect("test source should fit");
-    let before = elaborated(&source);
+    let before = elaborated("main : Unit -> Int\nmain () = 1 + 2\n");
 
-    let after = validate(
-        identity_traversal(&before).expect("validated Core should traverse"),
-        &[&source],
-    )
-    .expect("identity output should independently validate");
+    let after = before
+        .revalidate(identity_traversal(&before.program).expect("validated Core should traverse"));
 
-    let before_root = before.node(before.root()).expect("validated root");
-    let after_root = after.node(after.root()).expect("validated root");
+    let before_root = before
+        .program
+        .node(linked_main_body(&before.program))
+        .expect("validated root");
+    let after_root = after
+        .node(linked_main_body(&after))
+        .expect("validated root");
     assert_eq!(after_root.ty, before_root.ty);
     assert_eq!(after_root.origin, before_root.origin);
 
@@ -468,7 +658,7 @@ fn identity_traversal_preserves_exact_types_origins_and_primitive_structure() {
         (before_operation.left(), after_operation.left()),
         (before_operation.right(), after_operation.right()),
     ] {
-        let before_child = before.node(before_child).expect("validated child");
+        let before_child = before.program.node(before_child).expect("validated child");
         let after_child = after.node(after_child).expect("validated child");
         assert_eq!(after_child.ty, before_child.ty);
         assert_eq!(after_child.origin, before_child.origin);
@@ -481,7 +671,7 @@ fn identity_traversal_preserves_exact_types_origins_and_primitive_structure() {
         ));
     }
 
-    let before_evaluation = evaluate(&before).expect("validated input should evaluate");
+    let before_evaluation = evaluate(&before.program).expect("validated input should evaluate");
     let after_evaluation = evaluate(&after).expect("validated identity should evaluate");
     assert_eq!(
         after_evaluation.value.to_string(),
@@ -524,20 +714,12 @@ fn identity_traversal_preserves_shared_core_edges() {
 
 #[test]
 fn identity_traversal_preserves_every_core_feature_and_trace_relation() {
-    let source = SourceFile::new(
-        "identity-all.ash",
-        include_str!("fixtures/first-stratum/valid/v008-mixed.ash"),
-    )
-    .expect("fixture should fit");
-    let before = elaborated(&source);
-    let after = validate(
-        identity_traversal(&before).expect("validated Core should traverse"),
-        &[&source],
-    )
-    .expect("identity output should validate");
-    let remapped = assert_exact_core(&before, &after);
+    let before = elaborated(include_str!("fixtures/first-stratum/valid/v008-mixed.ash"));
+    let after = before
+        .revalidate(identity_traversal(&before.program).expect("validated Core should traverse"));
+    let remapped = assert_exact_core(&before.program, &after);
 
-    let before_evaluation = evaluate(&before).expect("validated input should evaluate");
+    let before_evaluation = evaluate(&before.program).expect("validated input should evaluate");
     let after_evaluation = evaluate(&after).expect("validated identity should evaluate");
     assert_eq!(
         after_evaluation.value.to_string(),
@@ -550,20 +732,16 @@ fn identity_traversal_preserves_every_core_feature_and_trace_relation() {
         assert_eq!(remapped.get(before_node), Some(after_node));
     }
 
-    for (name, text) in [
-        ("boolean", "true\n"),
-        ("unit", "()\n"),
-        ("equal", "1 == 1\n"),
+    for text in [
+        "main : Unit -> Bool\nmain () = true\n",
+        "main : Unit -> Unit\nmain () = ()\n",
+        "main : Unit -> Bool\nmain () = 1 == 1\n",
     ] {
-        let source =
-            SourceFile::new(format!("identity-{name}.ash"), text).expect("test source should fit");
-        let before = elaborated(&source);
-        let after = validate(
-            identity_traversal(&before).expect("validated Core should traverse"),
-            &[&source],
-        )
-        .expect("identity output should validate");
-        let _ = assert_exact_core(&before, &after);
+        let before = elaborated(text);
+        let after = before.revalidate(
+            identity_traversal(&before.program).expect("validated Core should traverse"),
+        );
+        let _ = assert_exact_core(&before.program, &after);
     }
 }
 

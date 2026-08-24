@@ -1,16 +1,22 @@
+use std::{
+    fs,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 use ash::{
-    core::{PureComputation, PureExprKind, PureValue, validate},
-    driver::{PipelineFailure, run_source},
-    elaborate::{Elaborator, TypeError, TypeReason},
-    lexer::lex,
-    parser::{parse, project},
-    resolve::resolve,
+    core::{PureComputation, PureExprKind, PureValue, ValidatedProgram, validate_modules},
+    driver::PipelineFailure,
+    elaborate::{Elaborator, TypeContext, TypeError, TypeReason, check_module, link_modules},
+    module::{ModuleRoots, load_module_graph},
+    resolve::resolve_module,
     resolved::{
-        Binder, ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration,
-        ResolvedPattern, ResolvedPatternKind, ResolvedProgram,
+        Binder, ResolvedApplicationExpr, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
+        ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleProgram, ResolvedOccurrence,
+        ResolvedPattern, ResolvedPatternKind,
     },
     source::{GeneratedReason, Origin, SourceFile, Span},
 };
+static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 fn pattern_binder(pattern: &ResolvedPattern) -> &Binder {
     let ResolvedPatternKind::Binder(binder) = &pattern.kind else {
@@ -19,25 +25,127 @@ fn pattern_binder(pattern: &ResolvedPattern) -> &Binder {
     binder
 }
 
-fn resolved(source: &SourceFile) -> ResolvedProgram {
-    let lexed = lex(source).expect("test source should lex");
-    assert!(lexed.diagnostics.is_empty());
-    let tree = parse(lexed);
-    assert!(tree.parse_diagnostics().is_empty());
-    let surface = project(source, &tree).expect("test source should project");
-    resolve(&surface).expect("test source should resolve")
+fn with_graph<T>(name: &str, text: &str, action: impl FnOnce(&ash::module::ModuleGraph) -> T) -> T {
+    let directory = loop {
+        let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("ash-provenance-module-{}-{id}", std::process::id()));
+        match fs::create_dir(&path) {
+            Ok(()) => break path,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("provenance fixture directory should be creatable: {error}"),
+        }
+    };
+    let entry = directory.join(name);
+    fs::write(&entry, text).expect("provenance fixture should be writable");
+    let graph =
+        load_module_graph(&entry, &ModuleRoots::empty()).expect("provenance fixture should load");
+    let result = action(&graph);
+    let _ = fs::remove_dir_all(directory);
+    result
 }
 
-fn validated(source: &SourceFile, program: &ResolvedProgram) -> ash::core::ValidatedProgram {
-    let mut elaborator = Elaborator::for_program(program).expect("binder namespace should fit");
+fn resolved(name: &str, text: &str) -> (SourceFile, ResolvedModule) {
+    with_graph(name, text, |graph| {
+        let source = graph.modules()[0].source().clone();
+        let resolved = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
+        (source, resolved)
+    })
+}
+
+fn resolved_typing_error(name: &str, text: &str) -> (ResolvedModule, PipelineFailure) {
+    with_graph(name, text, |graph| {
+        let inspection = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
+        let error = check_module(
+            resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve again"),
+        )
+        .expect_err("fixture should fail checking");
+        (inspection, PipelineFailure::Typing(error))
+    })
+}
+
+fn validated_entry_body(
+    source: &SourceFile,
+    module: &ResolvedModule,
+    expression: &ResolvedExpr,
+) -> ValidatedProgram {
+    let probe = ResolvedModuleProgram {
+        registry: std::sync::Arc::clone(module.registry()),
+        groups: Vec::new().into_boxed_slice(),
+        entry: module.module(),
+        result: expression.clone(),
+    };
+    let mut elaborator =
+        Elaborator::for_module_program(&probe).expect("binder namespace should fit");
     let typed = elaborator
-        .synthesize_program(program)
+        .synthesize(expression, &TypeContext::new())
         .expect("test program should elaborate");
-    validate(
+    validate_modules(
         elaborator.finish(typed.node).expect("root should finish"),
         &[source],
+        &[(module.module(), source.id())],
     )
     .expect("elaborated Core should validate")
+}
+
+fn validated_module(name: &str, text: &str) -> (SourceFile, ResolvedModule, ValidatedProgram) {
+    with_graph(name, text, |graph| {
+        let source = graph.modules()[0].source().clone();
+        let inspection = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
+        let checked = check_module(
+            resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve again"),
+        )
+        .expect("fixture should check");
+        let main = checked
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.spelling == "main")
+            .expect("fixture should declare main");
+        let span = main.origin.primary_span();
+        let result = ResolvedExpr {
+            kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+                function: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                        binder: main.binder,
+                        spelling: "main".to_owned(),
+                        origin: Origin::Source(span),
+                    }),
+                    span,
+                }),
+                argument: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span,
+                }),
+            }),
+            span,
+        };
+        let linked =
+            link_modules(vec![checked], graph.entry(), result).expect("fixture should link");
+        let mut elaborator =
+            Elaborator::for_module_program(&linked).expect("binder namespace should fit");
+        let typed = elaborator
+            .synthesize_module_program(&linked)
+            .expect("fixture should elaborate");
+        let unchecked = elaborator.finish(typed.node).expect("root should finish");
+        let validated = validate_modules(unchecked, &[&source], &[(graph.entry(), source.id())])
+            .expect("Core should validate");
+        (source, inspection, validated)
+    })
+}
+
+fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
+    module
+        .definitions()
+        .iter()
+        .find_map(|definition| match &definition.kind {
+            ResolvedDefinitionKind::Equational(global)
+                if global.interface.name.spelling == "main" =>
+            {
+                Some(&global.equations[0].body)
+            }
+            _ => None,
+        })
+        .expect("fixture should declare equational main")
 }
 
 fn assert_check_origin(origin: &Origin, expression: Span, expected: Span) {
@@ -51,13 +159,11 @@ fn assert_check_origin(origin: &Origin, expression: Span, expected: Span) {
 
 #[test]
 fn recursive_group_retains_group_member_function_and_occurrence_causes() {
-    let source = SourceFile::new(
+    let (source, program) = resolved(
         "recursive-origins.ash",
-        "{\nlet rec repeat : Unit -> Int = fn(ignored) {\nrepeat ()\n}\nrepeat ()\n}\n",
-    )
-    .expect("test source should fit");
-    let program = resolved(&source);
-    let ResolvedExprKind::Block(block) = &program.result.kind else {
+        "main : Unit -> Int\nmain () = {\nlet rec repeat : Unit -> Int = fn(ignored) {\nrepeat ()\n}\nrepeat ()\n}\n",
+    );
+    let ResolvedExprKind::Block(block) = &main_body(&program).kind else {
         panic!("expected block")
     };
     let ResolvedLocalDeclaration::Recursive(source_group) = &block.declarations[0] else {
@@ -71,7 +177,7 @@ fn recursive_group_retains_group_member_function_and_occurrence_causes() {
         panic!("expected recursive call")
     };
 
-    let core = validated(&source, &program);
+    let core = validated_entry_body(&source, &program, main_body(&program));
     let root = core.node(core.root()).expect("recursive root");
     let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &root.kind else {
         panic!("expected recursive Core group")
@@ -123,16 +229,14 @@ fn successful_definition_checks_retain_the_body_and_declared_result_origins() {
     for (path, text) in [
         (
             "equational.ash",
-            "increment : Int -> Int\nincrement value = value + 1\n\nincrement 41\n",
+            "increment : Int -> Int\nincrement value = value + 1\n\nmain : Unit -> Int\nmain () = increment 41\n",
         ),
         (
             "operational.ash",
-            "fn increment(value : Int) -> Int {\n    value + 1\n}\n\nincrement 41\n",
+            "fn increment(value : Int) -> Int {\n    value + 1\n}\n\nmain : Unit -> Int\nmain () = increment 41\n",
         ),
     ] {
-        let source = SourceFile::new(path, text).expect("test source should fit");
-        let program = resolved(&source);
-        let core = validated(&source, &program);
+        let (_source, program, core) = validated_module(path, text);
         let root = core.node(core.root()).expect("global binding");
         let PureExprKind::Computation(PureComputation::RecursiveBind(global)) = &root.kind else {
             panic!("expected global recursive group")
@@ -145,7 +249,7 @@ fn successful_definition_checks_retain_the_body_and_declared_result_origins() {
         };
         let body = core.node(function_node.body()).expect("function body");
 
-        match &program.definitions[0].kind {
+        match &program.definitions()[0].kind {
             ResolvedDefinitionKind::Equational(definition) => assert_check_origin(
                 &body.origin,
                 definition.equations[0].body.span,
@@ -173,17 +277,15 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
     for (path, text) in [
         (
             "equational-causes.ash",
-            "increment : Int -> Int\nincrement value = value + 1\n\nincrement 41\n",
+            "increment : Int -> Int\nincrement value = value + 1\n\nmain : Unit -> Int\nmain () = increment 41\n",
         ),
         (
             "operational-causes.ash",
-            "fn increment(value : Int) -> Int {\n    value + 1\n}\n\nincrement 41\n",
+            "fn increment(value : Int) -> Int {\n    value + 1\n}\n\nmain : Unit -> Int\nmain () = increment 41\n",
         ),
     ] {
-        let source = SourceFile::new(path, text).expect("test source should fit");
-        let program = resolved(&source);
-        let core = validated(&source, &program);
-        let definition = &program.definitions[0];
+        let (_source, program, core) = validated_module(path, text);
+        let definition = &program.definitions()[0];
         let root = core.node(core.root()).expect("global binding");
         let PureExprKind::Computation(PureComputation::RecursiveBind(global)) = &root.kind else {
             panic!("expected global recursive group")
@@ -192,7 +294,7 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
             root.origin.generated_reason(),
             Some(GeneratedReason::RecursiveBindingLowering)
         );
-        assert_eq!(root.origin.primary_span(), program.span);
+        assert_eq!(root.origin.primary_span(), program.span());
 
         let function = core
             .node(global.members()[0].initializer())
@@ -262,24 +364,58 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
             }
         }
 
-        let application = core
-            .node(global.body())
-            .expect("program result application");
-        let PureExprKind::Computation(PureComputation::Apply(application_node)) = &application.kind
-        else {
-            panic!("expected application")
-        };
-        let ash::resolved::ResolvedExprKind::Apply(resolved_application) = &program.result.kind
+        let source_result = main_body(&program);
+        let ash::resolved::ResolvedExprKind::Apply(resolved_application) = &source_result.kind
         else {
             panic!("expected resolved application")
         };
-        assert_eq!(application.origin.primary_span(), program.result.span);
+        let mut pending = vec![
+            global
+                .members()
+                .last()
+                .expect("main should be the final global")
+                .initializer(),
+        ];
+        let (application, application_node) = loop {
+            let node = core
+                .node(
+                    pending
+                        .pop()
+                        .expect("main Core should contain its application"),
+                )
+                .expect("main Core node should exist");
+            if node.origin.primary_span() == source_result.span
+                && let PureExprKind::Computation(PureComputation::Apply(application)) = &node.kind
+            {
+                break (node, application);
+            }
+            for index in 0..node.kind.child_count() {
+                pending.push(node.kind.child_at(index).expect("Core child should exist"));
+            }
+        };
+        let ResolvedDefinitionKind::Equational(main) =
+            &program.definitions().last().expect("main definition").kind
+        else {
+            panic!("main should be equational")
+        };
+        let (_, main_result) = main
+            .interface
+            .annotation
+            .provenance
+            .function_parts()
+            .expect("main should have a function type");
+        assert_check_origin(
+            &application.origin,
+            source_result.span,
+            main_result.span().expect("main result should have a span"),
+        );
         assert_eq!(
-            application.origin.related_spans(),
-            &[
-                resolved_application.function.span,
-                resolved_application.argument.span,
-            ]
+            resolved_application.function.span.source(),
+            source_result.span.source()
+        );
+        assert_eq!(
+            resolved_application.argument.span.source(),
+            source_result.span.source()
         );
         assert!(core.node(application_node.function()).is_some());
         assert!(core.node(application_node.argument()).is_some());
@@ -288,16 +424,12 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
 
 #[test]
 fn t001_and_t004_diagnostics_keep_their_source_cause_spans() {
-    let t001_source = SourceFile::new(
-        "t001.ash",
-        "wrong : Int -> Bool\nwrong value = value\n\ntrue\n",
-    )
-    .expect("test source should fit");
-    let t001 = resolved(&t001_source);
-    let ResolvedDefinitionKind::Equational(t001_definition) = &t001.definitions[0].kind else {
+    let t001_text =
+        "wrong : Int -> Bool\nwrong value = value\n\nmain : Unit -> Bool\nmain () = true\n";
+    let (t001, error) = resolved_typing_error("t001.ash", t001_text);
+    let ResolvedDefinitionKind::Equational(t001_definition) = &t001.definitions()[0].kind else {
         panic!("expected equational definition")
     };
-    let error = run_source(t001_source).expect_err("definition result should fail");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("expected source typing diagnostic")
     };
@@ -314,19 +446,14 @@ fn t001_and_t004_diagnostics_keep_their_source_cause_spans() {
         .expect("expected function annotation");
     assert_eq!(diagnostic.related[0].span(), codomain.span().unwrap());
 
-    let t004_source = SourceFile::new(
-        "t004.ash",
-        "identity : Int -> Int\nidentity value = value\n\nidentity true\n",
-    )
-    .expect("test source should fit");
-    let t004 = resolved(&t004_source);
-    let ResolvedDefinitionKind::Equational(t004_definition) = &t004.definitions[0].kind else {
+    let t004_text = "identity : Int -> Int\nidentity value = value\n\nmain : Unit -> Int\nmain () = identity true\n";
+    let (t004, error) = resolved_typing_error("t004.ash", t004_text);
+    let ResolvedDefinitionKind::Equational(t004_definition) = &t004.definitions()[0].kind else {
         panic!("expected equational definition")
     };
-    let ash::resolved::ResolvedExprKind::Apply(application) = &t004.result.kind else {
+    let ash::resolved::ResolvedExprKind::Apply(application) = &main_body(&t004).kind else {
         panic!("expected application")
     };
-    let error = run_source(t004_source).expect_err("argument should fail");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("expected source typing diagnostic")
     };
@@ -340,21 +467,16 @@ fn t001_and_t004_diagnostics_keep_their_source_cause_spans() {
         .expect("expected function annotation");
     assert_eq!(diagnostic.related[0].span(), domain.span().unwrap());
 
-    let operational_source = SourceFile::new(
-        "t004-operational.ash",
-        "fn identity(value : Int) -> Int {\n    value\n}\n\nidentity true\n",
-    )
-    .expect("test source should fit");
-    let operational = resolved(&operational_source);
+    let operational_text = "fn identity(value : Int) -> Int {\n    value\n}\n\nmain : Unit -> Int\nmain () = identity true\n";
+    let (operational, error) = resolved_typing_error("t004-operational.ash", operational_text);
     let ResolvedDefinitionKind::InlineOperational(operational_definition) =
-        &operational.definitions[0].kind
+        &operational.definitions()[0].kind
     else {
         panic!("expected operational definition")
     };
-    let ash::resolved::ResolvedExprKind::Apply(application) = &operational.result.kind else {
+    let ash::resolved::ResolvedExprKind::Apply(application) = &main_body(&operational).kind else {
         panic!("expected application")
     };
-    let error = run_source(operational_source).expect_err("argument should fail");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("expected source typing diagnostic")
     };

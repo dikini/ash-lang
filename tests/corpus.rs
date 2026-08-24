@@ -1,13 +1,52 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use ash::{
-    driver::{PipelineFailure, run_source},
+    driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
     elaborate::{TypeError, TypeReason},
     lexer::LexReason,
+    module::{LoadGraphError, ModuleRoots},
     parser::ParseReason,
     resolve::ResolveReason,
-    source::SourceFile,
 };
+
+static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct TempSource(PathBuf);
+
+impl TempSource {
+    fn write(text: &str) -> Self {
+        loop {
+            let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("ash-corpus-inline-{}-{id}.ash", std::process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    use std::io::Write as _;
+                    file.write_all(text.as_bytes())
+                        .expect("the inline corpus source should be writable");
+                    return Self(path);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("the inline corpus source should be creatable: {error}"),
+            }
+        }
+    }
+}
+
+impl Drop for TempSource {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
 
 struct ValidCase {
     id: &'static str,
@@ -293,22 +332,18 @@ fn ash(path: &Path) -> std::process::Output {
         .expect("the Ash executable should start")
 }
 
-fn source(case: &InvalidCase) -> SourceFile {
-    let text = fs::read_to_string(case.path)
-        .unwrap_or_else(|error| panic!("{} could not read {}: {error}", case.id, case.path));
-    SourceFile::new(case.path, text)
-        .unwrap_or_else(|error| panic!("{} could not admit its fixture: {error}", case.id))
+fn run(path: impl Into<PathBuf>) -> Result<ash::driver::Observation, FileFailure> {
+    run_path(RunConfiguration {
+        entry: path.into(),
+        roots: ModuleRoots::empty(),
+    })
 }
 
 #[test]
 fn every_valid_corpus_presentation_has_its_exact_library_and_cli_observation() {
     for case in VALID_CASES {
-        let text = fs::read_to_string(case.path)
-            .unwrap_or_else(|error| panic!("{} could not read {}: {error}", case.id, case.path));
-        let source = SourceFile::new(case.path, text)
-            .unwrap_or_else(|error| panic!("{} could not admit its fixture: {error}", case.id));
-        let observation = run_source(source)
-            .unwrap_or_else(|error| panic!("{} was rejected by {error}", case.id));
+        let observation =
+            run(case.path).unwrap_or_else(|error| panic!("{} was rejected by {error}", case.id));
 
         assert_eq!(
             observation.value.to_string(),
@@ -338,7 +373,7 @@ fn every_valid_corpus_presentation_has_its_exact_library_and_cli_observation() {
 #[test]
 fn every_invalid_corpus_case_stops_at_its_owning_stage_and_cli_boundary() {
     for case in INVALID_CASES {
-        let failure = match run_source(source(case)) {
+        let failure = match run(case.path) {
             Ok(_) => panic!("{} unexpectedly reached evaluation", case.id),
             Err(failure) => failure,
         };
@@ -352,12 +387,12 @@ fn every_invalid_corpus_case_stops_at_its_owning_stage_and_cli_boundary() {
     }
 }
 
-fn assert_source_reason(case: &InvalidCase, failure: &PipelineFailure) {
+fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
     match (case.stage, case.reason, failure) {
         (
             Stage::Lexical,
             ExpectedReason::Lexical { lexical, parser },
-            PipelineFailure::Syntax(actual),
+            FileFailure::Graph(LoadGraphError::Syntax(actual)),
         ) => {
             assert_eq!(actual.resource, None, "{}", case.id);
             assert_eq!(
@@ -384,7 +419,7 @@ fn assert_source_reason(case: &InvalidCase, failure: &PipelineFailure) {
         (
             Stage::Parser,
             ExpectedReason::Parser { parser, lexical },
-            PipelineFailure::Syntax(actual),
+            FileFailure::Graph(LoadGraphError::Syntax(actual)),
         ) => {
             assert_eq!(actual.resource, None, "{}", case.id);
             assert_eq!(
@@ -411,12 +446,12 @@ fn assert_source_reason(case: &InvalidCase, failure: &PipelineFailure) {
         (
             Stage::Resolution,
             ExpectedReason::Resolution(expected),
-            PipelineFailure::Resolution(actual),
+            FileFailure::Pipeline(PipelineFailure::Resolution(actual)),
         ) => assert_eq!(actual.reason, expected, "{}", case.id),
         (
             Stage::Typing,
             ExpectedReason::Typing(expected),
-            PipelineFailure::Typing(TypeError::Source(actual)),
+            FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Source(actual))),
         ) => assert_eq!(actual.reason, expected, "{}", case.id),
         _ => panic!(
             "{} expected {:?} at {:?}, found {failure:?}",
@@ -427,10 +462,9 @@ fn assert_source_reason(case: &InvalidCase, failure: &PipelineFailure) {
 
 #[test]
 fn bare_carriage_return_is_a_structured_lexical_rejection() {
-    let source = SourceFile::new("bare-cr.ash", "\rmain : Unit -> Int\nmain () = 1\n")
-        .expect("the excluded source should fit the source model");
-    let failure = run_source(source).expect_err("bare CR must not reach evaluation");
-    let PipelineFailure::Syntax(actual) = failure else {
+    let source = TempSource::write("\rmain : Unit -> Int\nmain () = 1\n");
+    let failure = run(source.0.clone()).expect_err("bare CR must not reach evaluation");
+    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
         panic!("bare CR should fail in the syntax pipeline");
     };
     assert_eq!(
@@ -446,13 +480,9 @@ fn bare_carriage_return_is_a_structured_lexical_rejection() {
 
 #[test]
 fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
-    let source = SourceFile::new(
-        "mixed-syntax.ash",
-        "$\nmain : Unit -> Bool\nmain () = true == false == true\n",
-    )
-    .expect("the mixed invalid source should fit the source model");
-    let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-    let PipelineFailure::Syntax(actual) = failure else {
+    let source = TempSource::write("$\nmain : Unit -> Bool\nmain () = true == false == true\n");
+    let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
         panic!("the mixed source should fail in the syntax pipeline");
     };
 
@@ -477,10 +507,9 @@ fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
 #[test]
 fn a_complete_module_retains_an_independent_lexical_failure() {
     let text = "$\nfn identity(value : Int) -> Int {\n    value\n}\n";
-    let source = SourceFile::new("mixed-module.ash", text)
-        .expect("the mixed invalid source should fit the source model");
-    let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-    let PipelineFailure::Syntax(actual) = failure else {
+    let source = TempSource::write(text);
+    let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
         panic!("the mixed source should fail in the syntax pipeline");
     };
 
@@ -503,10 +532,9 @@ fn a_lexically_rejected_line_after_complete_declarations_has_only_its_lexical_re
         ("01\n", LexReason::InvalidIntegerLiteral),
     ] {
         let text = format!("identity : Int -> Int\nidentity value = value\n\n{line}");
-        let source = SourceFile::new("excluded-module-line.ash", text)
-            .expect("the excluded source should fit the source model");
-        let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-        let PipelineFailure::Syntax(actual) = failure else {
+        let source = TempSource::write(&text);
+        let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
             panic!("the excluded line should fail in the syntax pipeline");
         };
 
@@ -531,10 +559,9 @@ fn a_lexically_rejected_tail_does_not_create_a_parser_diagnostic() {
         ("$\n", LexReason::UnknownCharacter),
     ] {
         let text = format!("fn identity(value : Int) -> Int {{\n    value\n}}\n\n{tail}");
-        let source = SourceFile::new("rejected-module-tail.ash", text)
-            .expect("the excluded source should fit the source model");
-        let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-        let PipelineFailure::Syntax(actual) = failure else {
+        let source = TempSource::write(&text);
+        let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
             panic!("the excluded tail should fail in the syntax pipeline");
         };
 
@@ -558,10 +585,9 @@ fn a_lexically_rejected_definition_tail_does_not_create_a_parser_diagnostic() {
         ("01", LexReason::InvalidIntegerLiteral),
     ] {
         let text = format!("identity : Int -> Int\nidentity value = value {tail}\n");
-        let source = SourceFile::new("rejected-definition-tail.ash", text)
-            .expect("the excluded source should fit the source model");
-        let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-        let PipelineFailure::Syntax(actual) = failure else {
+        let source = TempSource::write(&text);
+        let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
             panic!("the excluded definition tail should fail in the syntax pipeline");
         };
 

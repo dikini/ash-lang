@@ -1,4 +1,5 @@
-{
+main : Unit -> Int
+main () = {
     let offset = 40
     let add_offset : Int -> Int = fn(value) {
         value + offset
