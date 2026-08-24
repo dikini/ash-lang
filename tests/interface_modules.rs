@@ -86,6 +86,108 @@ fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
     Ok(checked)
 }
 
+fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
+    let entry = module_named(graph, "entry.ash");
+    let mut checked: Vec<CheckedModule> = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked| checked.module() == edge.target())
+                    .expect("dependency order should check the target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("checked summary should authenticate its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies);
+        if module.id() == entry.id() {
+            return resolved.expect_err("the entry fixture should fail resolution");
+        }
+        checked.push(
+            check_module(resolved.expect("a dependency fixture should resolve"))
+                .expect("a dependency fixture should check"),
+        );
+    }
+    panic!("the graph should contain its entry module")
+}
+
+#[test]
+fn targeted_interface_conflicts_with_same_spelled_local_interface() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (Shared)\n",
+            "interface Shared<A> {\nlocal : A -> A\n}\n",
+        ),
+        &[(
+            "dependency.ash",
+            "pub interface Shared<A> {\nshared : A -> A\n}\n",
+        )],
+    );
+
+    let error = resolve_entry_error(&graph);
+
+    assert_eq!(error.reason, ResolveReason::ImportConflict);
+}
+
+#[test]
+fn targeted_interface_conflicts_with_same_spelled_local_nominal() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (Shared)\ntype Shared = Shared\n",
+        &[(
+            "dependency.ash",
+            "pub interface Shared<A> {\nshared : A -> A\n}\n",
+        )],
+    );
+
+    let error = resolve_entry_error(&graph);
+
+    assert_eq!(error.reason, ResolveReason::ImportConflict);
+}
+
+#[test]
+fn targeted_method_conflicts_with_same_spelled_local_method() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (shared)\n",
+            "interface Local<A> {\nshared : A -> A\n}\n",
+        ),
+        &[(
+            "dependency.ash",
+            "pub interface Shared<A> {\nshared : A -> A\n}\n",
+        )],
+    );
+
+    let error = resolve_entry_error(&graph);
+
+    assert_eq!(error.reason, ResolveReason::ImportConflict);
+}
+
+#[test]
+fn targeted_method_renamed_uppercase_conflicts_with_same_spelled_local_constructor() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (shared as Shared)\ntype Local = Shared\n",
+        &[(
+            "dependency.ash",
+            "pub interface Shared<A> {\nshared : A -> A\n}\n",
+        )],
+    );
+
+    let error = resolve_entry_error(&graph);
+
+    assert_eq!(error.reason, ResolveReason::ImportConflict);
+}
+
 #[test]
 fn qualified_public_interface_and_method_keep_their_defining_identities() {
     let tree = ModuleTree::create();

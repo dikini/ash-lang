@@ -684,7 +684,9 @@ impl Resolver {
         kind: LocalTypeDeclarationKind,
         names: &mut HashMap<&'a str, (crate::source::Span, LocalTypeDeclarationKind)>,
     ) -> Result<(), ResolveError> {
-        if self.module_aliases.contains_key(&name.text) || self.type_names.contains_key(&name.text)
+        if self.module_aliases.contains_key(&name.text)
+            || self.type_names.contains_key(&name.text)
+            || self.interface_names.contains_key(&name.text)
         {
             return Err(import_conflict(name.span, &name.text));
         }
@@ -722,6 +724,7 @@ impl Resolver {
     ) -> Result<(), ResolveError> {
         if self.module_aliases.contains_key(&name.text)
             || self.constructor_names.contains_key(&name.text)
+            || self.method_names.contains_key(&name.text)
             || self
                 .scopes
                 .first()
@@ -2686,6 +2689,7 @@ impl Resolver {
             }
             if self.module_aliases.contains_key(&declaration.name.text)
                 || self.type_names.contains_key(&declaration.name.text)
+                || self.interface_names.contains_key(&declaration.name.text)
             {
                 return Err(import_conflict(
                     declaration.name.span,
@@ -2726,6 +2730,7 @@ impl Resolver {
                 }
                 if self.module_aliases.contains_key(&constructor.name.text)
                     || self.constructor_names.contains_key(&constructor.name.text)
+                    || self.method_names.contains_key(&constructor.name.text)
                     || self
                         .scopes
                         .first()
