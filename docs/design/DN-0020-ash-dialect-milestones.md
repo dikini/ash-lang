@@ -2,7 +2,7 @@
 
 - ID: `DN-0020`
 - Status: exploring
-- Related: [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), the [Mini-Ash closure report](mini-ash/closure.md), and the [passive-module evidence](modular-ash/evidence.md)
+- Related: [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), the [Mini-Ash closure report](mini-ash/closure.md), and the [passive-module evidence](modular-ash/evidence.md)
 
 > This design note is informative. It does not define current Ash, accept
 > future interface semantics, or authorize roadmap work.
@@ -69,9 +69,11 @@ visibility, opacity, and typed composition. [DN-0022](DN-0022-passive-static-mod
 records the exploration that developed that boundary, and the
 [passive-module evidence](modular-ash/evidence.md) records its implementation.
 
-The next increment should design Ash interfaces, `impl`, associated-type and
-constraint needs, satisfaction and rejection, and separate interface checking
-against real module boundaries.
+[DN-0023](DN-0023-interfaces-and-implementations.md) develops the next
+increment: method-only Ash interfaces, `impl`, constraints, satisfaction and
+rejection, and separate interface checking against real module boundaries. It
+retains associated types as later comparison pressure rather than including
+them in the first interface increment.
 
 Only then should Modular Ash use representative cases to compare core forms
 with library definitions. The audit should state the typing, diagnostic, Core,

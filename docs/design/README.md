@@ -27,6 +27,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   retained design exploration for the implemented declarations-only modules,
   rooted imports, visibility, opacity, generated export summaries, and
   single-program Core assembly.
+- [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md)
+  — method-only type-class-like interfaces, scoped implementations,
+  constrained rank-1 schemes, and explicit Core evidence.
 - [Passive-module evidence](modular-ash/evidence.md) — implementation,
   resource, locality, historical-comparison, and verification evidence for the
   first Modular Ash increment.

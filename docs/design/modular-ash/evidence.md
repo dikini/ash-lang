@@ -308,12 +308,14 @@ module initialization or dynamic lifetime management.
 
 ## Downstream pressure and exclusions
 
-The next Modular Ash increment is interface and `impl` design against real
-module boundaries. Ash interfaces are Rust-trait- or Haskell-type-class-like
-typed relationships, not module signatures. The next work must decide method
-and associated-type forms, satisfaction, ambiguity, coherence, explicit versus
-inferred evidence, and dictionary retention or specialization without
-reinterpreting compiler-generated export summaries as source declarations.
+The next Modular Ash increment is [interface and `impl`
+design](../DN-0023-interfaces-and-implementations.md) against real module
+boundaries. Ash interfaces are Rust-trait- or Haskell-type-class-like typed
+relationships, not module signatures. DN-0023 recommends method-only
+interfaces, scoped coherence, implicit source evidence, and explicit flattened
+Core evidence while retaining associated types and specialization as later
+pressure. It does not reinterpret compiler-generated export summaries as
+source declarations.
 
 This increment intentionally excludes individual constructor exports, import
 re-exports, parent traversal, module cycles, cross-module recursive groups,
