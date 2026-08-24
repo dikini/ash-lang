@@ -5,8 +5,10 @@ use std::{
 };
 
 use ash::{
+    driver::{RunConfiguration, run_path},
     module::{ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
+    types::Type,
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -29,6 +31,15 @@ impl TempModule {
                 Err(error) => panic!("fixture directory should be creatable: {error}"),
             }
         }
+    }
+
+    fn write(&self, relative: &str, text: &str) {
+        let path = self
+            .0
+            .parent()
+            .expect("the module fixture should have a parent")
+            .join(relative);
+        fs::write(path, text).expect("dependency fixture should be writable");
     }
 }
 
@@ -67,4 +78,69 @@ fn opaque_constructors_remain_available_inside_their_defining_module() {
         "main : Token -> Token\n",
         "main Seal(value) = Seal(value)\n",
     ));
+}
+
+#[test]
+fn public_generic_impl_composes_over_an_unnameable_hidden_carrier() {
+    let fixture = TempModule::create(concat!(
+        "import carrier as Carrier\n\n",
+        "main : Unit -> Int\n",
+        "main () = Carrier.read(Carrier.make(42))\n",
+    ));
+    fixture.write(
+        "carrier.ash",
+        concat!(
+            "type Hidden = Hidden(Int)\n\n",
+            "type Wrap<A> = Wrap(A)\n\n",
+            "pub interface Read<A> {\nread : A -> Int\n}\n\n",
+            "pub impl Read<Hidden> {\n",
+            "read (Hidden value) = value\n",
+            "}\n\n",
+            "pub impl Read<Wrap<A>> where Read<A> {\n",
+            "read (Wrap(value)) = read value\n",
+            "}\n\n",
+            "pub make : Int -> Wrap<Hidden>\n",
+            "make value = Wrap(Hidden(value))\n",
+        ),
+    );
+
+    let observation = run_path(RunConfiguration {
+        entry: fixture.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("hidden generic implementation facts should remain usable without exported names");
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.ty, Type::Int);
+}
+
+#[test]
+fn public_generic_impl_uses_an_opaque_constructor_only_in_its_defining_module() {
+    let fixture = TempModule::create(concat!(
+        "import token as Token\n\n",
+        "main : Unit -> Int\n",
+        "main () = Token.read(Token.make(42))\n",
+    ));
+    fixture.write(
+        "token.ash",
+        concat!(
+            "pub opaque type Token<A> = Token(A)\n\n",
+            "pub interface Read<A> {\nread : A -> Int\n}\n\n",
+            "pub impl Read<Int> {\nread value = value\n}\n\n",
+            "pub impl Read<Token<A>> where Read<A> {\n",
+            "read (Token(value)) = read value\n",
+            "}\n\n",
+            "pub make : Int -> Token<Int>\n",
+            "make value = Token(value)\n",
+        ),
+    );
+
+    let observation = run_path(RunConfiguration {
+        entry: fixture.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect(
+        "opaque generic implementation bodies should retain defining-module constructor access",
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.ty, Type::Int);
 }

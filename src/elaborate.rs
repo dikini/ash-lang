@@ -302,6 +302,7 @@ struct LoweredRequirement {
 
 #[derive(Debug)]
 struct LoweredScheme {
+    source_type_parameters: Option<Box<[TypeVariableId]>>,
     type_parameters: Box<[TypeVariableId]>,
     requirements: Box<[LoweredRequirement]>,
     value_type: Type,
@@ -1065,7 +1066,7 @@ impl Elaborator {
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for group in program.groups() {
             for checked in group.schemes() {
-                let scheme = self.lower_constrained_scheme(&checked.scheme, &lowering)?;
+                let scheme = self.lower_constrained_scheme(&checked.scheme, &lowering, false)?;
                 if lowering
                     .global_schemes
                     .insert(checked.binder, scheme)
@@ -1076,7 +1077,7 @@ impl Elaborator {
             }
             for implementation in group.implementation_facts() {
                 for method in &implementation.methods {
-                    let scheme = self.lower_constrained_scheme(&method.scheme, &lowering)?;
+                    let scheme = self.lower_constrained_scheme(&method.scheme, &lowering, true)?;
                     let lowered = LoweredImplementationMethod {
                         binder: method.binder,
                         scheme,
@@ -1099,6 +1100,7 @@ impl Elaborator {
         &mut self,
         scheme: &ConstrainedScheme,
         lowering: &EvidenceLowering,
+        freshen_core_parameters: bool,
     ) -> Result<LoweredScheme, TypeError> {
         self.type_work
             .charge(
@@ -1108,11 +1110,35 @@ impl Elaborator {
                     .saturating_add(scheme.requirements.len()),
             )
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let type_parameters =
+        let original_type_parameters =
             clone_type_variables_with_budget(&scheme.type_parameters, &mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
                 .into_boxed_slice();
         let value_type = self.clone_type(&scheme.value_type)?;
+        let mut parameter_replacements = TypeReplacementBuffer(HashMap::new());
+        let (source_type_parameters, type_parameters) = if freshen_core_parameters {
+            parameter_replacements
+                .0
+                .try_reserve(original_type_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut type_parameters = Vec::new();
+            type_parameters
+                .try_reserve(original_type_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for source in &original_type_parameters {
+                let core = self.fresh_type_variable()?;
+                type_parameters.push(core);
+                parameter_replacements
+                    .0
+                    .insert(*source, Type::Variable(core));
+            }
+            (
+                Some(original_type_parameters),
+                type_parameters.into_boxed_slice(),
+            )
+        } else {
+            (None, original_type_parameters)
+        };
         let mut requirements = Vec::new();
         requirements
             .try_reserve(scheme.requirements.len())
@@ -1172,6 +1198,15 @@ impl Elaborator {
                     Type::Function(Box::new(self.clone_type(&method.ty)?), Box::new(core_body));
             }
         }
+        if !parameter_replacements.0.is_empty() {
+            let renamed =
+                substitute_type_variables_with(&core_body, &parameter_replacements.0, |cells| {
+                    self.type_work.charge(cells)
+                })
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            discard_type_iteratively(core_body);
+            core_body = renamed;
+        }
         let core_scheme = if type_parameters.is_empty() {
             core_body
         } else {
@@ -1186,6 +1221,7 @@ impl Elaborator {
             )
         };
         Ok(LoweredScheme {
+            source_type_parameters,
             type_parameters,
             requirements: requirements.into_boxed_slice(),
             value_type,
@@ -2490,8 +2526,13 @@ impl Elaborator {
                                     .implementation_methods
                                     .get(method)
                                     .ok_or_else(invalid_state)?;
-                                if lowered.scheme.type_parameters.len() != substitution.len()
-                                    || lowered.scheme.type_parameters.iter().zip(substitution).any(
+                                let source_parameters = lowered
+                                    .scheme
+                                    .source_type_parameters
+                                    .as_deref()
+                                    .ok_or_else(invalid_state)?;
+                                if source_parameters.len() != substitution.len()
+                                    || source_parameters.iter().zip(substitution).any(
                                         |(parameter, substitution)| {
                                             *parameter != substitution.parameter()
                                         },
@@ -2937,8 +2978,8 @@ impl Elaborator {
                     .and_then(|lowering| lowering.implementation_methods.get(&method.id))
                     .ok_or_else(invalid_state)?;
                 if lowered.binder != method.binder
-                    || lowered.scheme.type_parameters.as_ref()
-                        != method.scheme.type_parameters.as_ref()
+                    || lowered.scheme.source_type_parameters.as_deref()
+                        != Some(method.scheme.type_parameters.as_ref())
                     || !same_type(&lowered.scheme.value_type, &method.scheme.value_type)
                 {
                     return Err(invalid_state());
@@ -2967,18 +3008,22 @@ impl Elaborator {
                 {
                     return Err(invalid_state());
                 }
-                let quantified = clone_type_variables_with_budget(
-                    &lowered.scheme.type_parameters,
+                let source_quantified = clone_type_variables_with_budget(
+                    lowered
+                        .scheme
+                        .source_type_parameters
+                        .as_deref()
+                        .ok_or_else(invalid_state)?,
                     &mut self.type_work,
                 )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
                 .into_boxed_slice();
                 prepared
                     .context
-                    .set_quantified(method.binder, quantified.clone())?;
+                    .set_quantified(method.binder, source_quantified.clone())?;
                 if prepared
                     .quantifiers
-                    .insert(method.binder, quantified)
+                    .insert(method.binder, source_quantified)
                     .is_some()
                 {
                     return Err(invalid_state());
@@ -3038,6 +3083,42 @@ impl Elaborator {
         if !self.monomorphic_recursive.insert(fact.binder) {
             return Err(invalid_state());
         }
+        let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
+        let mut core_type_replacements = TypeReplacementBuffer(HashMap::new());
+        {
+            let lowered = self
+                .evidence_lowering
+                .as_ref()
+                .and_then(|lowering| lowering.implementation_methods.get(&fact.id))
+                .ok_or_else(invalid_state)?;
+            let source_type_parameters = lowered
+                .scheme
+                .source_type_parameters
+                .as_deref()
+                .ok_or_else(invalid_state)?;
+            if source_type_parameters.len() != lowered.scheme.type_parameters.len() {
+                return Err(invalid_state());
+            }
+            self.type_work
+                .charge(lowered.scheme.type_parameters.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            core_type_replacements
+                .0
+                .try_reserve(lowered.scheme.type_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for (source, core) in source_type_parameters
+                .iter()
+                .zip(&lowered.scheme.type_parameters)
+            {
+                if core_type_replacements
+                    .0
+                    .insert(*source, Type::Variable(*core))
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+        }
         let evidence = self.enter_lowered_implementation_evidence_scope(fact.id, &fact.origin)?;
         let source_ty = self
             .evidence_lowering
@@ -3066,6 +3147,35 @@ impl Elaborator {
             }
         };
         function = self.wrap_lowered_evidence_scope(function, evidence, &fact.origin)?;
+        if !core_type_replacements.0.is_empty() {
+            let inference_solutions = &self.inference_solutions;
+            let type_work = &mut self.type_work;
+            self.builder.rewrite_types_since(rewrite_checkpoint, |ty| {
+                let (zonked, _) = zonk_type_with_status(ty, inference_solutions, |cells| {
+                    type_work
+                        .charge(cells)
+                        .map_err(|()| BuildError::TypeWorkExceeded)
+                })?;
+                let renamed =
+                    substitute_type_variables_with(&zonked, &core_type_replacements.0, |cells| {
+                        type_work
+                            .charge(cells)
+                            .map_err(|()| BuildError::TypeWorkExceeded)
+                    });
+                discard_type_iteratively(zonked);
+                renamed
+            })?;
+            let zonked_function_type = self.zonk(&function.ty)?;
+            let renamed_function_type = substitute_type_variables_with(
+                &zonked_function_type,
+                &core_type_replacements.0,
+                |cells| self.type_work.charge(cells),
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            discard_type_iteratively(zonked_function_type);
+            let source_function_type = std::mem::replace(&mut function.ty, renamed_function_type);
+            discard_type_iteratively(source_function_type);
+        }
         if !self.monomorphic_recursive.remove(&fact.binder) {
             return Err(invalid_state());
         }

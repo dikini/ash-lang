@@ -75,6 +75,46 @@ fn global_presentations_share_recursive_scope_and_evaluate() {
 }
 
 #[test]
+fn implementation_method_recurses_through_current_evidence() {
+    let observation = run(
+        "type Counter =\nStop\n| More(Counter)\n\ninterface Countdown<A> {\ncountdown : A -> Int\n}\n\nimpl Countdown<Counter> {\ncountdown Stop = 42\ncountdown (More(rest)) = countdown rest\n}\n\nmain : Unit -> Int\nmain () = countdown(More(More(Stop)))\n",
+    );
+
+    assert_eq!(observation.value.to_string(), "42");
+    assert_eq!(observation.ty, Type::Int);
+}
+
+#[test]
+fn implementation_methods_share_mutual_recursive_scope() {
+    let observation = run(
+        "type Counter =\nStop\n| More(Counter)\n\ninterface Countdown<A> {\nfirst : A -> Int\nsecond : (A, Unit) -> Int\n}\n\nimpl Countdown<Counter> {\nfirst Stop = 42\nfirst (More(rest)) = second(rest, ())\nsecond (value, ()) = first value\n}\n\nmain : Unit -> Int\nmain () = first(More(More(Stop)))\n",
+    );
+
+    assert_eq!(observation.value.to_string(), "42");
+    assert_eq!(observation.ty, Type::Int);
+}
+
+#[test]
+fn earlier_global_and_later_implementation_method_share_recursive_scope() {
+    let observation = run(
+        "type Counter =\nStop\n| More(Counter)\n\ninterface Countdown<A> {\ncountdown : A -> Int\n}\n\nadvance : Counter -> Int\nadvance Stop = 42\nadvance (More(rest)) = countdown rest\n\nimpl Countdown<Counter> {\ncountdown value = advance value\n}\n\nmain : Unit -> Int\nmain () = advance(More(More(Stop)))\n",
+    );
+
+    assert_eq!(observation.value.to_string(), "42");
+    assert_eq!(observation.ty, Type::Int);
+}
+
+#[test]
+fn earlier_implementation_method_and_later_global_share_recursive_scope() {
+    let observation = run(
+        "type Counter =\nStop\n| More(Counter)\n\ninterface Countdown<A> {\ncountdown : A -> Int\n}\n\nimpl Countdown<Counter> {\ncountdown Stop = 42\ncountdown (More(rest)) = advance rest\n}\n\nadvance : Counter -> Int\nadvance value = countdown value\n\nmain : Unit -> Int\nmain () = countdown(More(More(Stop)))\n",
+    );
+
+    assert_eq!(observation.value.to_string(), "42");
+    assert_eq!(observation.ty, Type::Int);
+}
+
+#[test]
 fn local_recursive_group_evaluates_through_the_same_core_form() {
     let observation = run(
         "main : Unit -> Int\nmain () = {\nlet rec first : Unit -> Int = fn(ignored) {\nsecond ()\n}\nand second : Unit -> Int = fn(ignored) {\nlet retain : Unit -> Int = fn(value) {\nfirst value\n}\n42\n}\nfirst ()\n}\n",

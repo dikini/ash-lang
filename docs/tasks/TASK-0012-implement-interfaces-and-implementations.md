@@ -119,6 +119,19 @@ Execute the linked plan to:
   authentication, shared strict-subterm revalidation, exact block accounting,
   same-typed slot corruption coverage, and root-method filtering; the repeated
   reviews found no remaining Task 6 defect.
+- Task 7 retains generic prerequisite construction, exact rigid self evidence,
+  abstract prerequisite use, ordered evidence flattening, cycle and termination
+  failures, and direct, mutual, global-to-method, and method-to-global recursion.
+  Hidden and opaque generic carriers complete through their defining modules.
+- Generic implementation methods now keep source parameter identities for
+  checked selection while receiving distinct Core quantifier identities. Each
+  completed method zonks its emitted Core slice before bounded alpha-renaming,
+  so solved inference cannot reintroduce an unbound source parameter. The Core
+  and evaluator feature inventories remain unchanged.
+- Task 7's 94-test focused matrix and complete all-target suite pass, together
+  with format, all-target checking, strict Clippy, and diff hygiene. Repeated
+  high-reasoning semantic and Core reviews plus an independent coverage review
+  found no remaining Task 7 defect.
 
 ## Verification
 
@@ -186,3 +199,9 @@ dispatch rule.
   target, while `tests/interfaces.rs` retains the exact resulting-Core shape
   witness. These targets separate validation corruption evidence from ordinary
   Core validation.
+- Task 7's three planned end-to-end additions were already GREEN because Task 6
+  had implemented iterative substitution, prerequisite application, and one
+  recursive group per module. The Task 7 RED audit instead exposed generic
+  multi-method Core quantifier reuse. Review additions then exposed inference
+  zonking that could reintroduce a source parameter after alpha-renaming; both
+  failures were fixed before the Task 7 checkpoint.

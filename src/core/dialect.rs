@@ -490,8 +490,13 @@ pub struct CoreBuilder {
     inference_binders: HashSet<BinderId>,
     binder_phase_started: bool,
     type_work: TypeWorkBudget,
+    rewrite_type_work: TypeWorkBudget,
     requires_type_rewrite: bool,
 }
+
+/// Identifies the first Core node after an elaboration-local type boundary.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TypeRewriteCheckpoint(usize);
 
 impl CoreBuilder {
     /// Starts an empty Core arena.
@@ -507,6 +512,7 @@ impl CoreBuilder {
             inference_binders: HashSet::new(),
             binder_phase_started: false,
             type_work: TypeWorkBudget::default(),
+            rewrite_type_work: TypeWorkBudget::default(),
             requires_type_rewrite: false,
         }
     }
@@ -961,16 +967,53 @@ impl CoreBuilder {
     where
         F: FnMut(&Type) -> Result<Type, BuildError>,
     {
-        let mut rewrite_type_work = TypeWorkBudget::default();
+        let checkpoint = TypeRewriteCheckpoint(0);
+        let rewritten_requires_type_rewrite = self.rewrite_types_from(checkpoint, &mut rewrite)?;
+        self.requires_type_rewrite = rewritten_requires_type_rewrite;
+        Ok(())
+    }
+
+    /// Captures the current end of the Core arena for a bounded type rewrite.
+    pub(crate) fn type_rewrite_checkpoint(&self) -> TypeRewriteCheckpoint {
+        TypeRewriteCheckpoint(self.nodes.len())
+    }
+
+    /// Rewrites type payloads only on nodes emitted after `checkpoint`.
+    pub(crate) fn rewrite_types_since<F>(
+        &mut self,
+        checkpoint: TypeRewriteCheckpoint,
+        mut rewrite: F,
+    ) -> Result<(), BuildError>
+    where
+        F: FnMut(&Type) -> Result<Type, BuildError>,
+    {
+        let rewritten_requires_type_rewrite = self.rewrite_types_from(checkpoint, &mut rewrite)?;
+        self.requires_type_rewrite |= rewritten_requires_type_rewrite;
+        Ok(())
+    }
+
+    fn rewrite_types_from<F>(
+        &mut self,
+        checkpoint: TypeRewriteCheckpoint,
+        rewrite: &mut F,
+    ) -> Result<bool, BuildError>
+    where
+        F: FnMut(&Type) -> Result<Type, BuildError>,
+    {
+        let nodes = self
+            .nodes
+            .get_mut(checkpoint.0..)
+            .ok_or(BuildError::InvalidNodeId)?;
+        let rewrite_type_work = &mut self.rewrite_type_work;
         let mut rewritten_requires_type_rewrite = false;
         let mut rewrite_admitted = |ty: &Type| {
             let rewritten = rewrite(ty)?;
             let (rewritten, contains_inference) =
-                admit_rewritten_type(rewritten, &mut rewrite_type_work)?;
+                admit_rewritten_type(rewritten, rewrite_type_work)?;
             rewritten_requires_type_rewrite |= contains_inference;
             Ok(rewritten)
         };
-        for node in &mut self.nodes {
+        for node in nodes {
             node.ty = rewrite_admitted(&node.ty)?;
             match &mut node.kind {
                 PureExprKind::Value(PureValue::Function(function)) => {
@@ -1009,8 +1052,7 @@ impl CoreBuilder {
                 ) => {}
             }
         }
-        self.requires_type_rewrite = rewritten_requires_type_rewrite;
-        Ok(())
+        Ok(rewritten_requires_type_rewrite)
     }
 
     /// Reports whether an admitted Core type still contains inference state.

@@ -160,6 +160,34 @@ fn one_method_occurrence_does_not_retain_unused_same_typed_evidence() {
 }
 
 #[test]
+fn generic_option_evidence_observes_true() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "type Option<A> =\n",
+            "None\n",
+            "| Some(A)\n\n",
+            "interface Equal<A> {\n",
+            "equal : (A, A) -> Bool\n",
+            "}\n\n",
+            "impl Equal<Int> {\n",
+            "equal (left, right) = left == right\n",
+            "}\n\n",
+            "impl Equal<Option<A>> where Equal<A> {\n",
+            "equal (None, None) = true\n",
+            "equal (Some(left), Some(right)) = equal(left, right)\n",
+            "equal _ = false\n",
+            "}\n\n",
+            "main : Unit -> Bool\n",
+            "main () = equal(Some(1), Some(1))\n",
+        ),
+    );
+
+    observe(&entry, "true", Type::Bool);
+}
+
+#[test]
 fn hidden_carrier_composes_to_forty_two() {
     let tree = TempTree::create();
     let entry = tree.write(
@@ -217,6 +245,56 @@ fn opaque_carrier_uses_public_operations() {
     );
 
     observe(&entry, "true", Type::Bool);
+}
+
+#[test]
+fn recursive_impl_method_computes_forty_two() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "type Step =\n",
+            "End\n",
+            "| More(Step)\n\n",
+            "interface Countdown<A> {\n",
+            "countdown : A -> Int\n",
+            "}\n\n",
+            "impl Countdown<Step> {\n",
+            "countdown End = 42\n",
+            "countdown (More rest) = countdown rest\n",
+            "}\n\n",
+            "main : Unit -> Int\n",
+            "main () = countdown(More End)\n",
+        ),
+    );
+
+    observe(&entry, "42", Type::Int);
+}
+
+#[test]
+fn mutual_impl_methods_compute_forty_two() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "type Step =\n",
+            "End\n",
+            "| More(Step)\n\n",
+            "interface Countdown<A> {\n",
+            "first : A -> Int\n",
+            "second : A -> Int\n",
+            "}\n\n",
+            "impl Countdown<Step> {\n",
+            "first End = 42\n",
+            "first (More rest) = second rest\n",
+            "second value = first value\n",
+            "}\n\n",
+            "main : Unit -> Int\n",
+            "main () = first(More End)\n",
+        ),
+    );
+
+    observe(&entry, "42", Type::Int);
 }
 
 #[test]

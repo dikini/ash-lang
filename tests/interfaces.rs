@@ -6,6 +6,7 @@ use std::{
 
 use ash::{
     core::{PureComputation, PureExprKind, PureValue, validate_modules},
+    driver::{RunConfiguration, run_path},
     elaborate::{Elaborator, TypeError, check_module, link_modules},
     evidence_validation::validate_interface_evidence,
     interface::RequirementOwner,
@@ -99,6 +100,18 @@ fn reason(error: &TypeError) -> String {
         panic!("the fixture should produce a source checking error");
     };
     diagnostic.reason.to_string()
+}
+
+fn observe_source(text: &str, expected_value: &str, expected_type: Type) {
+    let fixture = InterfaceFixture::create(text);
+    let observation = run_path(RunConfiguration {
+        entry: fixture.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the interface fixture should complete the modular pipeline");
+
+    assert_eq!(observation.value_display(), expected_value);
+    assert_eq!(observation.ty, expected_type);
 }
 
 #[test]
@@ -364,4 +377,179 @@ fn cross_module_constraint_lowers_to_method_evidence() {
         panic!("concrete evidence should lower through its hidden implementation-method binder");
     };
     assert_eq!(evidence_method.binder(), implementation_method);
+}
+
+#[test]
+fn generic_option_impl_constructs_prerequisite_evidence() {
+    observe_source(
+        concat!(
+            "type Option<A> =\nNone\n| Some(A)\n\n",
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\n",
+            "impl Equal<Int> {\n",
+            "equal (left, right) = left == right\n",
+            "}\n\n",
+            "impl Equal<Option<A>> where Equal<A> {\n",
+            "equal (None, None) = true\n",
+            "equal (Some(left), Some(right)) = equal((left, right))\n",
+            "equal pair = false\n",
+            "}\n\n",
+            "main : Unit -> Bool\n",
+            "main () = equal((Some(42), Some(42)))\n",
+        ),
+        "true",
+        Type::Bool,
+    );
+}
+
+#[test]
+fn generic_prerequisite_evidence_preserves_same_typed_method_slot_order() {
+    observe_source(
+        concat!(
+            "type Option<A> =\nNone\n| Some(A)\n\n",
+            "interface Compare<A> {\n",
+            "same : (A, A) -> Bool\n",
+            "different : (A, A) -> Bool\n",
+            "}\n\n",
+            "impl Compare<Int> {\n",
+            "same (left, right) = left == right\n",
+            "different pair = false\n",
+            "}\n\n",
+            "impl Compare<Option<A>> where Compare<A> {\n",
+            "same (Some(left), Some(right)) = same((left, right))\n",
+            "same pair = false\n",
+            "different pair = false\n",
+            "}\n\n",
+            "main : Unit -> Bool\n",
+            "main () = same((Some(42), Some(42)))\n",
+        ),
+        "true",
+        Type::Bool,
+    );
+}
+
+#[test]
+fn generic_two_prerequisite_slots_preserve_declaration_order() {
+    observe_source(
+        concat!(
+            "type Wrap<A> = Wrap(A)\n\n",
+            "interface First<A> {\nfirst : A -> Int\n}\n\n",
+            "interface Second<A> {\nsecond : A -> Int\n}\n\n",
+            "interface Combine<A> {\ncombine : A -> Int\n}\n\n",
+            "impl First<Int> {\nfirst value = 4\n}\n\n",
+            "impl Second<Int> {\nsecond value = 2\n}\n\n",
+            "impl Combine<Wrap<A>> where First<A>, Second<A> {\n",
+            "combine (Wrap(value)) = first value * 10 + second value\n",
+            "}\n\n",
+            "main : Unit -> Int\n",
+            "main () = combine(Wrap(0))\n",
+        ),
+        "42",
+        Type::Int,
+    );
+}
+
+#[test]
+fn generic_exact_current_self_carries_abstract_prerequisite_evidence() {
+    observe_source(
+        concat!(
+            "type Option<A> =\nNone\n| Some(A)\n\n",
+            "interface Score<A> {\nscore : A -> Int\n}\n\n",
+            "impl Score<Int> {\nscore value = value\n}\n\n",
+            "impl Score<Option<A>> where Score<A> {\n",
+            "score None = 4\n",
+            "score (Some(value)) = {\n",
+            "let empty : Option<A> = None\n",
+            "score empty * 10 + score value\n",
+            "}\n",
+            "}\n\n",
+            "main : Unit -> Int\n",
+            "main () = score(Some(2))\n",
+        ),
+        "42",
+        Type::Int,
+    );
+}
+
+#[test]
+fn generic_impl_constructor_result_zonks_before_core_alpha_renaming() {
+    observe_source(
+        concat!(
+            "type Option<A> =\nNone\n| Some(A)\n\n",
+            "type Wrap<A> = Wrap(A)\n\n",
+            "interface Lift<A> {\nlift : A -> Option<A>\n}\n\n",
+            "impl Lift<Wrap<A>> {\n",
+            "lift value = Some(value)\n",
+            "}\n\n",
+            "unwrap : Option<Wrap<Int>> -> Int\n",
+            "unwrap None = 0\n",
+            "unwrap (Some(Wrap(value))) = value\n\n",
+            "main : Unit -> Int\n",
+            "main () = unwrap(lift(Wrap(42)))\n",
+        ),
+        "42",
+        Type::Int,
+    );
+}
+
+#[test]
+fn generic_current_impl_does_not_freshly_instantiate_its_rigid_head() {
+    let error = check_error(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "interface Keep<A> {\nkeep : A -> A\n}\n\n",
+        "impl Keep<Option<A>> where Keep<A> {\n",
+        "keep value = {\n",
+        "let unrelated = keep(Some(1))\n",
+        "value\n",
+        "}\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "constraint.unsatisfied");
+}
+
+#[test]
+fn ground_cross_interface_prerequisite_cycle_has_the_exact_reason() {
+    let error = check_error(concat!(
+        "interface First<A> {\nfirst : A -> A\n}\n\n",
+        "interface Second<A> {\nsecond : A -> A\n}\n\n",
+        "impl First<Int> where Second<Int> {\nfirst value = value\n}\n\n",
+        "impl Second<Int> where First<Int> {\nsecond value = value\n}\n\n",
+        "main : Unit -> Int\n",
+        "main () = first 1\n",
+    ));
+
+    assert_eq!(reason(&error), "constraint.cycle");
+}
+
+#[test]
+fn deep_generic_prerequisite_chain_completes_the_pipeline_on_a_small_stack() {
+    const DEPTH: usize = 96;
+    let worker = std::thread::Builder::new()
+        .name("deep-generic-prerequisite-chain".into())
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut nested = "Option<".repeat(DEPTH);
+            nested.push_str("Int");
+            nested.push_str(&">".repeat(DEPTH));
+            let source = format!(
+                concat!(
+                    "type Option<A> =\nNone\n| Some(A)\n\n",
+                    "interface Keep<A> {{\nkeep : A -> A\n}}\n\n",
+                    "impl Keep<Int> {{\nkeep value = value\n}}\n\n",
+                    "impl Keep<Option<A>> where Keep<A> {{\nkeep value = value\n}}\n\n",
+                    "probe : {0} -> {0}\n",
+                    "probe value = keep value\n\n",
+                    "main : Unit -> Int\n",
+                    "main () = 42\n",
+                ),
+                nested,
+            );
+
+            observe_source(&source, "42", Type::Int);
+        })
+        .expect("the small-stack generic selection worker should start");
+
+    worker
+        .join()
+        .expect("generic prerequisite selection and destruction should remain iterative");
 }

@@ -1469,12 +1469,25 @@ mod tests {
                 ..
             }) if implementation == base
         ));
+        let constraint_limit = measured_constraints.used();
+        let type_limit = measured_types.used();
+        assert!(constraint_limit > 0);
+        assert!(type_limit > 0);
         assert_eq!(
             selector.select(
                 interface,
                 &goal,
-                &mut InterfaceConstraintBudget::with_limit(measured_constraints.used() - 1),
-                &mut TypeWorkBudget::with_limit(measured_types.used()),
+                &mut InterfaceConstraintBudget::with_limit(constraint_limit),
+                &mut TypeWorkBudget::with_limit(type_limit - 1),
+            ),
+            Err(SelectionFailure::TypeResource)
+        );
+        assert_eq!(
+            selector.select(
+                interface,
+                &goal,
+                &mut InterfaceConstraintBudget::with_limit(constraint_limit - 1),
+                &mut TypeWorkBudget::with_limit(type_limit),
             ),
             Err(SelectionFailure::ConstraintResource)
         );
@@ -1482,8 +1495,8 @@ mod tests {
             .select(
                 interface,
                 &goal,
-                &mut InterfaceConstraintBudget::with_limit(measured_constraints.used()),
-                &mut TypeWorkBudget::with_limit(measured_types.used()),
+                &mut InterfaceConstraintBudget::with_limit(constraint_limit),
+                &mut TypeWorkBudget::with_limit(type_limit),
             )
             .expect("exact prerequisite-selection budgets");
     }
@@ -1557,12 +1570,25 @@ mod tests {
                 methods: &[method],
             })
         );
+        let constraint_limit = measured_constraints.used();
+        let type_limit = measured_types.used();
+        assert!(constraint_limit > 0);
+        assert!(type_limit > 0);
         assert_eq!(
             selector.select(
                 interface,
                 &current_argument,
-                &mut InterfaceConstraintBudget::with_limit(measured_constraints.used() - 1),
-                &mut TypeWorkBudget::with_limit(measured_types.used()),
+                &mut InterfaceConstraintBudget::with_limit(constraint_limit),
+                &mut TypeWorkBudget::with_limit(type_limit - 1),
+            ),
+            Err(SelectionFailure::TypeResource)
+        );
+        assert_eq!(
+            selector.select(
+                interface,
+                &current_argument,
+                &mut InterfaceConstraintBudget::with_limit(constraint_limit - 1),
+                &mut TypeWorkBudget::with_limit(type_limit),
             ),
             Err(SelectionFailure::ConstraintResource)
         );
@@ -1570,8 +1596,8 @@ mod tests {
             .select(
                 interface,
                 &current_argument,
-                &mut InterfaceConstraintBudget::with_limit(measured_constraints.used()),
-                &mut TypeWorkBudget::with_limit(measured_types.used()),
+                &mut InterfaceConstraintBudget::with_limit(constraint_limit),
+                &mut TypeWorkBudget::with_limit(type_limit),
             )
             .expect("exact current-implementation budgets");
     }

@@ -828,6 +828,17 @@ cargo test --locked --test recursion --test module_visibility
 Expected RED at generic substitution, self evidence, cycle, or recursive group
 construction.
 
+The recorded Task 7 audit found the three planned corpus cases already GREEN:
+Task 6's iterative evidence lowering and defining-module recursive groups
+already handled generic `Option` evidence plus direct and mutual impl-method
+recursion. The first new RED was a same-typed multi-method generic impl whose
+second Core type abstraction reused the first method's source quantifier and
+failed `core.validation.type-operation`. Review-driven RED additions then found
+that deferred zonking could reintroduce a source parameter after bounded Core
+alpha-renaming, observed as `core.validation.node-type` and
+`core.validation.application-type`. These failures belonged to generic Core
+quantifier ownership, not selection or fixture setup.
+
 ### Task 7 — Step 3: Implement minimal generic evidence
 
 Fresh-match only ordinary candidate head variables. Exclude the current
@@ -850,6 +861,16 @@ cargo test --locked --test recursion --test module_visibility --test module_entr
 cargo test --locked --all-targets
 cargo fmt --check
 ```
+
+The recorded final Task 7 run is GREEN. Generic external evidence, positive and
+negative rigid-self behavior, abstract prerequisites, same-typed method and
+cross-prerequisite order, ground cycles, strict-subterm rejection, deep complete
+pipeline traversal on a 256-KiB stack, hidden and opaque generic carriers, and
+all four recursion directions pass. Generic selection tests retain exact
+constraint and type one-short boundaries. The focused matrix passes 94 tests;
+the complete all-target suite, format, all-target checking, strict Clippy, and
+diff hygiene pass. Repeated high-reasoning semantic and Core reviews plus an
+independent coverage review are clear.
 
 Expected GREEN. Commit unsigned as:
 
