@@ -5,7 +5,7 @@ use std::{
 };
 
 use ash::{
-    driver::{RunConfiguration, run_path},
+    driver::{EntryReason, FileFailure, PipelineFailure, RunConfiguration, run_path},
     module::ModuleRoots,
     types::Type,
 };
@@ -148,6 +148,39 @@ fn rejects_a_constrained_main_before_lowering_entry_evidence() {
 
     assert_eq!(failure.reason_code(), "entry.main-constrained");
     assert!(failure.is_source_rejection());
+}
+
+#[test]
+fn existing_entry_shape_failures_precede_main_constrained() {
+    let cases = [
+        (
+            concat!(
+                "interface Marker<A> {\nmarker : A -> Bool\n}\n",
+                "main : A -> A where Marker<A>\n",
+                "main value = value\n",
+            ),
+            EntryReason::MainPolymorphic,
+        ),
+        (
+            concat!(
+                "interface Marker<A> {\nmarker : A -> Bool\n}\n",
+                "main : Int -> Int where Marker<Int>\n",
+                "main value = value\n",
+            ),
+            EntryReason::MainDomain,
+        ),
+    ];
+
+    for (source, expected) in cases {
+        let tree = TempTree::create();
+        let entry = tree.write("entry.ash", source);
+        let failure = run(&entry).expect_err("the earlier entry-shape judgment should reject main");
+        let FileFailure::Pipeline(PipelineFailure::Entry(failure)) = failure else {
+            panic!("entry precedence should retain an entry-contract failure");
+        };
+
+        assert_eq!(failure.reason(), expected);
+    }
 }
 
 #[test]

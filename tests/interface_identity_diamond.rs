@@ -186,6 +186,12 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
                 assert_ne!(left.requirement, right.requirement);
                 assert!(resolved.imported_facts().global(left.global).is_some());
                 assert!(resolved.imported_facts().global(right.global).is_some());
+                let imported_interface = resolved
+                    .imported_facts()
+                    .interface(identities.interface)
+                    .expect("the constrained summaries should retain hidden interface metadata");
+                assert_eq!(imported_interface.id, identities.interface);
+                assert_eq!(imported_interface.methods[0].id, identities.method);
 
                 for arm in [left, right] {
                     let imported = resolved

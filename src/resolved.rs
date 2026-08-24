@@ -88,6 +88,8 @@ pub struct ResolvedOccurrence {
     pub spelling: String,
     /// Causal source provenance for the occurrence site.
     pub origin: Origin,
+    /// Exact direct import occurrence that introduced this term binding.
+    pub(crate) import_span: Option<Span>,
     /// Structural evidence positions owned by this exact occurrence.
     pub evidence: Box<[EvidenceSlot]>,
 }
@@ -100,6 +102,12 @@ impl ResolvedOccurrence {
             ResolvedTermName::Global(binder) => Some(binder),
             ResolvedTermName::Method(_) => None,
         }
+    }
+
+    /// Returns the direct import occurrence that introduced this binding.
+    #[must_use]
+    pub const fn import_span(&self) -> Option<Span> {
+        self.import_span
     }
 }
 
@@ -1070,7 +1078,7 @@ pub struct ImportedFacts {
     globals: HashMap<BinderId, ImportedGlobalScheme>,
     nominals: HashMap<NominalTypeId, ImportedNominalFact>,
     constructors: HashMap<ConstructorId, ImportedConstructorFact>,
-    interfaces: Vec<CheckedInterfaceFact>,
+    interfaces: Vec<ImportedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
     implementations: Vec<ImportedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
@@ -1098,7 +1106,12 @@ impl ImportedFacts {
     /// Looks up one imported checked interface by semantic identity.
     #[must_use]
     pub fn interface(&self, id: InterfaceId) -> Option<&CheckedInterfaceFact> {
-        self.interfaces.get(*self.interface_positions.get(&id)?)
+        Some(
+            &self
+                .interfaces
+                .get(*self.interface_positions.get(&id)?)?
+                .fact,
+        )
     }
 
     /// Looks up one directly imported public implementation by semantic identity.
@@ -1116,7 +1129,7 @@ impl ImportedFacts {
         self.globals.values()
     }
 
-    pub(crate) fn interfaces(&self) -> impl Iterator<Item = &CheckedInterfaceFact> {
+    pub(crate) fn interface_imports(&self) -> impl Iterator<Item = &ImportedInterfaceFact> {
         self.interfaces.iter()
     }
 
@@ -1184,10 +1197,43 @@ impl ImportedFacts {
         self.constructors.insert(fact.id, fact);
     }
 
-    pub(crate) fn insert_interface(&mut self, fact: CheckedInterfaceFact) {
+    pub(crate) fn insert_interface(
+        &mut self,
+        fact: CheckedInterfaceFact,
+        direct_dependency: ModuleId,
+        available_at: Span,
+        publicly_available: bool,
+    ) {
         let position = self.interfaces.len();
         self.interface_positions.insert(fact.id, position);
-        self.interfaces.push(fact);
+        self.interfaces.push(ImportedInterfaceFact {
+            fact,
+            direct_dependency,
+            available_at,
+            publicly_available,
+        });
+    }
+
+    pub(crate) fn merge_interface_route(
+        &mut self,
+        id: InterfaceId,
+        direct_dependency: ModuleId,
+        available_at: Span,
+        publicly_available: bool,
+    ) {
+        let Some(imported) = self
+            .interface_positions
+            .get(&id)
+            .and_then(|position| self.interfaces.get_mut(*position))
+        else {
+            return;
+        };
+        if !publicly_available || imported.publicly_available {
+            return;
+        }
+        imported.direct_dependency = direct_dependency;
+        imported.available_at = available_at;
+        imported.publicly_available = true;
     }
 
     pub(crate) fn reserve_interface(&mut self) -> Result<(), ()> {
@@ -1234,8 +1280,8 @@ impl Drop for ImportedFacts {
             }
             discard_origin_iteratively(fact.origin);
         }
-        for fact in self.interfaces.drain(..) {
-            drop(fact);
+        for imported in self.interfaces.drain(..) {
+            drop(imported.fact);
         }
         self.interface_positions.clear();
         for imported in self.implementations.drain(..) {
@@ -1260,6 +1306,14 @@ pub struct CheckedInterfaceFact {
     pub origin: Origin,
     /// Complete declaration span.
     pub span: Span,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ImportedInterfaceFact {
+    pub(crate) fact: CheckedInterfaceFact,
+    pub(crate) direct_dependency: ModuleId,
+    pub(crate) available_at: Span,
+    pub(crate) publicly_available: bool,
 }
 
 impl CheckedInterfaceFact {
@@ -1862,6 +1916,7 @@ pub struct ExportSummary {
     method_names: HashMap<String, MethodId>,
     interfaces: Vec<CheckedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
+    hidden_interfaces: Vec<CheckedInterfaceFact>,
     implementations: Vec<CheckedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
@@ -1931,6 +1986,7 @@ impl ExportSummary {
             method_names: HashMap::new(),
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
+            hidden_interfaces: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -2073,6 +2129,92 @@ impl ExportSummary {
             summary.implementations.push(fact);
         }
 
+        constraint_work
+            .charge(
+                summary
+                    .terms
+                    .len()
+                    .saturating_add(summary.implementations.len()),
+            )
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        let interface_reference_count = summary
+            .terms
+            .values()
+            .map(|exported| exported.scheme.requirements.len())
+            .chain(
+                summary
+                    .implementations
+                    .iter()
+                    .map(|implementation| implementation.prerequisites.len().saturating_add(1)),
+            )
+            .fold(0usize, usize::saturating_add);
+        if interface_reference_count > 0 {
+            constraint_work
+                .charge(
+                    interface_reference_count
+                        .saturating_add(summary.terms.len())
+                        .saturating_add(checked_globals.len()),
+                )
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            let mut exported_binders = HashSet::new();
+            exported_binders
+                .try_reserve(summary.terms.len())
+                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+            exported_binders.extend(summary.terms.values().map(|exported| exported.binder));
+            let mut referenced_interfaces = HashSet::new();
+            referenced_interfaces
+                .try_reserve(interface_reference_count)
+                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+            let mut referenced_interface_order = Vec::new();
+            referenced_interface_order
+                .try_reserve(interface_reference_count)
+                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+            for checked in checked_globals {
+                if !exported_binders.contains(&checked.binder) {
+                    continue;
+                }
+                for requirement in &checked.scheme.requirements {
+                    if referenced_interfaces.insert(requirement.interface) {
+                        referenced_interface_order.push(requirement.interface);
+                    }
+                }
+            }
+            for implementation in &summary.implementations {
+                if referenced_interfaces.insert(implementation.interface) {
+                    referenced_interface_order.push(implementation.interface);
+                }
+                for prerequisite in &implementation.prerequisites {
+                    if referenced_interfaces.insert(prerequisite.interface) {
+                        referenced_interface_order.push(prerequisite.interface);
+                    }
+                }
+            }
+            constraint_work
+                .charge(referenced_interface_order.len())
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            summary
+                .hidden_interfaces
+                .try_reserve(referenced_interface_order.len())
+                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+            for interface in referenced_interface_order {
+                if summary.interface_positions.contains_key(&interface) {
+                    continue;
+                }
+                let fact = resolved
+                    .imported
+                    .interface(interface)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if fact.id.module() == resolved.module {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                summary.hidden_interfaces.push(clone_checked_interface_fact(
+                    fact,
+                    type_work,
+                    constraint_work,
+                )?);
+            }
+        }
+
         for (spelling, candidate) in &resolved.export_candidate.nominals {
             let parameters = resolved
                 .registry
@@ -2151,6 +2293,12 @@ impl ExportSummary {
             }
         }
         for interface in &summary.interfaces {
+            for method in &interface.methods {
+                collect_nominal_identities(&method.value_type, &mut referenced_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+        }
+        for interface in &summary.hidden_interfaces {
             for method in &interface.methods {
                 collect_nominal_identities(&method.value_type, &mut referenced_nominals, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -2252,6 +2400,10 @@ impl ExportSummary {
 
     pub(crate) fn interfaces(&self) -> impl Iterator<Item = &CheckedInterfaceFact> {
         self.interfaces.iter()
+    }
+
+    pub(crate) fn hidden_interfaces(&self) -> impl Iterator<Item = &CheckedInterfaceFact> {
+        self.hidden_interfaces.iter()
     }
 
     pub(crate) fn implementations(&self) -> impl Iterator<Item = &CheckedImplementationFact> {
@@ -2421,6 +2573,7 @@ impl ExportSummary {
             method_names: HashMap::new(),
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
+            hidden_interfaces: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -2575,6 +2728,9 @@ impl Drop for ExportSummary {
             drop(fact);
         }
         self.interface_positions.clear();
+        for fact in self.hidden_interfaces.drain(..) {
+            drop(fact);
+        }
         for fact in self.implementations.drain(..) {
             drop(fact);
         }
@@ -3753,6 +3909,7 @@ fn discard_resolved_body_work(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interface::RequirementOwner;
     use crate::module::ModuleId;
     use crate::source::{ByteRange, GeneratedReason, SourceFile};
 
@@ -3860,6 +4017,7 @@ mod tests {
             method_names: HashMap::new(),
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
+            hidden_interfaces: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -4149,6 +4307,213 @@ mod tests {
         assert_eq!(cloned, fact);
         assert_eq!(exact.used(), 11);
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    fn freeze_hidden_interface_summary_with_limit(
+        limit: usize,
+    ) -> (Result<ExportSummary, ResolvedBuildFailure>, usize) {
+        let source = SourceFile::new("hidden-interface-summary.ash", "interface global")
+            .expect("the hidden-interface summary fixture should fit");
+        let interface_span = source
+            .span(ByteRange::new(0, 9).expect("the interface span should be ordered"))
+            .expect("the interface span should belong to the fixture");
+        let global_span = source
+            .span(ByteRange::new(10, 16).expect("the global span should be ordered"))
+            .expect("the global span should belong to the fixture");
+        let base = ModuleId::new(70);
+        let middle = ModuleId::new(71);
+        let interface = InterfaceId::new(base, 0);
+        let method = MethodId::new(interface, 0);
+        let binder = BinderId::resolved(middle, 0);
+        let mut imported = ImportedFacts::default();
+        imported
+            .reserve_interface()
+            .expect("one hidden interface slot should reserve");
+        imported.insert_interface(
+            CheckedInterfaceFact {
+                id: interface,
+                spelling: "Render".into(),
+                parameter: ResolvedTypeVariable {
+                    id: TypeVariableId::new(0),
+                    spelling: "A".into(),
+                    origin: Origin::Source(interface_span),
+                },
+                methods: vec![CheckedInterfaceMethodFact {
+                    id: method,
+                    spelling: "render".into(),
+                    value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                    origin: Origin::Source(interface_span),
+                    span: interface_span,
+                }]
+                .into_boxed_slice(),
+                origin: Origin::Source(interface_span),
+                span: interface_span,
+            },
+            base,
+            interface_span,
+            true,
+        );
+        let mut export_candidate = ResolvedExportCandidate::default();
+        export_candidate.insert_term(
+            "apply".into(),
+            CandidateGlobal {
+                binder,
+                origin: Origin::Source(global_span),
+            },
+        );
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module: middle,
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported,
+            direct_dependencies: vec![DirectDependencyRoute::new(base, interface_span)],
+            declaration_order: Vec::new(),
+            interfaces: Vec::new(),
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate,
+            span: global_span,
+        });
+        let checked_globals = [CheckedGlobalScheme {
+            binder,
+            spelling: "apply".into(),
+            scheme: ConstrainedScheme {
+                type_parameters: Box::new([]),
+                requirements: vec![CheckedRequirement {
+                    id: RequirementId::new(RequirementOwner::Global(binder), 0),
+                    interface,
+                    argument: Type::Int,
+                    origin: Origin::Source(global_span),
+                    span: global_span,
+                }]
+                .into_boxed_slice(),
+                value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+            },
+            origin: Origin::Source(global_span),
+        }];
+        let mut type_work = TypeWorkBudget::default();
+        let mut constraint_work = crate::interface::InterfaceConstraintBudget::with_limit(limit);
+        let result = ExportSummary::freeze(
+            &resolved,
+            &checked_globals,
+            &[],
+            &[],
+            &[],
+            &mut type_work,
+            &mut constraint_work,
+        );
+        (result, constraint_work.used())
+    }
+
+    #[test]
+    fn hidden_interface_summary_closure_uses_its_exact_constraint_budget() {
+        let (short, short_used) = freeze_hidden_interface_summary_with_limit(12);
+        assert_eq!(short, Err(ResolvedBuildFailure::ConstraintResource));
+        assert_eq!(short_used, 12);
+
+        let (exact, exact_used) = freeze_hidden_interface_summary_with_limit(13);
+        let summary = exact.expect("the exact budget should retain one hidden interface fact");
+        assert_eq!(exact_used, 13);
+        assert!(summary.interface("Render").is_none());
+        let hidden = summary
+            .hidden_interfaces()
+            .next()
+            .expect("the foreign interface shape should remain in summary closure");
+        assert_eq!(hidden.id.module(), ModuleId::new(70));
+        assert!(summary.implementations().next().is_none());
+    }
+
+    #[test]
+    fn public_interface_route_promotes_an_earlier_hidden_route_without_duplicating_the_fact() {
+        let source = SourceFile::new("interface-route.ash", "hidden public")
+            .expect("the route fixture should fit");
+        let hidden_span = source
+            .span(ByteRange::new(0, 6).expect("the hidden span should be ordered"))
+            .expect("the hidden span should belong to the fixture");
+        let public_span = source
+            .span(ByteRange::new(7, 13).expect("the public span should be ordered"))
+            .expect("the public span should belong to the fixture");
+        let owner = ModuleId::new(80);
+        let middle = ModuleId::new(81);
+        let interface = InterfaceId::new(owner, 0);
+        let mut imported = ImportedFacts::default();
+        imported
+            .reserve_interface()
+            .expect("one imported interface slot should reserve");
+        imported.insert_interface(
+            CheckedInterfaceFact {
+                id: interface,
+                spelling: "Render".into(),
+                parameter: ResolvedTypeVariable {
+                    id: TypeVariableId::new(0),
+                    spelling: "A".into(),
+                    origin: Origin::Source(hidden_span),
+                },
+                methods: Box::new([]),
+                origin: Origin::Source(hidden_span),
+                span: hidden_span,
+            },
+            middle,
+            hidden_span,
+            false,
+        );
+
+        imported.merge_interface_route(interface, owner, public_span, true);
+
+        let routes = imported.interface_imports().collect::<Vec<_>>();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].direct_dependency, owner);
+        assert_eq!(routes[0].available_at, public_span);
+        assert!(routes[0].publicly_available);
+    }
+
+    #[test]
+    fn first_public_interface_route_survives_hidden_and_duplicate_public_routes() {
+        let source = SourceFile::new("stable-interface-route.ash", "first hidden second")
+            .expect("the stable-route fixture should fit");
+        let first = source
+            .span(ByteRange::new(0, 5).expect("the first span should be ordered"))
+            .expect("the first span should belong to the fixture");
+        let hidden = source
+            .span(ByteRange::new(6, 12).expect("the hidden span should be ordered"))
+            .expect("the hidden span should belong to the fixture");
+        let second = source
+            .span(ByteRange::new(13, 19).expect("the second span should be ordered"))
+            .expect("the second span should belong to the fixture");
+        let owner = ModuleId::new(82);
+        let first_dependency = ModuleId::new(83);
+        let interface = InterfaceId::new(owner, 0);
+        let mut imported = ImportedFacts::default();
+        imported
+            .reserve_interface()
+            .expect("one imported interface slot should reserve");
+        imported.insert_interface(
+            CheckedInterfaceFact {
+                id: interface,
+                spelling: "Render".into(),
+                parameter: ResolvedTypeVariable {
+                    id: TypeVariableId::new(0),
+                    spelling: "A".into(),
+                    origin: Origin::Source(first),
+                },
+                methods: Box::new([]),
+                origin: Origin::Source(first),
+                span: first,
+            },
+            first_dependency,
+            first,
+            true,
+        );
+
+        imported.merge_interface_route(interface, ModuleId::new(84), hidden, false);
+        imported.merge_interface_route(interface, owner, second, true);
+
+        let route = imported
+            .interface_imports()
+            .next()
+            .expect("one deduplicated interface route should remain");
+        assert_eq!(route.direct_dependency, first_dependency);
+        assert_eq!(route.available_at, first);
+        assert!(route.publicly_available);
     }
 
     #[test]

@@ -271,6 +271,7 @@ mod tests {
                 term,
                 spelling: "value".into(),
                 origin: Origin::Source(span),
+                import_span: None,
                 evidence: evidence.into_boxed_slice(),
             }),
             span,

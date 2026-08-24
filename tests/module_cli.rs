@@ -6,6 +6,13 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use ash::{
+    driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
+    elaborate::TypeError,
+    interface::InterfaceReason,
+    module::ModuleRoots,
+};
+
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 struct TempTree(PathBuf);
@@ -298,4 +305,35 @@ fn entry_contract_failures_retain_a_causal_source_label() {
             .stderr
             .ends_with(b": this entry module declares no local main\n")
     );
+}
+
+#[test]
+fn cli_renders_the_structured_interface_diagnostic_without_reclassifying_it() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "interface Render<A> {\nrender : A -> Int\n}\n\n",
+            "main : Unit -> Int\n",
+            "main () = render true\n",
+        ),
+    );
+    let structured = run_path(RunConfiguration {
+        entry: entry.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("the interface obligation should remain unsatisfied");
+    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(diagnostic))) =
+        &structured
+    else {
+        panic!("the programmatic boundary should retain the structured interface diagnostic");
+    };
+    assert_eq!(diagnostic.reason, InterfaceReason::Unsatisfied);
+    let expected = format!("{}\n", diagnostic.render_plain());
+
+    let output = ash([entry.into_os_string()]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, expected.as_bytes());
 }

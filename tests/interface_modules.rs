@@ -301,6 +301,69 @@ fn private_method_is_not_a_qualified_import_binding() {
 }
 
 #[test]
+fn hidden_interface_metadata_in_a_constrained_summary_is_not_reexported() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import middle (Render)\n",
+        &[
+            (
+                "middle.ash",
+                concat!(
+                    "import base as Base\n",
+                    "pub apply : Int -> Int where Base.Render<Int>\n",
+                    "apply value = Base.render(value)\n",
+                ),
+            ),
+            (
+                "base.ash",
+                concat!(
+                    "pub interface Render<A> {\nrender : A -> Int\n}\n",
+                    "pub impl Render<Int> {\nrender value = value\n}\n",
+                ),
+            ),
+        ],
+    );
+    let entry = module_named(&graph, "entry.ash");
+    let mut checked = Vec::new();
+    for module in graph
+        .modules()
+        .iter()
+        .filter(|module| module.id() != entry.id())
+    {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("dependencies should check before their importers");
+                DependencyExports::new(edge, dependency.exports()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the dependency chain should resolve before the entry");
+        checked.push(check_module(resolved).expect("the dependency chain should check"));
+    }
+    let dependencies = entry
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            let dependency = checked
+                .iter()
+                .find(|checked| checked.module() == edge.target())
+                .expect("middle should check before the entry");
+            DependencyExports::new(edge, dependency.exports()).unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let error = resolve_module(entry, &dependencies)
+        .expect_err("hidden interface shape must not create a targeted source binding");
+    assert_eq!(error.reason, ResolveReason::UnavailableExport);
+}
+
+#[test]
 fn public_impl_fact_is_available_on_a_targeted_direct_import_edge() {
     let tree = ModuleTree::create();
     let graph = load(

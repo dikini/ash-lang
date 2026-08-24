@@ -474,11 +474,11 @@ struct Resolver {
     module: ModuleId,
     next_binder: u32,
     next_type_variable: u32,
-    scopes: Vec<HashMap<String, Binder>>,
+    scopes: Vec<HashMap<String, ResolvedTermBinding>>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
     interface_names: HashMap<String, InterfaceId>,
-    method_names: HashMap<String, MethodId>,
+    method_names: HashMap<String, ResolvedTermBinding>,
     global_requirement_counts: HashMap<BinderId, usize>,
     constructor_names: HashMap<String, ConstructorId>,
     module_aliases: HashMap<String, ImportedNamespaces>,
@@ -495,6 +495,28 @@ struct Resolver {
 struct GlobalFact {
     name_span: crate::source::Span,
     definition_span: crate::source::Span,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResolvedTermBinding {
+    term: ResolvedTermName,
+    import_span: Option<crate::source::Span>,
+}
+
+impl ResolvedTermBinding {
+    const fn local(term: ResolvedTermName) -> Self {
+        Self {
+            term,
+            import_span: None,
+        }
+    }
+
+    const fn imported(term: ResolvedTermName, import_span: crate::source::Span) -> Self {
+        Self {
+            term,
+            import_span: Some(import_span),
+        }
+    }
 }
 
 struct PendingImplementation {
@@ -524,11 +546,17 @@ enum LocalTypeDeclarationKind {
 
 #[derive(Debug, Default)]
 struct ImportedNamespaces {
-    terms: HashMap<String, ResolvedTermName>,
+    terms: HashMap<String, ResolvedTermBinding>,
     nominals: HashMap<String, ImportedNominalName>,
     interfaces: HashMap<String, InterfaceId>,
     constructors: HashMap<String, ConstructorId>,
     withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImportedInterfaceAccess {
+    PublicExport,
+    HiddenSummaryClosure,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -763,8 +791,10 @@ impl Resolver {
                     )
                 })?;
                 let method_id = MethodId::new(id, method_index);
-                self.method_names
-                    .insert(method.name.text.clone(), method_id);
+                self.method_names.insert(
+                    method.name.text.clone(),
+                    ResolvedTermBinding::local(ResolvedTermName::Method(method_id)),
+                );
                 methods.push(method_id);
             }
             identities.push((id, methods));
@@ -951,11 +981,10 @@ impl Resolver {
                             }
                             scope.insert(
                                 local.text.clone(),
-                                Binder {
-                                    id: exported.binder,
-                                    spelling: local.text.clone(),
-                                    origin: exported.origin.clone(),
-                                },
+                                ResolvedTermBinding::imported(
+                                    ResolvedTermName::Global(exported.binder),
+                                    item.span,
+                                ),
                             );
                             self.retain_imported_global(exported, dependency.summary, item.span)?;
                         }
@@ -970,7 +999,13 @@ impl Resolver {
                             {
                                 return Err(import_conflict(local.span, &local.text));
                             }
-                            self.method_names.insert(local.text.clone(), method);
+                            self.method_names.insert(
+                                local.text.clone(),
+                                ResolvedTermBinding::imported(
+                                    ResolvedTermName::Method(method),
+                                    item.span,
+                                ),
+                            );
                         }
                         if let Some(exported) = dependency.summary.nominal(&item.name.text) {
                             selected = true;
@@ -1107,7 +1142,10 @@ impl Resolver {
         for (spelling, exported) in terms {
             namespaces.terms.insert(
                 spelling.to_owned(),
-                ResolvedTermName::Global(exported.binder),
+                ResolvedTermBinding::imported(
+                    ResolvedTermName::Global(exported.binder),
+                    import_span,
+                ),
             );
             self.retain_imported_global(exported, summary, import_span)?;
         }
@@ -1117,7 +1155,10 @@ impl Resolver {
         for (spelling, method) in methods {
             if namespaces
                 .terms
-                .insert(spelling.to_owned(), ResolvedTermName::Method(method))
+                .insert(
+                    spelling.to_owned(),
+                    ResolvedTermBinding::imported(ResolvedTermName::Method(method), import_span),
+                )
                 .is_some()
             {
                 return Err(error(
@@ -1219,7 +1260,22 @@ impl Resolver {
         import_span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         for interface in summary.interfaces() {
-            self.retain_imported_interface_fact(interface, summary, import_span)?;
+            self.retain_imported_interface_fact(
+                interface,
+                summary,
+                ImportedInterfaceAccess::PublicExport,
+                direct_dependency,
+                import_span,
+            )?;
+        }
+        for interface in summary.hidden_interfaces() {
+            self.retain_imported_interface_fact(
+                interface,
+                summary,
+                ImportedInterfaceAccess::HiddenSummaryClosure,
+                direct_dependency,
+                import_span,
+            )?;
         }
 
         for implementation in summary.implementations() {
@@ -1237,6 +1293,8 @@ impl Resolver {
         &mut self,
         exported: &CheckedInterfaceFact,
         summary: &ExportSummary,
+        access: ImportedInterfaceAccess,
+        direct_dependency: ModuleId,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         self.constraint_work.charge(1).map_err(|()| {
@@ -1246,15 +1304,24 @@ impl Resolver {
                 "imported interface route retention exceeded its work budget",
             )
         })?;
-        if exported.id.module() != summary.module() {
+        let owner_is_summary = exported.id.module() == summary.module();
+        if (access == ImportedInterfaceAccess::PublicExport && !owner_is_summary)
+            || (access == ImportedInterfaceAccess::HiddenSummaryClosure && owner_is_summary)
+        {
             return Err(error(
                 ResolveReason::InternalState,
                 span,
-                "an interface summary contains identities from another owner",
+                "an interface summary contains an identity at the wrong visibility boundary",
             ));
         }
         if let Some(existing) = self.imported.interface(exported.id) {
             debug_assert_eq!(existing.id, exported.id);
+            self.imported.merge_interface_route(
+                exported.id,
+                direct_dependency,
+                span,
+                access == ImportedInterfaceAccess::PublicExport,
+            );
             return Ok(());
         }
         self.imported.reserve_interface().map_err(|()| {
@@ -1323,14 +1390,19 @@ impl Resolver {
                 span: method.span,
             });
         }
-        self.imported.insert_interface(CheckedInterfaceFact {
-            id: exported.id,
-            spelling: exported.spelling.clone(),
-            parameter: exported.parameter.clone(),
-            methods: methods.into_boxed_slice(),
-            origin: exported.origin.clone(),
-            span: exported.span,
-        });
+        self.imported.insert_interface(
+            CheckedInterfaceFact {
+                id: exported.id,
+                spelling: exported.spelling.clone(),
+                parameter: exported.parameter.clone(),
+                methods: methods.into_boxed_slice(),
+                origin: exported.origin.clone(),
+                span: exported.span,
+            },
+            direct_dependency,
+            span,
+            access == ImportedInterfaceAccess::PublicExport,
+        );
         Ok(())
     }
 
@@ -2221,7 +2293,10 @@ impl Resolver {
                 "the resolver lost the file scope",
             ));
         };
-        file_scope.insert(global.spelling.clone(), global.clone());
+        file_scope.insert(
+            global.spelling.clone(),
+            ResolvedTermBinding::local(ResolvedTermName::Global(global.id)),
+        );
         self.globals.insert(
             global_name.to_owned(),
             GlobalFact {
@@ -2526,7 +2601,13 @@ impl Resolver {
                                     "the resolver did not allocate a hidden method binder",
                                 )
                             })?;
-                            let method = self.method_names.get(&first.name.text).copied();
+                            let method =
+                                self.method_names.get(&first.name.text).and_then(|binding| {
+                                    match binding.term {
+                                        ResolvedTermName::Method(method) => Some(method),
+                                        ResolvedTermName::Global(_) => None,
+                                    }
+                                });
                             let identity =
                                 method.map(|method| ImplMethodId::new(pending.id, method));
                             let equations = equations
@@ -2758,7 +2839,12 @@ impl Resolver {
         self.scopes.push(
             binders
                 .iter()
-                .map(|binder| (binder.spelling.clone(), binder.clone()))
+                .map(|binder| {
+                    (
+                        binder.spelling.clone(),
+                        ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
+                    )
+                })
                 .collect(),
         );
     }
@@ -3259,7 +3345,10 @@ impl Resolver {
                         ));
                     };
                     for binder in &binders {
-                        scope.insert(binder.spelling.clone(), binder.clone());
+                        scope.insert(
+                            binder.spelling.clone(),
+                            ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
+                        );
                     }
                     tasks.push(ResolveTask::FinishRecursiveGroup { group, binders });
                     for member in group.members.iter().rev() {
@@ -3322,7 +3411,10 @@ impl Resolver {
                         ));
                     };
                     for binder in binders {
-                        scope.insert(binder.spelling.clone(), binder);
+                        scope.insert(
+                            binder.spelling.clone(),
+                            ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
+                        );
                     }
                     declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
                         ResolvedBinding {
@@ -3478,22 +3570,18 @@ impl Resolver {
             SurfaceExprKind::Name(name) => {
                 let member = name.member();
                 let qualified = self.imported_namespace(name)?;
-                let term = if let Some(namespace) = qualified {
+                let binding = if let Some(namespace) = qualified {
                     namespace.terms.get(&member.text).copied()
                 } else {
                     self.scopes
                         .iter()
                         .rev()
                         .find_map(|scope| scope.get(&member.text))
-                        .map(|binder| ResolvedTermName::Global(binder.id))
-                        .or_else(|| {
-                            self.method_names
-                                .get(&member.text)
-                                .copied()
-                                .map(ResolvedTermName::Method)
-                        })
+                        .copied()
+                        .or_else(|| self.method_names.get(&member.text).copied())
                 };
-                if let Some(term) = term {
+                if let Some(binding) = binding {
+                    let term = binding.term;
                     let evidence_count = match term {
                         ResolvedTermName::Global(binder) => self
                             .global_requirement_counts
@@ -3523,6 +3611,7 @@ impl Resolver {
                             term,
                             spelling: member.text.clone(),
                             origin: Origin::Source(name.span()),
+                            import_span: binding.import_span,
                             evidence: evidence.into_boxed_slice(),
                         }),
                         span: expression.span,
@@ -3949,6 +4038,142 @@ mod tests {
 
     static IMPORT_BUDGET_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
 
+    struct HiddenInterfaceBudgetFixture(PathBuf);
+
+    impl HiddenInterfaceBudgetFixture {
+        fn create() -> Self {
+            loop {
+                let id = IMPORT_BUDGET_FIXTURE_IDS.fetch_add(1, Ordering::Relaxed);
+                let directory = std::env::temp_dir().join(format!(
+                    "ash-hidden-interface-budget-{}-{id}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&directory) {
+                    Ok(()) => {
+                        fs::write(directory.join("entry.ash"), "import middle as Middle\n")
+                            .expect("the hidden-interface entry should be writable");
+                        fs::write(
+                            directory.join("middle.ash"),
+                            concat!(
+                                "import base as Base\n",
+                                "pub apply : Int -> Int where Base.Render<Int>\n",
+                                "apply value = Base.render(value)\n",
+                            ),
+                        )
+                        .expect("the hidden-interface intermediary should be writable");
+                        fs::write(
+                            directory.join("base.ash"),
+                            "pub interface Render<A> {\nrender : A -> Int\n}\n",
+                        )
+                        .expect("the hidden-interface owner should be writable");
+                        return Self(directory);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        panic!("the hidden-interface budget fixture should be creatable: {error}")
+                    }
+                }
+            }
+        }
+    }
+
+    impl Drop for HiddenInterfaceBudgetFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct HiddenInterfaceImportOutcome {
+        result: Result<(), ResolveError>,
+        used: usize,
+        interface: InterfaceId,
+        middle: ModuleId,
+        import_span: crate::source::Span,
+        retained: Option<(InterfaceId, ModuleId, crate::source::Span)>,
+    }
+
+    fn retain_hidden_interface_import_with_limit(limit: usize) -> HiddenInterfaceImportOutcome {
+        let fixture = HiddenInterfaceBudgetFixture::create();
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the hidden-interface import graph should load");
+        let mut checked = Vec::new();
+        let mut middle = None;
+        for module in graph
+            .modules()
+            .iter()
+            .filter(|module| module.id() != graph.entry())
+        {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let dependency = checked
+                        .iter()
+                        .find(|checked: &&crate::resolved::CheckedModule| {
+                            checked.module() == edge.target()
+                        })
+                        .expect("dependencies should check before their importers");
+                    DependencyExports::new(edge, dependency.exports()).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let checked_module = check_module(
+                resolve_module(module, &dependencies)
+                    .expect("the hidden-interface dependency should resolve"),
+            )
+            .expect("the hidden-interface dependency should check");
+            if Path::new(module.source().display_path()).file_name() == Some("middle.ash".as_ref())
+            {
+                middle = Some(checked_module.module());
+            }
+            checked.push(checked_module);
+        }
+        let entry = graph
+            .module(graph.entry())
+            .expect("the hidden-interface entry should load");
+        let middle = middle.expect("the intermediary should check");
+        let summary = checked
+            .iter()
+            .find(|checked| checked.module() == middle)
+            .expect("the checked intermediary should remain available")
+            .exports();
+        let interface = summary
+            .hidden_interfaces()
+            .next()
+            .expect("the intermediary should retain one hidden interface");
+        let import_span = entry.surface().imports[0].span;
+        let mut resolver = Resolver::with_budgets(
+            entry.id(),
+            TypeWorkBudget::default(),
+            InterfaceConstraintBudget::with_limit(limit),
+        );
+        let result = resolver.retain_imported_interface_fact(
+            interface,
+            summary,
+            ImportedInterfaceAccess::HiddenSummaryClosure,
+            middle,
+            import_span,
+        );
+        let retained = resolver
+            .imported
+            .interface_imports()
+            .next()
+            .map(|imported| {
+                (
+                    imported.fact.id,
+                    imported.direct_dependency,
+                    imported.available_at,
+                )
+            });
+        HiddenInterfaceImportOutcome {
+            result,
+            used: resolver.constraint_work.used(),
+            interface: interface.id,
+            middle,
+            import_span,
+            retained,
+        }
+    }
+
     struct ImportBudgetFixture(PathBuf);
 
     impl ImportBudgetFixture {
@@ -4104,6 +4329,30 @@ mod tests {
         let error = short.expect_err("one missing route unit should reject the duplicate edge");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(short_used, 24);
+    }
+
+    #[test]
+    fn hidden_interface_import_route_uses_its_exact_constraint_budget() {
+        let short = retain_hidden_interface_import_with_limit(8);
+        let error = short
+            .result
+            .expect_err("one missing unit should reject hidden interface retention");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(short.used, 8);
+        assert!(short.retained.is_none());
+
+        let exact = retain_hidden_interface_import_with_limit(9);
+        exact
+            .result
+            .expect("the exact route-and-shape budget should retain hidden interface metadata");
+        assert_eq!(exact.used, 9);
+        let (retained_interface, direct_dependency, available_at) = exact
+            .retained
+            .expect("one hidden interface fact should cross the constrained summary");
+        assert_eq!(retained_interface, exact.interface);
+        assert_eq!(direct_dependency, exact.middle);
+        assert_ne!(retained_interface.module(), direct_dependency);
+        assert_eq!(available_at, exact.import_span);
     }
 
     #[test]

@@ -13,7 +13,9 @@ use crate::{
         CorePatternKind, NodeId, Primitive, TypedBinder, UnvalidatedProgram,
     },
     diagnostic::{Diagnostic, SourceLabel},
-    evidence::{EvidenceSelector, SelectionError, SelectionFailure},
+    evidence::{
+        EvidenceSelector, SelectionCauseKind, SelectionError, SelectionFailure, SelectionSite,
+    },
     evidence_audit::{EvidenceAuditFailure, audit_checked_body_evidence},
     evidence_validation::ValidatedInterfaceProgram,
     interface::{
@@ -1997,6 +1999,9 @@ impl Elaborator {
                 }
                 scheme.requirements.len()
             };
+            let declaration_span = selector
+                .scheme_declaration_span(binder)
+                .ok_or_else(invalid_state)?;
             for (index, slot) in occurrence.evidence.iter().enumerate() {
                 if index >= requirement_count {
                     return Err(invalid_state());
@@ -2013,11 +2018,15 @@ impl Elaborator {
                     (requirement.interface, argument)
                 };
                 selector
-                    .push_obligation(
+                    .push_owned_obligation(
                         interface,
                         argument,
-                        slot.handle(),
-                        span,
+                        SelectionSite::contextual(
+                            slot.handle(),
+                            span,
+                            declaration_span,
+                            occurrence.import_span(),
+                        ),
                         &mut self.constraint_work,
                     )
                     .map_err(|failure| selection_failure(failure, Some(span)))?;
@@ -2057,8 +2066,12 @@ impl Elaborator {
                 .push_cloned_obligation(
                     interface,
                     argument,
-                    occurrence.evidence[0].handle(),
-                    span,
+                    SelectionSite::contextual(
+                        occurrence.evidence[0].handle(),
+                        span,
+                        method_span,
+                        occurrence.import_span(),
+                    ),
                     &mut self.constraint_work,
                     &mut self.type_work,
                 )
@@ -6502,22 +6515,12 @@ fn constraint_resource() -> TypeError {
 fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
     match error {
         SelectionFailure::Reason(reason) => {
-            let message = match reason {
-                InterfaceReason::Unsatisfied => {
-                    "no available implementation satisfies this interface obligation"
-                }
-                InterfaceReason::Ambiguous => "this interface obligation's type is not determined",
-                InterfaceReason::Cycle => {
-                    "selecting this interface obligation re-enters an active obligation"
-                }
-                _ => "this interface obligation is invalid",
-            };
             let Some(span) = span else {
                 return invalid_state();
             };
             TypeError::Interface(Box::new(Diagnostic::new(
                 reason,
-                SourceLabel::new(span, message),
+                SourceLabel::new(span, selection_reason_message(reason)),
             )))
         }
         SelectionFailure::TypeResource => {
@@ -6529,7 +6532,61 @@ fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
 }
 
 fn selected_obligation_error(error: SelectionError) -> TypeError {
-    selection_failure(error.failure(), error.span())
+    let SelectionFailure::Reason(reason) = error.failure() else {
+        return selection_failure(error.failure(), error.span());
+    };
+    let Some(span) = error.span() else {
+        return invalid_state();
+    };
+    let mut diagnostic = Diagnostic::new(
+        reason,
+        SourceLabel::new(span, selection_reason_message(reason)),
+    );
+    if let Some(declaration_span) = error.declaration_span() {
+        diagnostic.related.push(SourceLabel::new(
+            declaration_span,
+            "this declaration introduced the interface obligation",
+        ));
+    }
+    if let Some(import_span) = error.import_span() {
+        diagnostic.related.push(SourceLabel::new(
+            import_span,
+            "this import made the declaration available",
+        ));
+    }
+    for cause in error.causes() {
+        let message = match cause.kind() {
+            SelectionCauseKind::Interface => {
+                "this interface declaration participates in the failing selection"
+            }
+            SelectionCauseKind::Implementation => {
+                "selection followed this available implementation"
+            }
+            SelectionCauseKind::ImplementationMethod => {
+                "this implementation method supplies the selected evidence"
+            }
+            SelectionCauseKind::ImplementationImport => {
+                "this import made the selected implementation available"
+            }
+        };
+        diagnostic
+            .related
+            .push(SourceLabel::new(cause.span(), message));
+    }
+    TypeError::Interface(Box::new(diagnostic))
+}
+
+const fn selection_reason_message(reason: InterfaceReason) -> &'static str {
+    match reason {
+        InterfaceReason::Unsatisfied => {
+            "no available implementation satisfies this interface obligation"
+        }
+        InterfaceReason::Ambiguous => "this interface obligation's type is not determined",
+        InterfaceReason::Cycle => {
+            "selecting this interface obligation re-enters an active obligation"
+        }
+        _ => "this interface obligation is invalid",
+    }
 }
 
 fn type_contains_variable(
@@ -6775,9 +6832,9 @@ fn build_evidence_selector(
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<EvidenceSelector, TypeError> {
     let mut selector = EvidenceSelector::new();
-    for interface in resolved.imported_facts().interfaces() {
+    for imported in resolved.imported_facts().interface_imports() {
         selector
-            .add_interface_fact(interface, constraint_work, type_work)
+            .add_imported_interface_fact(&imported.fact, constraint_work, type_work)
             .map_err(|failure| selection_failure(failure, None))?;
     }
     for interface in interface_facts {
@@ -6797,7 +6854,7 @@ fn build_evidence_selector(
     }
     for imported in resolved.imported_facts().implementations() {
         selector
-            .add_implementation_fact(&imported.fact, constraint_work, type_work)
+            .add_implementation_fact(imported, constraint_work, type_work)
             .map_err(|failure| selection_failure(failure, None))?;
     }
     for checked in checked_implementations {
@@ -6927,6 +6984,7 @@ pub(crate) fn link_modules_with_budget(
                     term: crate::resolved::ResolvedTermName::Global(main.binder),
                     spelling: main.spelling.clone(),
                     origin: main.origin.clone(),
+                    import_span: None,
                     evidence: Box::new([]),
                 }),
                 span,
@@ -8812,7 +8870,7 @@ mod tests {
             resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(75);
+        let mut short = InterfaceConstraintBudget::with_limit(76);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -8824,11 +8882,11 @@ mod tests {
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut exact = InterfaceConstraintBudget::with_limit(76);
+        let mut exact = InterfaceConstraintBudget::with_limit(77);
         check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
             .expect("the exact budget should admit one implementation method");
 
-        assert_eq!(exact.used(), 76);
+        assert_eq!(exact.used(), 77);
         assert_eq!(exact.charge(1), Err(()));
     }
 
