@@ -44,7 +44,7 @@ type State = (Vec<Vec<WitnessPattern>>, Vec<WitnessPattern>, Vec<Type>);
 
 /// Maximum number of distinct usefulness states explored by one query.
 pub const USEFULNESS_STATE_LIMIT: usize = 100_000;
-/// Maximum cumulative matrix and specialization work for one case group.
+/// Maximum cumulative matrix and specialization work for one elaboration pass.
 pub const USEFULNESS_WORK_LIMIT: usize = 1_000_000;
 
 /// A compiler resource boundary reached while analyzing pattern coverage.
@@ -56,8 +56,8 @@ pub enum UsefulnessError {
     WorkLimit,
 }
 
-/// Shared deterministic work budget for all usefulness queries in one group.
-#[derive(Debug)]
+/// Shared deterministic work budget for all usefulness queries in one pass.
+#[derive(Clone, Debug)]
 pub struct UsefulnessBudget {
     remaining: usize,
 }
@@ -71,6 +71,11 @@ impl Default for UsefulnessBudget {
 }
 
 impl UsefulnessBudget {
+    #[cfg(test)]
+    pub(crate) const fn with_limit(limit: usize) -> Self {
+        Self { remaining: limit }
+    }
+
     fn charge(&mut self, amount: usize) -> Result<(), UsefulnessError> {
         self.remaining = self
             .remaining

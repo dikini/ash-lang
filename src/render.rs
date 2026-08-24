@@ -3,9 +3,12 @@
 use std::fmt::Write;
 
 use crate::{
+    diagnostic::{Diagnostic, compare_source_spans},
     driver::{FileFailure, Observation, PipelineFailure, SyntaxFailure},
+    elaborate::TypeError,
+    lexer::LexReason,
     module::{LoadGraphError, ModuleFailure, ModuleReason, ModuleResource},
-    parser::{InternalReason, ProjectionError, ResourceFailure},
+    parser::{InternalReason, ParseDiagnostic, ProjectionError, ResourceFailure},
     source::Span,
 };
 
@@ -45,10 +48,19 @@ pub fn pipeline_failure(failure: &PipelineFailure) -> String {
         PipelineFailure::Syntax(failure) => syntax_failure(failure),
         PipelineFailure::Projection(error) => projection_failure(*error),
         PipelineFailure::Resolution(error) => error.to_string(),
-        PipelineFailure::Typing(error) => error.to_string(),
+        PipelineFailure::Typing(error @ TypeError::Source(_)) => error.to_string(),
+        PipelineFailure::Typing(error @ TypeError::Mismatch(_)) => {
+            format!("type.mismatch\n{error}")
+        }
+        PipelineFailure::Typing(error @ TypeError::Internal(failure)) => {
+            format!("{}\n{error}", failure.reason_code())
+        }
         PipelineFailure::Entry(error) => error.diagnostic.render_plain(),
-        PipelineFailure::Validation(error) => error.to_string(),
-        PipelineFailure::Runtime(error) => format!("internal.runtime\n{error}"),
+        PipelineFailure::Validation(error) => match error.node() {
+            Some(node) => format!("{}\nnode: {}", error.reason(), node.value()),
+            None => error.reason().to_string(),
+        },
+        PipelineFailure::Runtime(error) => format!("{}\n{error}", error.reason_code()),
     }
 }
 
@@ -96,12 +108,8 @@ fn graph_failure(error: &LoadGraphError) -> String {
             output
         }
         LoadGraphError::Syntax(failure) => {
-            let borrowed = SyntaxFailure {
-                lexical: failure.lexical.clone(),
-                parser: failure.parser.clone(),
-                resource: failure.resource,
-            };
-            let mut output = syntax_failure(&borrowed);
+            let mut output =
+                syntax_failure_parts(&failure.lexical, &failure.parser, failure.resource);
             append_detail(&mut output, "path", failure.source.display_path());
             output
         }
@@ -180,15 +188,40 @@ fn append_detail(output: &mut String, name: &str, value: &str) {
 }
 
 fn syntax_failure(failure: &SyntaxFailure) -> String {
+    syntax_failure_parts(&failure.lexical, &failure.parser, failure.resource)
+}
+
+fn syntax_failure_parts(
+    lexical: &[Diagnostic<LexReason>],
+    parser: &[ParseDiagnostic],
+    resource: Option<ResourceFailure>,
+) -> String {
     let mut output = String::new();
-    if let Some(resource) = failure.resource {
+    if let Some(resource) = resource {
         output.push_str(&resource_failure(resource));
     }
-    for diagnostic in &failure.lexical {
-        append_section(&mut output, &diagnostic.render_plain());
-    }
-    for diagnostic in &failure.parser {
-        append_section(&mut output, &diagnostic.render_plain());
+    let mut lexical = lexical.iter().peekable();
+    let mut parser = parser.iter().peekable();
+    while lexical.peek().is_some() || parser.peek().is_some() {
+        let take_parser = match (lexical.peek(), parser.peek()) {
+            (Some(lexical), Some(parser)) => {
+                compare_source_spans(parser.primary.span(), lexical.primary.span()).is_lt()
+            }
+            (None, Some(_)) => true,
+            (Some(_), None) | (None, None) => false,
+        };
+        let rendered = if take_parser {
+            parser
+                .next()
+                .expect("a parser diagnostic was observed")
+                .render_plain()
+        } else {
+            lexical
+                .next()
+                .expect("a lexical diagnostic was observed")
+                .render_plain()
+        };
+        append_section(&mut output, &rendered);
     }
     if output.is_empty() {
         output.push_str("internal.syntax\nsyntax stage failed without a diagnostic");
@@ -206,10 +239,10 @@ fn append_section(output: &mut String, section: &str) {
 fn resource_failure(failure: ResourceFailure) -> String {
     match failure {
         ResourceFailure::StructuralDepth { limit } => {
-            format!("internal.resource.structural-depth\nlimit {limit}")
+            format!("{}\nlimit {limit}", failure.reason_code())
         }
         ResourceFailure::SyntaxWork { limit } => {
-            format!("internal.resource.syntax-work\nlimit {limit}")
+            format!("{}\nlimit {limit}", failure.reason_code())
         }
     }
 }

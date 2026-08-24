@@ -7,13 +7,14 @@ use std::{
 mod support;
 
 use ash::{
-    driver::PipelineFailure,
+    driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
     elaborate::{TypeError, TypeReason, check_module},
     lexer::lex,
-    module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
+    module::{LoadGraphError, LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     parser::{
         ParseContext, ParseReason, ProjectionError, SynchronizationBoundary, parse, project_module,
     },
+    render,
     resolve::{ResolveReason, resolve_module},
     resolved::{
         ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
@@ -133,6 +134,77 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
 
 fn failure(name: &str, text: &str) -> PipelineFailure {
     run_module(name, text).expect_err("diagnostic fixture should be rejected")
+}
+
+#[test]
+fn syntax_failure_reason_and_rendering_follow_source_order_across_stages() {
+    let text = concat!(
+        "import @ as Missing\n",
+        "main : Unit -> Int\n",
+        "main () = 42 #\n",
+    );
+    let fixture = ModuleFixture::load(
+        "syntax-source-order.ash",
+        "main : Unit -> Unit\nmain () = ()\n",
+    );
+    let entry = fixture.directory.join("syntax-source-order.ash");
+    fs::write(&entry, text).expect("the syntax-order fixture should be writable");
+    let file_error = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("the module should retain both independent syntax failures");
+    let FileFailure::Graph(LoadGraphError::Syntax(syntax)) = &file_error else {
+        panic!("the independent lexical and parser failures should retain graph syntax ownership")
+    };
+    let parser = syntax
+        .parser
+        .first()
+        .expect("the malformed absolute path should retain a parser diagnostic");
+    let lexical = syntax
+        .lexical
+        .first()
+        .expect("the later unknown character should retain a lexical diagnostic");
+
+    assert!(
+        parser.primary.span().range().start() < lexical.primary.span().range().start(),
+        "the fixture must place the parser cause before the lexical cause"
+    );
+    let pipeline_error = PipelineFailure::Syntax(Box::new(SyntaxFailure {
+        lexical: syntax.lexical.clone(),
+        parser: syntax.parser.clone(),
+        resource: syntax.resource,
+    }));
+    assert!(file_error.is_source_rejection());
+    assert!(pipeline_error.is_source_rejection());
+    let expected = parser.reason.to_string();
+    let file_rendered = render::file_failure(&file_error);
+    let pipeline_rendered = render::pipeline_failure(&pipeline_error);
+    let parser_position = pipeline_rendered
+        .find(&expected)
+        .expect("the earlier parser diagnostic should be rendered");
+    let lexical_position = pipeline_rendered
+        .find(&lexical.reason.to_string())
+        .expect("the later lexical diagnostic should also be rendered");
+    assert!(parser_position < lexical_position);
+    assert_eq!(
+        [
+            file_error.reason_code(),
+            file_rendered
+                .lines()
+                .next()
+                .expect("file-rendered reason line")
+                .to_owned(),
+            pipeline_error.reason_code(),
+            pipeline_rendered
+                .lines()
+                .next()
+                .expect("pipeline-rendered reason line")
+                .to_owned(),
+        ],
+        std::array::from_fn(|_| expected.clone()),
+        "public reason selection and rendering must share source-order causality"
+    );
 }
 
 #[test]

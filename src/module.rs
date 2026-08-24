@@ -11,10 +11,13 @@ use std::{
 
 use crate::{
     diagnostic::Diagnostic,
-    lexer::{LexReason, lex},
-    parser::{ParseDiagnostic, ProjectionError, ResourceFailure, parse, project_module},
+    lexer::{LexReason, lex_with_budget},
+    parser::{
+        ParseDiagnostic, ProjectionError, ResourceFailure, parse_with_budget, project_module,
+    },
     source::{SourceError, SourceFile, SourceId, Span},
     surface::{SurfaceImport, SurfaceModule, SurfaceModulePath},
+    syntax_resource::SyntaxBudget,
 };
 
 /// Maximum source files admitted by one module graph.
@@ -23,7 +26,7 @@ pub const MODULE_SOURCE_LIMIT: usize = 16_384;
 pub const MODULE_EDGE_LIMIT: usize = 65_536;
 /// Maximum module path segments processed by one module graph.
 pub const MODULE_PATH_SEGMENT_LIMIT: usize = 262_144;
-/// Maximum active dependency frames in one module traversal.
+/// Maximum active traversal and owner-propagation work items.
 pub const MODULE_PENDING_LIMIT: usize = 16_384;
 
 /// A validated name for one configured module root.
@@ -339,7 +342,7 @@ pub enum ModuleResource {
     Edges,
     /// Module-path segment processing.
     PathSegments,
-    /// Active iterative traversal frames.
+    /// Active iterative traversal and owner-propagation work items.
     PendingWork,
 }
 
@@ -689,6 +692,7 @@ struct GraphBudget {
     edges: usize,
     path_segments: usize,
     pending_work: usize,
+    syntax_work: SyntaxBudget,
     limits: GraphLimits,
 }
 
@@ -723,13 +727,21 @@ impl GraphBudget {
         )
     }
 
-    fn charge_pending_work(&mut self) -> Result<(), LoadGraphError> {
+    fn retain_pending_work(&mut self) -> Result<(), LoadGraphError> {
         charge(
             &mut self.pending_work,
             1,
             self.limits.pending_work,
             ModuleResource::PendingWork,
         )
+    }
+
+    fn release_pending_work(&mut self) {
+        debug_assert!(
+            self.pending_work > 0,
+            "pending graph work must be retained before it is released"
+        );
+        self.pending_work -= 1;
     }
 }
 
@@ -787,7 +799,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
         &mut budget,
         graph_identity,
     )?;
-    budget.charge_pending_work()?;
+    budget.retain_pending_work()?;
     let mut frames = vec![TraversalFrame {
         module: entry_id,
         next_import: 0,
@@ -803,6 +815,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
             staged[module_index].state = VisitState::Finished;
             dependency_order.push(completed);
             frames.pop();
+            budget.release_pending_work();
             continue;
         }
 
@@ -856,7 +869,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
                 .into());
             }
         } else {
-            budget.charge_pending_work()?;
+            budget.retain_pending_work()?;
             frames.push(TraversalFrame {
                 module: target,
                 next_import: 0,
@@ -890,7 +903,8 @@ fn admit_module(
     graph_identity: u32,
 ) -> Result<ModuleId, LoadGraphError> {
     budget.charge_sources()?;
-    let (source, surface) = load_surface_module(&canonical_path, import_span)?;
+    let (source, surface) =
+        load_surface_module(&canonical_path, import_span, &mut budget.syntax_work)?;
     let id_value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let id = ModuleId::admitted(graph_identity, id_value);
@@ -911,6 +925,7 @@ fn admit_module(
 fn load_surface_module(
     path: &Path,
     import_span: Option<Span>,
+    syntax_budget: &mut SyntaxBudget,
 ) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
     let bytes = fs::read(path).map_err(|error| LoadGraphError::Read {
         path: path.to_path_buf(),
@@ -928,12 +943,13 @@ fn load_surface_module(
             import_span,
         }
     })?;
-    let lexed = lex(&source).map_err(|error| LoadGraphError::SourceModel {
-        path: path.to_path_buf(),
-        error,
-        import_span,
-    })?;
-    let tree = parse(lexed);
+    let lexed =
+        lex_with_budget(&source, syntax_budget).map_err(|error| LoadGraphError::SourceModel {
+            path: path.to_path_buf(),
+            error,
+            import_span,
+        })?;
+    let tree = parse_with_budget(lexed, syntax_budget);
     if tree.resource_failure().is_some()
         || !tree.lexical_diagnostics().is_empty()
         || !tree.parse_diagnostics().is_empty()
@@ -1048,14 +1064,15 @@ fn propagate_owners(
     staged: &mut [StagedModule],
     budget: &mut GraphBudget,
 ) -> Result<(), LoadGraphError> {
-    let mut pending = VecDeque::with_capacity(owners.len());
+    let mut pending = VecDeque::new();
     for owner in owners {
-        budget.charge_pending_work()?;
+        budget.retain_pending_work()?;
         pending.push_back((start, owner, causing_import));
     }
     while let Some((module, owner, cause)) = pending.pop_front() {
         let module_index = module.index();
         if staged[module_index].owners.contains(&owner) {
+            budget.release_pending_work();
             continue;
         }
         require_within_owner(&staged[module_index].canonical_path, &owner, cause)?;
@@ -1065,9 +1082,10 @@ fn propagate_owners(
             require_within_owner(&edge.canonical_target, &owner, edge.import_span)?;
             let target = edge.target;
             let import_span = edge.import_span;
-            budget.charge_pending_work()?;
+            budget.retain_pending_work()?;
             pending.push_back((target, owner.clone(), import_span));
         }
+        budget.release_pending_work();
     }
     Ok(())
 }
@@ -1159,8 +1177,32 @@ mod tests {
         assert_resource(budget.charge_edge(), ModuleResource::Edges);
         assert!(budget.charge_path_segments(2).is_ok());
         assert_resource(budget.charge_path_segments(1), ModuleResource::PathSegments);
-        assert!(budget.charge_pending_work().is_ok());
-        assert_resource(budget.charge_pending_work(), ModuleResource::PendingWork);
+        assert!(budget.retain_pending_work().is_ok());
+        assert_resource(budget.retain_pending_work(), ModuleResource::PendingWork);
+        budget.release_pending_work();
+        assert!(budget.retain_pending_work().is_ok());
+    }
+
+    #[test]
+    fn one_syntax_budget_spans_all_admitted_module_sources() {
+        let first = SourceFile::new("first.ash", "").expect("first source");
+        let second = SourceFile::new("second.ash", "").expect("second source");
+        let mut budget = SyntaxBudget::with_limit(6);
+
+        let first = parse_with_budget(
+            lex_with_budget(&first, &mut budget).expect("first source should lex"),
+            &mut budget,
+        );
+        assert_eq!(first.resource_failure(), None);
+
+        let second = parse_with_budget(
+            lex_with_budget(&second, &mut budget).expect("second source should lex"),
+            &mut budget,
+        );
+        assert_eq!(
+            second.resource_failure(),
+            Some(ResourceFailure::SyntaxWork { limit: 6 })
+        );
     }
 
     fn assert_resource(result: Result<(), LoadGraphError>, expected: ModuleResource) {

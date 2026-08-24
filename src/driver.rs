@@ -4,16 +4,17 @@ use std::{collections::HashMap, error::Error, fmt, io, path::PathBuf, sync::Arc}
 
 use crate::{
     core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate_modules},
-    diagnostic::{Diagnostic, SourceLabel},
-    elaborate::{Elaborator, TypeError, check_module, link_modules},
+    diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
+    elaborate::{Elaborator, TypeError, check_module_with_budget, link_modules},
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
     lexer::LexReason,
     module::{LoadGraphError, ModuleId, ModuleRoots, load_module_graph},
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
-    resolve::{DependencyExports, ResolveError, ResolveReason, resolve_module},
+    pattern::UsefulnessBudget,
+    resolve::{DependencyExports, ResolveError, ResolveReason, resolve_module_with_budget},
     resolved::{ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence},
     source::{SourceError, SourceFile, SourceId, Span},
-    types::Type,
+    types::{Type, TypeWorkBudget},
 };
 
 /// Tool-facing inputs for one modular Ash execution.
@@ -151,27 +152,18 @@ impl PipelineFailure {
     #[must_use]
     pub fn reason_code(&self) -> String {
         match self {
-            Self::SourceModel(_) => "source.invalid".into(),
-            Self::Syntax(failure) if failure.resource.is_some() => "parse.resource".into(),
-            Self::Syntax(failure) => failure
-                .lexical
-                .first()
-                .map(|diagnostic| diagnostic.reason.to_string())
-                .or_else(|| {
-                    failure
-                        .parser
-                        .first()
-                        .map(|diagnostic| diagnostic.reason.to_string())
-                })
-                .unwrap_or_else(|| "parse.resource".into()),
+            Self::SourceModel(_) => "internal.source-model".into(),
+            Self::Syntax(failure) => {
+                syntax_reason_code(&failure.lexical, &failure.parser, failure.resource)
+            }
             Self::Projection(error) => projection_reason(*error).into(),
             Self::Resolution(error) => error.reason.to_string(),
             Self::Typing(TypeError::Source(diagnostic)) => diagnostic.reason.to_string(),
             Self::Typing(TypeError::Mismatch(_)) => "type.mismatch".into(),
-            Self::Typing(TypeError::Internal(_)) => "type.internal".into(),
+            Self::Typing(TypeError::Internal(failure)) => failure.reason_code().into(),
             Self::Entry(failure) => failure.reason().to_string(),
             Self::Validation(error) => error.reason().to_string(),
-            Self::Runtime(error) => format!("runtime.{error:?}"),
+            Self::Runtime(error) => error.reason_code().to_owned(),
         }
     }
 
@@ -261,20 +253,9 @@ impl FileFailure {
                 LoadGraphError::Read { .. } => "input.read".to_owned(),
                 LoadGraphError::InvalidUtf8 { .. } => "input.invalid-utf8".to_owned(),
                 LoadGraphError::SourceModel { .. } => "input.source-model".to_owned(),
-                LoadGraphError::Syntax(failure) if failure.resource.is_some() => {
-                    "parse.resource".to_owned()
+                LoadGraphError::Syntax(failure) => {
+                    syntax_reason_code(&failure.lexical, &failure.parser, failure.resource)
                 }
-                LoadGraphError::Syntax(failure) => failure
-                    .lexical
-                    .first()
-                    .map(|diagnostic| diagnostic.reason.to_string())
-                    .or_else(|| {
-                        failure
-                            .parser
-                            .first()
-                            .map(|diagnostic| diagnostic.reason.to_string())
-                    })
-                    .unwrap_or_else(|| "parse.resource".to_owned()),
                 LoadGraphError::Projection { error, .. } => projection_reason(*error).to_owned(),
             },
             Self::Read { .. } => "input.read".to_owned(),
@@ -282,6 +263,26 @@ impl FileFailure {
             Self::Source(_) => "input.source-model".to_owned(),
             Self::Pipeline(failure) => failure.reason_code(),
         }
+    }
+}
+
+fn syntax_reason_code(
+    lexical: &[Diagnostic<LexReason>],
+    parser: &[ParseDiagnostic],
+    resource: Option<ResourceFailure>,
+) -> String {
+    if let Some(resource) = resource {
+        return resource.reason_code().to_owned();
+    }
+    match (lexical.first(), parser.first()) {
+        (Some(lexical), Some(parser))
+            if compare_source_spans(parser.primary.span(), lexical.primary.span()).is_lt() =>
+        {
+            parser.reason.to_string()
+        }
+        (Some(lexical), _) => lexical.reason.to_string(),
+        (None, Some(parser)) => parser.reason.to_string(),
+        (None, None) => "internal.syntax".to_owned(),
     }
 }
 
@@ -332,6 +333,9 @@ where
         Vec::with_capacity(graph.modules().len());
     let mut checked_by_module: HashMap<ModuleId, usize> =
         HashMap::with_capacity(graph.modules().len());
+    let mut resolution_type_work = TypeWorkBudget::default();
+    let mut checking_type_work = TypeWorkBudget::default();
+    let mut coverage_work = UsefulnessBudget::default();
     for module in graph.modules() {
         let dependencies = module
             .dependencies()
@@ -351,13 +355,14 @@ where
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(FileFailure::Pipeline)?;
-        let resolved = resolve_module(module, &dependencies)
+        let resolved = resolve_module_with_budget(module, &dependencies, &mut resolution_type_work)
             .map_err(PipelineFailure::Resolution)
             .map_err(FileFailure::Pipeline)?;
         drop(dependencies);
-        let checked_module = check_module(resolved)
-            .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::Pipeline)?;
+        let checked_module =
+            check_module_with_budget(resolved, &mut checking_type_work, &mut coverage_work)
+                .map_err(PipelineFailure::Typing)
+                .map_err(FileFailure::Pipeline)?;
         checked_by_module.insert(module.id(), checked.len());
         checked.push(checked_module);
     }

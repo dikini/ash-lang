@@ -5,9 +5,11 @@ use std::{
 };
 
 use ash::{
+    driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveReason, resolve_module},
     resolved::{Binder, ResolvedDefinition, ResolvedDefinitionKind, ResolvedModule},
+    types::TYPE_WORK_LIMIT,
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -180,4 +182,41 @@ fn export_candidates_keep_withheld_type_and_constructor_namespaces_separate() {
 
     assert!(candidate.is_private("Foo"));
     assert!(candidate.is_opaque_constructor("Foo"));
+}
+
+#[test]
+fn repeated_summary_imports_share_one_graph_type_work_budget() {
+    const PAYLOAD_WIDTH: usize = 10_000;
+    const DEPENDENT_COUNT: usize = TYPE_WORK_LIMIT / PAYLOAD_WIDTH + 2;
+
+    let tree = TempTree::create();
+    let mut base = String::with_capacity(PAYLOAD_WIDTH * 5 + 32);
+    base.push_str("pub type Wide =\nWide(");
+    for index in 0..PAYLOAD_WIDTH {
+        if index > 0 {
+            base.push_str(", ");
+        }
+        base.push_str("Int");
+    }
+    base.push_str(")\n");
+    tree.write("base.ash", &base);
+
+    let mut entry = String::new();
+    for index in 0..DEPENDENT_COUNT {
+        entry.push_str(&format!("import dependency{index} as Dependency{index}\n"));
+        tree.write(&format!("dependency{index}.ash"), "import base as Base\n");
+    }
+    entry.push_str("main : Unit -> Int\nmain () = 0\n");
+    let entry = tree.write("entry.ash", &entry);
+
+    let failure = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("repeated dependency-summary retention must share graph type work");
+
+    let FileFailure::Pipeline(PipelineFailure::Resolution(error)) = failure else {
+        panic!("graph type work should remain owned by resolution: {failure:?}");
+    };
+    assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
 }

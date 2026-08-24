@@ -721,6 +721,12 @@ pub struct ExportSummary {
     withheld: HashMap<(String, WithheldNamespace), WithheldExport>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResolvedBuildFailure {
+    InvalidState,
+    TypeResource,
+}
+
 /// One hidden nominal fact retained by identity without a source name binding.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ExportedHiddenType {
@@ -747,15 +753,17 @@ impl ExportSummary {
         resolved: &ResolvedModule,
         checked: &[CheckedGlobalScheme],
         budget: &mut TypeWorkBudget,
-    ) -> Result<Self, ()> {
-        budget.charge(checked.len())?;
+    ) -> Result<Self, ResolvedBuildFailure> {
+        budget
+            .charge(checked.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         let mut checked_by_binder = HashMap::new();
         checked_by_binder
             .try_reserve(checked.len())
-            .map_err(|_| ())?;
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         for scheme in checked {
             if checked_by_binder.insert(scheme.binder, scheme).is_some() {
-                return Err(());
+                return Err(ResolvedBuildFailure::InvalidState);
             }
         }
         let mut summary = Self {
@@ -769,12 +777,15 @@ impl ExportSummary {
             withheld: resolved.export_candidate.withheld.clone(),
         };
         for (spelling, candidate) in &resolved.export_candidate.terms {
-            let scheme = checked_by_binder.get(&candidate.binder).ok_or(())?;
+            let scheme = checked_by_binder
+                .get(&candidate.binder)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
             summary.terms.insert(
                 spelling.clone(),
                 ExportedGlobal {
                     binder: scheme.binder,
-                    scheme: clone_type_with_budget(&scheme.scheme, budget)?,
+                    scheme: clone_type_with_budget(&scheme.scheme, budget)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                     origin: scheme.origin.clone(),
                 },
             );
@@ -784,12 +795,14 @@ impl ExportSummary {
             let parameters = resolved
                 .registry
                 .nominal_parameters(candidate.id)
-                .ok_or(())?;
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
             let parameter_count = parameters.len();
             let access = match candidate.visibility {
                 SurfaceTypeVisibility::PublicOpaque => ExportedTypeAccess::Opaque,
                 SurfaceTypeVisibility::PublicTransparent => ExportedTypeAccess::Transparent,
-                SurfaceTypeVisibility::Private => return Err(()),
+                SurfaceTypeVisibility::Private => {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
             };
             summary
                 .nominal_names_by_id
@@ -804,7 +817,7 @@ impl ExportSummary {
                         resolved
                             .registry
                             .nominal(candidate.id)
-                            .ok_or(())?
+                            .ok_or(ResolvedBuildFailure::InvalidState)?
                             .constructors
                             .clone()
                     } else {
@@ -817,7 +830,10 @@ impl ExportSummary {
         }
 
         for (spelling, candidate) in &resolved.export_candidate.constructors {
-            let constructor = resolved.registry.constructor(candidate.id).ok_or(())?;
+            let constructor = resolved
+                .registry
+                .constructor(candidate.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
             summary
                 .constructor_names_by_id
                 .insert(candidate.id, spelling.clone());
@@ -830,7 +846,8 @@ impl ExportSummary {
                         .payload
                         .as_ref()
                         .map(|payload| clone_type_with_budget(payload, budget))
-                        .transpose()?,
+                        .transpose()
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                     origin: candidate.origin.clone(),
                 },
             );
@@ -838,11 +855,13 @@ impl ExportSummary {
 
         let mut referenced_nominals = HashSet::new();
         for exported in summary.terms.values() {
-            collect_nominal_identities(&exported.scheme, &mut referenced_nominals, budget)?;
+            collect_nominal_identities(&exported.scheme, &mut referenced_nominals, budget)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         }
         for exported in summary.constructors.values() {
             if let Some(payload) = &exported.payload {
-                collect_nominal_identities(payload, &mut referenced_nominals, budget)?;
+                collect_nominal_identities(payload, &mut referenced_nominals, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             }
         }
 
@@ -853,7 +872,7 @@ impl ExportSummary {
             let parameters = resolved
                 .registry
                 .nominal_parameters(candidate.id)
-                .ok_or(())?
+                .ok_or(ResolvedBuildFailure::InvalidState)?
                 .to_vec()
                 .into_boxed_slice();
             summary.hidden_nominals.insert(
@@ -908,6 +927,13 @@ impl ExportSummary {
         self.terms
             .iter()
             .map(|(spelling, exported)| (spelling.as_str(), exported))
+    }
+
+    pub(crate) fn namespace_entry_count(&self) -> usize {
+        self.terms
+            .len()
+            .saturating_add(self.nominals.len())
+            .saturating_add(self.constructors.len())
     }
 
     pub(crate) fn nominals(&self) -> impl Iterator<Item = (&str, &ExportedType)> {
@@ -1247,7 +1273,7 @@ impl ResolvedRegistry {
         &self,
         imported: &ImportedFacts,
         budget: &mut TypeWorkBudget,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, ResolvedBuildFailure> {
         let mut nominals = self.nominals.to_vec();
         let mut constructors = ResolvedConstructorBuffer(Vec::with_capacity(
             self.constructors
@@ -1263,7 +1289,8 @@ impl ResolvedRegistry {
                     .payload
                     .as_ref()
                     .map(|payload| clone_type_with_budget(payload, budget))
-                    .transpose()?,
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                 origin: constructor.origin.clone(),
             });
         }
@@ -1280,12 +1307,14 @@ impl ResolvedRegistry {
             if fact.parameters.len() != fact.parameter_count
                 || nominals.iter().any(|nominal| nominal.id == fact.id)
             {
-                return Err(());
+                return Err(ResolvedBuildFailure::InvalidState);
             }
             for id in &fact.constructors {
-                let constructor = imported.constructor(*id).ok_or(())?;
+                let constructor = imported
+                    .constructor(*id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
                 if constructor.id.owner() != fact.id {
-                    return Err(());
+                    return Err(ResolvedBuildFailure::InvalidState);
                 }
                 constructors.0.push(ResolvedConstructor {
                     id: constructor.id,
@@ -1295,7 +1324,8 @@ impl ResolvedRegistry {
                         .payload
                         .as_ref()
                         .map(|payload| clone_type_with_budget(payload, budget))
-                        .transpose()?,
+                        .transpose()
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                     origin: constructor.origin.clone(),
                 });
             }
@@ -1334,7 +1364,7 @@ impl ResolvedRegistry {
     pub(crate) fn combine_checked(
         modules: &[CheckedModule],
         budget: &mut TypeWorkBudget,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, ResolvedBuildFailure> {
         let mut module_ids = HashSet::new();
         let mut nominal_ids = HashSet::new();
         let mut constructor_ids = HashSet::new();
@@ -1346,12 +1376,12 @@ impl ResolvedRegistry {
 
         for checked in modules {
             if !module_ids.insert(checked.module()) {
-                return Err(());
+                return Err(ResolvedBuildFailure::InvalidState);
             }
             let registry = checked.registry();
             for nominal in registry.nominals() {
                 if nominal.id.module() != checked.module() || !nominal_ids.insert(nominal.id) {
-                    return Err(());
+                    return Err(ResolvedBuildFailure::InvalidState);
                 }
                 nominals.push(nominal.clone());
             }
@@ -1359,7 +1389,7 @@ impl ResolvedRegistry {
                 if constructor.owner.module() != checked.module()
                     || !constructor_ids.insert(constructor.id)
                 {
-                    return Err(());
+                    return Err(ResolvedBuildFailure::InvalidState);
                 }
                 constructors.0.push(ResolvedConstructor {
                     id: constructor.id,
@@ -1369,13 +1399,14 @@ impl ResolvedRegistry {
                         .payload
                         .as_ref()
                         .map(|payload| clone_type_with_budget(payload, budget))
-                        .transpose()?,
+                        .transpose()
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                     origin: constructor.origin.clone(),
                 });
             }
             for (owner, owner_parameters) in registry.nominal_parameter_entries() {
                 if owner.module() != checked.module() {
-                    return Err(());
+                    return Err(ResolvedBuildFailure::InvalidState);
                 }
                 parameters.push((owner, owner_parameters.to_vec()));
             }
@@ -1383,7 +1414,7 @@ impl ResolvedRegistry {
                 if parameter.id.module() != Some(checked.module())
                     || !type_variable_ids.insert(parameter.id)
                 {
-                    return Err(());
+                    return Err(ResolvedBuildFailure::InvalidState);
                 }
                 additional_type_variables.push(parameter.clone());
             }

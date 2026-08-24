@@ -4,7 +4,13 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use ash::module::{LoadGraphError, ModuleReason, ModuleRoots, load_module_graph};
+use ash::{
+    module::{
+        LoadGraphError, MODULE_PATH_SEGMENT_LIMIT, MODULE_PENDING_LIMIT, ModuleReason,
+        ModuleResource, ModuleRoots, load_module_graph,
+    },
+    parser::{ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
+};
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -326,6 +332,128 @@ fn imported_syntax_failures_retain_the_parser_stage() {
     assert!(matches!(&failure, LoadGraphError::Syntax(_)));
     assert_eq!(failure.module_reason(), None);
     assert!(failure.is_source_rejection());
+}
+
+#[test]
+fn imported_syntax_resource_failures_retain_the_rejected_source() {
+    let tree = TempTree::create();
+    let entry = tree.write("entry.ash", "import deep as Deep\n");
+    let nested = format!(
+        "main : Unit\nmain () = {}0{}\n",
+        "(".repeat(STRUCTURAL_DEPTH_LIMIT + 1),
+        ")".repeat(STRUCTURAL_DEPTH_LIMIT + 1)
+    );
+    let rejected = tree.write("deep.ash", &nested);
+
+    let failure = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect_err("the imported source should exhaust structural syntax depth");
+
+    let LoadGraphError::Syntax(failure) = failure else {
+        panic!("syntax resources should remain owned by the parser stage");
+    };
+    assert_eq!(failure.source.display_path(), rejected.to_string_lossy());
+    assert_eq!(
+        failure.resource,
+        Some(ResourceFailure::StructuralDepth {
+            limit: STRUCTURAL_DEPTH_LIMIT
+        })
+    );
+    assert!(failure.lexical.is_empty());
+    assert!(failure.parser.is_empty());
+}
+
+#[test]
+fn path_segment_budget_rejects_before_filesystem_resolution() {
+    let tree = TempTree::create();
+    let mut source = String::with_capacity(MODULE_PATH_SEGMENT_LIMIT * 2 + 32);
+    source.push_str("import ");
+    for index in 0..=MODULE_PATH_SEGMENT_LIMIT {
+        if index > 0 {
+            source.push('.');
+        }
+        source.push('a');
+    }
+    source.push_str(" as Deep\n");
+    let entry = tree.write("entry.ash", &source);
+
+    let failure = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect_err("one segment beyond the graph path budget should fail");
+    let module = failure
+        .as_module_failure()
+        .expect("path work should remain a module resource failure");
+
+    assert_eq!(module.reason(), ModuleReason::ResourceLimit);
+    assert_eq!(module.resource_kind(), Some(ModuleResource::PathSegments));
+    assert!(!module.is_source_rejection());
+}
+
+#[test]
+fn repeated_canonical_edges_do_not_exhaust_the_active_frame_budget() {
+    let tree = TempTree::create();
+    let mut source = String::with_capacity(MODULE_PENDING_LIMIT * 30);
+    for index in 0..MODULE_PENDING_LIMIT {
+        source.push_str(&format!("import shared as M{index}\n"));
+    }
+    let entry = tree.write("entry.ash", &source);
+    tree.write("shared.ash", "");
+
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("a two-frame graph should not exhaust the active frame budget");
+
+    assert_eq!(graph.modules().len(), 2);
+    let entry = graph
+        .module(graph.entry())
+        .expect("the entry identity should remain admitted");
+    assert_eq!(entry.dependencies().len(), MODULE_PENDING_LIMIT);
+}
+
+#[test]
+fn dependency_failure_selection_follows_depth_first_source_order() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        "import first as First\nimport malformed as Malformed\n",
+    );
+    tree.write("first.ash", "import absent as Absent\n");
+    tree.write("malformed.ash", "import @ as Missing\n");
+
+    let failure = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect_err("both dependency branches should fail");
+
+    assert_eq!(failure.module_reason(), Some(ModuleReason::NotFound));
+    assert!(
+        failure
+            .as_module_failure()
+            .and_then(|failure| failure.path())
+            .is_some_and(|path| path.ends_with("absent.ash")),
+        "the descendant of the first source import should fail first: {failure:?}"
+    );
+}
+
+#[test]
+fn a_deep_dependency_chain_loads_and_drops_on_a_small_stack() {
+    const DEPTH: usize = 1_024;
+
+    let tree = TempTree::create();
+    for index in 0..DEPTH {
+        tree.write(
+            &format!("module{index}.ash"),
+            &format!("import module{} as Next\n", index + 1),
+        );
+    }
+    tree.write(&format!("module{DEPTH}.ash"), "");
+    let entry = tree.path("module0.ash");
+
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let graph = load_module_graph(&entry, &ModuleRoots::empty())
+                .expect("the explicit graph worklist should admit the deep chain");
+            assert_eq!(graph.modules().len(), DEPTH + 1);
+        })
+        .expect("the small-stack loader thread should start")
+        .join()
+        .expect("loading and dropping the deep graph should fit the host stack");
 }
 
 #[test]

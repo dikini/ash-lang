@@ -246,11 +246,41 @@ impl fmt::Display for ParseReason {
 #[must_use]
 pub fn parse(lexed: Lexed) -> ConcreteTree {
     let (tokens, lexical_diagnostics, syntax_budget, lexical_resource_failure) = lexed.into_parts();
+    parse_parts(
+        tokens,
+        lexical_diagnostics,
+        syntax_budget,
+        lexical_resource_failure,
+    )
+    .0
+}
+
+pub(crate) fn parse_with_budget(lexed: Lexed, syntax_budget: &mut SyntaxBudget) -> ConcreteTree {
+    let (tokens, lexical_diagnostics, _, lexical_resource_failure) = lexed.into_parts();
+    let (tree, retained_budget) = parse_parts(
+        tokens,
+        lexical_diagnostics,
+        syntax_budget.clone(),
+        lexical_resource_failure,
+    );
+    *syntax_budget = retained_budget;
+    tree
+}
+
+fn parse_parts(
+    tokens: Vec<crate::lexer::Token>,
+    lexical_diagnostics: Vec<Diagnostic<crate::lexer::LexReason>>,
+    syntax_budget: SyntaxBudget,
+    lexical_resource_failure: Option<ResourceFailure>,
+) -> (ConcreteTree, SyntaxBudget) {
     if let Some(resource_failure) = lexical_resource_failure {
-        return cst::resource_limited(tokens, lexical_diagnostics, Vec::new(), resource_failure);
+        return (
+            cst::resource_limited(tokens, lexical_diagnostics, Vec::new(), resource_failure),
+            syntax_budget,
+        );
     }
 
-    let (events, diagnostics, resource_failure, syntax_work_exhausted) = {
+    let (events, diagnostics, resource_failure, syntax_work_exhausted, syntax_budget) = {
         let mut parser = Parser {
             tokens: &tokens,
             position: 0,
@@ -269,22 +299,29 @@ pub fn parse(lexed: Lexed) -> ConcreteTree {
             parser.diagnostics,
             parser.resource_failure,
             parser.syntax_work_exhausted,
+            parser.syntax_budget,
         )
     };
     if syntax_work_exhausted {
-        return cst::resource_limited(
+        return (
+            cst::resource_limited(
+                tokens,
+                lexical_diagnostics,
+                diagnostics,
+                resource_failure.expect("syntax exhaustion records its resource failure"),
+            ),
+            syntax_budget,
+        );
+    }
+    (
+        cst::build(
             tokens,
             lexical_diagnostics,
             diagnostics,
-            resource_failure.expect("syntax exhaustion records its resource failure"),
-        );
-    }
-    cst::build(
-        tokens,
-        lexical_diagnostics,
-        diagnostics,
-        events,
-        resource_failure,
+            events,
+            resource_failure,
+        ),
+        syntax_budget,
     )
 }
 

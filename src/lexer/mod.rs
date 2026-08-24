@@ -136,6 +136,14 @@ impl DelimiterContext {
 /// Returns a source-model error only if the admitted source's stored invariants
 /// cannot produce checked token spans.
 pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
+    let mut syntax_budget = SyntaxBudget::default();
+    lex_with_budget(source, &mut syntax_budget)
+}
+
+pub(crate) fn lex_with_budget(
+    source: &SourceFile,
+    syntax_budget: &mut SyntaxBudget,
+) -> Result<Lexed, SourceError> {
     let text = source.text();
     let bytes = text.as_bytes();
     let mut offset = 0;
@@ -143,15 +151,13 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
     let mut diagnostics = Vec::new();
     let mut contexts = vec![DelimiterContext::File];
     let mut logical_line_has_token = false;
-    let mut syntax_budget = SyntaxBudget::default();
-
     macro_rules! charge_syntax {
         () => {
             if let Err(resource_failure) = syntax_budget.charge() {
                 return Ok(Lexed {
                     tokens,
                     diagnostics,
-                    syntax_budget,
+                    syntax_budget: syntax_budget.clone(),
                     resource_failure: Some(resource_failure),
                 });
             }
@@ -361,7 +367,7 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
     Ok(Lexed {
         tokens,
         diagnostics,
-        syntax_budget,
+        syntax_budget: syntax_budget.clone(),
         resource_failure: None,
     })
 }

@@ -1,8 +1,21 @@
 //! Structured diagnostics kept separate from their presentation.
 
-use std::fmt;
+use std::{cmp::Ordering, fmt};
 
 use crate::source::Span;
+
+/// Orders diagnostic locations by admitted source identity and byte range.
+///
+/// A single syntax failure normally compares spans from one source. Retaining
+/// the source identity in the ordering keeps this helper deterministic if a
+/// later multi-source presentation uses it.
+pub(crate) fn compare_source_spans(left: Span, right: Span) -> Ordering {
+    left.source()
+        .value()
+        .cmp(&right.source().value())
+        .then_with(|| left.range().start().cmp(&right.range().start()))
+        .then_with(|| left.range().end().cmp(&right.range().end()))
+}
 
 /// A source span and the explanation attached to that location.
 #[derive(Clone, Debug, Eq, PartialEq)]

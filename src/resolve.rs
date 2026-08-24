@@ -194,6 +194,16 @@ pub fn resolve_module(
     loaded: &LoadedModule,
     dependencies: &[DependencyExports<'_>],
 ) -> Result<ResolvedModule, ResolveError> {
+    let mut type_work = TypeWorkBudget::default();
+    resolve_module_with_budget(loaded, dependencies, &mut type_work)
+}
+
+/// Resolves one module while sharing type-work accounting across a graph pass.
+pub(crate) fn resolve_module_with_budget(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    type_work: &mut TypeWorkBudget,
+) -> Result<ResolvedModule, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
     reject_duplicate_module_aliases(surface)?;
@@ -216,20 +226,24 @@ pub fn resolve_module(
         ));
     }
 
-    let mut resolver = Resolver::new(module);
-    resolver.install_imports(surface, dependencies)?;
-    let (registry, definitions) =
-        resolver.resolve_declarations(&surface.type_declarations, &surface.definitions)?;
-    let imported = std::mem::take(&mut resolver.imported);
-    let export_candidate = build_export_candidate(surface, &registry, &definitions)?;
-    Ok(ResolvedModule::new(
-        module,
-        registry,
-        imported,
-        definitions,
-        export_candidate,
-        surface.span,
-    ))
+    let mut resolver = Resolver::with_type_work(module, std::mem::take(type_work));
+    let result = (|| {
+        resolver.install_imports(surface, dependencies)?;
+        let (registry, definitions) =
+            resolver.resolve_declarations(&surface.type_declarations, &surface.definitions)?;
+        let imported = std::mem::take(&mut resolver.imported);
+        let export_candidate = build_export_candidate(surface, &registry, &definitions)?;
+        Ok(ResolvedModule::new(
+            module,
+            registry,
+            imported,
+            definitions,
+            export_candidate,
+            surface.span,
+        ))
+    })();
+    *type_work = std::mem::take(&mut resolver.type_work);
+    result
 }
 
 fn reject_duplicate_module_aliases(surface: &SurfaceModule) -> Result<(), ResolveError> {
@@ -416,7 +430,12 @@ struct ImportedNominalName {
 }
 
 impl Resolver {
+    #[cfg(test)]
     fn new(module: ModuleId) -> Self {
+        Self::with_type_work(module, TypeWorkBudget::default())
+    }
+
+    fn with_type_work(module: ModuleId, type_work: TypeWorkBudget) -> Self {
         Self {
             module,
             next_binder: 0,
@@ -430,7 +449,7 @@ impl Resolver {
             imported: ImportedFacts::default(),
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
-            type_work: TypeWorkBudget::default(),
+            type_work,
             #[cfg(test)]
             max_type_pending_tasks: 0,
         }
@@ -582,13 +601,47 @@ impl Resolver {
         import_span: crate::source::Span,
     ) -> Result<ImportedNamespaces, ResolveError> {
         let mut namespaces = ImportedNamespaces::default();
-        for (spelling, exported) in summary.terms() {
+        let entry_count = summary.namespace_entry_count();
+        self.type_work.charge(entry_count).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                import_span,
+                "imported namespace retention exceeded its work budget",
+            )
+        })?;
+
+        let mut terms = Vec::new();
+        terms
+            .try_reserve(summary.terms().size_hint().0)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    import_span,
+                    "imported namespace retention exceeded its work budget",
+                )
+            })?;
+        terms.extend(summary.terms());
+        terms.sort_unstable_by_key(|(spelling, _)| *spelling);
+        for (spelling, exported) in terms {
             namespaces
                 .terms
                 .insert(spelling.to_owned(), exported.binder);
             self.retain_imported_global(exported, summary, import_span)?;
         }
-        for (spelling, exported) in summary.nominals() {
+
+        let mut nominals = Vec::new();
+        nominals
+            .try_reserve(summary.nominals().size_hint().0)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    import_span,
+                    "imported namespace retention exceeded its work budget",
+                )
+            })?;
+        nominals.extend(summary.nominals());
+        nominals.sort_unstable_by_key(|(spelling, _)| *spelling);
+        for (spelling, exported) in nominals {
             namespaces.nominals.insert(
                 spelling.to_owned(),
                 ImportedNominalName {
@@ -598,7 +651,20 @@ impl Resolver {
             );
             self.retain_imported_nominal(exported, summary, Some(spelling), import_span)?;
         }
-        for (spelling, exported) in summary.constructors() {
+
+        let mut constructors = Vec::new();
+        constructors
+            .try_reserve(summary.constructors().size_hint().0)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    import_span,
+                    "imported namespace retention exceeded its work budget",
+                )
+            })?;
+        constructors.extend(summary.constructors());
+        constructors.sort_unstable_by_key(|(spelling, _)| *spelling);
+        for (spelling, exported) in constructors {
             namespaces
                 .constructors
                 .insert(spelling.to_owned(), exported.id);

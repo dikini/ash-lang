@@ -8,15 +8,30 @@ use crate::module::ModuleId;
 pub const TYPE_WORK_LIMIT: usize = 327_680;
 
 /// Cumulative accounting for compiler-owned structural type work.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TypeWorkBudget {
     used: usize,
+    limit: usize,
+}
+
+impl Default for TypeWorkBudget {
+    fn default() -> Self {
+        Self {
+            used: 0,
+            limit: TYPE_WORK_LIMIT,
+        }
+    }
 }
 
 impl TypeWorkBudget {
+    #[cfg(test)]
+    pub(crate) const fn with_limit(limit: usize) -> Self {
+        Self { used: 0, limit }
+    }
+
     pub(crate) fn charge(&mut self, cells: usize) -> Result<(), ()> {
         let next = self.used.checked_add(cells).ok_or(())?;
-        if next > TYPE_WORK_LIMIT {
+        if next > self.limit {
             return Err(());
         }
         self.used = next;
@@ -590,9 +605,11 @@ mod tests {
         let ty = Type::Function(Box::new(Type::Unit), Box::new(Type::Bool));
         let mut exact = TypeWorkBudget {
             used: TYPE_WORK_LIMIT - 3,
+            ..TypeWorkBudget::default()
         };
         let mut short = TypeWorkBudget {
             used: TYPE_WORK_LIMIT - 2,
+            ..TypeWorkBudget::default()
         };
 
         assert_eq!(clone_type_with_budget(&ty, &mut exact), Ok(ty.clone()));

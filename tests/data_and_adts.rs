@@ -670,7 +670,7 @@ fn wider_tuple_syntax_reports_a_structured_internal_resource_failure() {
             limit: SYNTAX_WORK_LIMIT
         })
     );
-    assert_eq!(error.reason_code(), "parse.resource");
+    assert_eq!(error.reason_code(), "internal.resource.syntax-work");
     assert!(!error.is_source_rejection());
     assert_eq!(
         render::pipeline_failure(&error),

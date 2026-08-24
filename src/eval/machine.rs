@@ -296,6 +296,27 @@ pub enum RuntimeFailure {
     ImpossibleMatch,
 }
 
+impl RuntimeFailure {
+    /// Returns the stable reason code owned by this runtime failure.
+    #[must_use]
+    pub const fn reason_code(self) -> &'static str {
+        match self {
+            Self::MissingNode => "runtime.missing-node",
+            Self::UnexpectedPrimitiveValue => "runtime.unexpected-primitive-value",
+            Self::UnexpectedFunctionValue => "runtime.unexpected-function-value",
+            Self::MissingBinding => "runtime.missing-binding",
+            Self::UnexpectedRecursiveBinding => "runtime.unexpected-recursive-binding",
+            Self::EnvironmentCapacity => "runtime.environment-capacity",
+            Self::InvalidControlState => "runtime.invalid-control-state",
+            Self::HeapCapacity => "runtime.heap-capacity",
+            Self::InvalidLocation => "runtime.invalid-location",
+            Self::UninitializedLocation => "runtime.uninitialized-location",
+            Self::AliasLoop => "runtime.alias-loop",
+            Self::ImpossibleMatch => "runtime.impossible-match",
+        }
+    }
+}
+
 impl fmt::Display for RuntimeFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {

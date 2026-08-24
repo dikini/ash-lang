@@ -389,7 +389,7 @@ mod tests {
 
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
-        assert_eq!(stderr, b"core.validation.node-type at Core node 0\n");
+        assert_eq!(stderr, b"core.validation.node-type\nnode: 0\n");
     }
 
     #[test]
@@ -412,7 +412,7 @@ mod tests {
         assert!(stdout.is_empty());
         assert_eq!(
             stderr,
-            b"internal.runtime\nruntime lexical binding is absent\n"
+            b"runtime.missing-binding\nruntime lexical binding is absent\n"
         );
     }
 

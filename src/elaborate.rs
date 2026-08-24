@@ -19,10 +19,10 @@ use crate::{
     },
     resolved::{
         BinderId, CheckedGlobalScheme, CheckedModule, ExportSummary, ResolvedBinding,
-        ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
-        ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleProgram, ResolvedPattern,
-        ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry, ResolvedType,
-        ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        ResolvedBlock, ResolvedBuildFailure, ResolvedDefinitionKind, ResolvedExpr,
+        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleProgram,
+        ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry,
+        ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
@@ -151,6 +151,19 @@ pub enum ElaborationFailure {
     CoverageResourceExhausted,
     /// Cumulative inference and type construction exceeded its work budget.
     TypeResourceExhausted,
+}
+
+impl ElaborationFailure {
+    /// Returns the stable reason code owned by this elaboration failure.
+    #[must_use]
+    pub const fn reason_code(&self) -> &'static str {
+        match self {
+            Self::Core(_) => "internal.core-build",
+            Self::InvalidState => "type.internal",
+            Self::CoverageResourceExhausted => "internal.resource.coverage",
+            Self::TypeResourceExhausted => "internal.resource.type-work",
+        }
+    }
 }
 
 impl fmt::Display for ElaborationFailure {
@@ -632,6 +645,7 @@ pub struct Elaborator {
     inference_solutions: HashMap<InferenceVariableId, Type>,
     monomorphic_recursive: HashSet<BinderId>,
     type_work: TypeWorkBudget,
+    coverage_work: UsefulnessBudget,
     base_context: TypeContext,
 }
 
@@ -655,17 +669,30 @@ impl Elaborator {
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
             type_work: TypeWorkBudget::default(),
+            coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
         }
     }
 
+    #[cfg(test)]
     fn for_module(module: &ResolvedModule) -> Result<Self, TypeError> {
-        let mut type_work = TypeWorkBudget::default();
+        Self::for_module_with_work(
+            module,
+            TypeWorkBudget::default(),
+            UsefulnessBudget::default(),
+        )
+    }
+
+    fn for_module_with_work(
+        module: &ResolvedModule,
+        mut type_work: TypeWorkBudget,
+        coverage_work: UsefulnessBudget,
+    ) -> Result<Self, TypeError> {
         let registry = Arc::new(
             module
                 .registry()
                 .checker_view(module.imported_facts(), &mut type_work)
-                .map_err(|()| invalid_state())?,
+                .map_err(resolved_build_error)?,
         );
         let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
         builder
@@ -710,6 +737,7 @@ impl Elaborator {
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
             type_work,
+            coverage_work,
             base_context,
         })
     }
@@ -740,6 +768,7 @@ impl Elaborator {
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
             type_work: TypeWorkBudget::default(),
+            coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
         })
     }
@@ -2540,7 +2569,6 @@ impl Elaborator {
                         scrutinee,
                         next_arm: 0,
                         matrix,
-                        coverage_budget: UsefulnessBudget::default(),
                         arm_bodies,
                         result_type: expected
                             .map(|(expected, kind)| (expected.ty, expected.provenance, kind)),
@@ -2724,7 +2752,7 @@ impl Elaborator {
                 &progress.matrix,
                 std::slice::from_ref(&progress.scrutinee.ty),
                 &self.registry,
-                &mut progress.coverage_budget,
+                &mut self.coverage_work,
             )? {
                 return Err(case_error(
                     TypeReason::NonExhaustive,
@@ -2765,7 +2793,7 @@ impl Elaborator {
             &row,
             std::slice::from_ref(&progress.scrutinee.ty),
             &self.registry,
-            &mut progress.coverage_budget,
+            &mut self.coverage_work,
         )?
         .is_none()
         {
@@ -3275,7 +3303,6 @@ impl Elaborator {
         coverage_matrix
             .try_reserve(equational.equations.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut coverage_budget = UsefulnessBudget::default();
         let mut clause_bodies = Vec::new();
         clause_bodies
             .try_reserve(equational.equations.len())
@@ -3306,7 +3333,7 @@ impl Elaborator {
                 &patterns,
                 &domain_types,
                 &self.registry,
-                &mut coverage_budget,
+                &mut self.coverage_work,
             )?
             .is_none()
             {
@@ -3341,7 +3368,7 @@ impl Elaborator {
             &coverage_matrix,
             &domain_types,
             &self.registry,
-            &mut coverage_budget,
+            &mut self.coverage_work,
         )? {
             return Err(case_error(
                 TypeReason::NonExhaustive,
@@ -3635,12 +3662,29 @@ impl Elaborator {
 /// Returns the first source typing error or bounded internal elaboration
 /// failure. Failed modules do not produce a [`CheckedModule`].
 pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError> {
-    let mut elaborator = Elaborator::for_module(&resolved)?;
-    elaborator.check_module_bodies(&resolved)?;
-    let schemes = elaborator.checked_module_schemes(resolved.definitions())?;
-    let exports = ExportSummary::freeze(&resolved, &schemes, &mut elaborator.type_work)
-        .map_err(|()| invalid_state())?;
-    drop(elaborator);
+    let mut type_work = TypeWorkBudget::default();
+    let mut coverage_work = UsefulnessBudget::default();
+    check_module_with_budget(resolved, &mut type_work, &mut coverage_work)
+}
+
+/// Checks one module while sharing type-work accounting across a graph pass.
+pub(crate) fn check_module_with_budget(
+    resolved: ResolvedModule,
+    type_work: &mut TypeWorkBudget,
+    coverage_work: &mut UsefulnessBudget,
+) -> Result<CheckedModule, TypeError> {
+    let mut elaborator =
+        Elaborator::for_module_with_work(&resolved, type_work.clone(), coverage_work.clone())?;
+    let result: Result<_, TypeError> = (|| {
+        elaborator.check_module_bodies(&resolved)?;
+        let schemes = elaborator.checked_module_schemes(resolved.definitions())?;
+        let exports = ExportSummary::freeze(&resolved, &schemes, &mut elaborator.type_work)
+            .map_err(resolved_build_error)?;
+        Ok((schemes, exports))
+    })();
+    *type_work = std::mem::take(&mut elaborator.type_work);
+    *coverage_work = std::mem::take(&mut elaborator.coverage_work);
+    let (schemes, exports) = result?;
     Ok(CheckedModule::new(resolved, schemes, exports))
 }
 
@@ -3660,7 +3704,7 @@ pub fn link_modules(
     }
     let mut budget = TypeWorkBudget::default();
     let registry = Arc::new(
-        ResolvedRegistry::combine_checked(&modules, &mut budget).map_err(|()| invalid_state())?,
+        ResolvedRegistry::combine_checked(&modules, &mut budget).map_err(resolved_build_error)?,
     );
     let groups = modules
         .into_iter()
@@ -3780,7 +3824,6 @@ struct MatchProgress<'a> {
     scrutinee: TypedNode,
     next_arm: usize,
     matrix: Vec<Vec<CorePattern>>,
-    coverage_budget: UsefulnessBudget,
     arm_bodies: Vec<(NodeId, Span)>,
     result_type: Option<(Type, TypeProvenance, CheckKind)>,
 }
@@ -4158,6 +4201,15 @@ fn schedule_left<'a>(
 
 fn invalid_state() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
+}
+
+fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
+    match error {
+        ResolvedBuildFailure::InvalidState => invalid_state(),
+        ResolvedBuildFailure::TypeResource => {
+            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+        }
+    }
 }
 
 fn pattern_mismatch(span: Span, expected: &Type, registry: &ResolvedRegistry) -> TypeError {
@@ -5221,6 +5273,42 @@ mod tests {
         assert_eq!(zonked, source);
         assert!(!unresolved);
         assert_eq!(exact_remaining, 0);
+    }
+
+    #[test]
+    fn one_coverage_budget_spans_all_checked_modules() {
+        let first = resolved_module_fixture("first.ash", "", "Unit", "()");
+        let second = resolved_module_fixture("second.ash", "", "Unit", "()");
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::with_limit(20);
+
+        check_module_with_budget(first, &mut type_work, &mut coverage_work)
+            .expect("the first module should fit the shared coverage budget");
+        let failure = check_module_with_budget(second, &mut type_work, &mut coverage_work)
+            .expect_err("the second module should exhaust cumulative coverage work");
+
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted)
+        );
+    }
+
+    #[test]
+    fn one_type_budget_spans_all_checked_modules() {
+        let first = resolved_module_fixture("first.ash", "", "Unit", "()");
+        let second = resolved_module_fixture("second.ash", "", "Unit", "()");
+        let mut type_work = TypeWorkBudget::with_limit(60);
+        let mut coverage_work = UsefulnessBudget::default();
+
+        check_module_with_budget(first, &mut type_work, &mut coverage_work)
+            .expect("the first module should fit the shared type budget");
+        let failure = check_module_with_budget(second, &mut type_work, &mut coverage_work)
+            .expect_err("the second module should exhaust cumulative type work");
+
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+        );
     }
 
     #[test]
