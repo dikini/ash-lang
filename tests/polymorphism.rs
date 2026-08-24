@@ -17,11 +17,7 @@ use ash::{
     eval::evaluate,
     module::{ModuleId, ModuleRoots, load_module_graph},
     resolve::resolve_module,
-    resolved::{
-        ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
-        ResolvedTermName,
-    },
-    source::{Origin, SourceFile},
+    source::SourceFile,
 };
 use support::run_module;
 
@@ -54,31 +50,7 @@ fn elaborated(text: &str) -> (ValidatedProgram, SourceFile, ModuleId) {
         .expect("Core fixture graph should load");
     let resolved = resolve_module(&graph.modules()[0], &[]).expect("source should resolve");
     let checked = check_module(resolved).expect("source should check");
-    let main = checked
-        .schemes()
-        .iter()
-        .find(|scheme| scheme.spelling == "main")
-        .expect("fixture should declare main");
-    let span = main.origin.primary_span();
-    let result = ResolvedExpr {
-        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-            function: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    term: ResolvedTermName::Global(main.binder),
-                    spelling: "main".to_owned(),
-                    origin: Origin::Source(span),
-                    evidence: Box::new([]),
-                }),
-                span,
-            }),
-            argument: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Unit,
-                span,
-            }),
-        }),
-        span,
-    };
-    let linked = link_modules(vec![checked], graph.entry(), result).expect("source should link");
+    let linked = link_modules(vec![checked], graph.entry()).expect("source should link");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("Core namespace should fit");
     let typed = elaborator

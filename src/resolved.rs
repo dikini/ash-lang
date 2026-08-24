@@ -219,6 +219,16 @@ impl ResolvedModule {
         &self.definitions
     }
 
+    /// Moves resolved globals across a successful checker-owned transition.
+    pub(crate) fn take_definitions(&mut self) -> Box<[ResolvedDefinition]> {
+        std::mem::take(&mut self.definitions)
+    }
+
+    /// Moves resolved implementation bodies across a successful checker-owned transition.
+    pub(crate) fn take_implementations(&mut self) -> Box<[ResolvedImplementation]> {
+        std::mem::take(&mut self.implementations)
+    }
+
     /// Returns the unchecked set of local declarations eligible for export.
     #[must_use]
     pub const fn export_candidate(&self) -> &ResolvedExportCandidate {
@@ -229,6 +239,17 @@ impl ResolvedModule {
     #[must_use]
     pub const fn span(&self) -> Span {
         self.span
+    }
+}
+
+impl Drop for ResolvedModule {
+    fn drop(&mut self) {
+        for definition in self.take_definitions().into_vec() {
+            discard_resolved_definition_iteratively(definition);
+        }
+        for implementation in self.take_implementations().into_vec() {
+            discard_resolved_implementation_iteratively(implementation);
+        }
     }
 }
 
@@ -245,6 +266,153 @@ pub struct CheckedGlobalScheme {
     pub origin: Origin,
 }
 
+/// One resolved global definition admitted by successful body checking.
+///
+/// The private source field prevents callers from presenting an unchecked
+/// [`ResolvedDefinition`] at the checked-module boundary.
+#[derive(Debug)]
+pub struct CheckedDefinition {
+    source: Option<ResolvedDefinition>,
+}
+
+impl CheckedDefinition {
+    pub(crate) fn new(source: ResolvedDefinition) -> Self {
+        Self {
+            source: Some(source),
+        }
+    }
+
+    /// Returns the checked definition family without granting mutation.
+    #[must_use]
+    pub fn kind(&self) -> &ResolvedDefinitionKind {
+        &self
+            .source
+            .as_ref()
+            .expect("a checked definition retains its source")
+            .kind
+    }
+
+    /// Returns the complete checked definition span.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        self.source
+            .as_ref()
+            .expect("a checked definition retains its source")
+            .span
+    }
+}
+
+impl Drop for CheckedDefinition {
+    fn drop(&mut self) {
+        if let Some(source) = self.source.take() {
+            discard_resolved_definition_iteratively(source);
+        }
+    }
+}
+
+/// One resolved implementation body admitted by successful body checking.
+///
+/// Body-free checked implementation facts remain separate because imports may
+/// retain them without retaining this defining source body.
+#[derive(Debug)]
+pub struct CheckedImplementationBody {
+    source: Option<ResolvedImplementation>,
+}
+
+impl CheckedImplementationBody {
+    pub(crate) fn new(source: ResolvedImplementation) -> Self {
+        Self {
+            source: Some(source),
+        }
+    }
+
+    /// Returns the stable identity of the checked implementation body.
+    #[must_use]
+    pub fn id(&self) -> ImplId {
+        self.source
+            .as_ref()
+            .expect("a checked implementation body retains its source")
+            .id
+    }
+
+    /// Returns the complete checked implementation span.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        self.source
+            .as_ref()
+            .expect("a checked implementation body retains its source")
+            .span
+    }
+
+    /// Returns the checked source method groups without exposing an unchecked wrapper path.
+    #[must_use]
+    pub fn method_groups(&self) -> &[ResolvedImplementationMethodGroup] {
+        &self
+            .source
+            .as_ref()
+            .expect("a checked implementation body retains its source")
+            .method_groups
+    }
+
+    pub(crate) fn source(&self) -> &ResolvedImplementation {
+        self.source
+            .as_ref()
+            .expect("a checked implementation body retains its source")
+    }
+}
+
+impl Drop for CheckedImplementationBody {
+    fn drop(&mut self) {
+        if let Some(source) = self.source.take() {
+            discard_resolved_implementation_iteratively(source);
+        }
+    }
+}
+
+/// How one implementation entered a checked module's effective environment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImplementationRoute {
+    /// The implementation is declared by the checked module.
+    Local,
+    /// The implementation first arrived through this direct import occurrence.
+    DirectImport(Span),
+}
+
+/// One implementation in deterministic effective-environment order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AvailableImplementation {
+    id: ImplId,
+    route: ImplementationRoute,
+}
+
+impl AvailableImplementation {
+    pub(crate) const fn local(id: ImplId) -> Self {
+        Self {
+            id,
+            route: ImplementationRoute::Local,
+        }
+    }
+
+    pub(crate) const fn direct_import(id: ImplId, available_at: Span) -> Self {
+        Self {
+            id,
+            route: ImplementationRoute::DirectImport(available_at),
+        }
+    }
+
+    /// Returns the stable implementation identity.
+    #[must_use]
+    pub const fn id(self) -> ImplId {
+        self.id
+    }
+
+    /// Returns the local or first-direct-import availability route.
+    #[must_use]
+    pub const fn route(self) -> ImplementationRoute {
+        self.route
+    }
+}
+
 /// One successfully checked declarations-only module.
 #[derive(Debug)]
 pub struct CheckedModule {
@@ -252,8 +420,9 @@ pub struct CheckedModule {
     registry: Arc<ResolvedRegistry>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
-    implementations: Box<[ResolvedImplementation]>,
-    definitions: Box<[ResolvedDefinition]>,
+    implementations: Box<[CheckedImplementationBody]>,
+    definitions: Box<[CheckedDefinition]>,
+    available_implementations: Box<[AvailableImplementation]>,
     schemes: Vec<CheckedGlobalScheme>,
     checked_interfaces: Box<[CheckedInterface]>,
     checked_implementations: Box<[CheckedImplementation]>,
@@ -263,29 +432,38 @@ pub struct CheckedModule {
     span: Span,
 }
 
+pub(crate) struct CheckedModuleParts {
+    pub definitions: Box<[CheckedDefinition]>,
+    pub implementations: Box<[CheckedImplementationBody]>,
+    pub available_implementations: Box<[AvailableImplementation]>,
+    pub schemes: Vec<CheckedGlobalScheme>,
+    pub checked_interfaces: Box<[CheckedInterface]>,
+    pub checked_implementations: Box<[CheckedImplementation]>,
+    pub interface_facts: Box<[CheckedInterfaceFact]>,
+    pub implementation_facts: Box<[CheckedImplementationFact]>,
+    pub exports: ExportSummary,
+}
+
 impl CheckedModule {
-    pub(crate) fn new(
-        resolved: ResolvedModule,
-        schemes: Vec<CheckedGlobalScheme>,
-        checked_interfaces: Box<[CheckedInterface]>,
-        checked_implementations: Box<[CheckedImplementation]>,
-        interface_facts: Box<[CheckedInterfaceFact]>,
-        implementation_facts: Box<[CheckedImplementationFact]>,
-        exports: ExportSummary,
-    ) -> Self {
+    pub(crate) fn new(mut resolved: ResolvedModule, parts: CheckedModuleParts) -> Self {
+        assert!(
+            resolved.definitions.is_empty() && resolved.implementations.is_empty(),
+            "checked module construction requires checker-owned body wrappers"
+        );
         Self {
             module: resolved.module,
-            registry: resolved.registry,
-            declaration_order: resolved.declaration_order,
-            interfaces: resolved.interfaces,
-            implementations: resolved.implementations,
-            definitions: resolved.definitions,
-            schemes,
-            checked_interfaces,
-            checked_implementations,
-            interface_facts,
-            implementation_facts,
-            exports,
+            registry: Arc::clone(&resolved.registry),
+            declaration_order: std::mem::take(&mut resolved.declaration_order),
+            interfaces: std::mem::take(&mut resolved.interfaces),
+            implementations: parts.implementations,
+            definitions: parts.definitions,
+            available_implementations: parts.available_implementations,
+            schemes: parts.schemes,
+            checked_interfaces: parts.checked_interfaces,
+            checked_implementations: parts.checked_implementations,
+            interface_facts: parts.interface_facts,
+            implementation_facts: parts.implementation_facts,
+            exports: parts.exports,
             span: resolved.span,
         }
     }
@@ -304,7 +482,7 @@ impl CheckedModule {
 
     /// Returns local definitions in source order.
     #[must_use]
-    pub fn definitions(&self) -> &[ResolvedDefinition] {
+    pub fn definitions(&self) -> &[CheckedDefinition] {
         &self.definitions
     }
 
@@ -316,8 +494,14 @@ impl CheckedModule {
 
     /// Returns local implementations retained for interface checking.
     #[must_use]
-    pub const fn implementations(&self) -> &[ResolvedImplementation] {
+    pub const fn implementations(&self) -> &[CheckedImplementationBody] {
         &self.implementations
+    }
+
+    /// Returns the effective implementation environment in deterministic order.
+    #[must_use]
+    pub const fn available_implementations(&self) -> &[AvailableImplementation] {
+        &self.available_implementations
     }
 
     /// Returns checked local schemes in definition order.
@@ -369,6 +553,7 @@ impl CheckedModule {
             interfaces: std::mem::take(&mut self.interfaces),
             implementations: std::mem::take(&mut self.implementations),
             definitions: std::mem::take(&mut self.definitions),
+            available_implementations: std::mem::take(&mut self.available_implementations),
             schemes: std::mem::take(&mut self.schemes).into_boxed_slice(),
             checked_interfaces: std::mem::take(&mut self.checked_interfaces),
             checked_implementations: std::mem::take(&mut self.checked_implementations),
@@ -391,28 +576,92 @@ impl Drop for CheckedModule {
 /// One checked module-local recursive group retained for final lowering.
 #[derive(Debug)]
 pub struct ResolvedModuleGroup {
-    /// Stable canonical module identity.
-    pub module: ModuleId,
-    /// Cross-family declaration order within this module.
-    pub declaration_order: Box<[ResolvedDeclarationIndex]>,
-    /// Resolved local interfaces retained for later checked lowering.
-    pub interfaces: Box<[ResolvedInterfaceDeclaration]>,
-    /// Resolved local implementations retained for later checked lowering.
-    pub implementations: Box<[ResolvedImplementation]>,
-    /// Checked local definitions in source order.
-    pub definitions: Box<[ResolvedDefinition]>,
-    /// Checked schemes in the same definition order.
-    pub schemes: Box<[CheckedGlobalScheme]>,
-    /// Checked local interface authentication records in source order.
-    pub checked_interfaces: Box<[CheckedInterface]>,
-    /// Checked local implementations in declaration order.
-    pub checked_implementations: Box<[CheckedImplementation]>,
-    /// Checked local interface semantic facts in declaration order.
-    pub interface_facts: Box<[CheckedInterfaceFact]>,
-    /// Checked local implementation semantic facts in declaration order.
-    pub implementation_facts: Box<[CheckedImplementationFact]>,
-    /// Complete defining source span.
-    pub span: Span,
+    module: ModuleId,
+    declaration_order: Box<[ResolvedDeclarationIndex]>,
+    interfaces: Box<[ResolvedInterfaceDeclaration]>,
+    implementations: Box<[CheckedImplementationBody]>,
+    definitions: Box<[CheckedDefinition]>,
+    available_implementations: Box<[AvailableImplementation]>,
+    schemes: Box<[CheckedGlobalScheme]>,
+    checked_interfaces: Box<[CheckedInterface]>,
+    checked_implementations: Box<[CheckedImplementation]>,
+    interface_facts: Box<[CheckedInterfaceFact]>,
+    implementation_facts: Box<[CheckedImplementationFact]>,
+    span: Span,
+}
+
+impl ResolvedModuleGroup {
+    /// Returns the stable canonical module identity.
+    #[must_use]
+    pub const fn module(&self) -> ModuleId {
+        self.module
+    }
+
+    /// Returns the cross-family declaration order within this module.
+    #[must_use]
+    pub const fn declaration_order(&self) -> &[ResolvedDeclarationIndex] {
+        &self.declaration_order
+    }
+
+    /// Returns resolved local interfaces retained for checked lowering.
+    #[must_use]
+    pub const fn interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
+        &self.interfaces
+    }
+
+    /// Returns checked local implementation bodies in declaration order.
+    #[must_use]
+    pub const fn implementations(&self) -> &[CheckedImplementationBody] {
+        &self.implementations
+    }
+
+    /// Returns checked local definitions in source order.
+    #[must_use]
+    pub const fn definitions(&self) -> &[CheckedDefinition] {
+        &self.definitions
+    }
+
+    /// Returns the effective implementation environment in deterministic order.
+    #[must_use]
+    pub const fn available_implementations(&self) -> &[AvailableImplementation] {
+        &self.available_implementations
+    }
+
+    /// Returns checked global schemes in definition order.
+    #[must_use]
+    pub const fn schemes(&self) -> &[CheckedGlobalScheme] {
+        &self.schemes
+    }
+
+    /// Returns local interface authentication records in source order.
+    #[must_use]
+    pub const fn checked_interfaces(&self) -> &[CheckedInterface] {
+        &self.checked_interfaces
+    }
+
+    /// Returns checked local implementations in declaration order.
+    #[must_use]
+    pub const fn checked_implementations(&self) -> &[CheckedImplementation] {
+        &self.checked_implementations
+    }
+
+    /// Returns checked local interface semantic facts in declaration order.
+    #[must_use]
+    pub const fn interface_facts(&self) -> &[CheckedInterfaceFact] {
+        &self.interface_facts
+    }
+
+    /// Returns checked local implementation semantic facts in declaration order.
+    #[must_use]
+    pub const fn implementation_facts(&self) -> &[CheckedImplementationFact] {
+        &self.implementation_facts
+    }
+
+    /// Returns the complete defining source span.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
 }
 
 impl Drop for ResolvedModuleGroup {
@@ -427,14 +676,61 @@ impl Drop for ResolvedModuleGroup {
 /// Dependency-ordered checked modules ready for one final Core lowering.
 #[derive(Debug)]
 pub struct ResolvedModuleProgram {
-    /// Combined full defining registries from every checked module.
-    pub registry: Arc<ResolvedRegistry>,
-    /// Dependency-ordered ordinary recursive groups.
-    pub groups: Box<[ResolvedModuleGroup]>,
-    /// Stable entry module identity.
-    pub entry: ModuleId,
-    /// Generated entry result expression.
-    pub result: ResolvedExpr,
+    registry: Arc<ResolvedRegistry>,
+    groups: Box<[ResolvedModuleGroup]>,
+    entry: ModuleId,
+    result: ResolvedExpr,
+}
+
+impl ResolvedModuleProgram {
+    pub(crate) fn new(
+        registry: Arc<ResolvedRegistry>,
+        groups: Box<[ResolvedModuleGroup]>,
+        entry: ModuleId,
+        result: ResolvedExpr,
+    ) -> Self {
+        Self {
+            registry,
+            groups,
+            entry,
+            result,
+        }
+    }
+
+    /// Returns the combined full defining registries.
+    #[must_use]
+    pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
+        &self.registry
+    }
+
+    /// Returns dependency-ordered checked module groups.
+    #[must_use]
+    pub const fn groups(&self) -> &[ResolvedModuleGroup] {
+        &self.groups
+    }
+
+    /// Returns the stable entry module identity.
+    #[must_use]
+    pub const fn entry(&self) -> ModuleId {
+        self.entry
+    }
+
+    /// Returns the generated entry result expression.
+    #[must_use]
+    pub const fn result(&self) -> &ResolvedExpr {
+        &self.result
+    }
+}
+
+impl Drop for ResolvedModuleProgram {
+    fn drop(&mut self) {
+        let placeholder = ResolvedExpr {
+            kind: ResolvedExprKind::Unit,
+            span: self.result.span,
+        };
+        let result = std::mem::replace(&mut self.result, placeholder);
+        discard_resolved_body_work(vec![result], Vec::new());
+    }
 }
 
 /// Body-free dependency facts retained by one resolved module.
@@ -487,6 +783,10 @@ impl ImportedFacts {
 
     pub(crate) fn globals(&self) -> impl Iterator<Item = &ImportedGlobalScheme> {
         self.globals.values()
+    }
+
+    pub(crate) fn interfaces(&self) -> impl Iterator<Item = &CheckedInterfaceFact> {
+        self.interfaces.iter()
     }
 
     pub(crate) fn nominals(&self) -> impl Iterator<Item = &ImportedNominalFact> {
@@ -676,7 +976,7 @@ impl Drop for CheckedInterfaceMethodFact {
     }
 }
 
-/// One body-free checked implementation fact available for scoped coherence.
+/// One body-free checked implementation fact available for selection and overlap checks.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckedImplementationFact {
     /// Stable anonymous implementation identity.
@@ -2936,11 +3236,513 @@ pub struct ResolvedFunctionExpr {
     pub body: ResolvedBlock,
 }
 
+fn discard_resolved_definition_iteratively(definition: ResolvedDefinition) {
+    let mut expressions = Vec::new();
+    let mut patterns = Vec::new();
+    match definition.kind {
+        ResolvedDefinitionKind::Equational(global) => {
+            discard_external_interface(global.interface);
+            for equation in global.equations {
+                discard_equation_into_work(equation, &mut expressions, &mut patterns);
+            }
+        }
+        ResolvedDefinitionKind::InlineOperational(global) => {
+            discard_binder(global.header.name);
+            for parameter in global.header.parameters {
+                patterns.push(parameter.pattern);
+                discard_resolved_type(parameter.annotation);
+            }
+            discard_resolved_type(global.header.result_type);
+            for requirement in global.header.requirements {
+                discard_resolved_requirement(requirement);
+            }
+            for parameter in global.header.type_parameters {
+                discard_origin_iteratively(parameter.origin);
+            }
+            discard_block_into_work(global.body, &mut expressions, &mut patterns);
+        }
+    }
+    discard_resolved_body_work(expressions, patterns);
+}
+
+fn discard_resolved_implementation_iteratively(implementation: ResolvedImplementation) {
+    discard_origin_iteratively(implementation.interface.origin);
+    discard_resolved_type(implementation.argument);
+    for parameter in implementation.head_parameters {
+        discard_origin_iteratively(parameter.origin);
+    }
+    for parameter in implementation.prerequisite_only_parameters {
+        discard_origin_iteratively(parameter.origin);
+    }
+    for prerequisite in implementation.prerequisites {
+        discard_resolved_requirement(prerequisite);
+    }
+    let mut expressions = Vec::new();
+    let mut patterns = Vec::new();
+    for group in implementation.method_groups {
+        discard_binder(group.binder);
+        for equation in group.equations {
+            discard_equation_into_work(equation, &mut expressions, &mut patterns);
+        }
+    }
+    discard_resolved_body_work(expressions, patterns);
+}
+
+fn discard_external_interface(interface: ResolvedExternalInterface) {
+    discard_binder(interface.name);
+    discard_resolved_type(interface.annotation);
+    for requirement in interface.requirements {
+        discard_resolved_requirement(requirement);
+    }
+    for parameter in interface.type_parameters {
+        discard_origin_iteratively(parameter.origin);
+    }
+}
+
+fn discard_resolved_requirement(requirement: ResolvedRequirement) {
+    discard_origin_iteratively(requirement.interface.origin);
+    discard_resolved_type(requirement.argument);
+}
+
+fn discard_resolved_type(resolved: ResolvedType) {
+    discard_type_iteratively(resolved.ty);
+    discard_origin_iteratively(resolved.origin);
+}
+
+fn discard_binder(binder: Binder) {
+    discard_origin_iteratively(binder.origin);
+}
+
+fn discard_equation_into_work(
+    equation: ResolvedEquation,
+    expressions: &mut Vec<ResolvedExpr>,
+    patterns: &mut Vec<ResolvedPattern>,
+) {
+    discard_origin_iteratively(equation.name.origin);
+    patterns.extend(equation.patterns);
+    expressions.push(equation.body);
+}
+
+fn discard_block_into_work(
+    block: ResolvedBlock,
+    expressions: &mut Vec<ResolvedExpr>,
+    patterns: &mut Vec<ResolvedPattern>,
+) {
+    expressions.push(*block.result);
+    for declaration in block.declarations {
+        match declaration {
+            ResolvedLocalDeclaration::Binding(binding) => {
+                let binding = *binding;
+                patterns.push(binding.pattern);
+                if let Some(annotation) = binding.annotation {
+                    discard_resolved_type(annotation);
+                }
+                expressions.push(binding.initializer);
+            }
+            ResolvedLocalDeclaration::Recursive(group) => {
+                for member in group.members {
+                    discard_binder(member.binder);
+                    discard_resolved_type(member.annotation);
+                    expressions.push(member.initializer);
+                }
+            }
+        }
+    }
+}
+
+fn discard_resolved_body_work(
+    mut expressions: Vec<ResolvedExpr>,
+    mut patterns: Vec<ResolvedPattern>,
+) {
+    while let Some(expression) = expressions.pop() {
+        match expression.kind {
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit => {}
+            ResolvedExprKind::Occurrence(occurrence) => {
+                discard_origin_iteratively(occurrence.origin);
+            }
+            ResolvedExprKind::Constructor(occurrence) => {
+                discard_origin_iteratively(occurrence.origin);
+            }
+            ResolvedExprKind::Tuple(elements) => expressions.extend(elements),
+            ResolvedExprKind::Apply(application) => {
+                expressions.push(*application.function);
+                expressions.push(*application.argument);
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                expressions.push(*binary.left);
+                expressions.push(*binary.right);
+            }
+            ResolvedExprKind::Block(block) => {
+                discard_block_into_work(block, &mut expressions, &mut patterns);
+            }
+            ResolvedExprKind::Function(function) => {
+                patterns.push(function.pattern);
+                discard_block_into_work(function.body, &mut expressions, &mut patterns);
+            }
+            ResolvedExprKind::Match(matched) => {
+                expressions.push(*matched.scrutinee);
+                for arm in matched.arms {
+                    patterns.push(arm.pattern);
+                    expressions.push(arm.body);
+                }
+            }
+        }
+    }
+    while let Some(pattern) = patterns.pop() {
+        match pattern.kind {
+            ResolvedPatternKind::Binder(binder) => discard_binder(binder),
+            ResolvedPatternKind::Wildcard
+            | ResolvedPatternKind::Boolean(_)
+            | ResolvedPatternKind::Unit => {}
+            ResolvedPatternKind::Tuple(elements) => patterns.extend(elements),
+            ResolvedPatternKind::Constructor {
+                occurrence,
+                payload,
+                ..
+            } => {
+                discard_origin_iteratively(occurrence.origin);
+                if let Some(payload) = payload {
+                    patterns.push(*payload);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::module::ModuleId;
     use crate::source::{ByteRange, GeneratedReason, SourceFile};
+
+    #[test]
+    fn checked_module_moves_opaque_bodies_and_ordered_availability_into_group() {
+        let source = SourceFile::new("checked-boundary.ash", "main")
+            .expect("the checked-boundary fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the fixture range should be ordered"))
+            .expect("the fixture range should belong to the source");
+        let module = ModuleId::new(21);
+        let binder = Binder {
+            id: BinderId::resolved(module, 0),
+            spelling: "main".into(),
+            origin: Origin::Source(span),
+        };
+        let definition = CheckedDefinition::new(ResolvedDefinition {
+            kind: ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
+                interface: ResolvedExternalInterface {
+                    name: binder.clone(),
+                    annotation: ResolvedType {
+                        ty: Type::Unit,
+                        provenance: ResolvedTypeProvenance::new(
+                            vec![ResolvedTypeProvenanceNode::Fact(span)],
+                            0,
+                        ),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                    requirements: Box::new([]),
+                    type_parameters: Box::new([]),
+                    span,
+                },
+                equations: vec![ResolvedEquation {
+                    name: ResolvedEquationHead {
+                        binder: binder.id,
+                        spelling: binder.spelling,
+                        origin: Origin::Source(span),
+                    },
+                    patterns: Vec::new(),
+                    body: ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span,
+                    },
+                    span,
+                }],
+            }),
+            span,
+        });
+        let interface = InterfaceId::new(module, 0);
+        let implementation_id = ImplId::new(module, 0);
+        let implementation = CheckedImplementationBody::new(ResolvedImplementation {
+            id: implementation_id,
+            public: false,
+            interface: ResolvedInterfaceOccurrence {
+                id: interface,
+                spelling: "Show".into(),
+                origin: Origin::Source(span),
+            },
+            argument: ResolvedType {
+                ty: Type::Unit,
+                provenance: ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                    0,
+                ),
+                origin: Origin::Source(span),
+                span,
+            },
+            head_parameters: Box::new([]),
+            prerequisite_only_parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            method_groups: Box::new([]),
+            span,
+        });
+        let imported_id = ImplId::new(ModuleId::new(20), 0);
+        let available = vec![
+            AvailableImplementation::direct_import(imported_id, span),
+            AvailableImplementation::local(implementation_id),
+        ]
+        .into_boxed_slice();
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module,
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported: ImportedFacts::default(),
+            declaration_order: vec![
+                ResolvedDeclarationIndex::Global(0),
+                ResolvedDeclarationIndex::Implementation(0),
+            ],
+            interfaces: Vec::new(),
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate: ResolvedExportCandidate::default(),
+            span,
+        });
+        let exports = ExportSummary {
+            module,
+            terms: HashMap::new(),
+            nominals: HashMap::new(),
+            nominal_names_by_id: HashMap::new(),
+            constructors: HashMap::new(),
+            constructor_names_by_id: HashMap::new(),
+            interface_names: HashMap::new(),
+            method_names: HashMap::new(),
+            interfaces: Vec::new(),
+            interface_positions: HashMap::new(),
+            implementations: Vec::new(),
+            implementation_positions: HashMap::new(),
+            hidden_nominals: HashMap::new(),
+            withheld: HashMap::new(),
+        };
+        let checked = CheckedModule::new(
+            resolved,
+            CheckedModuleParts {
+                definitions: vec![definition].into_boxed_slice(),
+                implementations: vec![implementation].into_boxed_slice(),
+                available_implementations: available,
+                schemes: Vec::new(),
+                checked_interfaces: Box::new([]),
+                checked_implementations: Box::new([]),
+                interface_facts: Box::new([]),
+                implementation_facts: Box::new([]),
+                exports,
+            },
+        );
+        let definition_kind_address =
+            checked.definitions()[0].kind() as *const ResolvedDefinitionKind;
+        let implementation_address =
+            checked.implementations()[0].source() as *const ResolvedImplementation;
+
+        let group = checked.into_group();
+        let checked_definition_view: &[CheckedDefinition] = group.definitions();
+        let checked_implementation_view: &[CheckedImplementationBody] = group.implementations();
+
+        assert_eq!(checked_definition_view.len(), 1);
+        assert_eq!(checked_implementation_view.len(), 1);
+        assert_eq!(checked_definition_view[0].span(), span);
+        assert!(matches!(
+            checked_definition_view[0].kind(),
+            ResolvedDefinitionKind::Equational(_)
+        ));
+        assert_eq!(
+            checked_definition_view[0].kind() as *const ResolvedDefinitionKind,
+            definition_kind_address
+        );
+        assert_eq!(
+            checked_implementation_view[0].source() as *const ResolvedImplementation,
+            implementation_address
+        );
+        assert_eq!(
+            group
+                .available_implementations()
+                .iter()
+                .map(|available| (available.id(), available.route()))
+                .collect::<Vec<_>>(),
+            vec![
+                (imported_id, ImplementationRoute::DirectImport(span)),
+                (implementation_id, ImplementationRoute::Local),
+            ]
+        );
+    }
+
+    #[test]
+    fn raw_and_checked_body_owners_destroy_deep_source_iteratively() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                fn deep_expression(span: Span) -> ResolvedExpr {
+                    let mut body = ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span,
+                    };
+                    for _ in 0..20_000 {
+                        body = ResolvedExpr {
+                            kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+                                function: Box::new(ResolvedExpr {
+                                    kind: ResolvedExprKind::Unit,
+                                    span,
+                                }),
+                                argument: Box::new(body),
+                            }),
+                            span,
+                        };
+                    }
+                    body
+                }
+
+                let source = SourceFile::new("deep-checked-body.ash", "body")
+                    .expect("the deep-body fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 4).expect("the fixture range should be ordered"))
+                    .expect("the fixture range should belong to the source");
+                let module = ModuleId::new(22);
+                let binder_id = BinderId::resolved(module, 0);
+                let raw_module = ResolvedModule::new(ResolvedModuleParts {
+                    module,
+                    registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+                    imported: ImportedFacts::default(),
+                    declaration_order: vec![ResolvedDeclarationIndex::Global(0)],
+                    interfaces: Vec::new(),
+                    implementations: Vec::new(),
+                    definitions: vec![ResolvedDefinition {
+                        kind: ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
+                            interface: ResolvedExternalInterface {
+                                name: Binder {
+                                    id: binder_id,
+                                    spelling: "raw_deep".into(),
+                                    origin: Origin::Source(span),
+                                },
+                                annotation: ResolvedType {
+                                    ty: Type::Unit,
+                                    provenance: ResolvedTypeProvenance::new(
+                                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                        0,
+                                    ),
+                                    origin: Origin::Source(span),
+                                    span,
+                                },
+                                requirements: Box::new([]),
+                                type_parameters: Box::new([]),
+                                span,
+                            },
+                            equations: vec![ResolvedEquation {
+                                name: ResolvedEquationHead {
+                                    binder: binder_id,
+                                    spelling: "raw_deep".into(),
+                                    origin: Origin::Source(span),
+                                },
+                                patterns: Vec::new(),
+                                body: deep_expression(span),
+                                span,
+                            }],
+                        }),
+                        span,
+                    }],
+                    export_candidate: ResolvedExportCandidate::default(),
+                    span,
+                });
+                drop(raw_module);
+
+                let definition = CheckedDefinition::new(ResolvedDefinition {
+                    kind: ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
+                        interface: ResolvedExternalInterface {
+                            name: Binder {
+                                id: binder_id,
+                                spelling: "deep".into(),
+                                origin: Origin::Source(span),
+                            },
+                            annotation: ResolvedType {
+                                ty: Type::Unit,
+                                provenance: ResolvedTypeProvenance::new(
+                                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                    0,
+                                ),
+                                origin: Origin::Source(span),
+                                span,
+                            },
+                            requirements: Box::new([]),
+                            type_parameters: Box::new([]),
+                            span,
+                        },
+                        equations: vec![ResolvedEquation {
+                            name: ResolvedEquationHead {
+                                binder: binder_id,
+                                spelling: "deep".into(),
+                                origin: Origin::Source(span),
+                            },
+                            patterns: Vec::new(),
+                            body: deep_expression(span),
+                            span,
+                        }],
+                    }),
+                    span,
+                });
+                drop(definition);
+
+                let implementation_id = ImplId::new(module, 0);
+                let implementation = CheckedImplementationBody::new(ResolvedImplementation {
+                    id: implementation_id,
+                    public: false,
+                    interface: ResolvedInterfaceOccurrence {
+                        id: InterfaceId::new(module, 0),
+                        spelling: "Deep".into(),
+                        origin: Origin::Source(span),
+                    },
+                    argument: ResolvedType {
+                        ty: Type::Unit,
+                        provenance: ResolvedTypeProvenance::new(
+                            vec![ResolvedTypeProvenanceNode::Fact(span)],
+                            0,
+                        ),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                    head_parameters: Box::new([]),
+                    prerequisite_only_parameters: Box::new([]),
+                    prerequisites: Box::new([]),
+                    method_groups: vec![ResolvedImplementationMethodGroup {
+                        method: None,
+                        identity: None,
+                        binder: Binder {
+                            id: BinderId::resolved(module, 1),
+                            spelling: "method".into(),
+                            origin: Origin::Source(span),
+                        },
+                        equations: vec![ResolvedEquation {
+                            name: ResolvedEquationHead {
+                                binder: BinderId::resolved(module, 1),
+                                spelling: "method".into(),
+                                origin: Origin::Source(span),
+                            },
+                            patterns: Vec::new(),
+                            body: deep_expression(span),
+                            span,
+                        }]
+                        .into_boxed_slice(),
+                        span,
+                    }]
+                    .into_boxed_slice(),
+                    span,
+                });
+                assert_eq!(implementation.id(), implementation_id);
+                drop(implementation);
+            })
+            .expect("the small-stack checked-body thread should start")
+            .join()
+            .expect("raw and checked body teardown must remain iterative");
+    }
 
     #[test]
     fn checked_impl_summary_clone_uses_its_exact_constraint_budget() {

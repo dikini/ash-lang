@@ -19,10 +19,6 @@ use ash::{
     parser::{ResourceFailure, SYNTAX_WORK_LIMIT},
     render,
     resolve::resolve_module,
-    resolved::{
-        ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
-        ResolvedTermName,
-    },
     source::SourceFile,
     types::Type,
 };
@@ -62,32 +58,8 @@ fn elaborated_module(text: &str) -> StructuralProgram {
     assert!(loaded.dependencies().is_empty());
     let resolved = resolve_module(loaded, &[]).expect("Core fixture should resolve");
     let checked = check_module(resolved).expect("Core fixture should check");
-    let main = checked
-        .schemes()
-        .iter()
-        .find(|scheme| scheme.spelling == "main")
-        .expect("Core fixture should declare main");
-    let span = main.origin.primary_span();
-    let result = ResolvedExpr {
-        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-            function: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    term: ResolvedTermName::Global(main.binder),
-                    spelling: "main".to_owned(),
-                    origin: main.origin.clone(),
-                    evidence: Box::new([]),
-                }),
-                span,
-            }),
-            argument: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Unit,
-                span,
-            }),
-        }),
-        span,
-    };
-    let linked = link_modules(vec![checked], graph.entry(), result)
-        .expect("checked Core fixture should link");
+    let linked =
+        link_modules(vec![checked], graph.entry()).expect("checked Core fixture should link");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("Core namespace should fit");
     let typed = elaborator

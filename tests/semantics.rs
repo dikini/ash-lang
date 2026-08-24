@@ -17,10 +17,7 @@ use ash::{
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     render,
     resolve::{DependencyExports, resolve_module},
-    resolved::{
-        CheckedModule, ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
-        ResolvedTermName,
-    },
+    resolved::CheckedModule,
     source::{GeneratedReason, Origin, SourceFile},
     types::Type,
 };
@@ -222,36 +219,8 @@ fn check_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
 fn elaborated(text: &str) -> ElaboratedModule {
     let fixture = ModuleFixture::load(text);
     let checked = check_graph(&fixture.graph);
-    let entry = checked
-        .iter()
-        .find(|module| module.module() == fixture.graph.entry())
-        .expect("checked graph should retain its entry");
-    let main = entry
-        .schemes()
-        .iter()
-        .find(|scheme| scheme.spelling == "main")
-        .expect("entry should declare main");
-    let span = main.origin.primary_span();
-    let result = ResolvedExpr {
-        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-            function: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    term: ResolvedTermName::Global(main.binder),
-                    spelling: "main".to_owned(),
-                    origin: main.origin.clone(),
-                    evidence: Box::new([]),
-                }),
-                span,
-            }),
-            argument: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Unit,
-                span,
-            }),
-        }),
-        span,
-    };
-    let linked = link_modules(checked, fixture.graph.entry(), result)
-        .expect("checked module graph should link");
+    let linked =
+        link_modules(checked, fixture.graph.entry()).expect("checked module graph should link");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("binder namespace should fit Core");
     let typed = elaborator

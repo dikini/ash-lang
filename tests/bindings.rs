@@ -16,8 +16,8 @@ use ash::{
     resolve::resolve_module,
     resolved::{
         Binder, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
-        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleProgram,
-        ResolvedPatternKind, ResolvedTermName,
+        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedPatternKind,
+        ResolvedTermName,
     },
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
     types::Type,
@@ -88,13 +88,7 @@ fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
 }
 
 fn expression_elaborator(module: &ResolvedModule, expression: &ResolvedExpr) -> Elaborator {
-    let probe = ResolvedModuleProgram {
-        registry: std::sync::Arc::clone(module.registry()),
-        groups: Vec::new().into_boxed_slice(),
-        entry: module.module(),
-        result: expression.clone(),
-    };
-    Elaborator::for_module_program(&probe).expect("binder reservation should fit")
+    Elaborator::for_resolved_expression(module, expression).expect("binder reservation should fit")
 }
 
 fn elaborate(

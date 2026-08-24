@@ -3466,12 +3466,28 @@ impl Resolver {
                             .unwrap_or(0),
                         ResolvedTermName::Method(_) => 1,
                     };
+                    self.constraint_work.charge(evidence_count).map_err(|()| {
+                        error(
+                            ResolveReason::ConstraintResourceExhausted,
+                            expression.span,
+                            "occurrence evidence slots exceeded the graph work budget",
+                        )
+                    })?;
+                    let mut evidence = Vec::new();
+                    evidence.try_reserve(evidence_count).map_err(|_| {
+                        error(
+                            ResolveReason::ConstraintResourceExhausted,
+                            expression.span,
+                            "occurrence evidence-slot storage exceeded the graph work budget",
+                        )
+                    })?;
+                    evidence.extend((0..evidence_count).map(|_| EvidenceSlot::empty()));
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
                             term,
                             spelling: member.text.clone(),
                             origin: Origin::Source(name.span()),
-                            evidence: vec![EvidenceSlot::Empty; evidence_count].into_boxed_slice(),
+                            evidence: evidence.into_boxed_slice(),
                         }),
                         span: expression.span,
                     });
@@ -3963,6 +3979,62 @@ mod tests {
         let result =
             resolve_module_with_budget(entry, &dependencies, &mut type_work, &mut constraint_work);
         (result, constraint_work.used())
+    }
+
+    fn resolve_local_fixture_with_constraint_limit(
+        text: &str,
+        limit: usize,
+    ) -> (Result<(), ResolveError>, usize) {
+        let source = SourceFile::new("local-constraint-budget.ash", text)
+            .expect("the local constraint fixture should fit");
+        let tree = parse(lex(&source).expect("the local constraint fixture should lex"));
+        let module =
+            project_module(&source, &tree).expect("the local constraint fixture should project");
+        let mut resolver = Resolver::with_budgets(
+            ModuleId::new(0),
+            TypeWorkBudget::default(),
+            InterfaceConstraintBudget::with_limit(limit),
+        );
+        let result = resolver
+            .validate_local_namespaces(&module)
+            .and_then(|()| resolver.resolve_declarations(&module))
+            .map(|_| ());
+        (result, resolver.constraint_work.used())
+    }
+
+    #[test]
+    fn occurrence_evidence_slots_charge_the_exact_requirement_product() {
+        const PREFIX: &str = concat!(
+            "interface First<A> {\nfirst : A -> A\n}\n\n",
+            "interface Second<A> {\nsecond : A -> A\n}\n\n",
+            "interface Third<A> {\nthird : A -> A\n}\n\n",
+            "interface Fourth<A> {\nfourth : A -> A\n}\n\n",
+            "fan : Int -> Int where First<Int>, Second<Int>, Third<Int>, Fourth<Int>\n",
+            "fan value = value\n\n",
+            "main : Unit -> Int\n",
+        );
+        let one_occurrence = format!("{PREFIX}main () = fan 1\n");
+        let four_occurrences = format!("{PREFIX}main () = fan (fan (fan (fan 1)))\n");
+
+        let (one, one_used) = resolve_local_fixture_with_constraint_limit(&one_occurrence, 1_000);
+        one.expect("one constrained occurrence should fit");
+        let (four, four_used) =
+            resolve_local_fixture_with_constraint_limit(&four_occurrences, 1_000);
+        four.expect("four constrained occurrences should fit");
+
+        assert_eq!(four_used - one_used, 3 * 4);
+
+        let (exact, exact_used) =
+            resolve_local_fixture_with_constraint_limit(&four_occurrences, four_used);
+        exact.expect("the exact evidence-slot product budget should fit");
+        assert_eq!(exact_used, four_used);
+
+        let (short, short_used) =
+            resolve_local_fixture_with_constraint_limit(&four_occurrences, four_used - 1);
+        let error =
+            short.expect_err("an incomplete final evidence-slot vector should reject resolution");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(short_used, four_used - 4);
     }
 
     #[test]

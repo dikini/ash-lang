@@ -1,6 +1,10 @@
 //! Stable typed identities for resolved interfaces and implementations.
 
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, OnceLock},
+};
 
 use crate::{
     module::ModuleId,
@@ -107,6 +111,264 @@ impl InterfaceConstraintBudget {
 pub(crate) enum OverlapFailure {
     InvalidState,
     Resource,
+}
+
+/// Failure while matching one checked implementation head against an obligation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HeadMatchFailure {
+    /// A checked head contains a forbidden type or an unbound candidate variable.
+    InvalidState,
+    /// Matching or constraint-side retention exceeded the graph constraint bound.
+    ConstraintResource,
+    /// Retaining a matched substitution exceeded the structural type bound.
+    TypeResource,
+}
+
+/// Matches one implementation head against one already determined obligation.
+///
+/// Only `candidate_parameters` bind. Goal variables remain rigid, and inference
+/// variables or rank-1 schemes on either side are invalid checked state.
+pub(crate) fn match_implementation_head<I>(
+    candidate_parameters: I,
+    candidate: &Type,
+    goal: &Type,
+    constraint_budget: &mut InterfaceConstraintBudget,
+    type_budget: &mut TypeWorkBudget,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure>
+where
+    I: ExactSizeIterator<Item = TypeVariableId>,
+{
+    let parameter_count = candidate_parameters.len();
+    constraint_budget
+        .charge(parameter_count)
+        .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+    let mut parameters = Vec::new();
+    parameters
+        .try_reserve(parameter_count)
+        .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+    let mut positions = HashMap::new();
+    positions
+        .try_reserve(parameter_count)
+        .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+    for (position, parameter) in candidate_parameters.enumerate() {
+        constraint_budget
+            .charge(1)
+            .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        if positions.insert(parameter, position).is_some() {
+            return Err(HeadMatchFailure::InvalidState);
+        }
+        parameters.push(parameter);
+    }
+
+    validate_match_type(candidate, Some(&positions), constraint_budget)?;
+    validate_match_type(goal, None, constraint_budget)?;
+
+    constraint_budget
+        .charge(1)
+        .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(1)
+        .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+    pending.push((candidate, goal));
+    let mut bindings = Vec::new();
+    bindings
+        .try_reserve(parameter_count)
+        .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+    bindings.resize(parameter_count, None);
+    while let Some((candidate, goal)) = pending.pop() {
+        constraint_budget
+            .charge(1)
+            .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        if let Type::Variable(variable) = candidate {
+            let position = positions
+                .get(variable)
+                .copied()
+                .ok_or(HeadMatchFailure::InvalidState)?;
+            if let Some(previous) = bindings[position] {
+                if !match_types_equal(previous, goal, constraint_budget)? {
+                    return Ok(None);
+                }
+            } else {
+                bindings[position] = Some(goal);
+            }
+            continue;
+        }
+        match (candidate, goal) {
+            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Nominal(candidate), Type::Nominal(goal)) if candidate == goal => {}
+            (
+                Type::AppliedNominal(candidate_id, candidate_types),
+                Type::AppliedNominal(goal_id, goal_types),
+            ) if candidate_id == goal_id && candidate_types.len() == goal_types.len() => {
+                schedule_match_pairs(candidate_types, goal_types, &mut pending, constraint_budget)?;
+            }
+            (Type::Tuple(candidate_types), Type::Tuple(goal_types))
+                if candidate_types.len() == goal_types.len() =>
+            {
+                schedule_match_pairs(candidate_types, goal_types, &mut pending, constraint_budget)?;
+            }
+            (
+                Type::Function(candidate_domain, candidate_codomain),
+                Type::Function(goal_domain, goal_codomain),
+            ) => {
+                constraint_budget
+                    .charge(2)
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+                pending.push((candidate_codomain, goal_codomain));
+                pending.push((candidate_domain, goal_domain));
+            }
+            (Type::Variable(_), _)
+            | (Type::Forall(_, _), _)
+            | (_, Type::Forall(_, _))
+            | (Type::Inference(_), _)
+            | (_, Type::Inference(_)) => return Err(HeadMatchFailure::InvalidState),
+            _ => return Ok(None),
+        }
+    }
+
+    let mut substitution = Vec::new();
+    substitution
+        .try_reserve(parameter_count)
+        .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+    for (parameter, binding) in parameters.into_iter().zip(bindings) {
+        let binding = binding.ok_or(HeadMatchFailure::InvalidState)?;
+        constraint_budget
+            .charge(1)
+            .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        constraint_budget
+            .charge_type(binding)
+            .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        let argument = clone_type_with_budget(binding, type_budget)
+            .map_err(|()| HeadMatchFailure::TypeResource)?;
+        substitution.push(EvidenceSubstitution::new(parameter, argument));
+    }
+    Ok(Some(substitution.into_boxed_slice()))
+}
+
+fn validate_match_type(
+    root: &Type,
+    candidate_parameters: Option<&HashMap<TypeVariableId, usize>>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), HeadMatchFailure> {
+    budget
+        .charge(1)
+        .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(1)
+        .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+    pending.push(root);
+    while let Some(ty) = pending.pop() {
+        budget
+            .charge(1)
+            .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        match ty {
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                budget
+                    .charge(elements.len())
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(elements.len())
+                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+                pending.extend(elements.iter().rev());
+            }
+            Type::Function(domain, codomain) => {
+                budget
+                    .charge(2)
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+                pending.push(codomain);
+                pending.push(domain);
+            }
+            Type::Variable(variable) => {
+                if candidate_parameters.is_some_and(|positions| !positions.contains_key(variable)) {
+                    return Err(HeadMatchFailure::InvalidState);
+                }
+            }
+            Type::Forall(_, _) | Type::Inference(_) => {
+                return Err(HeadMatchFailure::InvalidState);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn schedule_match_pairs<'a>(
+    candidate: &'a [Type],
+    goal: &'a [Type],
+    pending: &mut Vec<(&'a Type, &'a Type)>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), HeadMatchFailure> {
+    budget
+        .charge(candidate.len())
+        .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+    pending
+        .try_reserve(candidate.len())
+        .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+    pending.extend(candidate.iter().zip(goal).rev());
+    Ok(())
+}
+
+fn match_types_equal(
+    left: &Type,
+    right: &Type,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, HeadMatchFailure> {
+    budget
+        .charge(1)
+        .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(1)
+        .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+    pending.push((left, right));
+    while let Some((left, right)) = pending.pop() {
+        budget
+            .charge(1)
+            .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        match (left, right) {
+            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::Variable(left), Type::Variable(right)) if left == right => {}
+            (
+                Type::AppliedNominal(left_id, left_types),
+                Type::AppliedNominal(right_id, right_types),
+            ) if left_id == right_id && left_types.len() == right_types.len() => {
+                schedule_match_pairs(left_types, right_types, &mut pending, budget)?;
+            }
+            (Type::Tuple(left_types), Type::Tuple(right_types))
+                if left_types.len() == right_types.len() =>
+            {
+                schedule_match_pairs(left_types, right_types, &mut pending, budget)?;
+            }
+            (
+                Type::Function(left_domain, left_codomain),
+                Type::Function(right_domain, right_codomain),
+            ) => {
+                budget
+                    .charge(2)
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+                pending.push((left_codomain, right_codomain));
+                pending.push((left_domain, right_domain));
+            }
+            (Type::Forall(_, _), _)
+            | (_, Type::Forall(_, _))
+            | (Type::Inference(_), _)
+            | (_, Type::Inference(_)) => return Err(HeadMatchFailure::InvalidState),
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -419,6 +681,12 @@ pub enum InterfaceReason {
     DuplicateRequirement,
     /// A requirement mentions a type parameter absent from the value type.
     UndeterminedParameter,
+    /// No abstract requirement or available implementation matches the obligation.
+    Unsatisfied,
+    /// The obligation remains undetermined when evidence selection must begin.
+    Ambiguous,
+    /// Selecting prerequisites re-entered an active obligation.
+    Cycle,
     /// A public constrained global exposes a private interface.
     ConstraintPrivateInterface,
     /// A public implementation or prerequisite exposes a private interface.
@@ -448,6 +716,9 @@ impl fmt::Display for InterfaceReason {
             Self::MethodNotFunction => "interface.method-not-function",
             Self::DuplicateRequirement => "constraint.duplicate-requirement",
             Self::UndeterminedParameter => "constraint.undetermined-parameter",
+            Self::Unsatisfied => "constraint.unsatisfied",
+            Self::Ambiguous => "constraint.ambiguous",
+            Self::Cycle => "constraint.cycle",
             Self::ConstraintPrivateInterface => "constraint.private-interface",
             Self::ImplPrivateInterface => "impl.private-interface",
             Self::ImplOrphan => "impl.orphan",
@@ -618,11 +889,322 @@ impl RequirementId {
     }
 }
 
-/// Structural evidence state owned by one resolved constrained occurrence.
+/// Stable index of one node in an immutable evidence plan.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum EvidenceSlot {
-    /// Resolution has retained the slot, but checking has not selected evidence.
-    Empty,
+pub struct EvidenceNodeId(usize);
+
+impl EvidenceNodeId {
+    /// Returns the node's index in its plan.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// One ordered implementation-head parameter substitution.
+#[derive(Debug, Eq, PartialEq)]
+pub struct EvidenceSubstitution {
+    parameter: TypeVariableId,
+    argument: Type,
+}
+
+impl EvidenceSubstitution {
+    fn new(parameter: TypeVariableId, argument: Type) -> Self {
+        Self {
+            parameter,
+            argument,
+        }
+    }
+
+    /// Returns the bound implementation-head parameter.
+    #[must_use]
+    pub const fn parameter(&self) -> TypeVariableId {
+        self.parameter
+    }
+
+    /// Returns the matched obligation type retained for that parameter.
+    #[must_use]
+    pub const fn argument(&self) -> &Type {
+        &self.argument
+    }
+}
+
+impl Drop for EvidenceSubstitution {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
+    }
+}
+
+#[derive(Debug)]
+enum EvidenceNodeData {
+    Abstract {
+        requirement: RequirementId,
+        methods: Box<[MethodId]>,
+    },
+    Implementation {
+        implementation: ImplId,
+        substitution: Box<[EvidenceSubstitution]>,
+        prerequisites: Box<[EvidenceNodeId]>,
+        methods: Box<[ImplMethodId]>,
+    },
+}
+
+#[derive(Debug)]
+struct EvidencePlan {
+    nodes: Box<[EvidenceNodeData]>,
+}
+
+/// Read-only view of one structural evidence node.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvidenceNode<'a> {
+    /// One exact abstract requirement and its interface method order.
+    Abstract {
+        /// Requirement binder selected before implementation search.
+        requirement: RequirementId,
+        /// Interface methods in declaration order.
+        methods: &'a [MethodId],
+    },
+    /// One selected implementation and the evidence needed to apply it.
+    Implementation {
+        /// Stable selected implementation identity.
+        implementation: ImplId,
+        /// Candidate parameters and matched obligation arguments in parameter order.
+        substitution: &'a [EvidenceSubstitution],
+        /// Prerequisite nodes in declaration order.
+        prerequisites: &'a [EvidenceNodeId],
+        /// Implementation methods in interface declaration order.
+        methods: &'a [ImplMethodId],
+    },
+}
+
+/// One rooted selection backed by an immutable flat evidence plan.
+#[derive(Clone, Debug)]
+pub struct EvidenceSelection {
+    plan: Arc<EvidencePlan>,
+    root: EvidenceNodeId,
+}
+
+impl EvidenceSelection {
+    /// Returns the root node selected for this requirement.
+    #[must_use]
+    pub const fn root(&self) -> EvidenceNodeId {
+        self.root
+    }
+
+    /// Returns the number of nodes retained in the flat plan.
+    #[must_use]
+    pub fn node_count(&self) -> usize {
+        self.plan.nodes.len()
+    }
+
+    /// Inspects one node from this selection's plan.
+    #[must_use]
+    pub fn node(&self, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
+        match self.plan.nodes.get(id.0)? {
+            EvidenceNodeData::Abstract {
+                requirement,
+                methods,
+            } => Some(EvidenceNode::Abstract {
+                requirement: *requirement,
+                methods,
+            }),
+            EvidenceNodeData::Implementation {
+                implementation,
+                substitution,
+                prerequisites,
+                methods,
+            } => Some(EvidenceNode::Implementation {
+                implementation: *implementation,
+                substitution,
+                prerequisites,
+                methods,
+            }),
+        }
+    }
+
+    /// Reports whether two selections share the same immutable flat plan.
+    #[must_use]
+    pub fn shares_plan_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.plan, &other.plan)
+    }
+}
+
+impl PartialEq for EvidenceSelection {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root && Arc::ptr_eq(&self.plan, &other.plan)
+    }
+}
+
+impl Eq for EvidenceSelection {}
+
+/// Builder for one immutable flat evidence plan.
+#[derive(Debug, Default)]
+pub(crate) struct EvidenceSelectionBuilder {
+    nodes: Vec<EvidenceNodeData>,
+}
+
+impl EvidenceSelectionBuilder {
+    pub(crate) const fn new() -> Self {
+        Self { nodes: Vec::new() }
+    }
+
+    pub(crate) fn push_abstract(
+        &mut self,
+        requirement: RequirementId,
+        methods: &[MethodId],
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<EvidenceNodeId, ()> {
+        let retained = 1usize.checked_add(methods.len()).ok_or(())?;
+        budget.charge(retained)?;
+        let methods = try_copy_slice(methods)?;
+        self.nodes.try_reserve(1).map_err(|_| ())?;
+        let id = EvidenceNodeId(self.nodes.len());
+        self.nodes.push(EvidenceNodeData::Abstract {
+            requirement,
+            methods,
+        });
+        Ok(id)
+    }
+
+    pub(crate) fn push_implementation(
+        &mut self,
+        implementation: ImplId,
+        substitution: Box<[EvidenceSubstitution]>,
+        prerequisites: &[EvidenceNodeId],
+        methods: &[ImplMethodId],
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<EvidenceNodeId, ()> {
+        let retained = 1usize
+            .checked_add(substitution.len())
+            .and_then(|work| work.checked_add(prerequisites.len()))
+            .and_then(|work| work.checked_add(methods.len()))
+            .ok_or(())?;
+        budget.charge(retained)?;
+        if prerequisites
+            .iter()
+            .any(|prerequisite| prerequisite.0 >= self.nodes.len())
+        {
+            return Err(());
+        }
+        let prerequisites = try_copy_slice(prerequisites)?;
+        let methods = try_copy_slice(methods)?;
+        self.nodes.try_reserve(1).map_err(|_| ())?;
+        let id = EvidenceNodeId(self.nodes.len());
+        self.nodes.push(EvidenceNodeData::Implementation {
+            implementation,
+            substitution,
+            prerequisites,
+            methods,
+        });
+        Ok(id)
+    }
+
+    pub(crate) fn finish(self, root: EvidenceNodeId) -> Result<EvidenceSelection, ()> {
+        if root.0 >= self.nodes.len() {
+            return Err(());
+        }
+        Ok(EvidenceSelection {
+            plan: Arc::new(EvidencePlan {
+                nodes: self.nodes.into_boxed_slice(),
+            }),
+            root,
+        })
+    }
+
+    #[cfg(test)]
+    const fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+}
+
+fn try_copy_slice<T: Copy>(values: &[T]) -> Result<Box<[T]>, ()> {
+    let mut copied = Vec::new();
+    copied.try_reserve(values.len()).map_err(|_| ())?;
+    copied.extend_from_slice(values);
+    Ok(copied.into_boxed_slice())
+}
+
+/// Structural evidence state owned by one resolved constrained occurrence.
+pub struct EvidenceSlot {
+    selection: Arc<OnceLock<EvidenceSelection>>,
+}
+
+impl EvidenceSlot {
+    /// Creates one independently fillable empty evidence slot.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            selection: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// Returns the selection filled by checking, when available.
+    #[must_use]
+    pub fn selection(&self) -> Option<&EvidenceSelection> {
+        self.selection.get()
+    }
+
+    /// Returns a transient capability that fills this exact structural slot.
+    pub(crate) fn handle(&self) -> EvidenceSlotHandle {
+        EvidenceSlotHandle {
+            selection: Arc::clone(&self.selection),
+        }
+    }
+}
+
+impl Default for EvidenceSlot {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl Clone for EvidenceSlot {
+    fn clone(&self) -> Self {
+        match self.selection() {
+            Some(_) => Self {
+                selection: Arc::clone(&self.selection),
+            },
+            None => Self::empty(),
+        }
+    }
+}
+
+impl fmt::Debug for EvidenceSlot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.selection() {
+            Some(selection) => formatter.debug_tuple("Selected").field(selection).finish(),
+            None => formatter.write_str("Empty"),
+        }
+    }
+}
+
+impl PartialEq for EvidenceSlot {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.selection(), other.selection()) {
+            (None, None) => true,
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for EvidenceSlot {}
+
+/// Transient capability for filling one exact occurrence's evidence slot.
+#[derive(Clone, Debug)]
+pub(crate) struct EvidenceSlotHandle {
+    selection: Arc<OnceLock<EvidenceSelection>>,
+}
+
+impl EvidenceSlotHandle {
+    #[cfg(test)]
+    pub(crate) fn selection(&self) -> Option<&EvidenceSelection> {
+        self.selection.get()
+    }
+
+    pub(crate) fn fill(&self, selection: EvidenceSelection) -> Result<(), EvidenceSelection> {
+        self.selection.set(selection)
+    }
 }
 
 /// One admitted requirement in a checked constrained scheme.
@@ -816,7 +1398,369 @@ mod tests {
         assert_ne!(TypeId::of::<InterfaceId>(), TypeId::of::<ImplId>());
         assert_ne!(TypeId::of::<MethodId>(), TypeId::of::<ImplMethodId>());
         assert_ne!(TypeId::of::<RequirementId>(), TypeId::of::<MethodId>());
-        assert_eq!(EvidenceSlot::Empty, EvidenceSlot::Empty);
+        assert!(EvidenceSlot::empty().selection().is_none());
+    }
+
+    #[test]
+    fn empty_evidence_slot_clones_have_independent_one_shot_cells() {
+        let slot = EvidenceSlot::empty();
+        let clone = slot.clone();
+        let handle = slot.handle();
+        let pending = handle.clone();
+        let selection = abstract_selection(RequirementId::new(
+            RequirementOwner::Global(BinderId::resolved(ModuleId::new(41), 0)),
+            0,
+        ));
+
+        pending
+            .fill(selection.clone())
+            .expect("the original empty slot should accept one selection");
+
+        assert_eq!(slot.selection(), Some(&selection));
+        assert_eq!(handle.selection(), Some(&selection));
+        assert!(clone.selection().is_none());
+        assert!(handle.fill(selection).is_err());
+    }
+
+    #[test]
+    fn selected_evidence_slot_clones_share_the_flat_plan() {
+        let slot = EvidenceSlot::empty();
+        let selection = abstract_selection(RequirementId::new(
+            RequirementOwner::Global(BinderId::resolved(ModuleId::new(43), 0)),
+            0,
+        ));
+        slot.handle()
+            .fill(selection)
+            .expect("the empty slot should accept one selection");
+
+        let clone = slot.clone();
+        let original = slot.selection().expect("the original should be selected");
+        let cloned = clone.selection().expect("the clone should be selected");
+
+        assert_eq!(original.root(), cloned.root());
+        assert!(original.shares_plan_with(cloned));
+    }
+
+    #[test]
+    fn evidence_builder_charges_nodes_and_ordered_slots_before_retention() {
+        let module = ModuleId::new(47);
+        let interface = InterfaceId::new(module, 0);
+        let methods = [MethodId::new(interface, 0), MethodId::new(interface, 1)];
+        let requirement =
+            RequirementId::new(RequirementOwner::Global(BinderId::resolved(module, 0)), 0);
+
+        let mut short_builder = EvidenceSelectionBuilder::new();
+        assert_eq!(
+            short_builder.push_abstract(
+                requirement,
+                &methods,
+                &mut InterfaceConstraintBudget::with_limit(2),
+            ),
+            Err(())
+        );
+        assert_eq!(short_builder.node_count(), 0);
+
+        let mut exact_budget = InterfaceConstraintBudget::with_limit(3);
+        let mut builder = EvidenceSelectionBuilder::new();
+        let root = builder
+            .push_abstract(requirement, &methods, &mut exact_budget)
+            .expect("one node and two method slots should fit exactly");
+        let selection = builder.finish(root).expect("the root should be retained");
+        assert_eq!(exact_budget.used(), 3);
+        assert_eq!(exact_budget.charge(1), Err(()));
+        assert_eq!(selection.node_count(), 1);
+        assert_eq!(
+            selection.node(root),
+            Some(EvidenceNode::Abstract {
+                requirement,
+                methods: &methods,
+            })
+        );
+    }
+
+    #[test]
+    fn implementation_evidence_retains_ordered_substitution_prerequisites_and_methods() {
+        let module = ModuleId::new(53);
+        let interface = InterfaceId::new(module, 0);
+        let implementation = ImplId::new(module, 0);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let method = MethodId::new(interface, 0);
+        let implementation_method = ImplMethodId::new(implementation, method);
+        let requirement =
+            RequirementId::new(RequirementOwner::Global(BinderId::resolved(module, 0)), 0);
+        let mut builder = EvidenceSelectionBuilder::new();
+        let prerequisite = builder
+            .push_abstract(
+                requirement,
+                &[method],
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the prerequisite should fit");
+        let substitutions = vec![EvidenceSubstitution::new(parameter, Type::Int)];
+        let mut exact = InterfaceConstraintBudget::with_limit(4);
+
+        let root = builder
+            .push_implementation(
+                implementation,
+                substitutions.into_boxed_slice(),
+                &[prerequisite],
+                &[implementation_method],
+                &mut exact,
+            )
+            .expect("one node and its three retained slots should fit exactly");
+        let selection = builder.finish(root).expect("the root should exist");
+        let Some(EvidenceNode::Implementation {
+            implementation: actual,
+            substitution,
+            prerequisites,
+            methods,
+        }) = selection.node(root)
+        else {
+            panic!("the root should be implementation evidence");
+        };
+
+        assert_eq!(actual, implementation);
+        assert_eq!(substitution.len(), 1);
+        assert_eq!(substitution[0].parameter(), parameter);
+        assert_eq!(substitution[0].argument(), &Type::Int);
+        assert_eq!(prerequisites, &[prerequisite]);
+        assert_eq!(methods, &[implementation_method]);
+        assert_eq!(exact.used(), 4);
+
+        let mut short_builder = EvidenceSelectionBuilder::new();
+        let prerequisite = short_builder
+            .push_abstract(
+                requirement,
+                &[method],
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the prerequisite should fit");
+        assert_eq!(
+            short_builder.push_implementation(
+                implementation,
+                vec![EvidenceSubstitution::new(parameter, Type::Int)].into_boxed_slice(),
+                &[prerequisite],
+                &[implementation_method],
+                &mut InterfaceConstraintBudget::with_limit(3),
+            ),
+            Err(())
+        );
+        assert_eq!(short_builder.node_count(), 1);
+    }
+
+    #[test]
+    fn one_way_head_matcher_binds_only_candidate_parameters_in_order() {
+        let module = ModuleId::new(59);
+        let first = TypeVariableId::resolved(module, 0);
+        let second = TypeVariableId::resolved(module, 1);
+        let candidate =
+            Type::Tuple(vec![Type::Variable(second), Type::Variable(first)].into_boxed_slice());
+        let goal = Type::Tuple(vec![Type::Bool, Type::Int].into_boxed_slice());
+        let mut constraints = InterfaceConstraintBudget::default();
+        let mut types = TypeWorkBudget::default();
+
+        let substitutions = match_implementation_head(
+            [first, second].into_iter(),
+            &candidate,
+            &goal,
+            &mut constraints,
+            &mut types,
+        )
+        .expect("the checked heads should be valid")
+        .expect("the candidate should match");
+
+        assert_eq!(substitutions.len(), 2);
+        assert_eq!(substitutions[0].parameter(), first);
+        assert_eq!(substitutions[0].argument(), &Type::Int);
+        assert_eq!(substitutions[1].parameter(), second);
+        assert_eq!(substitutions[1].argument(), &Type::Bool);
+    }
+
+    #[test]
+    fn one_way_head_matcher_preserves_repeated_candidate_variables() {
+        let parameter = TypeVariableId::new(0);
+        let candidate = Type::Tuple(
+            vec![Type::Variable(parameter), Type::Variable(parameter)].into_boxed_slice(),
+        );
+        let matching = Type::Tuple(vec![Type::Int, Type::Int].into_boxed_slice());
+        let conflicting = Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice());
+
+        assert!(
+            match_implementation_head(
+                std::iter::once(parameter),
+                &candidate,
+                &matching,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the heads should be valid")
+            .is_some()
+        );
+        assert_eq!(
+            match_implementation_head(
+                std::iter::once(parameter),
+                &candidate,
+                &conflicting,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn one_way_head_matcher_rejects_invalid_checked_state() {
+        let parameter = TypeVariableId::new(0);
+        for (candidate, goal) in [
+            (
+                Type::Variable(parameter),
+                Type::Inference(crate::types::InferenceVariableId::new(0)),
+            ),
+            (
+                Type::Variable(parameter),
+                Type::Forall(Box::new([]), Box::new(Type::Int)),
+            ),
+            (Type::Variable(TypeVariableId::new(1)), Type::Int),
+        ] {
+            assert_eq!(
+                match_implementation_head(
+                    std::iter::once(parameter),
+                    &candidate,
+                    &goal,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut TypeWorkBudget::default(),
+                ),
+                Err(HeadMatchFailure::InvalidState)
+            );
+        }
+    }
+
+    #[test]
+    fn one_way_head_matcher_has_exact_constraint_and_type_clone_boundaries() {
+        let parameter = TypeVariableId::new(0);
+        let candidate = Type::Variable(parameter);
+        let goal = Type::Function(Box::new(Type::Int), Box::new(Type::Bool));
+
+        assert_eq!(
+            match_implementation_head(
+                std::iter::once(parameter),
+                &candidate,
+                &goal,
+                &mut InterfaceConstraintBudget::with_limit(18),
+                &mut TypeWorkBudget::with_limit(3),
+            ),
+            Err(HeadMatchFailure::ConstraintResource)
+        );
+        assert_eq!(
+            match_implementation_head(
+                std::iter::once(parameter),
+                &candidate,
+                &goal,
+                &mut InterfaceConstraintBudget::with_limit(19),
+                &mut TypeWorkBudget::with_limit(2),
+            ),
+            Err(HeadMatchFailure::TypeResource)
+        );
+        let substitutions = match_implementation_head(
+            std::iter::once(parameter),
+            &candidate,
+            &goal,
+            &mut InterfaceConstraintBudget::with_limit(19),
+            &mut TypeWorkBudget::with_limit(3),
+        )
+        .expect("both exact budgets should fit")
+        .expect("the candidate should match");
+        assert_eq!(substitutions[0].argument(), &goal);
+    }
+
+    #[test]
+    fn constraint_selection_reasons_have_stable_codes() {
+        assert_eq!(
+            InterfaceReason::Unsatisfied.to_string(),
+            "constraint.unsatisfied"
+        );
+        assert_eq!(
+            InterfaceReason::Ambiguous.to_string(),
+            "constraint.ambiguous"
+        );
+        assert_eq!(InterfaceReason::Cycle.to_string(), "constraint.cycle");
+    }
+
+    #[test]
+    fn flat_evidence_plan_and_deep_substitution_drop_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(61);
+                let interface = InterfaceId::new(module, 0);
+                let implementation = ImplId::new(module, 0);
+                let method = MethodId::new(interface, 0);
+                let implementation_method = ImplMethodId::new(implementation, method);
+                let parameter = TypeVariableId::resolved(module, 0);
+                let requirement =
+                    RequirementId::new(RequirementOwner::Global(BinderId::resolved(module, 0)), 0);
+                let mut deep_type = Type::Unit;
+                for _ in 0..20_000 {
+                    deep_type = Type::Function(Box::new(Type::Unit), Box::new(deep_type));
+                }
+                let mut builder = EvidenceSelectionBuilder::new();
+                let mut root = builder
+                    .push_abstract(
+                        requirement,
+                        &[method],
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the first node should fit");
+                for _ in 0..20_000 {
+                    root = builder
+                        .push_abstract(
+                            requirement,
+                            &[method],
+                            &mut InterfaceConstraintBudget::default(),
+                        )
+                        .expect("the flat node should fit");
+                }
+                let substitutions = match_implementation_head(
+                    std::iter::once(parameter),
+                    &Type::Variable(parameter),
+                    &deep_type,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut TypeWorkBudget::default(),
+                )
+                .expect("the deep checked head should be valid")
+                .expect("the candidate variable should bind the deep goal");
+                discard_type_iteratively(deep_type);
+                root = builder
+                    .push_implementation(
+                        implementation,
+                        substitutions,
+                        &[root],
+                        &[implementation_method],
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the implementation node should fit");
+                let selection = builder.finish(root).expect("the root should exist");
+                let clone = selection.clone();
+                assert!(selection.shares_plan_with(&clone));
+                drop(selection);
+                drop(clone);
+            })
+            .expect("the small-stack evidence thread should start")
+            .join()
+            .expect("flat evidence and deep substitutions should drop iteratively");
+    }
+
+    fn abstract_selection(requirement: RequirementId) -> EvidenceSelection {
+        let method = MethodId::new(InterfaceId::new(ModuleId::new(41), 0), 0);
+        let mut builder = EvidenceSelectionBuilder::new();
+        let root = builder
+            .push_abstract(
+                requirement,
+                &[method],
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the abstract node should fit");
+        builder.finish(root).expect("the root should exist")
     }
 
     #[test]

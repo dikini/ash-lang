@@ -29,6 +29,11 @@ impl TypeWorkBudget {
         Self { used: 0, limit }
     }
 
+    #[cfg(test)]
+    pub(crate) const fn used(&self) -> usize {
+        self.used
+    }
+
     pub(crate) fn charge(&mut self, cells: usize) -> Result<(), ()> {
         let next = self.used.checked_add(cells).ok_or(())?;
         if next > self.limit {

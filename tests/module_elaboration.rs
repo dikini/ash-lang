@@ -10,11 +10,7 @@ use ash::{
     eval::evaluate,
     module::{ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
-    resolved::{
-        CheckedModule, ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
-        ResolvedTermName,
-    },
-    source::Origin,
+    resolved::CheckedModule,
     types::Type,
 };
 
@@ -202,35 +198,7 @@ fn linked_modules_form_dependency_ordered_core_groups_and_evaluate() {
         ],
     );
     let checked = check_graph(&graph).expect("the module chain should check");
-    let entry = checked
-        .iter()
-        .find(|module| module.module() == graph.entry())
-        .expect("the checked graph should retain its entry");
-    let main = entry
-        .schemes()
-        .iter()
-        .find(|scheme| scheme.spelling == "main")
-        .expect("the entry should expose main");
-    let span = entry.span();
-    let result = ResolvedExpr {
-        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-            function: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    term: ResolvedTermName::Global(main.binder),
-                    spelling: "main".to_owned(),
-                    origin: Origin::Source(span),
-                    evidence: Box::new([]),
-                }),
-                span,
-            }),
-            argument: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Unit,
-                span,
-            }),
-        }),
-        span,
-    };
-    let linked = link_modules(checked, graph.entry(), result).expect("the graph should link");
+    let linked = link_modules(checked, graph.entry()).expect("the graph should link");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("the graph namespace should reserve");
     let typed = elaborator

@@ -13,9 +13,8 @@ use ash::{
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{
-        CheckedModule, ResolvedApplicationExpr, ResolvedDefinitionKind, ResolvedExpr,
-        ResolvedExprKind, ResolvedModule, ResolvedOccurrence, ResolvedPatternKind,
-        ResolvedTermName,
+        CheckedModule, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind, ResolvedModule,
+        ResolvedPatternKind,
     },
     source::GeneratedReason,
     types::Type,
@@ -155,26 +154,7 @@ fn validated_program(fixture: &ModuleFixture) -> (ValidatedProgram, Type) {
     };
     assert_eq!(domain.as_ref(), &Type::Unit);
     let expected_type = codomain.as_ref().clone();
-    let span = main.origin.primary_span();
-    let result = ResolvedExpr {
-        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-            function: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    term: ResolvedTermName::Global(main.binder),
-                    spelling: "main".to_owned(),
-                    origin: main.origin.clone(),
-                    evidence: Box::new([]),
-                }),
-                span,
-            }),
-            argument: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Unit,
-                span,
-            }),
-        }),
-        span,
-    };
-    let linked = link_modules(checked, fixture.graph.entry(), result)
+    let linked = link_modules(checked, fixture.graph.entry())
         .expect("checked single-module graph should link");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("binder reservation should fit");

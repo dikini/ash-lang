@@ -13,10 +13,6 @@ use crate::{
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
     pattern::UsefulnessBudget,
     resolve::{DependencyExports, ResolveError, ResolveReason, resolve_module_with_budget},
-    resolved::{
-        ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
-        ResolvedTermName,
-    },
     source::{SourceError, SourceFile, SourceId, Span},
     types::{Type, TypeWorkBudget},
 };
@@ -430,28 +426,10 @@ where
     if !main.scheme.requirements.is_empty() {
         return Err(entry_failure(EntryReason::MainConstrained, main_span));
     }
-    let result = ResolvedExpr {
-        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
-            function: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    term: ResolvedTermName::Global(main.binder),
-                    spelling: "main".to_owned(),
-                    origin: main.origin.clone(),
-                    evidence: Box::new([]),
-                }),
-                span: main_span,
-            }),
-            argument: Box::new(ResolvedExpr {
-                kind: ResolvedExprKind::Unit,
-                span: main_span,
-            }),
-        }),
-        span: main_span,
-    };
-    let linked = link_modules(checked, graph.entry(), result)
+    let linked = link_modules(checked, graph.entry())
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
-    let registry = Arc::clone(&linked.registry);
+    let registry = Arc::clone(linked.registry());
     let mut elaborator = Elaborator::for_module_program(&linked)
         .map_err(TypeError::Internal)
         .map_err(PipelineFailure::Typing)

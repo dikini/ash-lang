@@ -531,16 +531,32 @@ feat: publish interface implementation summaries
 
 ### Task 5 — Files
 
-- Modify: `src/interface.rs`
-- Modify: `src/resolved.rs`
-- Modify: `src/elaborate.rs`
-- Modify: `src/driver.rs`
-- Modify: `tests/interfaces.rs`
-- Modify: `tests/polymorphism.rs`
+- Created: `src/evidence.rs`
+- Created: `src/evidence_audit.rs`
+- Created: `tests/interface_selection.rs`
+- Modified: `src/interface.rs`, `src/resolved.rs`, `src/elaborate.rs`,
+  `src/driver.rs`, `src/lib.rs`, `src/resolve.rs`, and `src/types.rs`
+- Modified compatibility regressions: `tests/bindings.rs`,
+  `tests/data_and_adts.rs`, `tests/functions.rs`,
+  `tests/module_elaboration.rs`, `tests/polymorphism.rs`,
+  `tests/provenance.rs`, `tests/recursion.rs`, `tests/resolution.rs`, and
+  `tests/semantics.rs`
+- Unchanged regression: `tests/interfaces.rs`
 
-### Task 5 — Step 1: Write selection RED tests
+### Task 5 — Step 1: Witness selection RED
 
-Add cases proving:
+The initial probe was:
+
+```text
+cargo test --locked --test interface_selection -- --ignored
+```
+
+It ran five ignored scaffolding cases and failed at unresolved method
+`Internal(InvalidState)`, before selection and checked-body ownership existed.
+The scaffolding was removed after the implementation supplied the retained
+structural assertions below.
+
+The completed integration tests prove:
 
 - a constrained global method occurrence selects its exact abstract
   `RequirementId` before an otherwise matching impl;
@@ -557,65 +573,59 @@ Add cases proving:
 - undetermined obligations never cause type guessing;
 - an eligible local anonymous-function initializer closes obligations before
   `generalize_local` and reports `constraint.ambiguous`; and
-- recursive constrained globals reuse their declared abstract evidence.
+- recursive constrained globals reuse their declared abstract evidence; and
+- body errors across global and implementation declaration families follow the
+  retained source declaration order.
 
-Inspect the resulting `CheckedModule` to prove each selection is attached to the
-exact occurrence and no detached vector/span join exists. Add a structural
-ownership test for the checked-definition transition: successful body checking
-produces `CheckedDefinition` values, `CheckedModule::into_group` moves them into
-the module group, and the linked group exposes no raw-definition synthesis
-path.
+They inspect the resulting `CheckedModule` to prove that each selection is
+attached to its exact occurrence rather than joined from detached span-keyed
+state. The linked-group probe confirms that successful checking produces
+`CheckedDefinition` values and `CheckedModule::into_group` moves them into the
+module group without exposing raw-definition synthesis. Unit tests also cover
+independent empty slots, shared selected flat plans, exact selection and audit
+work boundaries, and deep selection and destruction.
 
-Before implementing accounting, add exact admitted/limit-plus-one unit tests for
-obligations, candidate matches, substitutions, prerequisite edges, active goals,
-and retained selection nodes.
+### Task 5 — Step 2: Complete checked selection and retention
 
-### Task 5 — Step 2: Witness RED
+Ordered obligation creation follows ordinary rank-1 instantiation. At closure,
+checking selects exact abstract evidence, then exact-current-impl evidence,
+then one coherent ordinary implementation; it does not solve an obligation
+inference variable to fit a candidate. `CheckedModule` owns
+`CheckedDefinition` values only after complete success, and its group transition
+retains those values and their filled occurrence slots. The existing graph budget
+charges obligations, candidates, substitutions, prerequisites, active goals,
+retained selections, and the checked-body audit traversal.
 
-Run:
+The audit establishes only that every checked occurrence has the structurally
+expected, filled slots before the type-state transition. It does not authenticate
+linked identities, substitutions, availability, provenance, or method-slot
+meaning, and it does not lower evidence. Those are Task 6 work.
 
-```text
-cargo test --locked --test interfaces constrained_global_records_abstract_evidence -- --exact
-cargo test --locked --test polymorphism
-```
+The linker now derives the entry `main ()` expression from the checked entry
+module and rejects an absent, polymorphic, constrained, or non-`Unit` entry
+scheme. Standalone resolved-expression probes use a separate constructor and
+cannot be presented as the final checked-module root.
 
-Expected RED because `EvidenceSelection` and obligation closure are absent.
+### Task 5 — Step 3: Run GREEN and review
 
-### Task 5 — Step 3: Implement one checked selection path
-
-Implement ordered obligation creation after ordinary rank-1 instantiation. At
-closure, select exact abstract evidence, then exact-rigid current-impl evidence,
-then one coherent ordinary impl. Never solve an obligation inference variable
-to fit a candidate. Body checking must return a `CheckedModule` that owns
-`CheckedDefinition` values, or an equivalent type-state representation, only on
-complete success. Each checked definition structurally owns its resolved/source
-node and checked selection state. `CheckedModule::into_group` moves those values
-into `ResolvedModuleGroup`, which retains them through linking.
-
-The final synthesizer consumes only checked definitions. It may reconstruct
-ordinary Core typing, but it has no candidate-selection API and cannot accept a
-raw `ResolvedDefinition`. Fill the structural slot during checking and preserve
-it through the ownership transition.
-
-Charge obligations, candidates, substitutions, prerequisites, active goals,
-and retained selection nodes through the existing graph budget.
-
-### Task 5 — Step 4: Run GREEN and review
-
-Run:
+The following commands passed in the Task 5 worktree:
 
 ```text
-cargo test --locked --test interfaces
-cargo test --locked --test polymorphism --test module_elaboration
-cargo fmt --check
+cargo test --locked --test interface_selection
+cargo test --locked --lib
 ```
 
-Expected GREEN. Review that checking selects once and final synthesis cannot
-invoke candidate search.
+At the recorded run, the integration target had 11 passing tests and the
+library target had 252 passing tests. The complete all-target suite, Clippy,
+and `cargo xtask verify` also passed. Independent logic and resource reviews
+confirm that selection occurs in checking, body diagnostics preserve retained
+cross-family source order, and checked definitions retain their filled slots
+through the group transition without an unchecked final-synthesis bypass.
+Task 6 still owns linked evidence validation and evidence lowering through Core.
 
-### Task 5 — Step 5: Commit
+### Task 5 — Step 4: Commit
 
-Commit unsigned as:
+Commit the completed checkpoint unsigned as:
 
 ```text
 feat: select checked interface evidence

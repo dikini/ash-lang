@@ -4,7 +4,7 @@ use std::{
 };
 
 use ash::{
-    interface::{EvidenceSlot, RequirementOwner},
+    interface::RequirementOwner,
     module::{ModuleRoots, load_module_graph},
     parser::STRUCTURAL_DEPTH_LIMIT,
     resolve::{ResolveReason, resolve_module},
@@ -112,7 +112,8 @@ fn resolves_local_interface_and_method_identities() {
         panic!("expected a resolved method occurrence");
     };
     assert_eq!(occurrence.term, ResolvedTermName::Method(method.id));
-    assert_eq!(occurrence.evidence.as_ref(), &[EvidenceSlot::Empty]);
+    assert_eq!(occurrence.evidence.len(), 1);
+    assert!(occurrence.evidence[0].selection().is_none());
 }
 
 #[test]
@@ -362,7 +363,8 @@ fn resolves_impl_prerequisites_and_method_occurrences_to_method_ids() {
         panic!("expected a resolved method occurrence");
     };
     assert_eq!(occurrence.term, ResolvedTermName::Method(method.id));
-    assert_eq!(occurrence.evidence.as_ref(), &[EvidenceSlot::Empty]);
+    assert_eq!(occurrence.evidence.len(), 1);
+    assert!(occurrence.evidence[0].selection().is_none());
 }
 
 #[test]
@@ -486,15 +488,19 @@ fn resolved_constraint_occurrences_start_with_owned_empty_evidence_slots() {
         source_occurrence.term,
         ResolvedTermName::Global(source.interface.name.id)
     );
-    assert_eq!(
-        source_occurrence.evidence.as_ref(),
-        &[EvidenceSlot::Empty, EvidenceSlot::Empty]
+    assert_eq!(source_occurrence.evidence.len(), 2);
+    assert!(
+        source_occurrence
+            .evidence
+            .iter()
+            .all(|slot| slot.selection().is_none())
     );
     assert!(matches!(
         method_occurrence.term,
         ResolvedTermName::Method(_)
     ));
-    assert_eq!(method_occurrence.evidence.as_ref(), &[EvidenceSlot::Empty]);
+    assert_eq!(method_occurrence.evidence.len(), 1);
+    assert!(method_occurrence.evidence[0].selection().is_none());
 }
 
 #[test]

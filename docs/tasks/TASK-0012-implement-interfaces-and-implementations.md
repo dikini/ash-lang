@@ -57,9 +57,9 @@ Execute the linked plan to:
 
 - CP-0006 converged through independent syntax, semantics, and implementation-
   boundary reviews and is accepted.
-- Unsigned checkpoints through `f3bbc3a` implement parsing, stable identity and
-  constraint resolution, interface checking, and implementation-header
-  admission on `feature/modular-ash`.
+- Unsigned checkpoints through `f4d89e6` implement parsing, stable identity and
+  constraint resolution, interface checking, implementation-header admission,
+  and checked-summary publication on `feature/modular-ash`.
 - Task 4 now retains checked interface and implementation facts, publishes
   direct-only summaries, preserves import-route provenance, deduplicates stable
   identities, and rejects overlapping admitted heads after pair-freshening.
@@ -71,8 +71,17 @@ Execute the linked plan to:
   summary transport, orphan precedence, opacity, and dependency diamonds.
 - `cargo xtask verify` passes after the completed Task 4 test matrix, including
   format, build, Clippy, all test targets, and documentation.
-- The implementation plan records the remaining selection, linking, lowering,
-  resource, documentation, and corpus checkpoints.
+- Task 5 selects abstract, exact-current-impl, and concrete evidence during
+  checking and retains each result on its owning occurrence. Checked definitions
+  carry the bodies and selections through `CheckedModule::into_group`; the
+  checked-body structural-completeness audit rejects missing or extra slots
+  before that transition. This audit is not Task 6's linked evidence-validation
+  judgment.
+- Task 5's 11 focused integration tests and 252 library tests pass. Independent
+  high-reasoning reviews found no remaining logic, authority-boundary, or
+  resource-accounting defects after the review fixes. The implementation plan
+  records the commands and the remaining validation, lowering, resource,
+  documentation, and corpus checkpoints.
 
 ## Verification
 
@@ -101,6 +110,12 @@ dispatch rule.
   sibling and co-import conflict cases were therefore not source-expressible.
   CP-0006 and DN-0023 now state that consequence while retaining overlap checks
   over admitted effective-environment facts.
+- Empty evidence-slot clones own independent one-shot cells, while clones of a
+  filled slot share the same immutable flat evidence plan. This preserves
+  occurrence-local selection before checking and stable checked evidence across
+  the checked-module and linked-group ownership transitions.
+- Resolution charges and reserves the exact requirement-count-by-occurrence
+  evidence-slot product before constructing its heap-backed one-shot cells.
 
 ## Deviations
 
@@ -108,3 +123,18 @@ dispatch rule.
   synthetic facts instead of orphan-invalid sibling source fixtures. Source
   tests retain local overlap, orphan precedence, direct fact availability,
   route deduplication, and no re-export.
+- Task 5 uses `tests/interface_selection.rs` for checked-occurrence inspection
+  rather than extending `tests/interfaces.rs` and `tests/polymorphism.rs`.
+  It also adds `src/evidence.rs` and `src/evidence_audit.rs`; the latter audits
+  checked-body structural completeness only. The changed implementation files
+  are `src/interface.rs`, `src/resolved.rs`, `src/elaborate.rs`,
+  `src/driver.rs`, `src/lib.rs`, `src/resolve.rs`, and `src/types.rs`, with
+  compatibility regressions in `tests/bindings.rs`, `tests/data_and_adts.rs`,
+  `tests/functions.rs`, `tests/module_elaboration.rs`,
+  `tests/polymorphism.rs`, `tests/provenance.rs`, `tests/recursion.rs`,
+  `tests/resolution.rs`, and `tests/semantics.rs`. `tests/interfaces.rs`
+  remains an unchanged regression.
+- Task 5 replaces the public arbitrary-result linker input with an authenticated
+  entry `main ()` expression derived from the checked entry module. A separate
+  resolved-expression constructor retains standalone elaboration probes without
+  letting callers present an unchecked expression as a checked linked result.
