@@ -12,7 +12,10 @@ use ash::{
     eval::{Evaluation, evaluate},
     module::{ModuleRoots, load_module_graph},
     resolve::resolve_module,
-    resolved::{ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence},
+    resolved::{
+        ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
+        ResolvedTermName,
+    },
     source::Origin,
     types::Type,
 };
@@ -59,9 +62,10 @@ fn evaluate_module(text: &str) -> Evaluation {
         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
             function: Box::new(ResolvedExpr {
                 kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    binder: main.binder,
+                    term: ResolvedTermName::Global(main.binder),
                     spelling: "main".to_owned(),
                     origin: Origin::Source(span),
+                    evidence: Box::new([]),
                 }),
                 span,
             }),

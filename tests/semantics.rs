@@ -19,6 +19,7 @@ use ash::{
     resolve::{DependencyExports, resolve_module},
     resolved::{
         CheckedModule, ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
+        ResolvedTermName,
     },
     source::{GeneratedReason, Origin, SourceFile},
     types::Type,
@@ -235,9 +236,10 @@ fn elaborated(text: &str) -> ElaboratedModule {
         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
             function: Box::new(ResolvedExpr {
                 kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    binder: main.binder,
+                    term: ResolvedTermName::Global(main.binder),
                     spelling: "main".to_owned(),
                     origin: main.origin.clone(),
+                    evidence: Box::new([]),
                 }),
                 span,
             }),

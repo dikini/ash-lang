@@ -755,6 +755,7 @@ impl Elaborator {
         let mut expressions = vec![&program.result];
         for group in &program.groups {
             collect_definition_binders(&group.definitions, &mut binders, &mut expressions);
+            collect_implementation_binders(&group.implementations, &mut binders, &mut expressions);
         }
         collect_expression_binders(&mut binders, expressions);
         builder.reserve_resolved_binders(binders)?;
@@ -1722,19 +1723,18 @@ impl Elaborator {
                         schedule_left(Primitive::Equal, current.span, binary, &mut tasks)
                     }
                     ResolvedExprKind::Occurrence(occurrence) => {
-                        let fact = context.fact(occurrence.binder).ok_or_else(invalid_state)?;
-                        let rigid = self.monomorphic_recursive.contains(&occurrence.binder);
+                        let binder = occurrence.global_binder().ok_or_else(invalid_state)?;
+                        let fact = context.fact(binder).ok_or_else(invalid_state)?;
+                        let rigid = self.monomorphic_recursive.contains(&binder);
                         let (ty, arguments) = self.instantiate(fact, rigid, current.span)?;
                         let provenance = fact.provenance.clone();
                         let scheme =
                             clone_scheme_with_budget(fact, &mut self.type_work).map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?;
-                        let mut node = self.builder.variable(
-                            occurrence.binder,
-                            scheme,
-                            occurrence.origin.clone(),
-                        )?;
+                        let mut node =
+                            self.builder
+                                .variable(binder, scheme, occurrence.origin.clone())?;
                         if !arguments.is_empty() {
                             let core_ty = clone_type_with_budget(&ty, &mut self.type_work)
                                 .map_err(|()| {
@@ -1877,7 +1877,8 @@ impl Elaborator {
                         let recursive_call = matches!(
                             &application.function.kind,
                             ResolvedExprKind::Occurrence(occurrence)
-                                if self.monomorphic_recursive.contains(&occurrence.binder)
+                                if occurrence.global_binder().is_some_and(|binder|
+                                    self.monomorphic_recursive.contains(&binder))
                         );
                         tasks.push(ElaborationTask::AfterApplicationFunction {
                             whole_span: current.span,
@@ -4163,7 +4164,7 @@ fn not_applicable(
 
 fn equation_interface_not_function(
     annotation: &ResolvedType,
-    equation_name: &crate::resolved::ResolvedOccurrence,
+    equation_name: &crate::resolved::ResolvedEquationHead,
     registry: &ResolvedRegistry,
 ) -> TypeError {
     let found = registry.display_source_type(&annotation.ty);
@@ -4338,7 +4339,11 @@ fn validate_guarded_payload(
         return Ok(());
     }
     match &expression.kind {
-        ResolvedExprKind::Occurrence(occurrence) if recursive.contains(&occurrence.binder) => {
+        ResolvedExprKind::Occurrence(occurrence)
+            if occurrence
+                .global_binder()
+                .is_some_and(|binder| recursive.contains(&binder)) =>
+        {
             Ok(())
         }
         ResolvedExprKind::Tuple(elements) => {
@@ -4367,7 +4372,11 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
     let mut work = vec![expression];
     while let Some(expression) = work.pop() {
         match &expression.kind {
-            ResolvedExprKind::Occurrence(occurrence) if recursive.contains(&occurrence.binder) => {
+            ResolvedExprKind::Occurrence(occurrence)
+                if occurrence
+                    .global_binder()
+                    .is_some_and(|binder| recursive.contains(&binder)) =>
+            {
                 return true;
             }
             ResolvedExprKind::Apply(application) => {
@@ -5001,8 +5010,27 @@ fn resolved_module_binders(module: &ResolvedModule) -> Vec<BinderId> {
     let mut binders = Vec::new();
     let mut expressions = Vec::new();
     collect_definition_binders(module.definitions(), &mut binders, &mut expressions);
+    collect_implementation_binders(module.implementations(), &mut binders, &mut expressions);
     collect_expression_binders(&mut binders, expressions);
     binders
+}
+
+fn collect_implementation_binders<'a>(
+    implementations: &'a [crate::resolved::ResolvedImplementation],
+    binders: &mut Vec<BinderId>,
+    expressions: &mut Vec<&'a ResolvedExpr>,
+) {
+    for implementation in implementations {
+        for group in &implementation.method_groups {
+            binders.push(group.binder.id);
+            for equation in &group.equations {
+                for pattern in &equation.patterns {
+                    collect_pattern_binders(pattern, binders);
+                }
+                expressions.push(&equation.body);
+            }
+        }
+    }
 }
 
 fn collect_definition_binders<'a>(
@@ -5204,6 +5232,59 @@ mod tests {
             .first()
             .expect("the module fixture should retain one result body")
             .body
+    }
+
+    #[test]
+    fn module_binder_collection_includes_impl_groups_patterns_and_nested_bodies() {
+        let resolved = resolved_module_fixture(
+            "impl-binder-collection.ash",
+            "interface Convert<A> {\nconvert : A -> A\n}\n\nimpl Convert<Int> {\nconvert value = {\nlet saved = value\nsaved\n}\n}\n",
+            "Unit",
+            "()",
+        );
+        let group = &resolved.implementations()[0].method_groups[0];
+        let ResolvedPatternKind::Binder(parameter) = &group.equations[0].patterns[0].kind else {
+            panic!("the impl equation should retain its parameter binder");
+        };
+        let ResolvedExprKind::Block(body) = &group.equations[0].body.kind else {
+            panic!("the impl equation should retain its block body");
+        };
+        let ResolvedLocalDeclaration::Binding(binding) = &body.declarations[0] else {
+            panic!("the impl body should retain its nested binding");
+        };
+        let ResolvedPatternKind::Binder(nested) = &binding.pattern.kind else {
+            panic!("the nested binding should retain its binder");
+        };
+
+        let binders = resolved_module_binders(&resolved);
+
+        assert!(binders.contains(&group.binder.id));
+        assert!(binders.contains(&parameter.id));
+        assert!(binders.contains(&nested.id));
+    }
+
+    #[test]
+    fn program_elaborator_reserves_hidden_impl_binders() {
+        let resolved = resolved_module_fixture(
+            "impl-program-reservation.ash",
+            "interface Convert<A> {\nconvert : A -> A\n}\n\nimpl Convert<Int> {\nconvert value = value\n}\n",
+            "Unit",
+            "()",
+        );
+        let module = resolved.module();
+        let hidden = resolved.implementations()[0].method_groups[0].binder.id;
+        let result = fixture_result(&resolved).clone();
+        let checked = check_module(resolved).expect("Task 3 ignores impl bodies while checking");
+        let program = link_modules(vec![checked], module, result)
+            .expect("the checked fixture should link into one module program");
+        let origin = Origin::Source(program.groups[0].span);
+        let mut elaborator = Elaborator::for_module_program(&program)
+            .expect("the complete resolved namespace should reserve");
+
+        elaborator
+            .builder
+            .resolved_binder(hidden, Type::Unit, origin)
+            .expect("the hidden impl binder should be reserved before lowering");
     }
 
     fn nested_function_type(depth: usize) -> Type {
@@ -6080,7 +6161,9 @@ mod tests {
         };
         let mut context = TypeContext::new();
         context.insert(
-            occurrence.binder,
+            occurrence
+                .global_binder()
+                .expect("the fixture occurrence should be an ordinary binder"),
             Type::Inference(InferenceVariableId::new(999)),
         );
         let mut elaborator =
@@ -6110,7 +6193,9 @@ mod tests {
         };
         let mut context = TypeContext::new();
         context.insert(
-            occurrence.binder,
+            occurrence
+                .global_binder()
+                .expect("the fixture occurrence should be an ordinary binder"),
             Type::Inference(InferenceVariableId::new(0)),
         );
         let mut elaborator =
@@ -6135,7 +6220,9 @@ mod tests {
         };
         let mut context = TypeContext::new();
         context.insert(
-            occurrence.binder,
+            occurrence
+                .global_binder()
+                .expect("the fixture occurrence should be an ordinary binder"),
             Type::Tuple(vec![Type::Int; crate::types::TYPE_WORK_LIMIT].into_boxed_slice()),
         );
         let mut elaborator =

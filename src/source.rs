@@ -137,6 +137,20 @@ impl Span {
     pub const fn range(self) -> ByteRange {
         self.range
     }
+
+    /// Returns the smallest span covering both inputs when they share a source.
+    pub(crate) fn cover(self, other: Self) -> Option<Self> {
+        if self.source != other.source {
+            return None;
+        }
+        Some(Self {
+            source: self.source,
+            range: ByteRange {
+                start: self.range.start.min(other.range.start),
+                end: self.range.end.max(other.range.end),
+            },
+        })
+    }
 }
 
 /// Why a compiler-owned node was generated from a source construct.

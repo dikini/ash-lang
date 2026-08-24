@@ -4,12 +4,14 @@ use std::{
 };
 
 use ash::{
+    interface::{EvidenceSlot, RequirementOwner},
     module::{ModuleRoots, load_module_graph},
     parser::STRUCTURAL_DEPTH_LIMIT,
     resolve::{ResolveReason, resolve_module},
     resolved::{
-        Binder, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExprKind,
+        Binder, BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExprKind,
         ResolvedLocalDeclaration, ResolvedModule, ResolvedPattern, ResolvedPatternKind,
+        ResolvedTermName,
     },
     types::Type,
 };
@@ -58,6 +60,443 @@ fn main_body(program: &ResolvedModule) -> &ash::resolved::ResolvedExpr {
     &main.equations[0].body
 }
 
+fn occurrence_binder(occurrence: &ash::resolved::ResolvedOccurrence) -> BinderId {
+    occurrence
+        .global_binder()
+        .expect("the fixture occurrence should resolve to an ordinary binder")
+}
+
+#[test]
+fn resolves_local_interface_and_method_identities() {
+    let program = resolve_valid(
+        "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame : (Int, Int) -> Bool where Equal<Int>\nsame pair = equal pair\n",
+    );
+
+    let [interface] = program.interfaces() else {
+        panic!("expected one resolved interface");
+    };
+    assert_eq!(interface.id.module(), program.module());
+    assert_eq!(interface.id.declaration(), 0);
+    assert_eq!(interface.spelling, "Equal");
+    assert_eq!(interface.parameter.spelling, "A");
+    let [method] = interface.methods.as_ref() else {
+        panic!("expected one resolved interface method");
+    };
+    assert_eq!(method.id.interface(), interface.id);
+    assert_eq!(method.id.declaration(), 0);
+    assert_eq!(method.spelling, "equal");
+
+    let ResolvedDefinitionKind::Equational(same) = &program.definitions()[0].kind else {
+        panic!("expected the constrained equational global");
+    };
+    assert_eq!(
+        same.interface.name.id.local(),
+        0,
+        "interface and method identities must not consume the binder namespace"
+    );
+    let [requirement] = same.interface.requirements.as_ref() else {
+        panic!("expected one resolved requirement");
+    };
+    assert_eq!(
+        requirement.id.owner(),
+        RequirementOwner::Global(same.interface.name.id)
+    );
+    assert_eq!(requirement.id.declaration(), 0);
+    assert_eq!(requirement.interface.id, interface.id);
+    assert_eq!(requirement.argument.ty, Type::Int);
+
+    let ResolvedExprKind::Apply(application) = &same.equations[0].body.kind else {
+        panic!("expected a method application");
+    };
+    let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+        panic!("expected a resolved method occurrence");
+    };
+    assert_eq!(occurrence.term, ResolvedTermName::Method(method.id));
+    assert_eq!(occurrence.evidence.as_ref(), &[EvidenceSlot::Empty]);
+}
+
+#[test]
+fn local_binders_shadow_methods_without_inheriting_method_evidence() {
+    let program = resolve_valid(
+        "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nprobe : Bool -> Bool\nprobe equal = equal\n",
+    );
+    let ResolvedDefinitionKind::Equational(probe) = &program.definitions()[0].kind else {
+        panic!("expected the probe global");
+    };
+    let ResolvedPatternKind::Binder(parameter) = &probe.equations[0].patterns[0].kind else {
+        panic!("expected the shadowing parameter binder");
+    };
+    let ResolvedExprKind::Occurrence(occurrence) = &probe.equations[0].body.kind else {
+        panic!("expected the shadowing local occurrence");
+    };
+
+    assert_eq!(occurrence.term, ResolvedTermName::Global(parameter.id));
+    assert!(occurrence.evidence.is_empty());
+}
+
+#[test]
+fn retains_method_local_type_candidates_for_interface_checking() {
+    let program = resolve_valid("interface Broken<A> {\nbroken : B -> A\n}\n");
+    let [interface] = program.interfaces() else {
+        panic!("expected one resolved interface");
+    };
+    let [method] = interface.methods.as_ref() else {
+        panic!("expected one resolved interface method");
+    };
+    let [candidate] = method.type_parameters.as_ref() else {
+        panic!("expected one retained method-local type candidate");
+    };
+
+    assert_eq!(candidate.spelling, "B");
+    let Type::Function(domain, codomain) = &method.annotation.ty else {
+        panic!("expected the method's resolved function type");
+    };
+    assert_eq!(domain.as_ref(), &Type::Variable(candidate.id));
+    assert_eq!(codomain.as_ref(), &Type::Variable(interface.parameter.id));
+}
+
+#[test]
+fn rejects_interface_and_nominal_wrong_sorts() {
+    let cases = [
+        (
+            "type Named = Named\n\nvalue : Unit -> Bool where Named<Int>\nvalue () = true\n",
+            ResolveReason::InterfaceKind,
+        ),
+        (
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nvalue : Equal -> Bool\nvalue argument = true\n",
+            ResolveReason::TypeKind,
+        ),
+        (
+            "value : A -> Bool where A<A>\nvalue argument = true\n",
+            ResolveReason::InterfaceKind,
+        ),
+        (
+            "type Option = Some\n\nvalue : Unit -> Bool where Some<Int>\nvalue () = true\n",
+            ResolveReason::InterfaceKind,
+        ),
+        (
+            "value : Unit -> Bool where Missing<Unit>\nvalue () = true\n",
+            ResolveReason::UnknownInterface,
+        ),
+    ];
+
+    for (source, expected) in cases {
+        assert_eq!(resolve_error(source).reason, expected, "source:\n{source}");
+    }
+}
+
+#[test]
+fn rejects_local_interface_and_method_namespace_conflicts() {
+    let cases = [
+        (
+            "type Equal = Equal\n\ninterface Equal<A> {\nequal : (A, A) -> Bool\n}\n",
+            ResolveReason::DuplicateType,
+        ),
+        (
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nequal : Unit -> Bool\nequal () = true\n",
+            ResolveReason::DuplicateGlobal,
+        ),
+    ];
+
+    for (source, expected) in cases {
+        assert_eq!(resolve_error(source).reason, expected, "source:\n{source}");
+    }
+}
+
+#[test]
+fn resolves_duplicate_requirements_as_distinct_ordered_occurrences() {
+    let program = resolve_valid(
+        "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame : A -> Bool where Equal<A>, Equal<A>, Equal<B>\nsame value = true\n",
+    );
+    let ResolvedDefinitionKind::Equational(same) = &program.definitions()[0].kind else {
+        panic!("expected one constrained equational global");
+    };
+
+    assert_eq!(
+        same.interface
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        vec!["A", "B"]
+    );
+    let [first, duplicate, requirement_only] = same.interface.requirements.as_ref() else {
+        panic!("expected three ordered resolved requirements");
+    };
+    assert_eq!(first.interface.id, duplicate.interface.id);
+    assert_eq!(first.argument.ty, duplicate.argument.ty);
+    assert_ne!(first.id, duplicate.id);
+    assert_eq!(first.id.declaration(), 0);
+    assert_eq!(duplicate.id.declaration(), 1);
+    assert_eq!(requirement_only.id.declaration(), 2);
+    assert_eq!(
+        first.id.owner(),
+        RequirementOwner::Global(same.interface.name.id)
+    );
+    assert!(matches!(
+        requirement_only.argument.ty,
+        Type::Variable(id) if id == same.interface.type_parameters[1].id
+    ));
+}
+
+#[test]
+fn allocates_all_hidden_method_binders_before_resolving_bodies() {
+    let program = resolve_valid(
+        "interface Convert<A> {\nfirst : A -> A\nsecond : A -> A\n}\n\nbefore : Int -> Int\nbefore value = value\n\nimpl Convert<Int> {\nfirst value = second value\nsecond value = first value\n}\n\nafter : Int -> Int\nafter value = value\n",
+    );
+
+    let [implementation] = program.implementations() else {
+        panic!("expected one resolved implementation");
+    };
+    let [first, second] = implementation.method_groups.as_ref() else {
+        panic!("expected two resolved method groups");
+    };
+    let ResolvedDefinitionKind::Equational(before) = &program.definitions()[0].kind else {
+        panic!("expected the first global");
+    };
+    let ResolvedDefinitionKind::Equational(after) = &program.definitions()[1].kind else {
+        panic!("expected the second global");
+    };
+
+    assert_eq!(before.interface.name.id.local(), 0);
+    assert_eq!(first.binder.id.local(), 1);
+    assert_eq!(second.binder.id.local(), 2);
+    assert_eq!(after.interface.name.id.local(), 3);
+    let ResolvedPatternKind::Binder(before_parameter) = &before.equations[0].patterns[0].kind
+    else {
+        panic!("expected the first body parameter binder");
+    };
+    assert!(before_parameter.id.local() > after.interface.name.id.local());
+}
+
+#[test]
+fn allocates_impl_and_hidden_method_binders_in_source_order() {
+    let program = resolve_valid(
+        "interface Convert<A> {\nconvert : A -> A\n}\n\nbefore : Int -> Int\nbefore value = value\n\nimpl Convert<Int> {\nconvert value = value\n}\n\nmiddle : Int -> Int\nmiddle value = value\n\nimpl Convert<Bool> {\nconvert value = value\n}\n\nafter : Int -> Int\nafter value = value\n",
+    );
+
+    let [first_implementation, second_implementation] = program.implementations() else {
+        panic!("expected two resolved implementations");
+    };
+    let [first_method] = first_implementation.method_groups.as_ref() else {
+        panic!("expected one method group in the first implementation");
+    };
+    let [second_method] = second_implementation.method_groups.as_ref() else {
+        panic!("expected one method group in the second implementation");
+    };
+    let [before, middle, after] = program.definitions() else {
+        panic!("expected three resolved globals");
+    };
+    let ResolvedDefinitionKind::Equational(before) = &before.kind else {
+        panic!("expected the first equational global");
+    };
+    let ResolvedDefinitionKind::Equational(middle) = &middle.kind else {
+        panic!("expected the middle equational global");
+    };
+    let ResolvedDefinitionKind::Equational(after) = &after.kind else {
+        panic!("expected the final equational global");
+    };
+
+    assert_eq!(first_implementation.id.module(), program.module());
+    assert_eq!(first_implementation.id.declaration(), 0);
+    assert_eq!(second_implementation.id.module(), program.module());
+    assert_eq!(second_implementation.id.declaration(), 1);
+    assert_eq!(before.interface.name.id.local(), 0);
+    assert_eq!(first_method.binder.id.local(), 1);
+    assert_eq!(middle.interface.name.id.local(), 2);
+    assert_eq!(second_method.binder.id.local(), 3);
+    assert_eq!(after.interface.name.id.local(), 4);
+}
+
+#[test]
+fn resolves_impl_prerequisites_and_method_occurrences_to_method_ids() {
+    let program = resolve_valid(
+        "interface Convert<A> {\nconvert : A -> A\n}\n\nimpl Convert<A> where Convert<A>, Convert<B> {\nconvert value = convert value\n}\n",
+    );
+
+    let [interface] = program.interfaces() else {
+        panic!("expected one resolved interface");
+    };
+    let [method] = interface.methods.as_ref() else {
+        panic!("expected one resolved interface method");
+    };
+    let [implementation] = program.implementations() else {
+        panic!("expected one resolved implementation");
+    };
+    let [head_parameter] = implementation.head_parameters.as_ref() else {
+        panic!("expected one head parameter");
+    };
+    let [prerequisite_only_parameter] = implementation.prerequisite_only_parameters.as_ref() else {
+        panic!("expected one prerequisite-only parameter");
+    };
+    let [first, second] = implementation.prerequisites.as_ref() else {
+        panic!("expected two ordered prerequisites");
+    };
+
+    assert!(matches!(
+        implementation.argument.ty,
+        Type::Variable(id) if id == head_parameter.id
+    ));
+    assert_eq!(first.id.owner(), RequirementOwner::Impl(implementation.id));
+    assert_eq!(first.id.declaration(), 0);
+    assert_eq!(second.id.owner(), RequirementOwner::Impl(implementation.id));
+    assert_eq!(second.id.declaration(), 1);
+    assert_eq!(first.interface.id, interface.id);
+    assert_eq!(second.interface.id, interface.id);
+    assert!(matches!(
+        first.argument.ty,
+        Type::Variable(id) if id == head_parameter.id
+    ));
+    assert!(matches!(
+        second.argument.ty,
+        Type::Variable(id) if id == prerequisite_only_parameter.id
+    ));
+
+    let [group] = implementation.method_groups.as_ref() else {
+        panic!("expected one resolved method group");
+    };
+    let ResolvedExprKind::Apply(application) = &group.equations[0].body.kind else {
+        panic!("expected a method application");
+    };
+    let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+        panic!("expected a resolved method occurrence");
+    };
+    assert_eq!(occurrence.term, ResolvedTermName::Method(method.id));
+    assert_eq!(occurrence.evidence.as_ref(), &[EvidenceSlot::Empty]);
+}
+
+#[test]
+fn derives_impl_method_identity_from_impl_and_interface_method() {
+    let program = resolve_valid(
+        "interface Convert<A> {\nconvert : A -> A\n}\n\nimpl Convert<Int> {\nconvert value = value\n}\n",
+    );
+
+    let [interface] = program.interfaces() else {
+        panic!("expected one resolved interface");
+    };
+    let [method] = interface.methods.as_ref() else {
+        panic!("expected one resolved interface method");
+    };
+    let [implementation] = program.implementations() else {
+        panic!("expected one resolved implementation");
+    };
+    let [group] = implementation.method_groups.as_ref() else {
+        panic!("expected one resolved method group");
+    };
+    let identity = group
+        .identity
+        .expect("the method group should have an identity");
+
+    assert_eq!(group.method, Some(method.id));
+    assert_eq!(identity.implementation(), implementation.id);
+    assert_eq!(identity.method(), method.id);
+}
+
+#[test]
+fn retains_duplicate_impl_method_groups_with_one_shared_semantic_identity() {
+    let program = resolve_valid(
+        "interface Convert<A> {\nfirst : A -> A\nsecond : A -> A\n}\n\nimpl Convert<Int> {\nfirst value = value\nsecond value = value\nfirst value = value\n}\n",
+    );
+
+    let [implementation] = program.implementations() else {
+        panic!("expected one resolved implementation");
+    };
+    let [first, second, duplicate] = implementation.method_groups.as_ref() else {
+        panic!("expected three maximal contiguous method groups");
+    };
+
+    assert_eq!(first.method, duplicate.method);
+    assert_eq!(first.identity, duplicate.identity);
+    assert_ne!(first.binder.id, duplicate.binder.id);
+    assert_ne!(first.method, second.method);
+    assert_ne!(first.identity, second.identity);
+}
+
+#[test]
+fn contiguous_impl_equations_form_one_method_group() {
+    let program = resolve_valid(
+        "interface Convert<A> {\nfirst : A -> A\nsecond : A -> A\n}\n\nimpl Convert<Int> {\nfirst value = value\nfirst other = other\nsecond value = value\n}\n",
+    );
+    let [implementation] = program.implementations() else {
+        panic!("expected one resolved implementation");
+    };
+    let [first, second] = implementation.method_groups.as_ref() else {
+        panic!("expected two maximal contiguous groups");
+    };
+
+    assert_eq!(first.equations.len(), 2);
+    assert_eq!(second.equations.len(), 1);
+    assert_ne!(first.binder.id, second.binder.id);
+    assert_eq!(
+        first.span.range().start(),
+        first.equations[0].span.range().start()
+    );
+    assert_eq!(
+        first.span.range().end(),
+        first.equations[1].span.range().end()
+    );
+}
+
+#[test]
+fn leaves_extra_impl_method_group_without_semantic_identity() {
+    let program = resolve_valid(
+        "interface Convert<A> {\nconvert : A -> A\n}\n\nimpl Convert<Int> {\nconvert value = value\nextra value = value\n}\n",
+    );
+
+    let [implementation] = program.implementations() else {
+        panic!("expected one resolved implementation");
+    };
+    let [method, extra] = implementation.method_groups.as_ref() else {
+        panic!("expected the method and extra source groups");
+    };
+
+    assert!(method.method.is_some());
+    assert!(method.identity.is_some());
+    assert_eq!(extra.binder.spelling, "extra");
+    assert_eq!(extra.method, None);
+    assert_eq!(extra.identity, None);
+    assert_ne!(method.binder.id, extra.binder.id);
+}
+
+#[test]
+fn resolved_constraint_occurrences_start_with_owned_empty_evidence_slots() {
+    let program = resolve_valid(
+        "interface Convert<A> {\nconvert : A -> A\n}\n\nsource : Int -> Int where Convert<Int>, Convert<Int>\nsource value = value\n\ncaller : Int -> Int where Convert<Int>\ncaller value = source (convert value)\n",
+    );
+    let ResolvedDefinitionKind::Equational(source) = &program.definitions()[0].kind else {
+        panic!("expected the constrained source global");
+    };
+    let ResolvedDefinitionKind::Equational(caller) = &program.definitions()[1].kind else {
+        panic!("expected the constrained caller global");
+    };
+    let ResolvedExprKind::Apply(source_application) = &caller.equations[0].body.kind else {
+        panic!("expected the constrained global application");
+    };
+    let ResolvedExprKind::Occurrence(source_occurrence) = &source_application.function.kind else {
+        panic!("expected the constrained global occurrence");
+    };
+    let ResolvedExprKind::Apply(method_application) = &source_application.argument.kind else {
+        panic!("expected the method application argument");
+    };
+    let ResolvedExprKind::Occurrence(method_occurrence) = &method_application.function.kind else {
+        panic!("expected the method occurrence");
+    };
+
+    assert_eq!(
+        source_occurrence.term,
+        ResolvedTermName::Global(source.interface.name.id)
+    );
+    assert_eq!(
+        source_occurrence.evidence.as_ref(),
+        &[EvidenceSlot::Empty, EvidenceSlot::Empty]
+    );
+    assert!(matches!(
+        method_occurrence.term,
+        ResolvedTermName::Method(_)
+    ));
+    assert_eq!(method_occurrence.evidence.as_ref(), &[EvidenceSlot::Empty]);
+}
+
 #[test]
 fn data_and_pattern_resolution_allocates_file_wide_identities_and_pattern_binders() {
     let program = resolve_valid(
@@ -87,7 +526,7 @@ fn data_and_pattern_resolution_allocates_file_wide_identities_and_pattern_binder
     else {
         panic!("expected resolved body occurrence");
     };
-    assert_eq!(body_use.binder, pattern_binder.id);
+    assert_eq!(occurrence_binder(body_use), pattern_binder.id);
 }
 
 #[test]
@@ -190,7 +629,7 @@ fn completed_global_is_visible_to_the_program_result() {
         panic!("expected a resolved global occurrence");
     };
 
-    assert_eq!(global_use.binder, definition.interface.name.id);
+    assert_eq!(occurrence_binder(global_use), definition.interface.name.id);
     assert_eq!(
         definition.equations[0].name.binder,
         definition.interface.name.id
@@ -251,11 +690,11 @@ fn inline_operational_global_resolves_parameter_and_later_global_use() {
     };
 
     assert_eq!(
-        body_use.binder,
+        occurrence_binder(body_use),
         pattern_binder(&definition.header.parameters[0].pattern).id
     );
-    assert_eq!(global_use.binder, definition.header.name.id);
-    assert_ne!(body_use.binder, global_use.binder);
+    assert_eq!(occurrence_binder(global_use), definition.header.name.id);
+    assert_ne!(occurrence_binder(body_use), occurrence_binder(global_use));
 }
 
 #[test]
@@ -279,8 +718,8 @@ fn local_initializer_uses_incoming_scope_before_shadowing_binder_is_introduced()
     };
 
     assert_ne!(first.id, second.id);
-    assert_eq!(initializer_use.binder, first.id);
-    assert_eq!(result_use.binder, second.id);
+    assert_eq!(occurrence_binder(initializer_use), first.id);
+    assert_eq!(occurrence_binder(result_use), second.id);
     assert_eq!(first.origin.primary_span().range().start(), 39);
     assert_eq!(second.origin.primary_span().range().start(), 57);
     assert_eq!(initializer_use.origin.primary_span().range().start(), 65);
@@ -308,8 +747,8 @@ fn anonymous_parameter_shadows_outer_binder_only_inside_its_body() {
 
     let parameter = pattern_binder(&function.pattern);
     assert_ne!(outer.id, parameter.id);
-    assert_eq!(body_use.binder, parameter.id);
-    assert_eq!(block_use.binder, outer.id);
+    assert_eq!(occurrence_binder(body_use), parameter.id);
+    assert_eq!(occurrence_binder(block_use), outer.id);
 }
 
 #[test]
@@ -365,7 +804,10 @@ fn recursive_global_bodies_see_the_complete_file_scope() {
     let ResolvedExprKind::Occurrence(self_use) = &self_application.function.kind else {
         panic!("expected recursive occurrence")
     };
-    assert_eq!(self_use.binder, self_definition.interface.name.id);
+    assert_eq!(
+        occurrence_binder(self_use),
+        self_definition.interface.name.id
+    );
 
     let forward = resolve_valid(
         "first : Int -> Int\nfirst value = second value\n\nsecond : Int -> Int\nsecond value = value\n\nmain : Unit -> Int\nmain () = first 0\n",
@@ -382,7 +824,7 @@ fn recursive_global_bodies_see_the_complete_file_scope() {
     let ResolvedExprKind::Occurrence(second_use) = &application.function.kind else {
         panic!("expected forward occurrence")
     };
-    assert_eq!(second_use.binder, second.interface.name.id);
+    assert_eq!(occurrence_binder(second_use), second.interface.name.id);
 }
 
 #[test]
@@ -424,9 +866,9 @@ fn recursive_local_members_share_scope_and_remain_visible_after_the_group() {
         panic!("expected result occurrence")
     };
 
-    assert_eq!(second_use.binder, second.binder.id);
-    assert_eq!(first_use.binder, first.binder.id);
-    assert_eq!(result_use.binder, first.binder.id);
+    assert_eq!(occurrence_binder(second_use), second.binder.id);
+    assert_eq!(occurrence_binder(first_use), first.binder.id);
+    assert_eq!(occurrence_binder(result_use), first.binder.id);
 }
 
 #[test]
@@ -447,7 +889,7 @@ fn recursive_group_captures_outer_scope_and_may_shadow_it() {
     let ResolvedExprKind::Occurrence(captured_use) = &function.body.result.kind else {
         panic!("expected captured occurrence")
     };
-    assert_eq!(captured_use.binder, binding_binder(outer).id);
+    assert_eq!(occurrence_binder(captured_use), binding_binder(outer).id);
 
     let shadowed = resolve_valid(
         "main : Unit -> Int\nmain () = {\nlet repeat : Unit -> Int = fn(ignored) {\n1\n}\nlet rec repeat : Unit -> Int = fn(ignored) {\nrepeat ()\n}\nrepeat ()\n}\n",
@@ -470,7 +912,7 @@ fn recursive_group_captures_outer_scope_and_may_shadow_it() {
         panic!("expected self occurrence")
     };
     assert_ne!(member.binder.id, binding_binder(outer).id);
-    assert_eq!(self_use.binder, member.binder.id);
+    assert_eq!(occurrence_binder(self_use), member.binder.id);
 }
 
 #[test]
@@ -502,8 +944,8 @@ fn later_global_body_resolves_an_earlier_global_identity() {
         panic!("expected an earlier-global occurrence");
     };
 
-    assert_eq!(first_use.binder, first.interface.name.id);
-    assert_ne!(first_use.binder, second.interface.name.id);
+    assert_eq!(occurrence_binder(first_use), first.interface.name.id);
+    assert_ne!(occurrence_binder(first_use), second.interface.name.id);
 }
 
 #[test]
@@ -542,7 +984,7 @@ fn definition_and_occurrence_keep_distinct_causal_origins_and_exact_spelling() {
 
     assert_eq!(definition.interface.name.spelling, "identity");
     assert_eq!(use_site.spelling, "identity");
-    assert_eq!(use_site.binder, definition.interface.name.id);
+    assert_eq!(occurrence_binder(use_site), definition.interface.name.id);
     assert_eq!(
         definition
             .interface
@@ -695,7 +1137,10 @@ fn local_binding_may_shadow_a_global_without_changing_the_global_identity() {
         binding_binder(binding(block, 0)).id,
         global.interface.name.id
     );
-    assert_eq!(local_use.binder, binding_binder(binding(block, 0)).id);
+    assert_eq!(
+        occurrence_binder(local_use),
+        binding_binder(binding(block, 0)).id
+    );
 }
 
 #[test]
@@ -720,7 +1165,13 @@ fn anonymous_function_captures_outer_binder_and_keeps_parameter_identity_separat
         panic!("expected a captured occurrence");
     };
 
-    assert_eq!(parameter_use.binder, pattern_binder(&function.pattern).id);
-    assert_eq!(capture_use.binder, offset.id);
-    assert_ne!(parameter_use.binder, capture_use.binder);
+    assert_eq!(
+        occurrence_binder(parameter_use),
+        pattern_binder(&function.pattern).id
+    );
+    assert_eq!(occurrence_binder(capture_use), offset.id);
+    assert_ne!(
+        occurrence_binder(parameter_use),
+        occurrence_binder(capture_use)
+    );
 }

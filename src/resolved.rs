@@ -7,6 +7,7 @@ use std::{
 
 use crate::{
     integer::Integer,
+    interface::{EvidenceSlot, ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId},
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
     surface::SurfaceTypeVisibility,
@@ -78,12 +79,58 @@ pub struct Binder {
 /// A resolved occurrence site.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedOccurrence {
-    /// Identity of the definition selected by lexical scope.
-    pub binder: BinderId,
+    /// Typed identity selected by lexical scope.
+    pub term: ResolvedTermName,
     /// Exact source spelling at this occurrence.
     pub spelling: String,
     /// Causal source provenance for the occurrence site.
     pub origin: Origin,
+    /// Structural evidence positions owned by this exact occurrence.
+    pub evidence: Box<[EvidenceSlot]>,
+}
+
+impl ResolvedOccurrence {
+    /// Returns the ordinary binder selected by this occurrence, if it is not a method.
+    #[must_use]
+    pub const fn global_binder(&self) -> Option<BinderId> {
+        match self.term {
+            ResolvedTermName::Global(binder) => Some(binder),
+            ResolvedTermName::Method(_) => None,
+        }
+    }
+}
+
+/// The tagged semantic identity of one resolved term occurrence.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ResolvedTermName {
+    /// An ordinary global or lexical binder.
+    Global(BinderId),
+    /// An interface method requiring evidence during checking.
+    Method(MethodId),
+}
+
+/// A repeated equation-head occurrence, which never owns evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEquationHead {
+    /// Stable identity of the ordinary or hidden binder being defined.
+    pub binder: BinderId,
+    /// Exact source spelling at the repeated head.
+    pub spelling: String,
+    /// Causal source provenance for the head occurrence.
+    pub origin: Origin,
+}
+
+/// Cross-family declaration order with category-local indices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolvedDeclarationIndex {
+    /// A nominal type declaration.
+    Type(usize),
+    /// An interface declaration.
+    Interface(usize),
+    /// An ordinary global definition.
+    Global(usize),
+    /// An implementation declaration.
+    Implementation(usize),
 }
 
 /// One declarations-only module after name resolution.
@@ -92,27 +139,38 @@ pub struct ResolvedModule {
     module: ModuleId,
     registry: Arc<ResolvedRegistry>,
     imported: ImportedFacts,
+    declaration_order: Box<[ResolvedDeclarationIndex]>,
+    interfaces: Box<[ResolvedInterfaceDeclaration]>,
+    implementations: Box<[ResolvedImplementation]>,
     definitions: Box<[ResolvedDefinition]>,
     export_candidate: ResolvedExportCandidate,
     span: Span,
 }
 
+pub(crate) struct ResolvedModuleParts {
+    pub module: ModuleId,
+    pub registry: Arc<ResolvedRegistry>,
+    pub imported: ImportedFacts,
+    pub declaration_order: Vec<ResolvedDeclarationIndex>,
+    pub interfaces: Vec<ResolvedInterfaceDeclaration>,
+    pub implementations: Vec<ResolvedImplementation>,
+    pub definitions: Vec<ResolvedDefinition>,
+    pub export_candidate: ResolvedExportCandidate,
+    pub span: Span,
+}
+
 impl ResolvedModule {
-    pub(crate) fn new(
-        module: ModuleId,
-        registry: Arc<ResolvedRegistry>,
-        imported: ImportedFacts,
-        definitions: Vec<ResolvedDefinition>,
-        export_candidate: ResolvedExportCandidate,
-        span: Span,
-    ) -> Self {
+    pub(crate) fn new(parts: ResolvedModuleParts) -> Self {
         Self {
-            module,
-            registry,
-            imported,
-            definitions: definitions.into_boxed_slice(),
-            export_candidate,
-            span,
+            module: parts.module,
+            registry: parts.registry,
+            imported: parts.imported,
+            declaration_order: parts.declaration_order.into_boxed_slice(),
+            interfaces: parts.interfaces.into_boxed_slice(),
+            implementations: parts.implementations.into_boxed_slice(),
+            definitions: parts.definitions.into_boxed_slice(),
+            export_candidate: parts.export_candidate,
+            span: parts.span,
         }
     }
 
@@ -132,6 +190,24 @@ impl ResolvedModule {
     #[must_use]
     pub const fn imported_facts(&self) -> &ImportedFacts {
         &self.imported
+    }
+
+    /// Returns the explicit cross-family declaration order.
+    #[must_use]
+    pub const fn declaration_order(&self) -> &[ResolvedDeclarationIndex] {
+        &self.declaration_order
+    }
+
+    /// Returns local interface declarations in category-local source order.
+    #[must_use]
+    pub const fn interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
+        &self.interfaces
+    }
+
+    /// Returns local implementation declarations in category-local source order.
+    #[must_use]
+    pub const fn implementations(&self) -> &[ResolvedImplementation] {
+        &self.implementations
     }
 
     /// Returns local definitions in source order.
@@ -171,6 +247,9 @@ pub struct CheckedGlobalScheme {
 pub struct CheckedModule {
     module: ModuleId,
     registry: Arc<ResolvedRegistry>,
+    declaration_order: Box<[ResolvedDeclarationIndex]>,
+    interfaces: Box<[ResolvedInterfaceDeclaration]>,
+    implementations: Box<[ResolvedImplementation]>,
     definitions: Box<[ResolvedDefinition]>,
     schemes: Vec<CheckedGlobalScheme>,
     exports: ExportSummary,
@@ -186,6 +265,9 @@ impl CheckedModule {
         Self {
             module: resolved.module,
             registry: resolved.registry,
+            declaration_order: resolved.declaration_order,
+            interfaces: resolved.interfaces,
+            implementations: resolved.implementations,
             definitions: resolved.definitions,
             schemes,
             exports,
@@ -211,6 +293,18 @@ impl CheckedModule {
         &self.definitions
     }
 
+    /// Returns local interfaces retained for interface checking.
+    #[must_use]
+    pub const fn interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
+        &self.interfaces
+    }
+
+    /// Returns local implementations retained for interface checking.
+    #[must_use]
+    pub const fn implementations(&self) -> &[ResolvedImplementation] {
+        &self.implementations
+    }
+
     /// Returns checked local schemes in definition order.
     #[must_use]
     pub fn schemes(&self) -> &[CheckedGlobalScheme] {
@@ -232,6 +326,9 @@ impl CheckedModule {
     pub(crate) fn into_group(mut self) -> ResolvedModuleGroup {
         ResolvedModuleGroup {
             module: self.module,
+            declaration_order: std::mem::take(&mut self.declaration_order),
+            interfaces: std::mem::take(&mut self.interfaces),
+            implementations: std::mem::take(&mut self.implementations),
             definitions: std::mem::take(&mut self.definitions),
             schemes: std::mem::take(&mut self.schemes).into_boxed_slice(),
             span: self.span,
@@ -253,6 +350,12 @@ impl Drop for CheckedModule {
 pub struct ResolvedModuleGroup {
     /// Stable canonical module identity.
     pub module: ModuleId,
+    /// Cross-family declaration order within this module.
+    pub declaration_order: Box<[ResolvedDeclarationIndex]>,
+    /// Resolved local interfaces retained for later checked lowering.
+    pub interfaces: Box<[ResolvedInterfaceDeclaration]>,
+    /// Resolved local implementations retained for later checked lowering.
+    pub implementations: Box<[ResolvedImplementation]>,
     /// Checked local definitions in source order.
     pub definitions: Box<[ResolvedDefinition]>,
     /// Checked schemes in the same definition order.
@@ -1832,6 +1935,104 @@ pub struct ResolvedDefinition {
     pub span: Span,
 }
 
+/// One locally declared method-only interface after name resolution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedInterfaceDeclaration {
+    /// Stable module-qualified interface identity.
+    pub id: InterfaceId,
+    /// Whether the interface is eligible for checked publication.
+    pub public: bool,
+    /// Exact declared spelling.
+    pub spelling: String,
+    /// The interface's single resolved type parameter.
+    pub parameter: ResolvedTypeVariable,
+    /// Nonempty methods in semantic declaration order.
+    pub methods: Box<[ResolvedInterfaceMethod]>,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+    /// Complete declaration span.
+    pub span: Span,
+}
+
+/// One resolved signature-only interface method.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedInterfaceMethod {
+    /// Stable identity within the owning interface.
+    pub id: MethodId,
+    /// Exact declared spelling.
+    pub spelling: String,
+    /// Resolved source value type.
+    pub annotation: ResolvedType,
+    /// Free method-local type candidates retained for Task 4 rejection.
+    pub type_parameters: Box<[ResolvedTypeVariable]>,
+    /// Causal method provenance.
+    pub origin: Origin,
+    /// Complete method-signature span.
+    pub span: Span,
+}
+
+/// One resolved occurrence of an interface in a requirement or impl head.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedInterfaceOccurrence {
+    /// Stable selected interface identity.
+    pub id: InterfaceId,
+    /// Exact source spelling.
+    pub spelling: String,
+    /// Causal source provenance.
+    pub origin: Origin,
+}
+
+/// One ordered resolved interface requirement outside the ordinary type algebra.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedRequirement {
+    /// Owner-qualified occurrence identity.
+    pub id: RequirementId,
+    /// Resolved interface occurrence.
+    pub interface: ResolvedInterfaceOccurrence,
+    /// Resolved single type argument.
+    pub argument: ResolvedType,
+    /// Complete requirement span.
+    pub span: Span,
+}
+
+/// One resolved implementation declaration retained for Task 4 checking.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedImplementation {
+    /// Stable category-local implementation identity.
+    pub id: ImplId,
+    /// Whether the checked anonymous fact is eligible for publication.
+    pub public: bool,
+    /// Implemented interface occurrence.
+    pub interface: ResolvedInterfaceOccurrence,
+    /// Resolved implementation head argument.
+    pub argument: ResolvedType,
+    /// Rigid parameters discovered from the head in first-occurrence order.
+    pub head_parameters: Box<[ResolvedTypeVariable]>,
+    /// Candidate variables found only in prerequisites.
+    pub prerequisite_only_parameters: Box<[ResolvedTypeVariable]>,
+    /// Ordered prerequisites owned by this implementation.
+    pub prerequisites: Box<[ResolvedRequirement]>,
+    /// Maximal contiguous source method groups.
+    pub method_groups: Box<[ResolvedImplementationMethodGroup]>,
+    /// Complete implementation span.
+    pub span: Span,
+}
+
+/// One maximal contiguous implementation method-equation group.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedImplementationMethodGroup {
+    /// Interface method named by the source head, when it is a method at all.
+    pub method: Option<MethodId>,
+    /// Identity derived from the impl and method, retained even for duplicates.
+    pub identity: Option<ImplMethodId>,
+    /// Hidden module-qualified binder allocated for this exact source group.
+    pub binder: Binder,
+    /// Nonempty equations in the contiguous group.
+    pub equations: Box<[ResolvedEquation]>,
+    /// Complete group span.
+    pub span: Span,
+}
+
 /// The closed resolved global-definition family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedDefinitionKind {
@@ -1857,6 +2058,8 @@ pub struct ResolvedExternalInterface {
     pub name: Binder,
     /// Declared resolved type.
     pub annotation: ResolvedType,
+    /// Ordered explicit interface requirements.
+    pub requirements: Box<[ResolvedRequirement]>,
     /// Implicit outer type binders in first-occurrence order.
     pub type_parameters: Box<[ResolvedTypeVariable]>,
     /// Complete interface span.
@@ -1867,7 +2070,7 @@ pub struct ResolvedExternalInterface {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedEquation {
     /// Repeated global name in the equation head.
-    pub name: ResolvedOccurrence,
+    pub name: ResolvedEquationHead,
     /// Patterns consuming successive arrow domains.
     pub patterns: Vec<ResolvedPattern>,
     /// Resolved equation body.
@@ -1894,6 +2097,8 @@ pub struct ResolvedInlineOperationalHeader {
     pub parameters: Vec<ResolvedTypedPattern>,
     /// Declared result type.
     pub result_type: ResolvedType,
+    /// Ordered explicit interface requirements.
+    pub requirements: Box<[ResolvedRequirement]>,
     /// Implicit outer type binders in first-occurrence order.
     pub type_parameters: Box<[ResolvedTypeVariable]>,
     /// Complete header span, excluding the body.

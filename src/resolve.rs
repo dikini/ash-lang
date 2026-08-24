@@ -3,12 +3,15 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    ops::Deref,
+    ops::{Deref, Range},
     sync::Arc,
 };
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
+    interface::{
+        EvidenceSlot, ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId, RequirementOwner,
+    },
     module::{LoadedModule, ModuleDependency, ModuleId},
     resolved::{
         Binder, BinderId, CandidateConstructor, CandidateGlobal, CandidateHiddenNominal,
@@ -18,19 +21,24 @@ use crate::{
         ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
         ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
         ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
-        ResolvedFunctionExpr, ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
+        ResolvedFunctionExpr, ResolvedImplementation, ResolvedImplementationMethodGroup,
+        ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
+        ResolvedInterfaceDeclaration, ResolvedInterfaceMethod, ResolvedInterfaceOccurrence,
         ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr, ResolvedModule,
-        ResolvedNominalType, ResolvedOccurrence, ResolvedPattern, ResolvedPatternKind,
-        ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry, ResolvedType,
-        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
-        ResolvedTypedPattern, WithheldExport, WithheldExportKind, WithheldNamespace,
+        ResolvedModuleParts, ResolvedNominalType, ResolvedOccurrence, ResolvedPattern,
+        ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry,
+        ResolvedRequirement, ResolvedTermName, ResolvedType, ResolvedTypeProvenance,
+        ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern, WithheldExport,
+        WithheldExportKind, WithheldNamespace,
     },
     source::Origin,
     surface::{
-        BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr,
-        SurfaceExprKind, SurfaceImportSelection, SurfaceLocalDeclaration, SurfaceModule,
-        SurfacePattern, SurfacePatternKind, SurfaceRecursiveGroup, SurfaceReference, SurfaceType,
-        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeVisibility,
+        BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDeclarationIndex, SurfaceDefinition,
+        SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceImplementation,
+        SurfaceImportSelection, SurfaceInterfaceDeclaration, SurfaceLocalDeclaration,
+        SurfaceModule, SurfacePattern, SurfacePatternKind, SurfaceRecursiveGroup, SurfaceReference,
+        SurfaceRequirement, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
+        SurfaceTypeVisibility,
     },
     types::{
         ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, charge_type_cells,
@@ -67,6 +75,10 @@ pub enum ResolveReason {
     TypeArgumentCount,
     /// A type of kind `Type` was used as a type constructor.
     TypeKind,
+    /// An interface position names no interface declaration.
+    UnknownInterface,
+    /// A nominal type or type parameter was used as an interface.
+    InterfaceKind,
     /// An uppercase term or pattern names no constructor.
     UnknownConstructor,
     /// One pattern vector binds the same spelling more than once.
@@ -97,6 +109,8 @@ impl fmt::Display for ResolveReason {
             Self::UnknownType => "resolve.unknown-type",
             Self::TypeArgumentCount => "resolve.type-argument-count",
             Self::TypeKind => "resolve.type-kind",
+            Self::UnknownInterface => "resolve.unknown-interface",
+            Self::InterfaceKind => "resolve.interface-kind",
             Self::UnknownConstructor => "resolve.unknown-constructor",
             Self::DuplicatePatternBinder => "pattern.duplicate-binder",
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
@@ -229,18 +243,45 @@ pub(crate) fn resolve_module_with_budget(
     let mut resolver = Resolver::with_type_work(module, std::mem::take(type_work));
     let result = (|| {
         resolver.install_imports(surface, dependencies)?;
-        let (registry, definitions) =
-            resolver.resolve_declarations(&surface.type_declarations, &surface.definitions)?;
+        resolver.validate_local_namespaces(surface)?;
+        let ResolvedDeclarations {
+            registry,
+            interfaces,
+            implementations,
+            definitions,
+        } = resolver.resolve_declarations(surface)?;
         let imported = std::mem::take(&mut resolver.imported);
         let export_candidate = build_export_candidate(surface, &registry, &definitions)?;
-        Ok(ResolvedModule::new(
+        let declaration_order = surface
+            .declaration_order
+            .iter()
+            .copied()
+            .map(|declaration| match declaration {
+                SurfaceDeclarationIndex::Type(index) => {
+                    crate::resolved::ResolvedDeclarationIndex::Type(index)
+                }
+                SurfaceDeclarationIndex::Interface(index) => {
+                    crate::resolved::ResolvedDeclarationIndex::Interface(index)
+                }
+                SurfaceDeclarationIndex::Global(index) => {
+                    crate::resolved::ResolvedDeclarationIndex::Global(index)
+                }
+                SurfaceDeclarationIndex::Implementation(index) => {
+                    crate::resolved::ResolvedDeclarationIndex::Implementation(index)
+                }
+            })
+            .collect();
+        Ok(ResolvedModule::new(ResolvedModuleParts {
             module,
             registry,
             imported,
+            declaration_order,
+            interfaces,
+            implementations,
             definitions,
             export_candidate,
-            surface.span,
-        ))
+            span: surface.span,
+        }))
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
     result
@@ -386,6 +427,13 @@ fn definition_binder(definition: &ResolvedDefinition) -> &Binder {
     }
 }
 
+fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::SurfaceName {
+    match &definition.kind {
+        SurfaceDefinitionKind::Equational(global) => &global.interface.name,
+        SurfaceDefinitionKind::InlineOperational(global) => &global.header.name,
+    }
+}
+
 struct Resolver {
     module: ModuleId,
     next_binder: u32,
@@ -393,6 +441,9 @@ struct Resolver {
     scopes: Vec<HashMap<String, Binder>>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
+    interface_names: HashMap<String, InterfaceId>,
+    method_names: HashMap<String, MethodId>,
+    global_requirement_counts: HashMap<BinderId, usize>,
     constructor_names: HashMap<String, ConstructorId>,
     module_aliases: HashMap<String, ImportedNamespaces>,
     targeted_withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
@@ -409,9 +460,34 @@ struct GlobalFact {
     definition_span: crate::source::Span,
 }
 
+struct PendingImplementation {
+    id: ImplId,
+    head_parameters: Vec<ResolvedTypeVariable>,
+    prerequisite_only_parameters: Vec<ResolvedTypeVariable>,
+    method_groups: Vec<PendingImplementationMethodGroup>,
+}
+
+struct PendingImplementationMethodGroup {
+    equations: Range<usize>,
+    binder: Option<Binder>,
+}
+
+struct ResolvedDeclarations {
+    registry: Arc<ResolvedRegistry>,
+    interfaces: Vec<ResolvedInterfaceDeclaration>,
+    implementations: Vec<ResolvedImplementation>,
+    definitions: Vec<ResolvedDefinition>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LocalTypeDeclarationKind {
+    Nominal,
+    Interface,
+}
+
 #[derive(Debug, Default)]
 struct ImportedNamespaces {
-    terms: HashMap<String, BinderId>,
+    terms: HashMap<String, ResolvedTermName>,
     nominals: HashMap<String, ImportedNominalName>,
     constructors: HashMap<String, ConstructorId>,
     withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
@@ -443,6 +519,9 @@ impl Resolver {
             scopes: vec![HashMap::new()],
             globals: HashMap::new(),
             type_names: HashMap::new(),
+            interface_names: HashMap::new(),
+            method_names: HashMap::new(),
+            global_requirement_counts: HashMap::new(),
             constructor_names: HashMap::new(),
             module_aliases: HashMap::new(),
             targeted_withheld: HashMap::new(),
@@ -453,6 +532,325 @@ impl Resolver {
             #[cfg(test)]
             max_type_pending_tasks: 0,
         }
+    }
+
+    fn validate_local_namespaces(&self, surface: &SurfaceModule) -> Result<(), ResolveError> {
+        let mut type_names: HashMap<&str, (crate::source::Span, LocalTypeDeclarationKind)> =
+            HashMap::new();
+        let mut term_names: HashMap<&str, (crate::source::Span, Option<crate::source::Span>)> =
+            HashMap::new();
+
+        for declaration in &surface.declaration_order {
+            match *declaration {
+                SurfaceDeclarationIndex::Type(index) => {
+                    let declaration = surface.type_declarations.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid type index",
+                        )
+                    })?;
+                    self.validate_local_type_name(
+                        &declaration.name,
+                        LocalTypeDeclarationKind::Nominal,
+                        &mut type_names,
+                    )?;
+                }
+                SurfaceDeclarationIndex::Interface(index) => {
+                    let declaration = surface.interfaces.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid interface index",
+                        )
+                    })?;
+                    self.validate_local_type_name(
+                        &declaration.name,
+                        LocalTypeDeclarationKind::Interface,
+                        &mut type_names,
+                    )?;
+                    for method in &declaration.methods {
+                        self.validate_local_term_name(&method.name, None, &mut term_names)?;
+                    }
+                }
+                SurfaceDeclarationIndex::Global(index) => {
+                    let definition = surface.definitions.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid global index",
+                        )
+                    })?;
+                    let name = surface_definition_name(definition);
+                    self.validate_local_term_name(name, Some(definition.span), &mut term_names)?;
+                }
+                SurfaceDeclarationIndex::Implementation(index) => {
+                    if surface.implementations.get(index).is_none() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid impl index",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_local_type_name<'a>(
+        &self,
+        name: &'a crate::surface::SurfaceName,
+        kind: LocalTypeDeclarationKind,
+        names: &mut HashMap<&'a str, (crate::source::Span, LocalTypeDeclarationKind)>,
+    ) -> Result<(), ResolveError> {
+        if self.module_aliases.contains_key(&name.text) || self.type_names.contains_key(&name.text)
+        {
+            return Err(import_conflict(name.span, &name.text));
+        }
+        if let Some((first, first_kind)) = names.insert(&name.text, (name.span, kind)) {
+            if first_kind == LocalTypeDeclarationKind::Nominal
+                && kind == LocalTypeDeclarationKind::Nominal
+            {
+                let mut diagnostic = Diagnostic::new(
+                    ResolveReason::DuplicateType,
+                    SourceLabel::new(name.span, "this nominal type name is already defined"),
+                );
+                diagnostic
+                    .related
+                    .push(SourceLabel::new(first, "the first nominal type is here"));
+                return Err(diagnostic.into());
+            }
+            let mut diagnostic = Diagnostic::new(
+                ResolveReason::DuplicateType,
+                SourceLabel::new(name.span, "this type-namespace name is already declared"),
+            );
+            diagnostic
+                .related
+                .push(SourceLabel::new(first, "the first declaration is here"));
+            diagnostic.found = Some(name.text.clone());
+            return Err(diagnostic.into());
+        }
+        Ok(())
+    }
+
+    fn validate_local_term_name<'a>(
+        &self,
+        name: &'a crate::surface::SurfaceName,
+        complete_definition: Option<crate::source::Span>,
+        names: &mut HashMap<&'a str, (crate::source::Span, Option<crate::source::Span>)>,
+    ) -> Result<(), ResolveError> {
+        if self.module_aliases.contains_key(&name.text)
+            || self.constructor_names.contains_key(&name.text)
+            || self
+                .scopes
+                .first()
+                .is_some_and(|scope| scope.contains_key(&name.text))
+        {
+            return Err(import_conflict(name.span, &name.text));
+        }
+        if let Some((first, first_definition)) =
+            names.insert(&name.text, (name.span, complete_definition))
+        {
+            if let (Some(first_definition), Some(_)) = (first_definition, complete_definition) {
+                let mut diagnostic = Diagnostic::new(
+                    ResolveReason::DuplicateGlobal,
+                    SourceLabel::new(name.span, "this global name is already defined"),
+                );
+                diagnostic
+                    .related
+                    .push(SourceLabel::new(first, "the first global name is here"));
+                diagnostic.related.push(SourceLabel::new(
+                    first_definition,
+                    "the first complete definition is here",
+                ));
+                return Err(diagnostic.into());
+            }
+            let mut diagnostic = Diagnostic::new(
+                ResolveReason::DuplicateGlobal,
+                SourceLabel::new(name.span, "this term name is already declared"),
+            );
+            diagnostic
+                .related
+                .push(SourceLabel::new(first, "the first term name is here"));
+            if let Some(first_definition) = first_definition {
+                diagnostic.related.push(SourceLabel::new(
+                    first_definition,
+                    "the first complete definition is here",
+                ));
+            }
+            diagnostic.found = Some(name.text.clone());
+            return Err(diagnostic.into());
+        }
+        Ok(())
+    }
+
+    fn resolve_interface_declarations(
+        &mut self,
+        declarations: &[SurfaceInterfaceDeclaration],
+    ) -> Result<(Vec<ResolvedInterfaceDeclaration>, Vec<ResolvedTypeVariable>), ResolveError> {
+        let mut identities = Vec::with_capacity(declarations.len());
+        for (index, declaration) in declarations.iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| {
+                error(
+                    ResolveReason::InternalState,
+                    declaration.span,
+                    "the file contains too many interface declarations",
+                )
+            })?;
+            let id = InterfaceId::new(self.module, index);
+            self.interface_names
+                .insert(declaration.name.text.clone(), id);
+            let mut methods = Vec::with_capacity(declaration.methods.len());
+            for (method_index, method) in declaration.methods.iter().enumerate() {
+                let method_index = u32::try_from(method_index).map_err(|_| {
+                    error(
+                        ResolveReason::InternalState,
+                        method.span,
+                        "the interface contains too many method declarations",
+                    )
+                })?;
+                let method_id = MethodId::new(id, method_index);
+                self.method_names
+                    .insert(method.name.text.clone(), method_id);
+                methods.push(method_id);
+            }
+            identities.push((id, methods));
+        }
+
+        let mut resolved = Vec::with_capacity(declarations.len());
+        let mut retained_type_variables = Vec::new();
+        for (declaration, (id, method_ids)) in declarations.iter().zip(identities) {
+            let parameter = self
+                .allocate_type_variable(&declaration.parameter.text, declaration.parameter.span)?;
+            retained_type_variables.push(parameter.clone());
+            let mut methods = Vec::with_capacity(declaration.methods.len());
+            for (method, method_id) in declaration.methods.iter().zip(method_ids) {
+                let mut names = Vec::new();
+                let mut seen = HashSet::from([declaration.parameter.text.as_str()]);
+                collect_free_type_names(
+                    &method.annotation,
+                    &self.type_names,
+                    &self.interface_names,
+                    &mut seen,
+                    &mut names,
+                    &mut self.type_work,
+                )?;
+                let type_parameters = names
+                    .into_iter()
+                    .map(|name| self.allocate_type_variable(&name.text, name.span))
+                    .collect::<Result<Vec<_>, _>>()?;
+                retained_type_variables.extend(type_parameters.iter().cloned());
+                self.type_scopes.push(
+                    std::iter::once((parameter.spelling.clone(), parameter.clone()))
+                        .chain(
+                            type_parameters
+                                .iter()
+                                .map(|parameter| (parameter.spelling.clone(), parameter.clone())),
+                        )
+                        .collect(),
+                );
+                let annotation = self.resolve_type(&method.annotation);
+                let _ = self.type_scopes.pop();
+                methods.push(ResolvedInterfaceMethod {
+                    id: method_id,
+                    spelling: method.name.text.clone(),
+                    annotation: annotation?,
+                    type_parameters: type_parameters.into_boxed_slice(),
+                    origin: Origin::Source(method.span),
+                    span: method.span,
+                });
+            }
+            resolved.push(ResolvedInterfaceDeclaration {
+                id,
+                public: declaration.public,
+                spelling: declaration.name.text.clone(),
+                parameter,
+                methods: methods.into_boxed_slice(),
+                origin: Origin::Source(declaration.span),
+                span: declaration.span,
+            });
+        }
+        Ok((resolved, retained_type_variables))
+    }
+
+    fn prepare_implementations(
+        &mut self,
+        declarations: &[SurfaceImplementation],
+    ) -> Result<(Vec<PendingImplementation>, Vec<ResolvedTypeVariable>), ResolveError> {
+        let mut pending = Vec::with_capacity(declarations.len());
+        let mut retained_type_variables = Vec::new();
+
+        for (index, implementation) in declarations.iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| {
+                error(
+                    ResolveReason::InternalState,
+                    implementation.span,
+                    "the file contains too many implementation declarations",
+                )
+            })?;
+            let id = ImplId::new(self.module, index);
+
+            let mut seen = HashSet::new();
+            let mut head_names = Vec::new();
+            collect_free_type_names(
+                &implementation.argument,
+                &self.type_names,
+                &self.interface_names,
+                &mut seen,
+                &mut head_names,
+                &mut self.type_work,
+            )?;
+            let head_parameters = head_names
+                .into_iter()
+                .map(|name| self.allocate_type_variable(&name.text, name.span))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut prerequisite_only_names = Vec::new();
+            for prerequisite in &implementation.prerequisites {
+                collect_free_type_names(
+                    &prerequisite.argument,
+                    &self.type_names,
+                    &self.interface_names,
+                    &mut seen,
+                    &mut prerequisite_only_names,
+                    &mut self.type_work,
+                )?;
+            }
+            let prerequisite_only_parameters = prerequisite_only_names
+                .into_iter()
+                .map(|name| self.allocate_type_variable(&name.text, name.span))
+                .collect::<Result<Vec<_>, _>>()?;
+            retained_type_variables.extend(head_parameters.iter().cloned());
+            retained_type_variables.extend(prerequisite_only_parameters.iter().cloned());
+
+            let mut method_groups = Vec::new();
+            let mut start = 0;
+            while let Some(first) = implementation.equations.get(start) {
+                let mut end = start + 1;
+                while implementation
+                    .equations
+                    .get(end)
+                    .is_some_and(|equation| equation.name.text == first.name.text)
+                {
+                    end += 1;
+                }
+                method_groups.push(PendingImplementationMethodGroup {
+                    equations: start..end,
+                    binder: None,
+                });
+                start = end;
+            }
+
+            pending.push(PendingImplementation {
+                id,
+                head_parameters,
+                prerequisite_only_parameters,
+                method_groups,
+            });
+        }
+
+        Ok((pending, retained_type_variables))
     }
 
     fn install_imports(
@@ -623,9 +1021,10 @@ impl Resolver {
         terms.extend(summary.terms());
         terms.sort_unstable_by_key(|(spelling, _)| *spelling);
         for (spelling, exported) in terms {
-            namespaces
-                .terms
-                .insert(spelling.to_owned(), exported.binder);
+            namespaces.terms.insert(
+                spelling.to_owned(),
+                ResolvedTermName::Global(exported.binder),
+            );
             self.retain_imported_global(exported, summary, import_span)?;
         }
 
@@ -967,7 +1366,9 @@ impl Resolver {
     fn file_name_is_bound(&self, spelling: &str) -> bool {
         self.module_aliases.contains_key(spelling)
             || self.type_names.contains_key(spelling)
+            || self.interface_names.contains_key(spelling)
             || self.constructor_names.contains_key(spelling)
+            || self.method_names.contains_key(spelling)
             || self
                 .scopes
                 .first()
@@ -977,6 +1378,7 @@ impl Resolver {
     fn expression_name_is_bound(&self, spelling: &str) -> bool {
         self.module_aliases.contains_key(spelling)
             || self.constructor_names.contains_key(spelling)
+            || self.method_names.contains_key(spelling)
             || self
                 .scopes
                 .first()
@@ -1019,6 +1421,9 @@ impl Resolver {
                 });
         }
         let name = reference.member();
+        if self.interface_names.contains_key(&name.text) {
+            return Err(type_kind_error(name.span, &name.text));
+        }
         let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
             if let Some(withheld) = self
                 .targeted_withheld
@@ -1045,6 +1450,66 @@ impl Resolver {
             id,
             parameter_count,
         })
+    }
+
+    fn interface_reference(
+        &self,
+        reference: &SurfaceReference,
+    ) -> Result<ResolvedInterfaceOccurrence, ResolveError> {
+        let member = reference.member();
+        if let Some(namespace) = self.imported_namespace(reference)? {
+            if namespace.nominals.contains_key(&member.text)
+                || namespace.constructors.contains_key(&member.text)
+                || namespace.terms.contains_key(&member.text)
+            {
+                return Err(interface_kind_error(member.span, &member.text));
+            }
+            return Err(unknown_interface_error(member.span, &member.text));
+        }
+        if let Some(id) = self.interface_names.get(&member.text).copied() {
+            return Ok(ResolvedInterfaceOccurrence {
+                id,
+                spelling: member.text.clone(),
+                origin: Origin::Source(reference.span()),
+            });
+        }
+        if self.file_name_is_bound(&member.text)
+            || self
+                .type_scopes
+                .iter()
+                .rev()
+                .any(|scope| scope.contains_key(&member.text))
+        {
+            return Err(interface_kind_error(member.span, &member.text));
+        }
+        Err(unknown_interface_error(member.span, &member.text))
+    }
+
+    fn resolve_requirements(
+        &mut self,
+        owner: RequirementOwner,
+        requirements: &[SurfaceRequirement],
+    ) -> Result<Box<[ResolvedRequirement]>, ResolveError> {
+        requirements
+            .iter()
+            .enumerate()
+            .map(|(index, requirement)| {
+                let index = u32::try_from(index).map_err(|_| {
+                    error(
+                        ResolveReason::InternalState,
+                        requirement.span,
+                        "the declaration contains too many interface requirements",
+                    )
+                })?;
+                Ok(ResolvedRequirement {
+                    id: RequirementId::new(owner, index),
+                    interface: self.interface_reference(&requirement.interface)?,
+                    argument: self.resolve_type(&requirement.argument)?,
+                    span: requirement.span,
+                })
+            })
+            .collect::<Result<Vec<_>, ResolveError>>()
+            .map(Vec::into_boxed_slice)
     }
 
     fn constructor_reference(
@@ -1099,99 +1564,184 @@ impl Resolver {
         Err(diagnostic.into())
     }
 
+    fn allocate_global_binder(
+        &mut self,
+        definition: &SurfaceDefinition,
+    ) -> Result<Binder, ResolveError> {
+        let (global_name, global_name_span) = match &definition.kind {
+            SurfaceDefinitionKind::Equational(equational) => {
+                if equational.equations.is_empty() {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        definition.span,
+                        "the equational definition has no clause",
+                    ));
+                }
+                for equation in &equational.equations {
+                    if equational.interface.name.text != equation.name.text {
+                        let mut diagnostic = Diagnostic::new(
+                            ResolveReason::EquationNameMismatch,
+                            SourceLabel::new(
+                                equation.name.span,
+                                "this equation name does not match its interface",
+                            ),
+                        );
+                        diagnostic.related.push(SourceLabel::new(
+                            equational.interface.name.span,
+                            "the external interface declares this name",
+                        ));
+                        diagnostic.expected = Some(equational.interface.name.text.clone());
+                        diagnostic.found = Some(equation.name.text.clone());
+                        diagnostic.help = Some(format!(
+                            "rename the equation head to `{}`",
+                            equational.interface.name.text
+                        ));
+                        return Err(diagnostic.into());
+                    }
+                }
+                (
+                    equational.interface.name.text.as_str(),
+                    equational.interface.name.span,
+                )
+            }
+            SurfaceDefinitionKind::InlineOperational(operational) => (
+                operational.header.name.text.as_str(),
+                operational.header.name.span,
+            ),
+        };
+        if let Some(first) = self.globals.get(global_name) {
+            let mut diagnostic = Diagnostic::new(
+                ResolveReason::DuplicateGlobal,
+                SourceLabel::new(global_name_span, "this global name is already defined"),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                first.name_span,
+                "the first global name is here",
+            ));
+            diagnostic.related.push(SourceLabel::new(
+                first.definition_span,
+                "the first complete definition is here",
+            ));
+            return Err(diagnostic.into());
+        }
+        if self.expression_name_is_bound(global_name) {
+            return Err(import_conflict(global_name_span, global_name));
+        }
+        let global = self.allocate_binder(global_name, global_name_span)?;
+        let requirement_count = match &definition.kind {
+            SurfaceDefinitionKind::Equational(global) => global.interface.requirements.len(),
+            SurfaceDefinitionKind::InlineOperational(global) => global.header.requirements.len(),
+        };
+        self.global_requirement_counts
+            .insert(global.id, requirement_count);
+        let Some(file_scope) = self.scopes.first_mut() else {
+            return Err(error(
+                ResolveReason::InternalState,
+                definition.span,
+                "the resolver lost the file scope",
+            ));
+        };
+        file_scope.insert(global.spelling.clone(), global.clone());
+        self.globals.insert(
+            global_name.to_owned(),
+            GlobalFact {
+                name_span: global_name_span,
+                definition_span: definition.span,
+            },
+        );
+        Ok(global)
+    }
+
     fn resolve_declarations(
         &mut self,
-        type_declarations: &[SurfaceTypeDeclaration],
-        surface_definitions: &[crate::surface::SurfaceDefinition],
-    ) -> Result<(Arc<ResolvedRegistry>, Vec<ResolvedDefinition>), ResolveError> {
-        let registry = self.resolve_registry(type_declarations)?;
+        surface: &SurfaceModule,
+    ) -> Result<ResolvedDeclarations, ResolveError> {
+        let registry = self.resolve_registry(&surface.type_declarations)?;
+        let (interfaces, interface_type_parameters) =
+            self.resolve_interface_declarations(&surface.interfaces)?;
+        let surface_definitions = &surface.definitions;
         let mut global_type_parameters = Vec::with_capacity(surface_definitions.len());
         for definition in surface_definitions {
             global_type_parameters.push(self.allocate_global_type_parameters(definition)?);
         }
+        let (mut pending_implementations, implementation_type_parameters) =
+            self.prepare_implementations(&surface.implementations)?;
         let registry = Arc::new(
-            registry
-                .with_additional_type_variables(global_type_parameters.iter().flatten().cloned()),
+            registry.with_additional_type_variables(
+                interface_type_parameters
+                    .into_iter()
+                    .chain(global_type_parameters.iter().flatten().cloned())
+                    .chain(implementation_type_parameters),
+            ),
         );
-        let mut global_binders = Vec::with_capacity(surface_definitions.len());
-        for definition in surface_definitions {
-            let (global_name, global_name_span) = match &definition.kind {
-                SurfaceDefinitionKind::Equational(equational) => {
-                    if equational.equations.is_empty() {
-                        return Err(error(
+        let mut global_binders = vec![None; surface_definitions.len()];
+        for declaration in &surface.declaration_order {
+            match *declaration {
+                SurfaceDeclarationIndex::Global(index) => {
+                    let definition = surface_definitions.get(index).ok_or_else(|| {
+                        error(
                             ResolveReason::InternalState,
-                            definition.span,
-                            "the equational definition has no clause",
-                        ));
-                    }
-                    for equation in &equational.equations {
-                        if equational.interface.name.text != equation.name.text {
-                            let mut diagnostic = Diagnostic::new(
-                                ResolveReason::EquationNameMismatch,
-                                SourceLabel::new(
-                                    equation.name.span,
-                                    "this equation name does not match its interface",
-                                ),
-                            );
-                            diagnostic.related.push(SourceLabel::new(
-                                equational.interface.name.span,
-                                "the external interface declares this name",
-                            ));
-                            diagnostic.expected = Some(equational.interface.name.text.clone());
-                            diagnostic.found = Some(equation.name.text.clone());
-                            diagnostic.help = Some(format!(
-                                "rename the equation head to `{}`",
-                                equational.interface.name.text
-                            ));
-                            return Err(diagnostic.into());
-                        }
-                    }
-                    (
-                        equational.interface.name.text.as_str(),
-                        equational.interface.name.span,
-                    )
+                            surface.span,
+                            "the surface declaration order contains an invalid global index",
+                        )
+                    })?;
+                    let binder = self.allocate_global_binder(definition)?;
+                    let slot = global_binders.get_mut(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the resolver lost a global binder slot",
+                        )
+                    })?;
+                    *slot = Some(binder);
                 }
-                SurfaceDefinitionKind::InlineOperational(operational) => (
-                    operational.header.name.text.as_str(),
-                    operational.header.name.span,
-                ),
-            };
-            if let Some(first) = self.globals.get(global_name) {
-                let mut diagnostic = Diagnostic::new(
-                    ResolveReason::DuplicateGlobal,
-                    SourceLabel::new(global_name_span, "this global name is already defined"),
-                );
-                diagnostic.related.push(SourceLabel::new(
-                    first.name_span,
-                    "the first global name is here",
-                ));
-                diagnostic.related.push(SourceLabel::new(
-                    first.definition_span,
-                    "the first complete definition is here",
-                ));
-                return Err(diagnostic.into());
+                SurfaceDeclarationIndex::Implementation(index) => {
+                    let implementation = surface.implementations.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid impl index",
+                        )
+                    })?;
+                    let pending = pending_implementations.get_mut(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the resolver lost an implementation plan",
+                        )
+                    })?;
+                    for group in &mut pending.method_groups {
+                        let first = implementation
+                            .equations
+                            .get(group.equations.start)
+                            .ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    implementation.span,
+                                    "an implementation method group is empty",
+                                )
+                            })?;
+                        group.binder =
+                            Some(self.allocate_binder(&first.name.text, first.name.span)?);
+                    }
+                }
+                SurfaceDeclarationIndex::Type(_) | SurfaceDeclarationIndex::Interface(_) => {}
             }
-            if self.expression_name_is_bound(global_name) {
-                return Err(import_conflict(global_name_span, global_name));
-            }
-            let global = self.allocate_binder(global_name, global_name_span)?;
-            let Some(file_scope) = self.scopes.first_mut() else {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    definition.span,
-                    "the resolver lost the file scope",
-                ));
-            };
-            file_scope.insert(global.spelling.clone(), global.clone());
-            self.globals.insert(
-                global_name.to_owned(),
-                GlobalFact {
-                    name_span: global_name_span,
-                    definition_span: definition.span,
-                },
-            );
-            global_binders.push(global);
         }
+
+        let global_binders = global_binders
+            .into_iter()
+            .enumerate()
+            .map(|(index, binder)| {
+                binder.ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        surface_definitions[index].span,
+                        "the resolver did not allocate a global binder",
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut definitions = Vec::with_capacity(surface_definitions.len());
         for ((definition, global), type_parameters) in surface_definitions
@@ -1209,6 +1759,10 @@ impl Resolver {
             let kind = match &definition.kind {
                 SurfaceDefinitionKind::Equational(equational) => {
                     let annotation = self.resolve_type(&equational.interface.annotation)?;
+                    let requirements = self.resolve_requirements(
+                        RequirementOwner::Global(global.id),
+                        &equational.interface.requirements,
+                    )?;
                     let mut equations = Vec::with_capacity(equational.equations.len());
                     for equation in &equational.equations {
                         let scope_checkpoint = self.scopes.len();
@@ -1218,7 +1772,7 @@ impl Resolver {
                         let resolved_body = self.resolve_expr(&equation.body);
                         self.scopes.truncate(scope_checkpoint);
                         equations.push(ResolvedEquation {
-                            name: ResolvedOccurrence {
+                            name: crate::resolved::ResolvedEquationHead {
                                 binder: global.id,
                                 spelling: equation.name.text.clone(),
                                 origin: Origin::Source(equation.name.span),
@@ -1239,6 +1793,7 @@ impl Resolver {
                         interface: ResolvedExternalInterface {
                             name: global.clone(),
                             annotation,
+                            requirements,
                             type_parameters: type_parameters.clone().into_boxed_slice(),
                             span: equational.interface.span,
                         },
@@ -1246,6 +1801,10 @@ impl Resolver {
                     })
                 }
                 SurfaceDefinitionKind::InlineOperational(operational) => {
+                    let requirements = self.resolve_requirements(
+                        RequirementOwner::Global(global.id),
+                        &operational.header.requirements,
+                    )?;
                     let surface_patterns = operational
                         .header
                         .parameters
@@ -1281,6 +1840,7 @@ impl Resolver {
                             name: global.clone(),
                             parameters,
                             result_type: self.resolve_type(&operational.header.result_type)?,
+                            requirements,
                             type_parameters: type_parameters.clone().into_boxed_slice(),
                             span: operational.header.span,
                         },
@@ -1295,7 +1855,150 @@ impl Resolver {
             self.type_scopes.truncate(type_scope_checkpoint);
         }
 
-        Ok((registry, definitions))
+        let implementations = self.resolve_implementations(
+            &surface.implementations,
+            pending_implementations,
+            surface.span,
+        )?;
+
+        Ok(ResolvedDeclarations {
+            registry,
+            interfaces,
+            implementations,
+            definitions,
+        })
+    }
+
+    fn resolve_implementations(
+        &mut self,
+        declarations: &[SurfaceImplementation],
+        pending: Vec<PendingImplementation>,
+        module_span: crate::source::Span,
+    ) -> Result<Vec<ResolvedImplementation>, ResolveError> {
+        if declarations.len() != pending.len() {
+            return Err(error(
+                ResolveReason::InternalState,
+                module_span,
+                "the resolver retained mismatched implementation plans",
+            ));
+        }
+
+        declarations
+            .iter()
+            .zip(pending)
+            .map(|(implementation, pending)| {
+                let type_scope_checkpoint = self.type_scopes.len();
+                self.type_scopes.push(
+                    pending
+                        .head_parameters
+                        .iter()
+                        .chain(&pending.prerequisite_only_parameters)
+                        .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
+                        .collect(),
+                );
+
+                let result = (|| {
+                    let interface = self.interface_reference(&implementation.interface)?;
+                    let argument = self.resolve_type(&implementation.argument)?;
+                    let prerequisites = self.resolve_requirements(
+                        RequirementOwner::Impl(pending.id),
+                        &implementation.prerequisites,
+                    )?;
+                    let method_groups = pending
+                        .method_groups
+                        .into_iter()
+                        .map(|group| {
+                            let equations = implementation
+                                .equations
+                                .get(group.equations.clone())
+                                .ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    implementation.span,
+                                    "the resolver retained an invalid method-group range",
+                                )
+                            })?;
+                            let first = equations.first().ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    implementation.span,
+                                    "the resolver retained an empty method group",
+                                )
+                            })?;
+                            let last = equations.last().ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    implementation.span,
+                                    "the resolver retained an empty method group",
+                                )
+                            })?;
+                            let span = first.span.cover(last.span).ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    implementation.span,
+                                    "one implementation method group crosses source files",
+                                )
+                            })?;
+                            let binder = group.binder.ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    first.span,
+                                    "the resolver did not allocate a hidden method binder",
+                                )
+                            })?;
+                            let method = self.method_names.get(&first.name.text).copied();
+                            let identity =
+                                method.map(|method| ImplMethodId::new(pending.id, method));
+                            let equations = equations
+                                .iter()
+                                .map(|equation| {
+                                    let scope_checkpoint = self.scopes.len();
+                                    let (patterns, binders) =
+                                        self.resolve_pattern_vector(&equation.patterns)?;
+                                    self.push_binder_scope_many(&binders);
+                                    let body = self.resolve_expr(&equation.body);
+                                    self.scopes.truncate(scope_checkpoint);
+                                    Ok(ResolvedEquation {
+                                        name: crate::resolved::ResolvedEquationHead {
+                                            binder: binder.id,
+                                            spelling: equation.name.text.clone(),
+                                            origin: Origin::Source(equation.name.span),
+                                        },
+                                        patterns,
+                                        body: body?,
+                                        span: equation.span,
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, ResolveError>>()?;
+                            Ok(ResolvedImplementationMethodGroup {
+                                method,
+                                identity,
+                                binder,
+                                equations: equations.into_boxed_slice(),
+                                span,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, ResolveError>>()?;
+
+                    Ok(ResolvedImplementation {
+                        id: pending.id,
+                        public: implementation.public,
+                        interface,
+                        argument,
+                        head_parameters: pending.head_parameters.into_boxed_slice(),
+                        prerequisite_only_parameters: pending
+                            .prerequisite_only_parameters
+                            .into_boxed_slice(),
+                        prerequisites,
+                        method_groups: method_groups.into_boxed_slice(),
+                        span: implementation.span,
+                    })
+                })();
+
+                self.type_scopes.truncate(type_scope_checkpoint);
+                result
+            })
+            .collect()
     }
 
     fn resolve_registry(
@@ -1832,16 +2535,28 @@ impl Resolver {
                 collect_free_type_names(
                     &equational.interface.annotation,
                     &self.type_names,
+                    &self.interface_names,
                     &mut seen,
                     &mut names,
                     &mut self.type_work,
                 )?;
+                for requirement in &equational.interface.requirements {
+                    collect_free_type_names(
+                        &requirement.argument,
+                        &self.type_names,
+                        &self.interface_names,
+                        &mut seen,
+                        &mut names,
+                        &mut self.type_work,
+                    )?;
+                }
             }
             SurfaceDefinitionKind::InlineOperational(operational) => {
                 for parameter in &operational.header.parameters {
                     collect_free_type_names(
                         &parameter.annotation,
                         &self.type_names,
+                        &self.interface_names,
                         &mut seen,
                         &mut names,
                         &mut self.type_work,
@@ -1850,10 +2565,21 @@ impl Resolver {
                 collect_free_type_names(
                     &operational.header.result_type,
                     &self.type_names,
+                    &self.interface_names,
                     &mut seen,
                     &mut names,
                     &mut self.type_work,
                 )?;
+                for requirement in &operational.header.requirements {
+                    collect_free_type_names(
+                        &requirement.argument,
+                        &self.type_names,
+                        &self.interface_names,
+                        &mut seen,
+                        &mut names,
+                        &mut self.type_work,
+                    )?;
+                }
             }
         }
         names
@@ -2172,21 +2898,36 @@ impl Resolver {
             SurfaceExprKind::Name(name) => {
                 let member = name.member();
                 let qualified = self.imported_namespace(name)?;
-                let binder = if let Some(namespace) = qualified {
+                let term = if let Some(namespace) = qualified {
                     namespace.terms.get(&member.text).copied()
                 } else {
                     self.scopes
                         .iter()
                         .rev()
                         .find_map(|scope| scope.get(&member.text))
-                        .map(|binder| binder.id)
+                        .map(|binder| ResolvedTermName::Global(binder.id))
+                        .or_else(|| {
+                            self.method_names
+                                .get(&member.text)
+                                .copied()
+                                .map(ResolvedTermName::Method)
+                        })
                 };
-                if let Some(binder) = binder {
+                if let Some(term) = term {
+                    let evidence_count = match term {
+                        ResolvedTermName::Global(binder) => self
+                            .global_requirement_counts
+                            .get(&binder)
+                            .copied()
+                            .unwrap_or(0),
+                        ResolvedTermName::Method(_) => 1,
+                    };
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                            binder,
+                            term,
                             spelling: member.text.clone(),
                             origin: Origin::Source(name.span()),
+                            evidence: vec![EvidenceSlot::Empty; evidence_count].into_boxed_slice(),
                         }),
                         span: expression.span,
                     });
@@ -2491,9 +3232,39 @@ fn type_argument_count(
     diagnostic.into()
 }
 
+fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> ResolveError {
+    let mut diagnostic = Diagnostic::new(
+        ResolveReason::UnknownInterface,
+        SourceLabel::new(span, "this interface is not declared"),
+    );
+    diagnostic.found = Some(spelling.to_owned());
+    diagnostic.into()
+}
+
+fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
+    let mut diagnostic = Diagnostic::new(
+        ResolveReason::InterfaceKind,
+        SourceLabel::new(span, "this name does not denote an interface"),
+    );
+    diagnostic.expected = Some("interface".to_owned());
+    diagnostic.found = Some(spelling.to_owned());
+    diagnostic.into()
+}
+
+fn type_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
+    let mut diagnostic = Diagnostic::new(
+        ResolveReason::TypeKind,
+        SourceLabel::new(span, "an interface cannot be used as a value type"),
+    );
+    diagnostic.expected = Some("type".to_owned());
+    diagnostic.found = Some(spelling.to_owned());
+    diagnostic.into()
+}
+
 fn collect_free_type_names<'a>(
     root: &'a SurfaceType,
     nominals: &HashMap<String, NominalTypeId>,
+    interfaces: &HashMap<String, InterfaceId>,
     seen: &mut HashSet<&'a str>,
     output: &mut Vec<crate::surface::SurfaceName>,
     budget: &mut TypeWorkBudget,
@@ -2527,7 +3298,10 @@ fn collect_free_type_names<'a>(
                 let SurfaceReference::Unqualified(name) = name else {
                     continue;
                 };
-                if !nominals.contains_key(&name.text) && seen.insert(&name.text) {
+                if !nominals.contains_key(&name.text)
+                    && !interfaces.contains_key(&name.text)
+                    && seen.insert(&name.text)
+                {
                     output.push(name.clone());
                 }
             }
@@ -2537,6 +3311,7 @@ fn collect_free_type_names<'a>(
             } => {
                 if let SurfaceReference::Unqualified(constructor) = constructor
                     && !nominals.contains_key(&constructor.text)
+                    && !interfaces.contains_key(&constructor.text)
                     && seen.insert(&constructor.text)
                 {
                     output.push(constructor.clone());
@@ -2581,6 +3356,28 @@ mod tests {
         let error = resolver
             .allocate_binder("name", span)
             .expect_err("the reserved exhaustion sentinel must not be exposed");
+
+        assert_eq!(error.reason, ResolveReason::BinderIdExhausted);
+        assert_eq!(resolver.next_binder, u32::MAX);
+    }
+
+    #[test]
+    fn hidden_impl_binder_exhaustion_precedes_global_body_resolution() {
+        let text = "interface Convert<A> {\nconvert : A -> A\n}\n\nbefore : Int -> Int\nbefore value = missing\n\nimpl Convert<Int> {\nconvert value = value\n}\n";
+        let source = SourceFile::new("hidden-exhaustion.ash", text)
+            .expect("the exhaustion fixture should fit");
+        let tree = parse(lex(&source).expect("the fixture should lex"));
+        let module = project_module(&source, &tree).expect("the fixture should project");
+        let mut resolver = Resolver::new(ModuleId::new(0));
+        resolver.next_binder = u32::MAX - 1;
+        resolver
+            .validate_local_namespaces(&module)
+            .expect("the fixture namespaces should be distinct");
+
+        let error = match resolver.resolve_declarations(&module) {
+            Err(error) => error,
+            Ok(_) => panic!("the hidden binder should exhaust before body resolution"),
+        };
 
         assert_eq!(error.reason, ResolveReason::BinderIdExhausted);
         assert_eq!(resolver.next_binder, u32::MAX);
@@ -2648,6 +3445,7 @@ mod tests {
 
         let error = collect_free_type_names(
             &annotation,
+            &HashMap::new(),
             &HashMap::new(),
             &mut seen,
             &mut output,

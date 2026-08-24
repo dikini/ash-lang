@@ -17,7 +17,7 @@ use ash::{
     resolved::{
         Binder, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
         ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleProgram,
-        ResolvedPatternKind,
+        ResolvedPatternKind, ResolvedTermName,
     },
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
     types::Type,
@@ -132,8 +132,8 @@ fn v003_resolves_shadowing_to_distinct_binders_and_runs_to_two() {
     };
 
     assert_ne!(first, second);
-    assert_eq!(initializer_use.binder, first);
-    assert_eq!(result_use.binder, second);
+    assert_eq!(initializer_use.global_binder(), Some(first));
+    assert_eq!(result_use.global_binder(), Some(second));
 
     let observation =
         run_module("v003-local-shadowing.ash", V003).expect("V-003 should run end to end");
@@ -288,7 +288,7 @@ fn failed_initializer_scope_check_poisons_the_elaborator() {
     let ResolvedExprKind::Occurrence(use_site) = &mut initializer.left.kind else {
         panic!("expected an occurrence");
     };
-    use_site.binder = second_binder;
+    use_site.term = ResolvedTermName::Global(second_binder);
 
     let mut elaborator = expression_elaborator(&module, &expression);
     let prior = elaborator
@@ -344,7 +344,10 @@ fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() 
     let ResolvedExprKind::Occurrence(outer_use) = &inner_initializer.left.kind else {
         panic!("expected outer use inside nested block");
     };
-    assert_eq!(outer_use.binder, binding_binder(binding(outer_block, 0)).id);
+    assert_eq!(
+        outer_use.global_binder(),
+        Some(binding_binder(binding(outer_block, 0)).id)
+    );
 
     let (validated, ty) = elaborate(&source, &module, expression);
     let outer_core = validated.node(validated.root()).expect("outer binding");
@@ -391,7 +394,7 @@ fn nested_block_binder_is_removed_before_the_enclosing_result() {
     let ResolvedExprKind::Occurrence(result_use) = &mut outer.result.kind else {
         panic!("expected outer result occurrence");
     };
-    result_use.binder = hidden;
+    result_use.term = ResolvedTermName::Global(hidden);
 
     let mut elaborator = expression_elaborator(&module, &expression);
     assert!(matches!(

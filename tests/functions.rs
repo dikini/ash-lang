@@ -15,6 +15,7 @@ use ash::{
     resolved::{
         CheckedModule, ResolvedApplicationExpr, ResolvedDefinitionKind, ResolvedExpr,
         ResolvedExprKind, ResolvedModule, ResolvedOccurrence, ResolvedPatternKind,
+        ResolvedTermName,
     },
     source::GeneratedReason,
     types::Type,
@@ -159,9 +160,10 @@ fn validated_program(fixture: &ModuleFixture) -> (ValidatedProgram, Type) {
         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
             function: Box::new(ResolvedExpr {
                 kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    binder: main.binder,
+                    term: ResolvedTermName::Global(main.binder),
                     spelling: "main".to_owned(),
                     origin: main.origin.clone(),
+                    evidence: Box::new([]),
                 }),
                 span,
             }),

@@ -12,7 +12,7 @@ use ash::{
     resolved::{
         Binder, ResolvedApplicationExpr, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
         ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleProgram, ResolvedOccurrence,
-        ResolvedPattern, ResolvedPatternKind,
+        ResolvedPattern, ResolvedPatternKind, ResolvedTermName,
     },
     source::{GeneratedReason, Origin, SourceFile, Span},
 };
@@ -106,9 +106,10 @@ fn validated_module(name: &str, text: &str) -> (SourceFile, ResolvedModule, Vali
             kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
                 function: Box::new(ResolvedExpr {
                     kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                        binder: main.binder,
+                        term: ResolvedTermName::Global(main.binder),
                         spelling: "main".to_owned(),
                         origin: Origin::Source(span),
+                        evidence: Box::new([]),
                     }),
                     span,
                 }),

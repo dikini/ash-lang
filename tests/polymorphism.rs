@@ -17,7 +17,10 @@ use ash::{
     eval::evaluate,
     module::{ModuleId, ModuleRoots, load_module_graph},
     resolve::resolve_module,
-    resolved::{ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence},
+    resolved::{
+        ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
+        ResolvedTermName,
+    },
     source::{Origin, SourceFile},
 };
 use support::run_module;
@@ -61,9 +64,10 @@ fn elaborated(text: &str) -> (ValidatedProgram, SourceFile, ModuleId) {
         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
             function: Box::new(ResolvedExpr {
                 kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    binder: main.binder,
+                    term: ResolvedTermName::Global(main.binder),
                     spelling: "main".to_owned(),
                     origin: Origin::Source(span),
+                    evidence: Box::new([]),
                 }),
                 span,
             }),

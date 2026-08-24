@@ -12,7 +12,10 @@ use crate::{
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
     pattern::UsefulnessBudget,
     resolve::{DependencyExports, ResolveError, ResolveReason, resolve_module_with_budget},
-    resolved::{ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence},
+    resolved::{
+        ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
+        ResolvedTermName,
+    },
     source::{SourceError, SourceFile, SourceId, Span},
     types::{Type, TypeWorkBudget},
 };
@@ -406,9 +409,10 @@ where
         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
             function: Box::new(ResolvedExpr {
                 kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    binder: main.binder,
+                    term: ResolvedTermName::Global(main.binder),
                     spelling: "main".to_owned(),
                     origin: main.origin.clone(),
+                    evidence: Box::new([]),
                 }),
                 span: main_span,
             }),

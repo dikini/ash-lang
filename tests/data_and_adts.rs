@@ -19,7 +19,10 @@ use ash::{
     parser::{ResourceFailure, SYNTAX_WORK_LIMIT},
     render,
     resolve::resolve_module,
-    resolved::{ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence},
+    resolved::{
+        ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
+        ResolvedTermName,
+    },
     source::SourceFile,
     types::Type,
 };
@@ -69,9 +72,10 @@ fn elaborated_module(text: &str) -> StructuralProgram {
         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
             function: Box::new(ResolvedExpr {
                 kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    binder: main.binder,
+                    term: ResolvedTermName::Global(main.binder),
                     spelling: "main".to_owned(),
                     origin: main.origin.clone(),
+                    evidence: Box::new([]),
                 }),
                 span,
             }),

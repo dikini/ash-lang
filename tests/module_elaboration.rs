@@ -12,6 +12,7 @@ use ash::{
     resolve::{DependencyExports, resolve_module},
     resolved::{
         CheckedModule, ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
+        ResolvedTermName,
     },
     source::Origin,
     types::Type,
@@ -214,9 +215,10 @@ fn linked_modules_form_dependency_ordered_core_groups_and_evaluate() {
         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
             function: Box::new(ResolvedExpr {
                 kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
-                    binder: main.binder,
+                    term: ResolvedTermName::Global(main.binder),
                     spelling: "main".to_owned(),
                     origin: Origin::Source(span),
+                    evidence: Box::new([]),
                 }),
                 span,
             }),

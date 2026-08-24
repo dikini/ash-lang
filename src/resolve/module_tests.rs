@@ -180,7 +180,8 @@ fn qualified_import_resolves_term_type_and_constructor_identities() {
     ));
     assert!(matches!(
         definition.equations[0].body.kind,
-        ResolvedExprKind::Occurrence(ref occurrence) if occurrence.binder == binder
+        ResolvedExprKind::Occurrence(ref occurrence)
+            if occurrence.global_binder() == Some(binder)
     ));
 }
 
@@ -212,7 +213,8 @@ fn targeted_import_rename_preserves_the_exported_binder_identity() {
     assert!(matches!(
         equational(&resolved, 0).equations[0].body.kind,
         ResolvedExprKind::Occurrence(ref occurrence)
-            if occurrence.spelling == "renamed" && occurrence.binder == binder
+            if occurrence.spelling == "renamed"
+                && occurrence.global_binder() == Some(binder)
     ));
 }
 
@@ -420,6 +422,191 @@ fn targeted_import_cannot_shadow_a_local_global() {
 }
 
 #[test]
+fn local_interface_cannot_shadow_a_qualified_module_alias() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency as Equal\ninterface Equal<A> {\nequal : A -> Bool\n}\n",
+        &[("dependency.ash", "")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary = ExportSummary::test_fixture(dependency.id(), vec![], vec![], vec![], vec![]);
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("a local interface must not shadow a qualified module alias");
+
+    assert_eq!(error.reason, ResolveReason::ImportConflict);
+}
+
+#[test]
+fn local_interface_cannot_shadow_a_targeted_nominal() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (Equal)\ninterface Equal<A> {\nequal : A -> Bool\n}\n",
+        &[("dependency.ash", "")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary = ExportSummary::test_fixture(
+        dependency.id(),
+        vec![],
+        vec![(
+            "Equal",
+            NominalTypeId::new(dependency.id(), 0),
+            ExportedTypeAccess::Transparent,
+            Origin::Source(dependency.surface().span),
+        )],
+        vec![],
+        vec![],
+    );
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("a local interface must not shadow a targeted nominal");
+
+    assert_eq!(error.reason, ResolveReason::ImportConflict);
+}
+
+#[test]
+fn local_method_cannot_shadow_a_targeted_global_term() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (equal)\ninterface Equal<A> {\nequal : A -> Bool\n}\n",
+        &[("dependency.ash", "")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary = ExportSummary::test_fixture(
+        dependency.id(),
+        vec![(
+            "equal",
+            BinderId::resolved(dependency.id(), 0),
+            Type::Unit,
+            Origin::Source(dependency.surface().span),
+        )],
+        vec![],
+        vec![],
+        vec![],
+    );
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("a local method must not shadow a targeted global term");
+
+    assert_eq!(error.reason, ResolveReason::ImportConflict);
+}
+
+#[test]
+fn local_method_cannot_shadow_a_targeted_constructor_under_a_lowercase_rename() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (Some as equal)\ninterface Equal<A> {\nequal : A -> Bool\n}\n",
+        &[("dependency.ash", "")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let nominal = NominalTypeId::new(dependency.id(), 0);
+    let summary = ExportSummary::test_fixture(
+        dependency.id(),
+        vec![],
+        vec![(
+            "Option",
+            nominal,
+            ExportedTypeAccess::Transparent,
+            Origin::Source(dependency.surface().span),
+        )],
+        vec![(
+            "Some",
+            ConstructorId::new(nominal, 0),
+            None,
+            Origin::Source(dependency.surface().span),
+        )],
+        vec![],
+    );
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("a local method must not shadow a targeted renamed constructor");
+
+    assert_eq!(error.reason, ResolveReason::ImportConflict);
+}
+
+#[test]
+fn imported_non_interface_targets_report_interface_kind() {
+    for (entry, label) in [
+        (
+            "import dependency (Make)\nvalue : Unit -> Bool where Make<Int>\nvalue () = true\n",
+            "targeted constructor",
+        ),
+        (
+            "import dependency as Dep\nvalue : Unit -> Bool where Dep.Make<Int>\nvalue () = true\n",
+            "qualified constructor",
+        ),
+        (
+            "import dependency as Dep\nvalue : Unit -> Bool where Dep<Int>\nvalue () = true\n",
+            "unqualified module alias",
+        ),
+    ] {
+        let tree = TempTree::create();
+        let graph = load(&tree, entry, &[("dependency.ash", "")]);
+        let dependency = module_named(&graph, "dependency.ash");
+        let importer = module_named(&graph, "entry.ash");
+        let nominal = NominalTypeId::new(dependency.id(), 0);
+        let origin = Origin::Source(dependency.surface().span);
+        let summary = ExportSummary::test_fixture(
+            dependency.id(),
+            vec![],
+            vec![(
+                "Carrier",
+                nominal,
+                ExportedTypeAccess::Transparent,
+                origin.clone(),
+            )],
+            vec![("Make", ConstructorId::new(nominal, 0), None, origin)],
+            vec![],
+        );
+
+        let error = resolve_with(importer, &[&summary])
+            .expect_err("a resolved non-interface target should fail its sort check");
+
+        assert_eq!(error.reason, ResolveReason::InterfaceKind, "{label}");
+    }
+}
+
+#[test]
+fn local_interface_and_nominal_report_a_duplicate_type() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "type Equal = Equal\n\ninterface Equal<A> {\nequal : A -> Bool\n}\n",
+        &[],
+    );
+    let importer = module_named(&graph, "entry.ash");
+
+    let error = resolve_with(importer, &[])
+        .expect_err("a local interface and nominal cannot share a type namespace name");
+
+    assert_eq!(error.reason, ResolveReason::DuplicateType);
+}
+
+#[test]
+fn local_method_and_global_report_a_duplicate_global() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "interface Equal<A> {\nequal : A -> Bool\n}\n\nequal : Unit -> Bool\nequal () = true\n",
+        &[],
+    );
+    let importer = module_named(&graph, "entry.ash");
+
+    let error = resolve_with(importer, &[])
+        .expect_err("a local method and global cannot share a term namespace name");
+
+    assert_eq!(error.reason, ResolveReason::DuplicateGlobal);
+}
+
+#[test]
 fn a_renamed_imported_type_does_not_conflict_with_a_local_global() {
     let tree = TempTree::create();
     let graph = load(
@@ -557,11 +744,13 @@ fn diamond_consumers_preserve_one_shared_binder_and_nominal_identity() {
     );
     assert!(matches!(
         left_definition.equations[0].body.kind,
-        ResolvedExprKind::Occurrence(ref occurrence) if occurrence.binder == binder
+        ResolvedExprKind::Occurrence(ref occurrence)
+            if occurrence.global_binder() == Some(binder)
     ));
     assert!(matches!(
         right_definition.equations[0].body.kind,
-        ResolvedExprKind::Occurrence(ref occurrence) if occurrence.binder == binder
+        ResolvedExprKind::Occurrence(ref occurrence)
+            if occurrence.global_binder() == Some(binder)
     ));
 }
 
