@@ -81,6 +81,12 @@ compatibility path.
   a separate namespace for generated term and type binders. Qualifying only
   source term binders and nominal declarations would leave cross-module or
   generated-identity collisions.
+- A successfully checked module publishes closed, inference-free rank-1
+  schemes. Every source type parameter is already bound by an outer `forall`,
+  so a monomorphic entry `main` cannot expose an open result. The driver retains
+  the `entry.main-open-result` guard as a defensive boundary, but current source
+  cannot supply the plan's proposed negative case without first failing the
+  polymorphic-entry check.
 
 ## Deviations
 
@@ -92,3 +98,7 @@ compatibility path.
 - Task 4 no longer runs the legacy `tests/resolution.rs` file-result corpus as
   modular evidence. Those sources are intentionally invalid under the selected
   declarations-only grammar and remain part of the Task 8 corpus migration.
+- Task 7 replaces the planned source-level open-result case with direct closure
+  traversal coverage. Constructing an open checked scheme would contradict the
+  checker contract and would not be valid language evidence; the accepted
+  entry contract and its defensive reason family remain unchanged.
