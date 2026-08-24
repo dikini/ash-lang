@@ -2,7 +2,7 @@
 
 - ID: `DN-0023`
 - Status: exploring
-- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), and the [passive-module evidence](modular-ash/evidence.md)
+- Related: [CP-0006: Interfaces and Implementations](../proposals/CP-0006-interfaces-and-implementations.md), [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), and the [passive-module evidence](modular-ash/evidence.md)
 
 > This design note is informative. It explores a candidate interface and
 > implementation increment. It does not define current Ash, accept the
@@ -175,7 +175,9 @@ and every evidence slot is a function. A method introduces no additional type
 parameters or constraints. Methods have no default bodies in the first
 increment.
 
-Illustrative syntax is:
+[CP-0006](../proposals/CP-0006-interfaces-and-implementations.md) proposes one
+trailing `where` clause shared by global signatures, operational headers, and
+impl heads. The earlier comparison form is:
 
 ```ash
 pub interface Equal<A> {
@@ -191,14 +193,14 @@ and its methods remain local.
 A global signature may carry an ordered nonempty constraint list:
 
 ```ash
-pub same : Equal<A> => (A, A) -> Bool
+pub same : (A, A) -> Bool where Equal<A>
 same pair = equal(pair)
 ```
 
-Multiple constraints use a parenthesized list before `=>`. Every constrained
-type variable must also occur in the value type so that a caller's ordinary
-typing determines the requested implementation. Duplicate constraints are
-rejected. Constraints are part of the checked rank-1 scheme and export
+Multiple constraints use a comma-separated trailing `where` list. Every
+constrained type variable must also occur in the value type so that a caller's
+ordinary typing determines the requested implementation. Duplicate constraints
+are rejected. Constraints are part of the checked rank-1 scheme and export
 summary; they are not ordinary source types or runtime values.
 
 An inline operational global carries the same ordered requirement list in its
@@ -237,8 +239,8 @@ pub impl Equal<Option<A>> where Equal<A> {
 }
 ```
 
-The exact `where` spelling remains illustrative. A change proposal should
-select it together with the complete grammar.
+[CP-0006](../proposals/CP-0006-interfaces-and-implementations.md) selects this
+`where` spelling as part of its complete proposed grammar.
 
 `impl` is private by default. `pub impl` publishes an anonymous implementation
 fact in the defining module's checked export summary. A public implementation
@@ -416,7 +418,9 @@ is an ordinary function value.
 Conceptually:
 
 ```text
-forall A. Equal<A> => (A, A) -> Bool
+parameters: [A]
+requirements: [Equal<A>]
+value type: (A, A) -> Bool
 
     lowers to
 
@@ -504,7 +508,7 @@ denotes the stable qualified identity described above.
 Suppose `equality.ash` defines public `Equal<A>` and:
 
 ```ash
-pub same : Equal<A> => (A, A) -> Bool
+pub same : (A, A) -> Bool where Equal<A>
 same pair = equal(pair)
 ```
 
@@ -603,9 +607,9 @@ the lexical spelling does not choose between those cases.
 
 ### Abstract evidence passes through another constrained caller
 
-If `all_same : Equal<A> => List<A> -> Bool` calls imported `same`, its call-site
-selection is `Abstract { requirement: all_same.0, methods: [equal] }`. The Core
-shape is:
+If `all_same : List<A> -> Bool where Equal<A>` calls imported `same`, its
+call-site selection is
+`Abstract { requirement: all_same.0, methods: [equal] }`. The Core shape is:
 
 ```text
 all_same = /\\A. \\equal_evidence. \\values.
@@ -770,9 +774,9 @@ prerequisite evidence, two same-typed method slots, recursive method identities,
 and abstract evidence supplied by a caller. They expose no representation
 uncertainty that requires a disposable probe.
 
-A change proposal should make the illustrative grammar exact, state the
-constraint and coherence judgments, define resulting specification truth,
-name structured failures, and retain the positive and negative product corpus.
-Associated-type cases should remain recorded as the reason for keeping
-normalization and constraint resolution separate, not as partially implemented
+[CP-0006](../proposals/CP-0006-interfaces-and-implementations.md) makes the
+grammar exact, states the constraint and coherence judgments, defines resulting
+specification truth, names structured failures, and retains the positive and
+negative product corpus. Associated-type cases remain the reason for keeping
+normalization and constraint resolution separate, not partially implemented
 behavior.

@@ -13,7 +13,9 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No change proposal is currently under consideration.
+- [CP-0006: Interfaces and Implementations](CP-0006-interfaces-and-implementations.md)
+  — method-only interfaces, scoped implementations, constrained rank-1
+  schemes, and explicit Core evidence.
 
 ## Accepted changes
 
