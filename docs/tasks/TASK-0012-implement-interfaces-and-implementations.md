@@ -104,10 +104,21 @@ Execute the linked plan to:
   Fourteen focused validation unit tests, one public validation integration
   test, and the 12 selection integrations pass with format, all-target checking,
   and Clippy.
-- The seven end-to-end corpus cases and the focused Core-shape case are valid
-  witnessed RED tests at final `Internal(InvalidState)`. Substitution, complete
-  type/scope/provenance authentication, the closed validated-only synthesis
-  capability, and evidence lowering remain outside this bounded checkpoint.
+- Task 6 now authenticates complete linked schemes, provenance, availability,
+  substitutions, prerequisite structure, termination, scope, types, and method
+  order before Core synthesis. Final synthesis accepts only that validated
+  capability and lowers abstract and concrete evidence through ordinary type
+  abstraction, functions, applications, and defining-module recursive groups.
+- The seven planned end-to-end observations and an additional same-typed
+  multi-method regression are GREEN. The 84-test focused Task 6 matrix, 282
+  library tests, the complete test suite, format, all-target checking, strict
+  Clippy, and diff hygiene pass. The closed Core and evaluator inventories
+  contain no interface or evidence runtime mechanism.
+- Two independent review cycles covered validation, lowering, the driver
+  barrier, Core consumers, budgets, and test strength. Fixes added public-import
+  authentication, shared strict-subterm revalidation, exact block accounting,
+  same-typed slot corruption coverage, and root-method filtering; the repeated
+  reviews found no remaining Task 6 defect.
 
 ## Verification
 

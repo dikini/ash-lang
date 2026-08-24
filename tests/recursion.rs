@@ -10,6 +10,7 @@ use ash::{
     driver::PipelineFailure,
     elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
     eval::{Evaluation, evaluate},
+    evidence_validation::validate_interface_evidence,
     module::{ModuleRoots, load_module_graph},
     resolve::resolve_module,
     types::Type,
@@ -48,6 +49,7 @@ fn evaluate_module(text: &str) -> Evaluation {
     let resolved = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
     let checked = check_module(resolved).expect("fixture should check");
     let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+    let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("binder namespace should fit");
     let typed = elaborator

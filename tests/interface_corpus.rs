@@ -138,6 +138,28 @@ fn complete_and_targeted_imports_observe_the_same_evidence() {
 }
 
 #[test]
+fn one_method_occurrence_does_not_retain_unused_same_typed_evidence() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "interface Select<A> {\n",
+            "first : A -> A\n",
+            "second : A -> A\n",
+            "}\n\n",
+            "impl Select<Int> {\n",
+            "first value = value\n\n",
+            "second value = 0\n",
+            "}\n\n",
+            "main : Unit -> Int\n",
+            "main () = first 42\n",
+        ),
+    );
+
+    observe(&entry, "42", Type::Int);
+}
+
+#[test]
 fn hidden_carrier_composes_to_forty_two() {
     let tree = TempTree::create();
     let entry = tree.write(

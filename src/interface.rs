@@ -107,6 +107,146 @@ impl InterfaceConstraintBudget {
     }
 }
 
+/// Checks the generic implementation prerequisite termination judgment.
+///
+/// Ground prerequisites are admitted. A prerequisite containing a rigid type
+/// variable must be a strict syntactic subterm of the implementation head.
+pub(crate) fn implementation_prerequisite_terminates(
+    prerequisite: &Type,
+    head: &Type,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    if !type_contains_any_variable(prerequisite, budget)? {
+        return Ok(true);
+    }
+
+    let mut pending = Vec::new();
+    schedule_type_children(head, &mut pending, budget)?;
+    while let Some(candidate) = pending.pop() {
+        if same_type_with_constraint_budget(prerequisite, candidate, budget)? {
+            return Ok(true);
+        }
+        schedule_type_children(candidate, &mut pending, budget)?;
+    }
+    Ok(false)
+}
+
+fn type_contains_any_variable(
+    root: &Type,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    budget.charge(1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push(root);
+    while let Some(ty) = pending.pop() {
+        budget.charge(1)?;
+        match ty {
+            Type::Variable(_) => return Ok(true),
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                budget.charge(elements.len())?;
+                pending.try_reserve(elements.len()).map_err(|_| ())?;
+                pending.extend(elements.iter().rev());
+            }
+            Type::Function(domain, codomain) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push(codomain);
+                pending.push(domain);
+            }
+            Type::Forall(parameters, body) => {
+                budget.charge(parameters.len().saturating_add(1))?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push(body);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+        }
+    }
+    Ok(false)
+}
+
+fn schedule_type_children<'a>(
+    ty: &'a Type,
+    pending: &mut Vec<&'a Type>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), ()> {
+    match ty {
+        Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+            budget.charge(elements.len())?;
+            pending.try_reserve(elements.len()).map_err(|_| ())?;
+            pending.extend(elements.iter().rev());
+        }
+        Type::Function(domain, codomain) => {
+            budget.charge(2)?;
+            pending.try_reserve(2).map_err(|_| ())?;
+            pending.push(codomain);
+            pending.push(domain);
+        }
+        Type::Forall(parameters, body) => {
+            budget.charge(parameters.len().saturating_add(1))?;
+            pending.try_reserve(1).map_err(|_| ())?;
+            pending.push(body);
+        }
+        Type::Int
+        | Type::Bool
+        | Type::Unit
+        | Type::Nominal(_)
+        | Type::Variable(_)
+        | Type::Inference(_) => {}
+    }
+    Ok(())
+}
+
+pub(crate) fn same_type_with_constraint_budget(
+    left: &Type,
+    right: &Type,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    budget.charge(1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push((left, right));
+    while let Some((left, right)) = pending.pop() {
+        budget.charge(1)?;
+        match (left, right) {
+            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::Variable(left), Type::Variable(right)) if left == right => {}
+            (Type::Inference(left), Type::Inference(right)) if left == right => {}
+            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                budget.charge(left.len())?;
+                pending.try_reserve(left.len()).map_err(|_| ())?;
+                pending.extend(left.iter().zip(right).rev());
+            }
+            (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
+                if left_parameters == right_parameters =>
+            {
+                budget.charge(left_parameters.len().saturating_add(1))?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push((left, right));
+            }
+            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
+                budget.charge(left.len())?;
+                pending.try_reserve(left.len()).map_err(|_| ())?;
+                pending.extend(left.iter().zip(right).rev());
+            }
+            (
+                Type::Function(left_domain, left_codomain),
+                Type::Function(right_domain, right_codomain),
+            ) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push((left_codomain, right_codomain));
+                pending.push((left_domain, right_domain));
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OverlapFailure {
     InvalidState,

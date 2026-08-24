@@ -10,6 +10,7 @@ use ash::{
     driver::{FileFailure, Observation, RunConfiguration, run_path},
     elaborate::{Elaborator, TypeContext, TypeError, TypeReason, check_module, link_modules},
     eval::{TraceEvent, Value, evaluate},
+    evidence_validation::validate_interface_evidence,
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{
@@ -156,6 +157,7 @@ fn validated_program(fixture: &ModuleFixture) -> (ValidatedProgram, Type) {
     let expected_type = codomain.as_ref().clone();
     let linked = link_modules(checked, fixture.graph.entry())
         .expect("checked single-module graph should link");
+    let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("binder reservation should fit");
     let typed = elaborator

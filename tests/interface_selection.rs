@@ -14,6 +14,7 @@ use ash::{
     elaborate::{
         ElaborationFailure, Elaborator, TypeContext, TypeError, check_module, link_modules,
     },
+    evidence_validation::validate_interface_evidence,
     interface::{EvidenceNode, ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId},
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
@@ -602,6 +603,8 @@ fn link_modules_retains_the_checked_occurrences_evidence_selection() {
     let before_link = selection_for_occurrence(occurrence).clone();
     let linked = link_modules(checked, graph.entry())
         .expect("checked modules should link without reselection");
+    let linked = validate_interface_evidence(linked)
+        .expect("linked checked evidence should authenticate without reselection");
     let mut final_elaborator = Elaborator::for_module_program(&linked)
         .expect("the linked checked namespace should reserve");
     assert_eq!(

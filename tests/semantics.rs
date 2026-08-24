@@ -14,6 +14,7 @@ use ash::{
     driver::{Observation, RunConfiguration, run_path},
     elaborate::{Elaborator, check_module, link_modules},
     eval::{TraceEvent, evaluate},
+    evidence_validation::validate_interface_evidence,
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     render,
     resolve::{DependencyExports, resolve_module},
@@ -221,6 +222,7 @@ fn elaborated(text: &str) -> ElaboratedModule {
     let checked = check_graph(&fixture.graph);
     let linked =
         link_modules(checked, fixture.graph.entry()).expect("checked module graph should link");
+    let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("binder namespace should fit Core");
     let typed = elaborator

@@ -7,13 +7,17 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
     elaborate::{Elaborator, TypeError, check_module_with_budget, link_modules_with_budget},
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
-    evidence_validation::{EvidenceValidationFailure, validate_interface_evidence_with_budget},
+    evidence_validation::{
+        EvidenceValidationFailure, ValidatedInterfaceProgram,
+        validate_interface_evidence_with_budget,
+    },
     interface::InterfaceConstraintBudget,
     lexer::LexReason,
     module::{LoadGraphError, ModuleId, ModuleRoots, load_module_graph},
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
     pattern::UsefulnessBudget,
     resolve::{DependencyExports, ResolveError, ResolveReason, resolve_module_with_budget},
+    resolved::ResolvedModuleProgram,
     source::{SourceError, SourceFile, SourceId, Span},
     types::{Type, TypeWorkBudget},
 };
@@ -325,15 +329,25 @@ impl Error for FileFailure {}
 /// Returns a structured input, source-model, compiler, source-rejection, or
 /// runtime failure.
 pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFailure> {
-    run_path_with_consumers(configuration, validate_modules, evaluate)
+    run_path_with_consumers(
+        configuration,
+        validate_interface_evidence_with_budget,
+        validate_modules,
+        evaluate,
+    )
 }
 
-fn run_path_with_consumers<V, E>(
+fn run_path_with_consumers<I, V, E>(
     configuration: RunConfiguration,
+    interface_validator: I,
     validator: V,
     evaluator: E,
 ) -> Result<Observation, FileFailure>
 where
+    I: FnOnce(
+        ResolvedModuleProgram,
+        &mut InterfaceConstraintBudget,
+    ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
     V: FnOnce(
         UnvalidatedProgram,
         &[&SourceFile],
@@ -435,18 +449,16 @@ where
     let linked = link_modules_with_budget(checked, graph.entry(), &mut constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
-    let validated_interfaces =
-        validate_interface_evidence_with_budget(linked, &mut constraint_work)
-            .map_err(PipelineFailure::EvidenceValidation)
-            .map_err(FileFailure::Pipeline)?;
-    let linked = validated_interfaces.source();
+    let validated_interfaces = interface_validator(linked, &mut constraint_work)
+        .map_err(PipelineFailure::EvidenceValidation)
+        .map_err(FileFailure::Pipeline)?;
     let registry = Arc::clone(validated_interfaces.registry());
-    let mut elaborator = Elaborator::for_module_program(linked)
+    let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
         .map_err(TypeError::Internal)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
     let typed = elaborator
-        .synthesize_module_program(linked)
+        .synthesize_module_program(&validated_interfaces)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
     let ty = typed.ty;
@@ -602,6 +614,7 @@ mod tests {
 
         let failure = run_path_with_consumers(
             source.configuration(),
+            validate_interface_evidence_with_budget,
             |unchecked, _, _| validate_modules(unchecked, &[], &[]),
             |_| {
                 evaluation_called.set(true);
@@ -614,6 +627,54 @@ mod tests {
             panic!("the injected validator failure should retain its stage");
         };
         assert_eq!(error.reason(), crate::core::ValidationReason::Provenance);
+        assert!(!evaluation_called.get());
+    }
+
+    #[test]
+    fn injected_evidence_failure_stops_before_core_synthesis_consumers() {
+        let source = TestSource::write(concat!(
+            "interface Equal<A> {\n",
+            "equal : (A, A) -> Bool\n",
+            "}\n",
+            "main : Unit -> Int\n",
+            "main () = 1\n",
+        ));
+        let core_validation_called = Cell::new(false);
+        let evaluation_called = Cell::new(false);
+
+        let failure = run_path_with_consumers(
+            source.configuration(),
+            |mut linked, budget| {
+                let module = linked
+                    .groups()
+                    .first()
+                    .expect("the fixture should retain one linked group")
+                    .module();
+                assert!(linked.replace_first_interface_fact_id_for_test(
+                    module,
+                    crate::interface::InterfaceId::new(module, u32::MAX),
+                ));
+                validate_interface_evidence_with_budget(linked, budget)
+            },
+            |_, _, _| {
+                core_validation_called.set(true);
+                panic!("Core validation must not run after evidence validation fails")
+            },
+            |_| {
+                evaluation_called.set(true);
+                panic!("evaluation must not run after evidence validation fails")
+            },
+        )
+        .expect_err("the forged linked interface identity should fail evidence validation");
+
+        let FileFailure::Pipeline(PipelineFailure::EvidenceValidation(error)) = failure else {
+            panic!("the injected evidence validator failure should retain its stage");
+        };
+        assert_eq!(
+            error.reason(),
+            crate::evidence_validation::EvidenceValidationReason::UnknownIdentity,
+        );
+        assert!(!core_validation_called.get());
         assert!(!evaluation_called.get());
     }
 

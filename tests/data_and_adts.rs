@@ -15,6 +15,7 @@ use ash::{
     driver::{Observation, PipelineFailure},
     elaborate::{ElaborationFailure, Elaborator, TypeError, check_module, link_modules},
     eval::{TraceEvent, evaluate},
+    evidence_validation::validate_interface_evidence,
     module::{ModuleId, ModuleRoots, load_module_graph},
     parser::{ResourceFailure, SYNTAX_WORK_LIMIT},
     render,
@@ -60,6 +61,7 @@ fn elaborated_module(text: &str) -> StructuralProgram {
     let checked = check_module(resolved).expect("Core fixture should check");
     let linked =
         link_modules(vec![checked], graph.entry()).expect("checked Core fixture should link");
+    let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("Core namespace should fit");
     let typed = elaborator

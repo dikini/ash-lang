@@ -758,6 +758,19 @@ cargo fmt --check
 Expected GREEN. Independently review the selection/validation erasure boundary
 and every changed Core consumer.
 
+The recorded final Task 6 run is GREEN. The seven required corpus observations
+and the additional same-typed multi-method regression pass, as do the exact
+Core-shape and validator-barrier witnesses. The focused matrix passes 84 tests,
+the library passes 282 tests, and the complete test suite, format, all-target
+checking, strict Clippy, and diff hygiene pass. Two independent review cycles
+covered validation, lowering, Core consumers, budget accounting, and test
+strength. Review fixes authenticate imported implementation publication,
+revalidate generic-header termination through the checker's shared iterative
+judgment, charge block scans before inspection, reject missing or reordered
+same-typed slots, retain the closed Core/evaluator inventory, and avoid emitting
+unused sibling methods for a single method occurrence. The repeated reviews are
+clear.
+
 ### Task 6 — Step 5: Commit
 
 Commit unsigned as:

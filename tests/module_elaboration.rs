@@ -8,6 +8,7 @@ use ash::{
     core::{PureComputation, PureExprKind, transform::identity_traversal, validate_modules},
     elaborate::{Elaborator, TypeError, check_module, link_modules},
     eval::evaluate,
+    evidence_validation::validate_interface_evidence,
     module::{ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::CheckedModule,
@@ -199,6 +200,7 @@ fn linked_modules_form_dependency_ordered_core_groups_and_evaluate() {
     );
     let checked = check_graph(&graph).expect("the module chain should check");
     let linked = link_modules(checked, graph.entry()).expect("the graph should link");
+    let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("the graph namespace should reserve");
     let typed = elaborator

@@ -15,6 +15,7 @@ use ash::{
     driver::PipelineFailure,
     elaborate::{Elaborator, check_module, link_modules},
     eval::evaluate,
+    evidence_validation::validate_interface_evidence,
     module::{ModuleId, ModuleRoots, load_module_graph},
     resolve::resolve_module,
     source::SourceFile,
@@ -51,6 +52,7 @@ fn elaborated(text: &str) -> (ValidatedProgram, SourceFile, ModuleId) {
     let resolved = resolve_module(&graph.modules()[0], &[]).expect("source should resolve");
     let checked = check_module(resolved).expect("source should check");
     let linked = link_modules(vec![checked], graph.entry()).expect("source should link");
+    let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("Core namespace should fit");
     let typed = elaborator

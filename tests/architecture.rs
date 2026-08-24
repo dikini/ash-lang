@@ -24,6 +24,56 @@ const DRIVER_SOURCE: &str = include_str!("../src/driver.rs");
 const PARSER_EXPORTS: &str = include_str!("../src/parser/mod.rs");
 const PARSER_GRAMMAR: &str = include_str!("../src/parser/grammar.rs");
 const PARSER_PROJECTION: &str = include_str!("../src/parser/project.rs");
+const CORE_AND_EVALUATOR_SOURCES: &[(&str, &str)] = &[
+    (
+        "src/core/binding.rs",
+        include_str!("../src/core/binding.rs"),
+    ),
+    ("src/core/data.rs", include_str!("../src/core/data.rs")),
+    (
+        "src/core/dialect.rs",
+        include_str!("../src/core/dialect.rs"),
+    ),
+    (
+        "src/core/function.rs",
+        include_str!("../src/core/function.rs"),
+    ),
+    (
+        "src/core/literal.rs",
+        include_str!("../src/core/literal.rs"),
+    ),
+    ("src/core/mod.rs", include_str!("../src/core/mod.rs")),
+    (
+        "src/core/primitive.rs",
+        include_str!("../src/core/primitive.rs"),
+    ),
+    (
+        "src/core/recursion.rs",
+        include_str!("../src/core/recursion.rs"),
+    ),
+    (
+        "src/core/transform.rs",
+        include_str!("../src/core/transform.rs"),
+    ),
+    (
+        "src/core/type_ops.rs",
+        include_str!("../src/core/type_ops.rs"),
+    ),
+    (
+        "src/core/validate.rs",
+        include_str!("../src/core/validate.rs"),
+    ),
+    (
+        "src/core/variable.rs",
+        include_str!("../src/core/variable.rs"),
+    ),
+    (
+        "src/eval/machine.rs",
+        include_str!("../src/eval/machine.rs"),
+    ),
+    ("src/eval/mod.rs", include_str!("../src/eval/mod.rs")),
+    ("src/eval/value.rs", include_str!("../src/eval/value.rs")),
+];
 
 #[test]
 fn current_source_exposes_only_the_modular_source_pipeline() {
@@ -62,6 +112,18 @@ fn current_source_exposes_only_the_modular_source_pipeline() {
         !PARSER_GRAMMAR.contains("MINI_ASH_DIALECT"),
         "the current parser must not retain a Mini-Ash grammar selector"
     );
+}
+
+#[test]
+fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories() {
+    for (path, source) in CORE_AND_EVALUATOR_SOURCES {
+        for mechanism in ["Interface", "Impl", "Requirement", "EvidenceSelection"] {
+            assert!(
+                !source.contains(mechanism),
+                "{path} must not gain the {mechanism} runtime mechanism"
+            );
+        }
+    }
 }
 
 trait OperationFamily {

@@ -7,6 +7,7 @@ use std::{
 use ash::{
     core::{PureComputation, PureExprKind, PureValue, validate_modules},
     elaborate::{Elaborator, TypeError, check_module, link_modules},
+    evidence_validation::validate_interface_evidence,
     interface::RequirementOwner,
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
@@ -241,6 +242,8 @@ fn cross_module_constraint_lowers_to_method_evidence() {
         .expect("the entry main should remain checked")
         .binder;
     let linked = link_modules(checked, graph.entry()).expect("the checked graph should link");
+    let linked =
+        validate_interface_evidence(linked).expect("the linked evidence should authenticate");
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("the graph namespace should reserve");
     let typed = elaborator
@@ -321,9 +324,21 @@ fn cross_module_constraint_lowers_to_method_evidence() {
     else {
         panic!("main should lower to a source function");
     };
-    let PureExprKind::Computation(PureComputation::Apply(source_application)) = &core
+    let main_body = match &core
         .node(main_function.body())
         .expect("main body should exist")
+        .kind
+    {
+        PureExprKind::Computation(PureComputation::Match(group)) => group
+            .arms()
+            .first()
+            .expect("the checked Unit equation should retain its one arm")
+            .body(),
+        _ => main_function.body(),
+    };
+    let PureExprKind::Computation(PureComputation::Apply(source_application)) = &core
+        .node(main_body)
+        .expect("main equation body should exist")
         .kind
     else {
         panic!("the source argument should be applied after evidence");

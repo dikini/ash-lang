@@ -7,6 +7,7 @@ use ash::{
     core::{PureComputation, PureExprKind, PureValue, ValidatedProgram, validate_modules},
     driver::PipelineFailure,
     elaborate::{Elaborator, TypeContext, TypeError, TypeReason, check_module, link_modules},
+    evidence_validation::validate_interface_evidence,
     module::{ModuleRoots, load_module_graph},
     resolve::resolve_module,
     resolved::{
@@ -90,6 +91,7 @@ fn validated_module(name: &str, text: &str) -> (SourceFile, ResolvedModule, Vali
         )
         .expect("fixture should check");
         let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+        let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
         let mut elaborator =
             Elaborator::for_module_program(&linked).expect("binder namespace should fit");
         let typed = elaborator

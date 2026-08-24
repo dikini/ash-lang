@@ -809,6 +809,100 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
+    pub(crate) fn replace_available_implementation_id_for_test(
+        &mut self,
+        module: ModuleId,
+        implementation: ImplId,
+        replacement: ImplId,
+    ) -> bool {
+        let Some(available) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == module)
+            .and_then(|group| {
+                group
+                    .available_implementations
+                    .iter_mut()
+                    .find(|available| available.id == implementation)
+            })
+        else {
+            return false;
+        };
+        available.id = replacement;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_implementation_prerequisite_with_head_for_test(
+        &mut self,
+        implementation: ImplId,
+        prerequisite_index: usize,
+    ) -> bool {
+        let Some(group) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == implementation.module())
+        else {
+            return false;
+        };
+        let Some(implementation_index) = group
+            .implementation_facts
+            .iter()
+            .position(|fact| fact.id == implementation)
+        else {
+            return false;
+        };
+        let argument = group.implementation_facts[implementation_index]
+            .argument
+            .clone();
+        let Some(source) = group
+            .implementations
+            .get_mut(implementation_index)
+            .and_then(|body| body.source.as_mut())
+        else {
+            return false;
+        };
+        let Some(source_prerequisite) = source.prerequisites.get_mut(prerequisite_index) else {
+            return false;
+        };
+        let Some(fact) = group.implementation_facts.get_mut(implementation_index) else {
+            return false;
+        };
+        let Some(fact_prerequisite) = fact.prerequisites.get_mut(prerequisite_index) else {
+            return false;
+        };
+        if fact
+            .methods
+            .iter()
+            .any(|method| method.scheme.requirements.get(prerequisite_index).is_none())
+        {
+            return false;
+        }
+
+        discard_type_iteratively(std::mem::replace(
+            &mut source_prerequisite.argument.ty,
+            argument.clone(),
+        ));
+        discard_type_iteratively(std::mem::replace(
+            &mut fact_prerequisite.argument,
+            argument.clone(),
+        ));
+        for method in &mut fact.methods {
+            let requirement = method
+                .scheme
+                .requirements
+                .get_mut(prerequisite_index)
+                .expect("the complete implementation method scheme was checked above");
+            discard_type_iteratively(std::mem::replace(
+                &mut requirement.argument,
+                argument.clone(),
+            ));
+        }
+        discard_type_iteratively(argument);
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn replace_first_implementation_method_binder_for_test(
         &mut self,
         module: ModuleId,
@@ -899,6 +993,62 @@ impl ResolvedModuleProgram {
             return false;
         };
         second.binder = first.binder;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_implementation_argument_for_test(
+        &mut self,
+        module: ModuleId,
+        argument: Type,
+    ) -> bool {
+        let Some(fact) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == module)
+            .and_then(|group| group.implementation_facts.first_mut())
+        else {
+            return false;
+        };
+        discard_type_iteratively(std::mem::replace(&mut fact.argument, argument));
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_implementation_method_type_for_test(
+        &mut self,
+        module: ModuleId,
+        value_type: Type,
+    ) -> bool {
+        let Some(method) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == module)
+            .and_then(|group| group.implementation_facts.first_mut())
+            .and_then(|fact| fact.methods.first_mut())
+        else {
+            return false;
+        };
+        discard_type_iteratively(std::mem::replace(&mut method.scheme.value_type, value_type));
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_implementation_method_origin_for_test(
+        &mut self,
+        module: ModuleId,
+        origin: Origin,
+    ) -> bool {
+        let Some(method) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == module)
+            .and_then(|group| group.implementation_facts.first_mut())
+            .and_then(|fact| fact.methods.first_mut())
+        else {
+            return false;
+        };
+        discard_origin_iteratively(std::mem::replace(&mut method.origin, origin));
         true
     }
 }
