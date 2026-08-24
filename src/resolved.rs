@@ -8,7 +8,8 @@ use std::{
 use crate::{
     integer::Integer,
     interface::{
-        ConstrainedScheme, EvidenceSlot, ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId,
+        CheckedImplementation, CheckedInterface, ConstrainedScheme, EvidenceSlot, ImplId,
+        ImplMethodId, InterfaceId, MethodId, RequirementId,
     },
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
@@ -254,6 +255,8 @@ pub struct CheckedModule {
     implementations: Box<[ResolvedImplementation]>,
     definitions: Box<[ResolvedDefinition]>,
     schemes: Vec<CheckedGlobalScheme>,
+    checked_interfaces: Box<[CheckedInterface]>,
+    checked_implementations: Box<[CheckedImplementation]>,
     exports: ExportSummary,
     span: Span,
 }
@@ -262,6 +265,8 @@ impl CheckedModule {
     pub(crate) fn new(
         resolved: ResolvedModule,
         schemes: Vec<CheckedGlobalScheme>,
+        checked_interfaces: Box<[CheckedInterface]>,
+        checked_implementations: Box<[CheckedImplementation]>,
         exports: ExportSummary,
     ) -> Self {
         Self {
@@ -272,6 +277,8 @@ impl CheckedModule {
             implementations: resolved.implementations,
             definitions: resolved.definitions,
             schemes,
+            checked_interfaces,
+            checked_implementations,
             exports,
             span: resolved.span,
         }
@@ -313,6 +320,18 @@ impl CheckedModule {
         &self.schemes
     }
 
+    /// Returns checked local interface authentication records in source order.
+    #[must_use]
+    pub const fn checked_interfaces(&self) -> &[CheckedInterface] {
+        &self.checked_interfaces
+    }
+
+    /// Returns checked local implementation facts in declaration order.
+    #[must_use]
+    pub const fn checked_implementations(&self) -> &[CheckedImplementation] {
+        &self.checked_implementations
+    }
+
     /// Returns the immutable body-free dependency summary.
     #[must_use]
     pub const fn exports(&self) -> &ExportSummary {
@@ -333,6 +352,8 @@ impl CheckedModule {
             implementations: std::mem::take(&mut self.implementations),
             definitions: std::mem::take(&mut self.definitions),
             schemes: std::mem::take(&mut self.schemes).into_boxed_slice(),
+            checked_interfaces: std::mem::take(&mut self.checked_interfaces),
+            checked_implementations: std::mem::take(&mut self.checked_implementations),
             span: self.span,
         }
     }
@@ -362,6 +383,10 @@ pub struct ResolvedModuleGroup {
     pub definitions: Box<[ResolvedDefinition]>,
     /// Checked schemes in the same definition order.
     pub schemes: Box<[CheckedGlobalScheme]>,
+    /// Checked local interface authentication records in source order.
+    pub checked_interfaces: Box<[CheckedInterface]>,
+    /// Checked local implementations in declaration order.
+    pub checked_implementations: Box<[CheckedImplementation]>,
     /// Complete defining source span.
     pub span: Span,
 }

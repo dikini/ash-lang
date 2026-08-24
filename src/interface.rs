@@ -1,6 +1,6 @@
 //! Stable typed identities for resolved interfaces and implementations.
 
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 use crate::{
     module::ModuleId,
@@ -34,6 +34,11 @@ impl InterfaceConstraintBudget {
     #[cfg(test)]
     pub(crate) const fn with_limit(limit: usize) -> Self {
         Self { used: 0, limit }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn used(&self) -> usize {
+        self.used
     }
 
     pub(crate) fn charge(&mut self, work: usize) -> Result<(), ()> {
@@ -96,6 +101,133 @@ impl InterfaceConstraintBudget {
         }
         Ok(())
     }
+}
+
+pub(crate) fn implementation_heads_overlap(
+    left: &Type,
+    right: &Type,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    budget.charge(1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push((left, right));
+    let mut solutions = HashMap::new();
+    while let Some((left, right)) = pending.pop() {
+        let left = follow_overlap_solution(left, &solutions, budget)?;
+        let right = follow_overlap_solution(right, &solutions, budget)?;
+        budget.charge(1)?;
+        match (left, right) {
+            (Type::Variable(left), Type::Variable(right)) if left == right => {}
+            (Type::Variable(variable), ty) | (ty, Type::Variable(variable)) => {
+                if overlap_occurs(*variable, ty, &solutions, budget)? {
+                    return Ok(false);
+                }
+                budget.charge(1)?;
+                solutions.try_reserve(1).map_err(|_| ())?;
+                solutions.insert(*variable, ty);
+            }
+            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::Inference(left), Type::Inference(right)) if left == right => {}
+            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                schedule_overlap_pairs(left, right, &mut pending, budget)?;
+            }
+            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
+                schedule_overlap_pairs(left, right, &mut pending, budget)?;
+            }
+            (
+                Type::Function(left_domain, left_codomain),
+                Type::Function(right_domain, right_codomain),
+            ) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push((left_codomain, right_codomain));
+                pending.push((left_domain, right_domain));
+            }
+            (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
+                if left_parameters == right_parameters =>
+            {
+                budget.charge(left_parameters.len().saturating_add(1))?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push((left, right));
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+fn schedule_overlap_pairs<'a>(
+    left: &'a [Type],
+    right: &'a [Type],
+    pending: &mut Vec<(&'a Type, &'a Type)>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), ()> {
+    budget.charge(left.len())?;
+    pending.try_reserve(left.len()).map_err(|_| ())?;
+    pending.extend(left.iter().zip(right).rev());
+    Ok(())
+}
+
+fn follow_overlap_solution<'a>(
+    mut ty: &'a Type,
+    solutions: &HashMap<TypeVariableId, &'a Type>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<&'a Type, ()> {
+    loop {
+        budget.charge(1)?;
+        let Type::Variable(variable) = ty else {
+            return Ok(ty);
+        };
+        let Some(solution) = solutions.get(variable) else {
+            return Ok(ty);
+        };
+        ty = solution;
+    }
+}
+
+fn overlap_occurs<'a>(
+    needle: TypeVariableId,
+    root: &'a Type,
+    solutions: &HashMap<TypeVariableId, &'a Type>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    budget.charge(1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push(root);
+    while let Some(ty) = pending.pop() {
+        let ty = follow_overlap_solution(ty, solutions, budget)?;
+        budget.charge(1)?;
+        match ty {
+            Type::Variable(variable) => {
+                if *variable == needle {
+                    return Ok(true);
+                }
+            }
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                budget.charge(elements.len())?;
+                pending.try_reserve(elements.len()).map_err(|_| ())?;
+                pending.extend(elements.iter().rev());
+            }
+            Type::Function(domain, codomain) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push(codomain);
+                pending.push(domain);
+            }
+            Type::Forall(parameters, body) => {
+                budget.charge(parameters.len().saturating_add(1))?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push(body);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+        }
+    }
+    Ok(false)
 }
 
 /// The interface or implementation header judgment that rejected source.
@@ -351,6 +483,41 @@ pub struct ConstrainedScheme {
     pub value_type: Type,
 }
 
+/// Authentication token for one successfully checked local interface.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CheckedInterface {
+    /// Source-order index into the owning module's resolved interface list.
+    pub source_index: usize,
+    /// Stable checked interface identity.
+    pub id: InterfaceId,
+}
+
+/// One exact checked implementation-method membership relation.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CheckedImplMethod {
+    /// Source-order index into the owning implementation's method-group list.
+    pub source_group: usize,
+    /// Stable identity derived from the implementation and interface method.
+    pub id: ImplMethodId,
+    /// Stable interface method supplied by this body group.
+    pub method: MethodId,
+    /// Hidden module-qualified binder for the accepted source group.
+    pub binder: BinderId,
+}
+
+/// One locally checked implementation header with exact method membership.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CheckedImplementation {
+    /// Source-order index into the owning module's resolved implementation list.
+    pub source_index: usize,
+    /// Stable anonymous implementation identity.
+    pub id: ImplId,
+    /// Stable implemented interface identity.
+    pub interface: InterfaceId,
+    /// Exact method mappings in interface declaration order.
+    pub methods: Box<[CheckedImplMethod]>,
+}
+
 impl ConstrainedScheme {
     #[cfg(test)]
     pub(crate) fn from_rank1_type(scheme: Type) -> Self {
@@ -485,6 +652,24 @@ mod tests {
         exact
             .charge_type(&ty)
             .expect("the exact traversal and worklist budget should fit");
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn overlap_unification_accepts_its_exact_budget_and_rejects_the_next_unit() {
+        let variable = Type::Variable(TypeVariableId::new(0));
+
+        let mut short = InterfaceConstraintBudget::with_limit(7);
+        assert_eq!(
+            implementation_heads_overlap(&variable, &Type::Int, &mut short),
+            Err(())
+        );
+
+        let mut exact = InterfaceConstraintBudget::with_limit(8);
+        assert_eq!(
+            implementation_heads_overlap(&variable, &Type::Int, &mut exact),
+            Ok(true)
+        );
         assert_eq!(exact.charge(1), Err(()));
     }
 }

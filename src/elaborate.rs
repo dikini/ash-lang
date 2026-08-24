@@ -14,7 +14,9 @@ use crate::{
     },
     diagnostic::{Diagnostic, SourceLabel},
     interface::{
-        CheckedRequirement, ConstrainedScheme, InterfaceConstraintBudget, InterfaceReason,
+        CheckedImplMethod, CheckedImplementation, CheckedInterface, CheckedRequirement,
+        ConstrainedScheme, InterfaceConstraintBudget, InterfaceReason,
+        implementation_heads_overlap,
     },
     pattern::{
         UsefulnessBudget, UsefulnessError, display_witness, missing_witness_for_types_with_budget,
@@ -644,6 +646,16 @@ impl Drop for CheckedSchemeBuffer {
     }
 }
 
+struct TypeReplacementBuffer(HashMap<TypeVariableId, Type>);
+
+impl Drop for TypeReplacementBuffer {
+    fn drop(&mut self) {
+        for (_, ty) in self.0.drain() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
 /// The one bidirectional typed elaborator for resolved Ash syntax.
 #[derive(Debug)]
 #[must_use]
@@ -884,12 +896,98 @@ impl Elaborator {
         result
     }
 
-    fn check_module_bodies(&mut self, module: &ResolvedModule) -> Result<(), TypeError> {
+    fn check_module_bodies(
+        &mut self,
+        module: &ResolvedModule,
+        checked_interfaces: &[CheckedInterface],
+        checked_implementations: &[CheckedImplementation],
+        constraint_work: &mut InterfaceConstraintBudget,
+    ) -> Result<(), TypeError> {
+        let base_context = self.base_context.clone();
+        let (_, mut context) = self.elaborate_globals(module.definitions(), None, base_context)?;
+        for checked in checked_implementations {
+            let implementation = module
+                .implementations()
+                .get(checked.source_index)
+                .ok_or_else(invalid_state)?;
+            if implementation.id != checked.id || implementation.interface.id != checked.interface {
+                return Err(invalid_state());
+            }
+            let checked_interface = checked_interfaces
+                .iter()
+                .find(|interface| interface.id == checked.interface)
+                .ok_or_else(invalid_state)?;
+            let interface = module
+                .interfaces()
+                .get(checked_interface.source_index)
+                .ok_or_else(invalid_state)?;
+            if interface.id != checked_interface.id {
+                return Err(invalid_state());
+            }
+
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut replacements = TypeReplacementBuffer(HashMap::new());
+            replacements
+                .0
+                .try_reserve(1)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            replacements.0.insert(
+                interface.parameter.id,
+                self.clone_type(&implementation.argument.ty)?,
+            );
+
+            if checked.methods.len() != interface.methods.len() {
+                return Err(invalid_state());
+            }
+            for (checked_method, method) in checked.methods.iter().zip(&interface.methods) {
+                let group = implementation
+                    .method_groups
+                    .get(checked_method.source_group)
+                    .ok_or_else(invalid_state)?;
+                if method.id != checked_method.method
+                    || group.method != Some(method.id)
+                    || group.identity != Some(checked_method.id)
+                    || group.binder.id != checked_method.binder
+                    || checked_method.id.implementation() != implementation.id
+                {
+                    return Err(invalid_state());
+                }
+                let method_type = substitute_type_variables_with(
+                    &method.annotation.ty,
+                    &replacements.0,
+                    |cells| {
+                        constraint_work
+                            .charge(cells)
+                            .map_err(|()| constraint_resource())?;
+                        self.type_work.charge(cells).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })
+                    },
+                )?;
+                charge_type_provenance_nodes(&method_type, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let provenance = TypeProvenance::at_span(&method_type, method.annotation.span);
+                let presentation = implementation_method_origin(implementation, group, method);
+                self.elaborate_equations(
+                    &group.equations,
+                    ProvenancedType {
+                        ty: method_type,
+                        provenance,
+                    },
+                    &mut context,
+                    group.span,
+                    &presentation,
+                )?;
+            }
+        }
+
         let result = ResolvedExpr {
             kind: ResolvedExprKind::Unit,
             span: module.span(),
         };
-        self.elaborate_definition_group(module.definitions(), &result, module.span())?;
+        self.elaborate_result(&result, &mut context)?;
         Ok(())
     }
 
@@ -1622,39 +1720,6 @@ impl Elaborator {
         self.monomorphic_recursive.clear();
 
         Ok((globals, context))
-    }
-
-    fn elaborate_definition_group(
-        &mut self,
-        definitions: &[crate::resolved::ResolvedDefinition],
-        result_expression: &ResolvedExpr,
-        span: Span,
-    ) -> Result<TypedNode, TypeError> {
-        let (globals, mut context) =
-            self.elaborate_globals(definitions, None, self.base_context.clone())?;
-        let mut result = self.elaborate_result(result_expression, &mut context)?;
-        if !globals.is_empty() {
-            let members = globals
-                .into_iter()
-                .map(|global| (global.binder, global.initializer))
-                .collect();
-            let core_result_type = self.clone_type(&result.ty)?;
-            let node = self.builder.recursive_binding(
-                members,
-                result.node,
-                core_result_type,
-                Origin::Generated {
-                    cause: Box::new(Origin::Source(span)),
-                    reason: GeneratedReason::RecursiveBindingLowering,
-                },
-            )?;
-            result = TypedNode {
-                node,
-                ty: result.ty,
-                provenance: result.provenance,
-            };
-        }
-        Ok(result)
     }
 
     fn elaborate_result(
@@ -3271,13 +3336,30 @@ impl Elaborator {
         context: &mut TypeContext,
         definition_span: Span,
     ) -> Result<TypedNode, TypeError> {
-        let Some(first) = equational.equations.first() else {
+        let origin = equational_origin(definition_span, equational);
+        self.elaborate_equations(
+            &equational.equations,
+            function_type,
+            context,
+            definition_span,
+            &origin,
+        )
+    }
+
+    fn elaborate_equations(
+        &mut self,
+        equations: &[crate::resolved::ResolvedEquation],
+        function_type: ProvenancedType,
+        context: &mut TypeContext,
+        definition_span: Span,
+        presentation: &Origin,
+    ) -> Result<TypedNode, TypeError> {
+        let Some(first) = equations.first() else {
             return Err(invalid_state());
         };
         let arity = first.patterns.len();
         if arity == 0
-            || equational
-                .equations
+            || equations
                 .iter()
                 .any(|clause| clause.patterns.len() != arity)
         {
@@ -3322,7 +3404,7 @@ impl Elaborator {
             parameters.push(self.builder.binder(
                 parameter_type,
                 Origin::Generated {
-                    cause: Box::new(equational_origin(definition_span, equational)),
+                    cause: Box::new(presentation.clone()),
                     reason: GeneratedReason::FunctionLowering,
                 },
             )?);
@@ -3340,17 +3422,17 @@ impl Elaborator {
         }
 
         self.type_work
-            .charge(equational.equations.len().saturating_mul(2))
+            .charge(equations.len().saturating_mul(2))
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut coverage_matrix = Vec::new();
         coverage_matrix
-            .try_reserve(equational.equations.len())
+            .try_reserve(equations.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut clause_bodies = Vec::new();
         clause_bodies
-            .try_reserve(equational.equations.len())
+            .try_reserve(equations.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for clause in &equational.equations {
+        for clause in equations {
             let mut binder_ids = Vec::new();
             self.type_work
                 .charge(arity)
@@ -3531,7 +3613,7 @@ impl Elaborator {
                 body_node,
                 core_ty,
                 Origin::Generated {
-                    cause: Box::new(equational_origin(definition_span, equational)),
+                    cause: Box::new(presentation.clone()),
                     reason: GeneratedReason::FunctionLowering,
                 },
             )?;
@@ -3699,8 +3781,15 @@ impl Elaborator {
 fn check_interface_declarations(
     module: &ResolvedModule,
     budget: &mut InterfaceConstraintBudget,
-) -> Result<(), TypeError> {
-    for interface in module.interfaces() {
+) -> Result<Box<[CheckedInterface]>, TypeError> {
+    budget
+        .charge(module.interfaces().len())
+        .map_err(|()| constraint_resource())?;
+    let mut checked = Vec::new();
+    checked
+        .try_reserve(module.interfaces().len())
+        .map_err(|_| constraint_resource())?;
+    for (source_index, interface) in module.interfaces().iter().enumerate() {
         budget.charge(1).map_err(|()| constraint_resource())?;
         for method in &interface.methods {
             budget
@@ -3735,12 +3824,17 @@ fn check_interface_declarations(
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
         }
+        checked.push(CheckedInterface {
+            source_index,
+            id: interface.id,
+        });
     }
-    Ok(())
+    Ok(checked.into_boxed_slice())
 }
 
 fn check_global_requirements(
     module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<(), TypeError> {
     for definition in module.definitions() {
@@ -3784,14 +3878,9 @@ fn check_global_requirements(
         if public {
             for requirement in requirements.iter() {
                 budget.charge(1).map_err(|()| constraint_resource())?;
-                let mut private = None;
-                for interface in module.interfaces() {
-                    budget.charge(1).map_err(|()| constraint_resource())?;
-                    if interface.id == requirement.interface.id {
-                        private = (!interface.public).then_some(interface);
-                        break;
-                    }
-                }
+                let private =
+                    local_interface(module, checked_interfaces, requirement.interface.id, budget)?
+                        .filter(|interface| !interface.public);
                 if let Some(interface) = private {
                     let mut diagnostic = Diagnostic::new(
                         InterfaceReason::ConstraintPrivateInterface,
@@ -3859,6 +3948,406 @@ fn check_global_requirements(
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
         }
+    }
+    Ok(())
+}
+
+fn check_implementation_headers_and_membership(
+    module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<Box<[CheckedImplementation]>, TypeError> {
+    for implementation in module.implementations() {
+        check_implementation_header(module, checked_interfaces, implementation, budget)?;
+    }
+    check_local_implementation_overlap(module, budget)?;
+
+    budget
+        .charge(module.implementations().len())
+        .map_err(|()| constraint_resource())?;
+    let mut checked = Vec::new();
+    checked
+        .try_reserve(module.implementations().len())
+        .map_err(|_| constraint_resource())?;
+    for (source_index, implementation) in module.implementations().iter().enumerate() {
+        checked.push(check_implementation_membership(
+            module,
+            checked_interfaces,
+            source_index,
+            implementation,
+            budget,
+        )?);
+    }
+    Ok(checked.into_boxed_slice())
+}
+
+fn check_local_implementation_overlap(
+    module: &ResolvedModule,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    for (index, implementation) in module.implementations().iter().enumerate() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        for previous in &module.implementations()[..index] {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            if implementation.interface.id != previous.interface.id {
+                continue;
+            }
+            if implementation_heads_overlap(
+                &previous.argument.ty,
+                &implementation.argument.ty,
+                budget,
+            )
+            .map_err(|()| constraint_resource())?
+            {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::ImplOverlap,
+                    SourceLabel::new(
+                        implementation.argument.span,
+                        "this implementation overlaps an earlier available implementation",
+                    ),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    previous.argument.span,
+                    "the earlier overlapping implementation head is here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_implementation_header(
+    module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    implementation: &crate::resolved::ResolvedImplementation,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    budget
+        .charge(
+            implementation
+                .head_parameters
+                .len()
+                .saturating_add(implementation.prerequisite_only_parameters.len())
+                .saturating_add(implementation.prerequisites.len())
+                .saturating_add(1),
+        )
+        .map_err(|()| constraint_resource())?;
+    budget
+        .charge_type(&implementation.argument.ty)
+        .map_err(|()| constraint_resource())?;
+    for prerequisite in &implementation.prerequisites {
+        budget
+            .charge_type(&prerequisite.argument.ty)
+            .map_err(|()| constraint_resource())?;
+    }
+
+    if implementation.public {
+        if let Some(interface) = local_interface(
+            module,
+            checked_interfaces,
+            implementation.interface.id,
+            budget,
+        )? && !interface.public
+        {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplPrivateInterface,
+                SourceLabel::new(
+                    implementation.interface.origin.primary_span(),
+                    "a public implementation cannot expose this private interface",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                interface.span,
+                "the private interface is declared here",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        }
+        for prerequisite in &implementation.prerequisites {
+            if let Some(interface) = local_interface(
+                module,
+                checked_interfaces,
+                prerequisite.interface.id,
+                budget,
+            )? && !interface.public
+            {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::ImplPrivateInterface,
+                    SourceLabel::new(
+                        prerequisite.span,
+                        "a public implementation cannot expose this private prerequisite",
+                    ),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    interface.span,
+                    "the private interface is declared here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+
+    if matches!(implementation.argument.ty, Type::Variable(_)) {
+        let mut diagnostic = Diagnostic::new(
+            InterfaceReason::ImplVariableHead,
+            SourceLabel::new(
+                implementation.argument.span,
+                "an implementation head cannot be a bare type variable",
+            ),
+        );
+        diagnostic.related.push(SourceLabel::new(
+            implementation.interface.origin.primary_span(),
+            "this is the implemented interface",
+        ));
+        return Err(TypeError::Interface(Box::new(diagnostic)));
+    }
+
+    if let Some(parameter) = implementation.prerequisite_only_parameters.first() {
+        let mut diagnostic = Diagnostic::new(
+            InterfaceReason::ImplPrerequisiteVariable,
+            SourceLabel::new(
+                parameter.origin.primary_span(),
+                "this prerequisite variable does not occur in the implementation head",
+            ),
+        );
+        diagnostic.related.push(SourceLabel::new(
+            implementation.argument.span,
+            "the implementation head determines every prerequisite variable",
+        ));
+        return Err(TypeError::Interface(Box::new(diagnostic)));
+    }
+
+    let local_interface_owner = implementation.interface.id.module() == module.module();
+    let local_nominal_owner = match implementation.argument.ty {
+        Type::Nominal(id) | Type::AppliedNominal(id, _) => id.module() == module.module(),
+        Type::Int
+        | Type::Bool
+        | Type::Unit
+        | Type::Tuple(_)
+        | Type::Function(_, _)
+        | Type::Forall(_, _)
+        | Type::Variable(_)
+        | Type::Inference(_) => false,
+    };
+    if !local_interface_owner && !local_nominal_owner {
+        let mut diagnostic = Diagnostic::new(
+            InterfaceReason::ImplOrphan,
+            SourceLabel::new(
+                implementation.argument.span,
+                "this module owns neither the interface nor the outer nominal type",
+            ),
+        );
+        diagnostic.related.push(SourceLabel::new(
+            implementation.interface.origin.primary_span(),
+            "the foreign interface is selected here",
+        ));
+        return Err(TypeError::Interface(Box::new(diagnostic)));
+    }
+
+    for prerequisite in &implementation.prerequisites {
+        if type_contains_any_variable(&prerequisite.argument.ty, budget)?
+            && !is_strict_type_subterm(
+                &prerequisite.argument.ty,
+                &implementation.argument.ty,
+                budget,
+            )?
+        {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplPrerequisiteNotDecreasing,
+                SourceLabel::new(
+                    prerequisite.span,
+                    "this generic prerequisite does not strictly decrease",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                implementation.argument.span,
+                "the prerequisite must be a strict subterm of this head",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        }
+    }
+    Ok(())
+}
+
+fn check_implementation_membership(
+    module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    source_index: usize,
+    implementation: &crate::resolved::ResolvedImplementation,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<CheckedImplementation, TypeError> {
+    let interface = local_interface(
+        module,
+        checked_interfaces,
+        implementation.interface.id,
+        budget,
+    )?
+    .ok_or_else(invalid_state)?;
+    budget
+        .charge(implementation.method_groups.len())
+        .map_err(|()| constraint_resource())?;
+    let mut supplied = HashMap::new();
+    supplied
+        .try_reserve(implementation.method_groups.len())
+        .map_err(|_| constraint_resource())?;
+    for (source_group, group) in implementation.method_groups.iter().enumerate() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        let Some(method) = group
+            .method
+            .filter(|method| method.interface() == interface.id)
+        else {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplExtraMethod,
+                SourceLabel::new(
+                    group.span,
+                    "this method is not declared by the implemented interface",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                interface.span,
+                "the implemented interface is declared here",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        };
+        if let Some((_, first)) = supplied.insert(method, (source_group, group)) {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplDuplicateMethod,
+                SourceLabel::new(group.span, "this interface method is implemented twice"),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                first.span,
+                "the first method group is here",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        }
+    }
+    for method in &interface.methods {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        if !supplied.contains_key(&method.id) {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplMissingMethod,
+                SourceLabel::new(
+                    implementation.span,
+                    "this implementation does not supply every interface method",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                method.span,
+                "this required method is missing",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        }
+    }
+
+    budget
+        .charge(interface.methods.len().saturating_add(1))
+        .map_err(|()| constraint_resource())?;
+    let mut methods = Vec::new();
+    methods
+        .try_reserve(interface.methods.len())
+        .map_err(|_| constraint_resource())?;
+    for method in &interface.methods {
+        let (source_group, group) = supplied.get(&method.id).ok_or_else(invalid_state)?;
+        let identity = group.identity.ok_or_else(invalid_state)?;
+        if identity != crate::interface::ImplMethodId::new(implementation.id, method.id) {
+            return Err(invalid_state());
+        }
+        methods.push(CheckedImplMethod {
+            source_group: *source_group,
+            id: identity,
+            method: method.id,
+            binder: group.binder.id,
+        });
+    }
+    Ok(CheckedImplementation {
+        source_index,
+        id: implementation.id,
+        interface: implementation.interface.id,
+        methods: methods.into_boxed_slice(),
+    })
+}
+
+fn local_interface<'a>(
+    module: &'a ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    id: crate::interface::InterfaceId,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<Option<&'a crate::resolved::ResolvedInterfaceDeclaration>, TypeError> {
+    for checked in checked_interfaces {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        let interface = module
+            .interfaces()
+            .get(checked.source_index)
+            .ok_or_else(invalid_state)?;
+        if interface.id != checked.id {
+            return Err(invalid_state());
+        }
+        if checked.id == id {
+            return Ok(Some(interface));
+        }
+    }
+    Ok(None)
+}
+
+fn type_contains_any_variable(
+    root: &Type,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, TypeError> {
+    visit_type_variables(root, budget, |_, _| Ok(true)).map_err(|()| constraint_resource())
+}
+
+fn is_strict_type_subterm(
+    candidate: &Type,
+    root: &Type,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, TypeError> {
+    let mut pending = Vec::new();
+    schedule_type_children(root, &mut pending, budget)?;
+    while let Some(ty) = pending.pop() {
+        if same_type_with_constraint_budget(candidate, ty, budget)
+            .map_err(|()| constraint_resource())?
+        {
+            return Ok(true);
+        }
+        schedule_type_children(ty, &mut pending, budget)?;
+    }
+    Ok(false)
+}
+
+fn schedule_type_children<'a>(
+    ty: &'a Type,
+    pending: &mut Vec<&'a Type>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    match ty {
+        Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+            budget
+                .charge(elements.len())
+                .map_err(|()| constraint_resource())?;
+            pending
+                .try_reserve(elements.len())
+                .map_err(|_| constraint_resource())?;
+            pending.extend(elements.iter().rev());
+        }
+        Type::Function(domain, codomain) => {
+            budget.charge(2).map_err(|()| constraint_resource())?;
+            pending.try_reserve(2).map_err(|_| constraint_resource())?;
+            pending.push(codomain);
+            pending.push(domain);
+        }
+        Type::Forall(parameters, body) => {
+            budget
+                .charge(parameters.len().saturating_add(1))
+                .map_err(|()| constraint_resource())?;
+            pending.try_reserve(1).map_err(|_| constraint_resource())?;
+            pending.push(body);
+        }
+        Type::Int
+        | Type::Bool
+        | Type::Unit
+        | Type::Nominal(_)
+        | Type::Variable(_)
+        | Type::Inference(_) => {}
     }
     Ok(())
 }
@@ -4022,21 +4511,37 @@ pub(crate) fn check_module_with_budget(
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<CheckedModule, TypeError> {
-    check_interface_declarations(&resolved, constraint_work)?;
-    check_global_requirements(&resolved, constraint_work)?;
+    let checked_interfaces = check_interface_declarations(&resolved, constraint_work)?;
+    check_global_requirements(&resolved, &checked_interfaces, constraint_work)?;
+    let checked_implementations = check_implementation_headers_and_membership(
+        &resolved,
+        &checked_interfaces,
+        constraint_work,
+    )?;
     let mut elaborator =
         Elaborator::for_module_with_work(&resolved, type_work.clone(), coverage_work.clone())?;
     let result: Result<_, TypeError> = (|| {
-        elaborator.check_module_bodies(&resolved)?;
+        elaborator.check_module_bodies(
+            &resolved,
+            &checked_interfaces,
+            &checked_implementations,
+            constraint_work,
+        )?;
         let schemes = elaborator.checked_module_schemes(resolved.definitions())?;
         let exports = ExportSummary::freeze(&resolved, &schemes, &mut elaborator.type_work)
             .map_err(resolved_build_error)?;
-        Ok((schemes, exports))
+        Ok((schemes, checked_implementations, exports))
     })();
     *type_work = std::mem::take(&mut elaborator.type_work);
     *coverage_work = std::mem::take(&mut elaborator.coverage_work);
-    let (schemes, exports) = result?;
-    Ok(CheckedModule::new(resolved, schemes, exports))
+    let (schemes, checked_implementations, exports) = result?;
+    Ok(CheckedModule::new(
+        resolved,
+        schemes,
+        checked_interfaces,
+        checked_implementations,
+        exports,
+    ))
 }
 
 /// Assembles dependency-ordered checked modules for one final Core lowering.
@@ -4846,6 +5351,28 @@ fn equational_origin(
             definition_span,
             equational.interface.span,
             equational.interface.annotation.span,
+        ]
+        .into_iter()
+        .chain(first.map(|equation| equation.body.span))
+        .collect(),
+    }
+}
+
+fn implementation_method_origin(
+    implementation: &crate::resolved::ResolvedImplementation,
+    group: &crate::resolved::ResolvedImplementationMethodGroup,
+    method: &crate::resolved::ResolvedInterfaceMethod,
+) -> Origin {
+    let first = group.equations.first();
+    Origin::Related {
+        primary: Box::new(Origin::Source(
+            first.map_or(group.span, |equation| equation.span),
+        )),
+        related: [
+            implementation.span,
+            group.span,
+            method.span,
+            method.annotation.span,
         ]
         .into_iter()
         .chain(first.map(|equation| equation.body.span))
@@ -5801,7 +6328,7 @@ mod tests {
         let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut constraint_work = InterfaceConstraintBudget::with_limit(7);
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(8);
 
         check_module_with_budget(
             first,
@@ -5822,6 +6349,60 @@ mod tests {
             failure,
             TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
         );
+    }
+
+    #[test]
+    fn impl_method_substitution_uses_the_exact_constraint_budget() {
+        let declarations = concat!(
+            "interface Keep<A> {\nkeep : A -> A\n}\n\n",
+            "impl Keep<Int> {\nkeep value = value\n}\n",
+        );
+        let short_module = resolved_module_fixture(
+            "short-impl-method-constraint.ash",
+            declarations,
+            "Unit",
+            "()",
+        );
+        let exact_module =
+            resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut short = InterfaceConstraintBudget::with_limit(21);
+
+        let failure =
+            check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
+                .expect_err("one missing unit should reject the method substitution");
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
+        );
+
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut exact = InterfaceConstraintBudget::with_limit(22);
+        check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
+            .expect("the exact budget should admit one implementation method");
+
+        assert_eq!(exact.used(), 22);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn impl_head_replacement_storage_drops_iteratively_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut head = Type::Int;
+                for _ in 0..10_000 {
+                    head = Type::Function(Box::new(Type::Unit), Box::new(head));
+                }
+                let mut replacements = TypeReplacementBuffer(HashMap::new());
+                replacements.0.insert(TypeVariableId::generated(0), head);
+                drop(replacements);
+            })
+            .expect("the small-stack replacement drop thread should start")
+            .join()
+            .expect("the replacement buffer should dismantle the deep head iteratively");
     }
 
     #[test]
@@ -6956,7 +7537,12 @@ mod tests {
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         elaborator
-            .check_module_bodies(&program)
+            .check_module_bodies(
+                &program,
+                &[],
+                &[],
+                &mut InterfaceConstraintBudget::default(),
+            )
             .expect("recursive globals should elaborate");
 
         TYPE_CONTEXT_CLONES.with(|clones| {
