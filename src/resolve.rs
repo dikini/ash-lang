@@ -505,6 +505,7 @@ impl Resolver {
                                 .insert(exported.id, exported.parameter_count);
                             self.retain_imported_nominal(
                                 exported,
+                                dependency.summary,
                                 Some(&item.name.text),
                                 item.span,
                             )?;
@@ -607,7 +608,7 @@ impl Resolver {
                     parameter_count: exported.parameter_count,
                 },
             );
-            self.retain_imported_nominal(exported, Some(spelling), import_span)?;
+            self.retain_imported_nominal(exported, summary, Some(spelling), import_span)?;
         }
         for (spelling, exported) in summary.constructors() {
             namespaces
@@ -728,6 +729,8 @@ impl Resolver {
             .merge_nominal(ImportedNominalFact {
                 id: exported.id,
                 parameter_count: exported.parameter_count,
+                parameters: exported.parameters.to_vec().into_boxed_slice(),
+                constructors: exported.constructors.to_vec().into_boxed_slice(),
                 access: exported.access,
                 display_spelling: exported.display_spelling.map(str::to_owned),
                 origin: exported.origin.clone(),
@@ -744,6 +747,7 @@ impl Resolver {
     fn retain_imported_nominal(
         &mut self,
         exported: &ExportedType,
+        summary: &ExportSummary,
         display_spelling: Option<&str>,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
@@ -751,6 +755,8 @@ impl Resolver {
             .merge_nominal(ImportedNominalFact {
                 id: exported.id,
                 parameter_count: exported.parameter_count,
+                parameters: exported.parameters.to_vec().into_boxed_slice(),
+                constructors: exported.constructors.to_vec().into_boxed_slice(),
                 access: exported.access.into(),
                 display_spelling: display_spelling.map(str::to_owned),
                 origin: exported.origin.clone(),
@@ -761,7 +767,18 @@ impl Resolver {
                     span,
                     "imported routes disagree about nominal metadata",
                 )
-            })
+            })?;
+        for constructor in &exported.constructors {
+            let constructor = summary.constructor_by_id(*constructor).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "a transparent type summary lost one of its constructors",
+                )
+            })?;
+            self.retain_imported_constructor_fact(constructor, summary, span)?;
+        }
+        Ok(())
     }
 
     fn retain_imported_constructor(
@@ -780,7 +797,30 @@ impl Resolver {
                 "an exported constructor references missing owner metadata",
             )
         })?;
+        let siblings = owner.constructors.to_vec();
         self.retain_imported_nominal_fact(owner, span)?;
+        for sibling in siblings {
+            let sibling = summary.constructor_by_id(sibling).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "a transparent type summary lost one of its constructors",
+                )
+            })?;
+            self.retain_imported_constructor_fact(sibling, summary, span)?;
+        }
+        self.retain_imported_constructor_fact(exported, summary, span)
+    }
+
+    fn retain_imported_constructor_fact(
+        &mut self,
+        exported: &ExportedConstructor,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        if self.imported.contains_constructor(exported.id) {
+            return Ok(());
+        }
         if let Some(payload) = &exported.payload {
             self.retain_scheme_nominals(payload, summary, span)?;
         }
@@ -798,6 +838,7 @@ impl Resolver {
             })?;
         self.imported.insert_constructor(ImportedConstructorFact {
             id: exported.id,
+            spelling: exported.spelling.clone(),
             payload,
             origin: exported.origin.clone(),
         });

@@ -18,6 +18,7 @@ use super::{
 };
 use crate::{
     core::{CorePattern, CorePatternKind},
+    module::ModuleId,
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::{BinderId, ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable},
     source::{Origin, SourceFile, SourceId, Span},
@@ -242,9 +243,62 @@ pub fn validate(
     )))
 }
 
+/// Consumes unchecked Core assembled from multiple canonical modules.
+///
+/// `module_sources` is the explicit one-to-one relation between every module
+/// admitted to the compilation and its canonical source. Registry and source
+/// binder identities are checked against that relation rather than inferred
+/// from the program root.
+///
+/// # Errors
+///
+/// Returns a structured internal failure if the module/source relation is
+/// missing, duplicated, forged, or if any ordinary Core invariant fails.
+pub fn validate_modules(
+    program: UnvalidatedProgram,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+) -> Result<ValidatedProgram, ValidationError> {
+    let validator = match Validator::new_modules(&program, sources, module_sources) {
+        Ok(validator) => validator,
+        Err(error) => {
+            program.discard_iteratively();
+            return Err(error);
+        }
+    };
+    if let Err(error) = validator.run() {
+        program.discard_iteratively();
+        return Err(error);
+    }
+
+    let mut nodes = Vec::with_capacity(program.nodes.len());
+    for (index, stored) in program.nodes.into_iter().enumerate() {
+        let node = node_id(program.arena, index)?;
+        let Some(origin) = stored.origin else {
+            return Err(ValidationError::new(
+                ValidationReason::Provenance,
+                Some(node),
+            ));
+        };
+        nodes.push(TypedExpr {
+            ty: stored.ty,
+            origin,
+            kind: stored.kind,
+        });
+    }
+
+    Ok(ValidatedProgram::new(PureProgram::new(
+        Arc::clone(&program.registry),
+        program.arena,
+        nodes,
+        program.root,
+    )))
+}
+
 struct Validator<'program, 'source> {
     program: &'program UnvalidatedProgram,
     sources: HashMap<SourceId, &'source SourceFile>,
+    module_sources: Option<HashMap<ModuleId, SourceId>>,
     binders: HashMap<BinderId, &'program TypedBinder>,
     type_work: Cell<usize>,
     #[cfg(test)]
@@ -261,6 +315,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 .iter()
                 .map(|source| (source.id(), *source))
                 .collect(),
+            module_sources: None,
             binders: HashMap::new(),
             type_work: Cell::new(0),
             #[cfg(test)]
@@ -268,6 +323,38 @@ impl<'program, 'source> Validator<'program, 'source> {
             #[cfg(test)]
             type_validation_pending_peak: Cell::new(0),
         }
+    }
+
+    fn new_modules(
+        program: &'program UnvalidatedProgram,
+        sources: &[&'source SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+    ) -> Result<Self, ValidationError> {
+        let mut validator = Self::new(program, sources);
+        if validator.sources.len() != sources.len() {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        let mut relation = HashMap::new();
+        let mut mapped_sources = HashSet::new();
+        relation
+            .try_reserve(module_sources.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        mapped_sources
+            .try_reserve(module_sources.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        for (module, source) in module_sources.iter().copied() {
+            if !validator.sources.contains_key(&source)
+                || relation.insert(module, source).is_some()
+                || !mapped_sources.insert(source)
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        }
+        if mapped_sources.len() != validator.sources.len() {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        validator.module_sources = Some(relation);
+        Ok(validator)
     }
 
     fn run(mut self) -> Result<(), ValidationError> {
@@ -284,6 +371,9 @@ impl<'program, 'source> Validator<'program, 'source> {
         &self,
     ) -> Result<HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>, ValidationError>
     {
+        if self.module_sources.is_some() {
+            return self.validate_module_registry();
+        }
         let registry = &self.program.registry;
         let mut nominal_ids = HashSet::new();
         let mut nominal_names = HashSet::new();
@@ -472,6 +562,206 @@ impl<'program, 'source> Validator<'program, 'source> {
                             .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?,
                     )
                 {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
+        if registry.constructors().iter().any(|constructor| {
+            registry
+                .nominal(constructor.owner)
+                .is_none_or(|owner| !constructor_belongs_to_owner(owner, constructor.id))
+        }) {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        Ok(parameter_owners)
+    }
+
+    fn validate_module_registry(
+        &self,
+    ) -> Result<HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>, ValidationError>
+    {
+        let registry = &self.program.registry;
+        let relation = self
+            .module_sources
+            .as_ref()
+            .expect("module registry validation requires an explicit relation");
+        let mut nominal_ids = HashSet::new();
+        let mut nominal_names = HashMap::<ModuleId, HashSet<&str>>::new();
+        let mut next_nominal = HashMap::<ModuleId, u32>::new();
+        let mut previous_nominal_end = HashMap::new();
+
+        for nominal in registry.nominals() {
+            let module = nominal.id.module();
+            let Some(source) = relation.get(&module).copied() else {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            };
+            let expected = next_nominal.entry(module).or_insert(0);
+            let nominal_span = nominal.origin.primary_span();
+            let nominal_range = nominal_span.range();
+            let names = nominal_names.entry(module).or_default();
+            if nominal.id.declaration() != *expected
+                || nominal_span.source() != source
+                || !origin_depth_within_limit(&nominal.origin)
+                || nominal.constructors.is_empty()
+                || !valid_upper_spelling(&nominal.spelling)
+                || !nominal_ids.insert(nominal.id)
+                || !names.insert(nominal.spelling.as_str())
+                || nominal_range.start() >= nominal_range.end()
+                || previous_nominal_end
+                    .get(&module)
+                    .is_some_and(|previous| nominal_range.start() < *previous)
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            *expected = expected
+                .checked_add(1)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            previous_nominal_end.insert(module, nominal_range.end());
+            self.validate_origin(&nominal.origin, self.program.root)?;
+        }
+
+        let owner_parameter_count =
+            registry
+                .nominal_parameter_entries()
+                .try_fold(0_usize, |count, (owner, parameters)| {
+                    registry
+                        .nominal(owner)
+                        .and_then(|_| count.checked_add(parameters.len()))
+                });
+        if owner_parameter_count.is_none_or(|count| count > registry.type_variable_count()) {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+
+        let mut type_variables = registry.type_variables().collect::<Vec<_>>();
+        type_variables.sort_unstable_by_key(|parameter| {
+            (
+                parameter.id.module(),
+                parameter.id.local(),
+                parameter.origin.primary_span().range().start(),
+            )
+        });
+        let mut next_type_variable = HashMap::<ModuleId, u32>::new();
+        let mut previous_type_variable_start = HashMap::new();
+        for parameter in type_variables {
+            let Some(module) = parameter.id.module() else {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            };
+            let Some(source) = relation.get(&module).copied() else {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            };
+            let expected = next_type_variable.entry(module).or_insert(0);
+            let parameter_span = parameter.origin.primary_span();
+            let parameter_range = parameter_span.range();
+            self.charge_type_work(1)?;
+            if parameter.id.local() != *expected
+                || parameter_span.source() != source
+                || !origin_depth_within_limit(&parameter.origin)
+                || !valid_upper_spelling(&parameter.spelling)
+                || parameter_range.start() >= parameter_range.end()
+                || previous_type_variable_start
+                    .get(&module)
+                    .is_some_and(|previous| parameter_range.start() <= *previous)
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            *expected = expected
+                .checked_add(1)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            previous_type_variable_start.insert(module, parameter_range.start());
+            self.validate_origin(&parameter.origin, self.program.root)?;
+        }
+
+        let mut parameter_owners = HashMap::new();
+        for nominal in registry.nominals() {
+            let nominal_range = nominal.origin.primary_span().range();
+            let parameters = registry
+                .nominal_parameters(nominal.id)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            let mut parameter_names = HashSet::new();
+            let mut previous_parameter_start = None;
+            for parameter in parameters {
+                #[cfg(test)]
+                self.owner_parameter_index_work
+                    .set(self.owner_parameter_index_work.get() + 1);
+                let parameter_span = parameter.origin.primary_span();
+                let parameter_range = parameter_span.range();
+                if parameter.id.module() != Some(nominal.id.module())
+                    || parameter_owners.insert(parameter.id, nominal.id).is_some()
+                    || !parameter_names.insert(parameter.spelling.as_str())
+                    || registry.type_variable(parameter.id) != Some(parameter)
+                    || parameter_range.start() < nominal_range.start()
+                    || parameter_range.end() > nominal_range.end()
+                    || previous_parameter_start
+                        .is_some_and(|previous| parameter_range.start() <= previous)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                previous_parameter_start = Some(parameter_range.start());
+            }
+        }
+
+        let mut constructor_ids = HashSet::new();
+        let mut constructor_names = HashMap::<ModuleId, HashSet<&str>>::new();
+        let mut previous_constructor_start = HashMap::new();
+        for constructor in registry.constructors() {
+            let module = constructor.owner.module();
+            let Some(source) = relation.get(&module).copied() else {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            };
+            let constructor_span = constructor.origin.primary_span();
+            let constructor_range = constructor_span.range();
+            let owner_range = registry
+                .nominal(constructor.owner)
+                .map(|owner| owner.origin.primary_span().range());
+            let payload_valid = self.valid_registry_payload(
+                constructor.payload.as_ref(),
+                constructor.owner,
+                &parameter_owners,
+            )?;
+            let names = constructor_names.entry(module).or_default();
+            if constructor.id.owner() != constructor.owner
+                || !nominal_ids.contains(&constructor.owner)
+                || constructor_span.source() != source
+                || !origin_depth_within_limit(&constructor.origin)
+                || !valid_upper_spelling(&constructor.spelling)
+                || !constructor_ids.insert(constructor.id)
+                || !names.insert(constructor.spelling.as_str())
+                || !payload_valid
+                || owner_range.is_none_or(|owner| {
+                    constructor_range.start() < owner.start()
+                        || constructor_range.end() > owner.end()
+                })
+                || constructor_range.start() >= constructor_range.end()
+                || previous_constructor_start
+                    .get(&module)
+                    .is_some_and(|previous| constructor_range.start() <= *previous)
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            previous_constructor_start.insert(module, constructor_range.start());
+            self.validate_origin(&constructor.origin, self.program.root)?;
+        }
+
+        let expected_constructor_order = registry
+            .nominals()
+            .iter()
+            .flat_map(|nominal| nominal.constructors.iter().copied());
+        if !registry
+            .constructors()
+            .iter()
+            .map(|constructor| constructor.id)
+            .eq(expected_constructor_order)
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        for nominal in registry.nominals() {
+            for (index, constructor) in nominal.constructors.iter().copied().enumerate() {
+                let expected = ConstructorId::new(
+                    nominal.id,
+                    u32::try_from(index)
+                        .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?,
+                );
+                if constructor != expected || registry.constructor(constructor).is_none() {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
             }
@@ -906,6 +1196,11 @@ impl<'program, 'source> Validator<'program, 'source> {
             return Err(ValidationError::new(ValidationReason::Scope, Some(node)));
         }
         self.validate_origin(binder.origin(), node)?;
+        if let (Some(relation), Some(module)) = (&self.module_sources, binder.id().module())
+            && relation.get(&module).copied() != Some(binder.origin().primary_span().source())
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, Some(node)));
+        }
         let type_valid = if allow_scheme {
             self.valid_type(Some(binder.ty()))?
         } else {
@@ -1176,6 +1471,21 @@ impl<'program, 'source> Validator<'program, 'source> {
                     ));
                 };
                 self.charge_type_work(abstraction.parameters().len())?;
+                if let Some(relation) = &self.module_sources {
+                    let source = node
+                        .origin
+                        .as_ref()
+                        .expect("validated envelopes have origins")
+                        .primary_span()
+                        .source();
+                    if abstraction.parameters().iter().any(|parameter| {
+                        parameter
+                            .module()
+                            .is_some_and(|module| relation.get(&module).copied() != Some(source))
+                    }) {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                }
                 type_abstraction_definitions
                     .try_reserve(abstraction.parameters().len())
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
@@ -2048,6 +2358,193 @@ mod tests {
     fn origin(source: &SourceFile) -> Origin {
         let range = ByteRange::new(0, 2).expect("ordered range");
         Origin::Source(source.span(range).expect("source span"))
+    }
+
+    fn range_origin(source: &SourceFile, start: u32, end: u32) -> Origin {
+        Origin::Source(
+            source
+                .span(ByteRange::new(start, end).expect("ordered range"))
+                .expect("source span"),
+        )
+    }
+
+    fn modular_registry_program(
+        first_source: &SourceFile,
+        second_source: &SourceFile,
+        second_declaration: u32,
+    ) -> (UnvalidatedProgram, ModuleId, ModuleId) {
+        let first_module = ModuleId::new(40);
+        let second_module = ModuleId::new(41);
+        let first_nominal = crate::types::NominalTypeId::new(first_module, 0);
+        let second_nominal = crate::types::NominalTypeId::new(second_module, second_declaration);
+        let first_constructor = ConstructorId::new(first_nominal, 0);
+        let second_constructor = ConstructorId::new(second_nominal, 0);
+        let first_parameter = crate::types::TypeVariableId::resolved(first_module, 0);
+        let second_parameter = crate::types::TypeVariableId::resolved(second_module, 0);
+        let registry = Arc::new(
+            crate::resolved::ResolvedRegistry::new(
+                vec![
+                    crate::resolved::ResolvedNominalType {
+                        id: first_nominal,
+                        spelling: "Shared".into(),
+                        constructors: vec![first_constructor].into_boxed_slice(),
+                        origin: range_origin(first_source, 0, 13),
+                    },
+                    crate::resolved::ResolvedNominalType {
+                        id: second_nominal,
+                        spelling: "Shared".into(),
+                        constructors: vec![second_constructor].into_boxed_slice(),
+                        origin: range_origin(second_source, 0, 13),
+                    },
+                ],
+                vec![
+                    crate::resolved::ResolvedConstructor {
+                        id: first_constructor,
+                        owner: first_nominal,
+                        spelling: "Make".into(),
+                        payload: Some(Type::Variable(first_parameter)),
+                        origin: range_origin(first_source, 9, 13),
+                    },
+                    crate::resolved::ResolvedConstructor {
+                        id: second_constructor,
+                        owner: second_nominal,
+                        spelling: "Make".into(),
+                        payload: Some(Type::Variable(second_parameter)),
+                        origin: range_origin(second_source, 9, 13),
+                    },
+                ],
+            )
+            .with_type_parameters(vec![
+                (
+                    first_nominal,
+                    vec![crate::resolved::ResolvedTypeVariable {
+                        id: first_parameter,
+                        spelling: "A".into(),
+                        origin: range_origin(first_source, 7, 8),
+                    }],
+                ),
+                (
+                    second_nominal,
+                    vec![crate::resolved::ResolvedTypeVariable {
+                        id: second_parameter,
+                        spelling: "A".into(),
+                        origin: range_origin(second_source, 7, 8),
+                    }],
+                ),
+            ]),
+        );
+        let mut builder = CoreBuilder::with_registry(registry);
+        let root = builder
+            .unit(Type::Unit, range_origin(first_source, 0, 13))
+            .expect("unit root");
+        (
+            builder.finish(root).expect("valid root"),
+            first_module,
+            second_module,
+        )
+    }
+
+    #[test]
+    fn module_validation_allows_module_local_registry_spellings() {
+        let first = SourceFile::new("first.ash", "Shared A Make").expect("test source");
+        let second = SourceFile::new("second.ash", "Shared A Make").expect("test source");
+        let (program, first_module, second_module) = modular_registry_program(&first, &second, 0);
+
+        validate_modules(
+            program,
+            &[&first, &second],
+            &[(first_module, first.id()), (second_module, second.id())],
+        )
+        .expect("same spellings in distinct modules are valid");
+    }
+
+    #[test]
+    fn module_validation_rejects_missing_forged_and_duplicate_relations() {
+        let first = SourceFile::new("first.ash", "Shared A Make").expect("test source");
+        let second = SourceFile::new("second.ash", "Shared A Make").expect("test source");
+
+        let (program, first_module, _) = modular_registry_program(&first, &second, 0);
+        let error = validate_modules(program, &[&first, &second], &[(first_module, first.id())])
+            .expect_err("every defining module needs a source mapping");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+
+        let (program, first_module, second_module) = modular_registry_program(&first, &second, 0);
+        let error = validate_modules(
+            program,
+            &[&first, &second],
+            &[(first_module, second.id()), (second_module, first.id())],
+        )
+        .expect_err("a module cannot claim another module's source");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+
+        let (program, first_module, second_module) = modular_registry_program(&first, &second, 0);
+        let error = validate_modules(
+            program,
+            &[&first, &second],
+            &[
+                (first_module, first.id()),
+                (first_module, second.id()),
+                (second_module, second.id()),
+            ],
+        )
+        .expect_err("a module cannot have duplicate source associations");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+
+        let (program, first_module, second_module) = modular_registry_program(&first, &second, 0);
+        let error = validate_modules(
+            program,
+            &[&first, &second],
+            &[(first_module, first.id()), (second_module, first.id())],
+        )
+        .expect_err("one canonical source cannot define two modules");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+    }
+
+    #[test]
+    fn module_validation_checks_declaration_indices_per_module() {
+        let first = SourceFile::new("first.ash", "Shared A Make").expect("test source");
+        let second = SourceFile::new("second.ash", "Shared A Make").expect("test source");
+        let (program, first_module, second_module) = modular_registry_program(&first, &second, 1);
+
+        let error = validate_modules(
+            program,
+            &[&first, &second],
+            &[(first_module, first.id()), (second_module, second.id())],
+        )
+        .expect_err("each module's nominal declarations begin at zero");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+    }
+
+    #[test]
+    fn module_validation_checks_resolved_binder_ownership() {
+        let first = SourceFile::new("first.ash", "()").expect("test source");
+        let second = SourceFile::new("second.ash", "()").expect("test source");
+        let module = ModuleId::new(42);
+        let binder_id = BinderId::resolved(module, 0);
+        let mut builder = CoreBuilder::new();
+        builder
+            .reserve_resolved_binders([binder_id])
+            .expect("reserve source binder");
+        let initializer = builder
+            .unit(Type::Unit, origin(&first))
+            .expect("unit initializer");
+        let binder = builder
+            .resolved_binder(binder_id, Type::Unit, origin(&first))
+            .expect("resolved binder");
+        let body = builder
+            .variable(binder_id, Type::Unit, origin(&first))
+            .expect("bound occurrence");
+        let root = builder
+            .binding(binder, initializer, body, Type::Unit, origin(&first))
+            .expect("binding root");
+
+        let error = validate_modules(
+            builder.finish(root).expect("valid root"),
+            &[&first, &second],
+            &[(module, second.id())],
+        )
+        .expect_err("resolved binders belong to their defining module source");
+        assert_eq!(error.reason(), ValidationReason::Registry);
     }
 
     fn generated_origin(source: &SourceFile, depth: usize) -> Origin {

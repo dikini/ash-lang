@@ -1,0 +1,279 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use ash::{
+    core::{PureComputation, PureExprKind, transform::identity_traversal, validate_modules},
+    elaborate::{Elaborator, TypeError, check_module, link_modules},
+    eval::evaluate,
+    module::{ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
+    resolve::{DependencyExports, resolve_module},
+    resolved::{
+        CheckedModule, ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence,
+    },
+    source::Origin,
+    types::Type,
+};
+
+static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct TempTree(PathBuf);
+
+impl TempTree {
+    fn create() -> Self {
+        loop {
+            let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "ash-module-elaboration-{}-{id}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("test tree should be creatable: {error}"),
+            }
+        }
+    }
+
+    fn write(&self, relative: &str, text: &str) -> PathBuf {
+        let path = self.0.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("fixture parent should be creatable");
+        }
+        fs::write(&path, text).expect("fixture should be writable");
+        path
+    }
+}
+
+impl Drop for TempTree {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn load(tree: &TempTree, entry: &str, dependencies: &[(&str, &str)]) -> ModuleGraph {
+    let entry = tree.write("entry.ash", entry);
+    for (path, text) in dependencies {
+        tree.write(path, text);
+    }
+    load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture graph should load")
+}
+
+fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
+    let mut checked = Vec::<CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|dependency| dependency.module() == edge.target())
+                    .expect("dependency order should publish the target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("checked summary should authenticate its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies).expect("module should resolve");
+        drop(dependencies);
+        checked.push(check_module(resolved)?);
+    }
+    Ok(checked)
+}
+
+fn checked_module<'a>(
+    graph: &ModuleGraph,
+    checked: &'a [CheckedModule],
+    file_name: &str,
+) -> &'a CheckedModule {
+    let id = graph
+        .modules()
+        .iter()
+        .find(|module| {
+            Path::new(module.source().display_path()).file_name() == Some(file_name.as_ref())
+        })
+        .map(|module| module.id())
+        .expect("loaded module should be present");
+    checked
+        .iter()
+        .find(|module| module.module() == id)
+        .expect("checked module should retain its identity")
+}
+
+fn contains_inference(root: &Type) -> bool {
+    let mut pending = vec![root];
+    while let Some(ty) = pending.pop() {
+        match ty {
+            Type::Inference(_) => return true,
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                pending.extend(elements.iter());
+            }
+            Type::Function(domain, codomain) => {
+                pending.push(codomain);
+                pending.push(domain);
+            }
+            Type::Forall(_, body) => pending.push(body),
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
+        }
+    }
+    false
+}
+
+#[test]
+fn imported_polymorphic_scheme_instantiates_at_unrelated_types_without_re_generalizing() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency as Dep\n",
+            "at_int : Int -> Int\n",
+            "at_int value = Dep.id(value)\n",
+            "at_bool : Bool -> Bool\n",
+            "at_bool value = Dep.id(value)\n",
+        ),
+        &[("dependency.ash", "pub id : A -> A\nid value = value\n")],
+    );
+
+    let checked = check_graph(&graph).expect("both instantiations should type-check");
+    let dependency = checked_module(&graph, &checked, "dependency.ash");
+    let exported = dependency
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "id")
+        .expect("the dependency should retain its checked id scheme");
+
+    assert!(matches!(exported.scheme, Type::Forall(_, _)));
+    assert!(!contains_inference(&exported.scheme));
+    assert_eq!(dependency.exports().module(), dependency.module());
+}
+
+#[test]
+fn failed_module_body_never_publishes_an_export_summary() {
+    let tree = TempTree::create();
+    let graph = load(&tree, "pub broken : Unit -> Int\nbroken () = false\n", &[]);
+
+    let error = check_graph(&graph).expect_err("the declared result and body disagree");
+
+    assert!(matches!(
+        error,
+        TypeError::Mismatch(_) | TypeError::Source(_)
+    ));
+}
+
+#[test]
+fn checked_modules_keep_their_stable_graph_identity() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "private : Unit -> Unit\nprivate value = value\n",
+        &[],
+    );
+    let expected: ModuleId = graph.entry();
+
+    let checked = check_graph(&graph).expect("the module should check");
+
+    assert_eq!(checked[0].module(), expected);
+}
+
+#[test]
+fn linked_modules_form_dependency_ordered_core_groups_and_evaluate() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import middle as Middle\n",
+            "pub main : Unit -> Int\n",
+            "main () = Middle.pass(())\n",
+        ),
+        &[
+            (
+                "middle.ash",
+                concat!(
+                    "import base as Base\n",
+                    "pub pass : Unit -> Int\n",
+                    "pass () = Base.answer(())\n",
+                ),
+            ),
+            ("base.ash", "pub answer : Unit -> Int\nanswer () = 42\n"),
+        ],
+    );
+    let checked = check_graph(&graph).expect("the module chain should check");
+    let entry = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .expect("the checked graph should retain its entry");
+    let main = entry
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "main")
+        .expect("the entry should expose main");
+    let span = entry.span();
+    let result = ResolvedExpr {
+        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+            function: Box::new(ResolvedExpr {
+                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                    binder: main.binder,
+                    spelling: "main".to_owned(),
+                    origin: Origin::Source(span),
+                }),
+                span,
+            }),
+            argument: Box::new(ResolvedExpr {
+                kind: ResolvedExprKind::Unit,
+                span,
+            }),
+        }),
+        span,
+    };
+    let linked = link_modules(checked, graph.entry(), result).expect("the graph should link");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the graph namespace should reserve");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("final lowering should preserve checked schemes");
+    assert_eq!(typed.ty, Type::Int);
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the one final builder should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let validated = validate_modules(unchecked, &sources, &module_sources)
+        .expect("all canonical module sources should validate");
+
+    let mut node = validated.root();
+    for _ in 0..3 {
+        let expression = validated.node(node).expect("group node should exist");
+        assert!(matches!(
+            expression.kind,
+            PureExprKind::Computation(PureComputation::RecursiveBind(_))
+        ));
+        node = expression
+            .kind
+            .child_at(expression.kind.child_count() - 1)
+            .expect("a recursive group should end in its body");
+    }
+    assert!(matches!(
+        validated.node(node).map(|expression| &expression.kind),
+        Some(PureExprKind::Computation(PureComputation::Apply(_)))
+    ));
+
+    let evaluation = evaluate(&validated).expect("linked Core should evaluate");
+    assert_eq!(evaluation.value.to_string(), "42");
+
+    let transformed = identity_traversal(&validated)
+        .expect("a validated linked graph should preserve every identity");
+    let revalidated = validate_modules(transformed, &sources, &module_sources)
+        .expect("transformed module identities should validate independently");
+    let reevaluation = evaluate(&revalidated).expect("transformed linked Core should evaluate");
+    assert_eq!(reevaluation.value.to_string(), "42");
+}

@@ -1,13 +1,19 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     integer::Integer,
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
     surface::SurfaceTypeVisibility,
-    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, discard_type_iteratively},
+    types::{
+        ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
+        discard_type_iteratively,
+    },
 };
 
 /// Stable identity of one resolved or compiler-generated term binder.
@@ -160,6 +166,136 @@ impl ResolvedModule {
     }
 }
 
+/// One fully checked local global scheme retained for linking and exports.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CheckedGlobalScheme {
+    /// Stable binder identity.
+    pub binder: BinderId,
+    /// Source declaration spelling.
+    pub spelling: String,
+    /// Closed, inference-free rank-1 scheme.
+    pub scheme: Type,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+}
+
+/// One successfully checked declarations-only module.
+#[derive(Debug)]
+pub struct CheckedModule {
+    module: ModuleId,
+    registry: Arc<ResolvedRegistry>,
+    definitions: Box<[ResolvedDefinition]>,
+    schemes: Vec<CheckedGlobalScheme>,
+    exports: ExportSummary,
+    span: Span,
+}
+
+impl CheckedModule {
+    pub(crate) fn new(
+        resolved: ResolvedModule,
+        schemes: Vec<CheckedGlobalScheme>,
+        exports: ExportSummary,
+    ) -> Self {
+        Self {
+            module: resolved.module,
+            registry: resolved.registry,
+            definitions: resolved.definitions,
+            schemes,
+            exports,
+            span: resolved.span,
+        }
+    }
+
+    /// Returns the stable defining module identity.
+    #[must_use]
+    pub const fn module(&self) -> ModuleId {
+        self.module
+    }
+
+    /// Returns the module's full local registry for final linking.
+    #[must_use]
+    pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
+        &self.registry
+    }
+
+    /// Returns local definitions in source order.
+    #[must_use]
+    pub fn definitions(&self) -> &[ResolvedDefinition] {
+        &self.definitions
+    }
+
+    /// Returns checked local schemes in definition order.
+    #[must_use]
+    pub fn schemes(&self) -> &[CheckedGlobalScheme] {
+        &self.schemes
+    }
+
+    /// Returns the immutable body-free dependency summary.
+    #[must_use]
+    pub const fn exports(&self) -> &ExportSummary {
+        &self.exports
+    }
+
+    /// Returns the complete source span.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+
+    pub(crate) fn into_group(mut self) -> ResolvedModuleGroup {
+        ResolvedModuleGroup {
+            module: self.module,
+            definitions: std::mem::take(&mut self.definitions),
+            schemes: std::mem::take(&mut self.schemes).into_boxed_slice(),
+            span: self.span,
+        }
+    }
+}
+
+impl Drop for CheckedModule {
+    fn drop(&mut self) {
+        for checked in self.schemes.drain(..) {
+            discard_type_iteratively(checked.scheme);
+            discard_origin_iteratively(checked.origin);
+        }
+    }
+}
+
+/// One checked module-local recursive group retained for final lowering.
+#[derive(Debug)]
+pub struct ResolvedModuleGroup {
+    /// Stable canonical module identity.
+    pub module: ModuleId,
+    /// Checked local definitions in source order.
+    pub definitions: Box<[ResolvedDefinition]>,
+    /// Checked schemes in the same definition order.
+    pub schemes: Box<[CheckedGlobalScheme]>,
+    /// Complete defining source span.
+    pub span: Span,
+}
+
+impl Drop for ResolvedModuleGroup {
+    fn drop(&mut self) {
+        for checked in std::mem::take(&mut self.schemes).into_vec() {
+            discard_type_iteratively(checked.scheme);
+            discard_origin_iteratively(checked.origin);
+        }
+    }
+}
+
+/// Dependency-ordered checked modules ready for one final Core lowering.
+#[derive(Debug)]
+pub struct ResolvedModuleProgram {
+    /// Combined full defining registries from every checked module.
+    pub registry: Arc<ResolvedRegistry>,
+    /// Dependency-ordered ordinary recursive groups.
+    pub groups: Box<[ResolvedModuleGroup]>,
+    /// Stable entry module identity.
+    pub entry: ModuleId,
+    /// Generated entry result expression.
+    pub result: ResolvedExpr,
+}
+
 /// Body-free dependency facts retained by one resolved module.
 #[derive(Debug, Default, Eq, PartialEq)]
 pub struct ImportedFacts {
@@ -187,6 +323,14 @@ impl ImportedFacts {
         self.constructors.get(&id)
     }
 
+    pub(crate) fn globals(&self) -> impl Iterator<Item = &ImportedGlobalScheme> {
+        self.globals.values()
+    }
+
+    pub(crate) fn nominals(&self) -> impl Iterator<Item = &ImportedNominalFact> {
+        self.nominals.values()
+    }
+
     pub(crate) fn contains_global(&self, id: BinderId) -> bool {
         self.globals.contains_key(&id)
     }
@@ -203,17 +347,32 @@ impl ImportedFacts {
             self.nominals.insert(fact.id, fact);
             return Ok(());
         };
-        if existing.parameter_count != fact.parameter_count {
+        let constructor_conflict = !existing.constructors.is_empty()
+            && !fact.constructors.is_empty()
+            && existing.constructors != fact.constructors;
+        if existing.parameter_count != fact.parameter_count
+            || existing.parameters != fact.parameters
+            || constructor_conflict
+        {
+            for parameter in fact.parameters.into_vec() {
+                discard_origin_iteratively(parameter.origin);
+            }
             discard_origin_iteratively(fact.origin);
             return Err(ImportedNominalConflict);
         }
         if fact.access.rank() > existing.access.rank() {
             existing.access = fact.access;
+            if !fact.constructors.is_empty() {
+                existing.constructors = std::mem::take(&mut fact.constructors);
+            }
             if fact.display_spelling.is_some() {
                 existing.display_spelling = fact.display_spelling.take();
             }
         } else if existing.display_spelling.is_none() {
             existing.display_spelling = fact.display_spelling.take();
+        }
+        for parameter in fact.parameters.into_vec() {
+            discard_origin_iteratively(parameter.origin);
         }
         discard_origin_iteratively(fact.origin);
         Ok(())
@@ -235,6 +394,9 @@ impl Drop for ImportedFacts {
             discard_origin_iteratively(fact.origin);
         }
         for (_, fact) in self.nominals.drain() {
+            for parameter in fact.parameters.into_vec() {
+                discard_origin_iteratively(parameter.origin);
+            }
             discard_origin_iteratively(fact.origin);
         }
         for (_, fact) in self.constructors.drain() {
@@ -264,6 +426,10 @@ pub struct ImportedNominalFact {
     pub id: NominalTypeId,
     /// Number of parameters of kind `Type`.
     pub parameter_count: usize,
+    /// Ordered declaration parameters, preserving defining identities.
+    pub parameters: Box<[ResolvedTypeVariable]>,
+    /// Complete constructor family when access is transparent.
+    pub constructors: Box<[ConstructorId]>,
     /// Importer access mode.
     pub access: ImportedTypeAccess,
     /// Display-only declaration spelling; never a resolver binding.
@@ -294,6 +460,8 @@ pub(crate) struct ImportedNominalConflict;
 pub struct ImportedConstructorFact {
     /// Stable defining constructor identity.
     pub id: ConstructorId,
+    /// Defining source spelling retained for coverage diagnostics.
+    pub spelling: String,
     /// Optional semantic payload type.
     pub payload: Option<Type>,
     /// Causal declaration provenance.
@@ -530,6 +698,10 @@ pub struct ExportedType {
     pub id: NominalTypeId,
     /// Number of parameters of kind `Type`.
     pub parameter_count: usize,
+    /// Ordered declaration parameters, preserving defining identities.
+    pub parameters: Box<[ResolvedTypeVariable]>,
+    /// Complete constructor family for transparent access.
+    pub constructors: Box<[ConstructorId]>,
     /// Opaque or transparent importer access.
     pub access: ExportedTypeAccess,
     /// Causal declaration provenance.
@@ -541,6 +713,8 @@ pub struct ExportedType {
 pub struct ExportedConstructor {
     /// Stable constructor identity from the defining module.
     pub id: ConstructorId,
+    /// Defining source spelling.
+    pub spelling: String,
     /// Optional semantic payload type.
     pub payload: Option<Type>,
     /// Causal declaration provenance.
@@ -555,6 +729,7 @@ pub struct ExportSummary {
     nominals: HashMap<String, ExportedType>,
     nominal_names_by_id: HashMap<NominalTypeId, String>,
     constructors: HashMap<String, ExportedConstructor>,
+    constructor_names_by_id: HashMap<ConstructorId, String>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
     withheld: HashMap<(String, WithheldNamespace), WithheldExport>,
 }
@@ -566,6 +741,8 @@ pub struct ExportedHiddenType {
     pub id: NominalTypeId,
     /// Number of parameters of kind `Type`.
     pub parameter_count: usize,
+    /// Ordered declaration parameters, preserving defining identities.
+    pub parameters: Box<[ResolvedTypeVariable]>,
     /// Display-only private spelling.
     pub spelling: String,
     /// Causal declaration provenance.
@@ -577,6 +754,155 @@ impl ExportSummary {
     #[must_use]
     pub const fn module(&self) -> ModuleId {
         self.module
+    }
+
+    pub(crate) fn freeze(
+        resolved: &ResolvedModule,
+        checked: &[CheckedGlobalScheme],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        budget.charge(checked.len())?;
+        let mut checked_by_binder = HashMap::new();
+        checked_by_binder
+            .try_reserve(checked.len())
+            .map_err(|_| ())?;
+        for scheme in checked {
+            if checked_by_binder.insert(scheme.binder, scheme).is_some() {
+                return Err(());
+            }
+        }
+        let mut summary = Self {
+            module: resolved.module,
+            terms: HashMap::new(),
+            nominals: HashMap::new(),
+            nominal_names_by_id: HashMap::new(),
+            constructors: HashMap::new(),
+            constructor_names_by_id: HashMap::new(),
+            hidden_nominals: HashMap::new(),
+            withheld: resolved.export_candidate.withheld.clone(),
+        };
+        for (spelling, candidate) in &resolved.export_candidate.terms {
+            let scheme = checked_by_binder.get(&candidate.binder).ok_or(())?;
+            summary.terms.insert(
+                spelling.clone(),
+                ExportedGlobal {
+                    binder: scheme.binder,
+                    scheme: clone_type_with_budget(&scheme.scheme, budget)?,
+                    origin: scheme.origin.clone(),
+                },
+            );
+        }
+
+        for (spelling, candidate) in &resolved.export_candidate.nominals {
+            let parameters = resolved
+                .registry
+                .nominal_parameters(candidate.id)
+                .ok_or(())?;
+            let parameter_count = parameters.len();
+            let access = match candidate.visibility {
+                SurfaceTypeVisibility::PublicOpaque => ExportedTypeAccess::Opaque,
+                SurfaceTypeVisibility::PublicTransparent => ExportedTypeAccess::Transparent,
+                SurfaceTypeVisibility::Private => return Err(()),
+            };
+            summary
+                .nominal_names_by_id
+                .insert(candidate.id, spelling.clone());
+            summary.nominals.insert(
+                spelling.clone(),
+                ExportedType {
+                    id: candidate.id,
+                    parameter_count,
+                    parameters: parameters.to_vec().into_boxed_slice(),
+                    constructors: if access == ExportedTypeAccess::Transparent {
+                        resolved
+                            .registry
+                            .nominal(candidate.id)
+                            .ok_or(())?
+                            .constructors
+                            .clone()
+                    } else {
+                        Vec::new().into_boxed_slice()
+                    },
+                    access,
+                    origin: candidate.origin.clone(),
+                },
+            );
+        }
+
+        for (spelling, candidate) in &resolved.export_candidate.constructors {
+            let constructor = resolved.registry.constructor(candidate.id).ok_or(())?;
+            summary
+                .constructor_names_by_id
+                .insert(candidate.id, spelling.clone());
+            summary.constructors.insert(
+                spelling.clone(),
+                ExportedConstructor {
+                    id: candidate.id,
+                    spelling: constructor.spelling.clone(),
+                    payload: constructor
+                        .payload
+                        .as_ref()
+                        .map(|payload| clone_type_with_budget(payload, budget))
+                        .transpose()?,
+                    origin: candidate.origin.clone(),
+                },
+            );
+        }
+
+        let mut referenced_nominals = HashSet::new();
+        for exported in summary.terms.values() {
+            collect_nominal_identities(&exported.scheme, &mut referenced_nominals, budget)?;
+        }
+        for exported in summary.constructors.values() {
+            if let Some(payload) = &exported.payload {
+                collect_nominal_identities(payload, &mut referenced_nominals, budget)?;
+            }
+        }
+
+        for candidate in resolved.export_candidate.hidden_nominals.values() {
+            if !referenced_nominals.contains(&candidate.id) {
+                continue;
+            }
+            let parameters = resolved
+                .registry
+                .nominal_parameters(candidate.id)
+                .ok_or(())?
+                .to_vec()
+                .into_boxed_slice();
+            summary.hidden_nominals.insert(
+                candidate.id,
+                ExportedHiddenType {
+                    id: candidate.id,
+                    parameter_count: candidate.parameter_count,
+                    parameters,
+                    spelling: candidate.spelling.clone(),
+                    origin: candidate.origin.clone(),
+                },
+            );
+        }
+        for imported in resolved.imported.nominals.values() {
+            if !referenced_nominals.contains(&imported.id)
+                || summary.nominal_names_by_id.contains_key(&imported.id)
+                || summary.hidden_nominals.contains_key(&imported.id)
+            {
+                continue;
+            }
+            summary.hidden_nominals.insert(
+                imported.id,
+                ExportedHiddenType {
+                    id: imported.id,
+                    parameter_count: imported.parameter_count,
+                    parameters: imported.parameters.to_vec().into_boxed_slice(),
+                    spelling: imported
+                        .display_spelling
+                        .clone()
+                        .unwrap_or_else(|| "hidden".to_owned()),
+                    origin: imported.origin.clone(),
+                },
+            );
+        }
+
+        Ok(summary)
     }
 
     pub(crate) fn term(&self, spelling: &str) -> Option<&ExportedGlobal> {
@@ -634,6 +960,8 @@ impl ExportSummary {
             return Some(ImportedNominalFactRef {
                 id,
                 parameter_count: exported.parameter_count,
+                parameters: &exported.parameters,
+                constructors: &exported.constructors,
                 access: exported.access.into(),
                 display_spelling: Some(spelling),
                 origin: &exported.origin,
@@ -644,10 +972,17 @@ impl ExportSummary {
             .map(|exported| ImportedNominalFactRef {
                 id,
                 parameter_count: exported.parameter_count,
+                parameters: &exported.parameters,
+                constructors: &[],
                 access: ImportedTypeAccess::Hidden,
                 display_spelling: Some(&exported.spelling),
                 origin: &exported.origin,
             })
+    }
+
+    pub(crate) fn constructor_by_id(&self, id: ConstructorId) -> Option<&ExportedConstructor> {
+        self.constructors
+            .get(self.constructor_names_by_id.get(&id)?)
     }
 
     #[cfg(test)]
@@ -659,6 +994,10 @@ impl ExportSummary {
         unavailable: Vec<&str>,
     ) -> Self {
         let nominal_names_by_id = nominals
+            .iter()
+            .map(|(spelling, id, _, _)| (*id, (*spelling).to_owned()))
+            .collect();
+        let constructor_names_by_id = constructors
             .iter()
             .map(|(spelling, id, _, _)| (*id, (*spelling).to_owned()))
             .collect();
@@ -685,6 +1024,8 @@ impl ExportSummary {
                         ExportedType {
                             id,
                             parameter_count: 0,
+                            parameters: Vec::new().into_boxed_slice(),
+                            constructors: Vec::new().into_boxed_slice(),
                             access,
                             origin,
                         },
@@ -699,12 +1040,14 @@ impl ExportSummary {
                         spelling.to_owned(),
                         ExportedConstructor {
                             id,
+                            spelling: spelling.to_owned(),
                             payload,
                             origin,
                         },
                     )
                 })
                 .collect(),
+            constructor_names_by_id,
             hidden_nominals: HashMap::new(),
             withheld: unavailable
                 .into_iter()
@@ -770,6 +1113,7 @@ impl ExportSummary {
                             ExportedHiddenType {
                                 id,
                                 parameter_count,
+                                parameters: Vec::new().into_boxed_slice(),
                                 spelling: spelling.to_owned(),
                                 origin,
                             },
@@ -780,9 +1124,39 @@ impl ExportSummary {
     }
 }
 
+fn collect_nominal_identities(
+    root: &Type,
+    output: &mut HashSet<NominalTypeId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    let mut work = vec![root];
+    while let Some(ty) = work.pop() {
+        budget.charge(1)?;
+        match ty {
+            Type::Nominal(id) => {
+                output.insert(*id);
+            }
+            Type::AppliedNominal(id, arguments) => {
+                output.insert(*id);
+                work.extend(arguments);
+            }
+            Type::Tuple(elements) => work.extend(elements),
+            Type::Function(domain, codomain) => {
+                work.push(codomain);
+                work.push(domain);
+            }
+            Type::Forall(_, body) => work.push(body),
+            Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
+        }
+    }
+    Ok(())
+}
+
 pub(crate) struct ImportedNominalFactRef<'a> {
     pub(crate) id: NominalTypeId,
     pub(crate) parameter_count: usize,
+    pub(crate) parameters: &'a [ResolvedTypeVariable],
+    pub(crate) constructors: &'a [ConstructorId],
     pub(crate) access: ImportedTypeAccess,
     pub(crate) display_spelling: Option<&'a str>,
     pub(crate) origin: &'a Origin,
@@ -795,6 +1169,9 @@ impl Drop for ExportSummary {
             discard_origin_iteratively(exported.origin);
         }
         for (_, exported) in self.nominals.drain() {
+            for parameter in exported.parameters.into_vec() {
+                discard_origin_iteratively(parameter.origin);
+            }
             discard_origin_iteratively(exported.origin);
         }
         self.nominal_names_by_id.clear();
@@ -804,7 +1181,11 @@ impl Drop for ExportSummary {
             }
             discard_origin_iteratively(exported.origin);
         }
+        self.constructor_names_by_id.clear();
         for (_, exported) in self.hidden_nominals.drain() {
+            for parameter in exported.parameters.into_vec() {
+                discard_origin_iteratively(parameter.origin);
+            }
             discard_origin_iteratively(exported.origin);
         }
         for (_, withheld) in self.withheld.drain() {
@@ -824,6 +1205,26 @@ pub struct ResolvedRegistry {
     constructor_positions: HashMap<ConstructorId, usize>,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
     type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
+    abstract_nominal_names: HashMap<NominalTypeId, String>,
+}
+
+struct ResolvedConstructorBuffer(Vec<ResolvedConstructor>);
+
+impl ResolvedConstructorBuffer {
+    fn into_vec(mut self) -> Vec<ResolvedConstructor> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedConstructorBuffer {
+    fn drop(&mut self) {
+        for constructor in self.0.drain(..) {
+            if let Some(payload) = constructor.payload {
+                discard_type_iteratively(payload);
+            }
+            discard_origin_iteratively(constructor.origin);
+        }
+    }
 }
 
 impl ResolvedRegistry {
@@ -847,7 +1248,163 @@ impl ResolvedRegistry {
             constructor_positions,
             nominal_parameters: HashMap::new(),
             type_variables: HashMap::new(),
+            abstract_nominal_names: HashMap::new(),
         }
+    }
+
+    /// Builds the semantic registry view needed while checking one module.
+    ///
+    /// Only transparent imported nominals are materialized. Hidden and opaque
+    /// identities remain abstract rather than masquerading as empty types.
+    pub(crate) fn checker_view(
+        &self,
+        imported: &ImportedFacts,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        let mut nominals = self.nominals.to_vec();
+        let mut constructors = ResolvedConstructorBuffer(Vec::with_capacity(
+            self.constructors
+                .len()
+                .saturating_add(imported.constructors.len()),
+        ));
+        for constructor in &self.constructors {
+            constructors.0.push(ResolvedConstructor {
+                id: constructor.id,
+                owner: constructor.owner,
+                spelling: constructor.spelling.clone(),
+                payload: constructor
+                    .payload
+                    .as_ref()
+                    .map(|payload| clone_type_with_budget(payload, budget))
+                    .transpose()?,
+                origin: constructor.origin.clone(),
+            });
+        }
+        let mut parameters = self
+            .nominal_parameters
+            .iter()
+            .map(|(owner, parameters)| (*owner, parameters.to_vec()))
+            .collect::<Vec<_>>();
+
+        for fact in imported.nominals() {
+            if fact.access != ImportedTypeAccess::Transparent {
+                continue;
+            }
+            if fact.parameters.len() != fact.parameter_count
+                || nominals.iter().any(|nominal| nominal.id == fact.id)
+            {
+                return Err(());
+            }
+            for id in &fact.constructors {
+                let constructor = imported.constructor(*id).ok_or(())?;
+                if constructor.id.owner() != fact.id {
+                    return Err(());
+                }
+                constructors.0.push(ResolvedConstructor {
+                    id: constructor.id,
+                    owner: fact.id,
+                    spelling: constructor.spelling.clone(),
+                    payload: constructor
+                        .payload
+                        .as_ref()
+                        .map(|payload| clone_type_with_budget(payload, budget))
+                        .transpose()?,
+                    origin: constructor.origin.clone(),
+                });
+            }
+            nominals.push(ResolvedNominalType {
+                id: fact.id,
+                spelling: fact
+                    .display_spelling
+                    .clone()
+                    .unwrap_or_else(|| "<imported>".to_owned()),
+                constructors: fact.constructors.clone(),
+                origin: fact.origin.clone(),
+            });
+            parameters.push((fact.id, fact.parameters.to_vec()));
+        }
+
+        let abstract_nominal_names = imported
+            .nominals()
+            .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
+            .map(|fact| {
+                let spelling = fact.display_spelling.as_deref().unwrap_or("hidden");
+                let display = if fact.access == ImportedTypeAccess::Hidden {
+                    format!("<private {spelling}>")
+                } else {
+                    spelling.to_owned()
+                };
+                (fact.id, display)
+            })
+            .collect();
+        Ok(Self::new(nominals, constructors.into_vec())
+            .with_type_parameters(parameters)
+            .with_additional_type_variables(self.type_variables.values().cloned())
+            .with_abstract_nominal_names(abstract_nominal_names))
+    }
+
+    /// Combines complete defining registries by canonical semantic identity.
+    pub(crate) fn combine_checked(
+        modules: &[CheckedModule],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        let mut module_ids = HashSet::new();
+        let mut nominal_ids = HashSet::new();
+        let mut constructor_ids = HashSet::new();
+        let mut type_variable_ids = HashSet::new();
+        let mut nominals = Vec::new();
+        let mut constructors = ResolvedConstructorBuffer(Vec::new());
+        let mut parameters = Vec::new();
+        let mut additional_type_variables = Vec::new();
+
+        for checked in modules {
+            if !module_ids.insert(checked.module()) {
+                return Err(());
+            }
+            let registry = checked.registry();
+            for nominal in registry.nominals() {
+                if nominal.id.module() != checked.module() || !nominal_ids.insert(nominal.id) {
+                    return Err(());
+                }
+                nominals.push(nominal.clone());
+            }
+            for constructor in registry.constructors() {
+                if constructor.owner.module() != checked.module()
+                    || !constructor_ids.insert(constructor.id)
+                {
+                    return Err(());
+                }
+                constructors.0.push(ResolvedConstructor {
+                    id: constructor.id,
+                    owner: constructor.owner,
+                    spelling: constructor.spelling.clone(),
+                    payload: constructor
+                        .payload
+                        .as_ref()
+                        .map(|payload| clone_type_with_budget(payload, budget))
+                        .transpose()?,
+                    origin: constructor.origin.clone(),
+                });
+            }
+            for (owner, owner_parameters) in registry.nominal_parameter_entries() {
+                if owner.module() != checked.module() {
+                    return Err(());
+                }
+                parameters.push((owner, owner_parameters.to_vec()));
+            }
+            for parameter in registry.type_variables.values() {
+                if parameter.id.module() != Some(checked.module())
+                    || !type_variable_ids.insert(parameter.id)
+                {
+                    return Err(());
+                }
+                additional_type_variables.push(parameter.clone());
+            }
+        }
+
+        Ok(Self::new(nominals, constructors.into_vec())
+            .with_type_parameters(parameters)
+            .with_additional_type_variables(additional_type_variables))
     }
 
     /// Attaches ordered declaration parameters after nominal identity allocation.
@@ -881,6 +1438,11 @@ impl ResolvedRegistry {
         for parameter in parameters {
             self.insert_type_variable(parameter);
         }
+        self
+    }
+
+    fn with_abstract_nominal_names(mut self, names: HashMap<NominalTypeId, String>) -> Self {
+        self.abstract_nominal_names = names;
         self
     }
 
@@ -941,6 +1503,10 @@ impl ResolvedRegistry {
             .map(|(owner, parameters)| (*owner, parameters.as_ref()))
     }
 
+    pub(crate) fn type_variables(&self) -> impl Iterator<Item = &ResolvedTypeVariable> {
+        self.type_variables.values()
+    }
+
     pub(crate) fn type_variable_count(&self) -> usize {
         self.type_variables.len()
     }
@@ -974,6 +1540,8 @@ impl ResolvedRegistry {
                 Task::Type(Type::Nominal(id)) => {
                     if let Some(nominal) = self.nominal(*id) {
                         output.push_str(&nominal.spelling);
+                    } else if let Some(spelling) = self.abstract_nominal_names.get(id) {
+                        output.push_str(spelling);
                     } else {
                         output.push_str(&Type::Nominal(*id).to_string());
                     }
@@ -995,6 +1563,8 @@ impl ResolvedRegistry {
                 Task::Type(Type::AppliedNominal(id, arguments)) => {
                     if let Some(nominal) = self.nominal(*id) {
                         output.push_str(&nominal.spelling);
+                    } else if let Some(spelling) = self.abstract_nominal_names.get(id) {
+                        output.push_str(spelling);
                     } else {
                         output.push_str(&Type::Nominal(*id).to_string());
                     }

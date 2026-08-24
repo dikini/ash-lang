@@ -18,10 +18,11 @@ use crate::{
         missing_witness_for_types_with_budget, usefulness_with_budget,
     },
     resolved::{
-        BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
-        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedPattern, ResolvedPatternKind,
-        ResolvedProgram, ResolvedRecursiveGroup, ResolvedRegistry, ResolvedType,
-        ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        BinderId, CheckedGlobalScheme, CheckedModule, ExportSummary, ResolvedBinding,
+        ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
+        ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleProgram, ResolvedPattern,
+        ResolvedPatternKind, ResolvedProgram, ResolvedRecursiveGroup, ResolvedRegistry,
+        ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
@@ -282,6 +283,14 @@ impl TypeProvenance {
     }
 
     fn unknown(ty: &Type) -> Self {
+        Self::uniform(ty, None)
+    }
+
+    fn at_span(ty: &Type, span: Span) -> Self {
+        Self::uniform(ty, Some(span))
+    }
+
+    fn uniform(ty: &Type, span: Option<Span>) -> Self {
         let mut tasks = vec![(ty, false)];
         let mut nodes = Vec::new();
         let mut roots = Vec::new();
@@ -296,7 +305,7 @@ impl TypeProvenance {
                     let codomain = roots.pop().unwrap_or(0);
                     let domain = roots.pop().unwrap_or(0);
                     nodes.push(TypeProvenanceNode::Function {
-                        span: None,
+                        span,
                         domain,
                         codomain,
                     });
@@ -311,7 +320,7 @@ impl TypeProvenance {
                 | Type::Inference(_)
                 | Type::AppliedNominal(_, _)
                 | Type::Forall(_, _) => {
-                    nodes.push(TypeProvenanceNode::Fact(None));
+                    nodes.push(TypeProvenanceNode::Fact(span));
                     roots.push(nodes.len() - 1);
                 }
             }
@@ -593,6 +602,23 @@ pub struct TypedNode {
     provenance: TypeProvenance,
 }
 
+struct CheckedSchemeBuffer(Vec<CheckedGlobalScheme>);
+
+impl CheckedSchemeBuffer {
+    fn into_vec(mut self) -> Vec<CheckedGlobalScheme> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for CheckedSchemeBuffer {
+    fn drop(&mut self) {
+        for checked in self.0.drain(..) {
+            discard_type_iteratively(checked.scheme);
+            discard_origin_iteratively(checked.origin);
+        }
+    }
+}
+
 /// The one bidirectional typed elaborator for resolved Mini-Ash syntax.
 #[derive(Debug)]
 #[must_use]
@@ -606,6 +632,7 @@ pub struct Elaborator {
     inference_solutions: HashMap<InferenceVariableId, Type>,
     monomorphic_recursive: HashSet<BinderId>,
     type_work: TypeWorkBudget,
+    base_context: TypeContext,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -628,6 +655,7 @@ impl Elaborator {
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
             type_work: TypeWorkBudget::default(),
+            base_context: TypeContext::new(),
         }
     }
 
@@ -651,6 +679,92 @@ impl Elaborator {
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
             type_work: TypeWorkBudget::default(),
+            base_context: TypeContext::new(),
+        })
+    }
+
+    fn for_module(module: &ResolvedModule) -> Result<Self, TypeError> {
+        let mut type_work = TypeWorkBudget::default();
+        let registry = Arc::new(
+            module
+                .registry()
+                .checker_view(module.imported_facts(), &mut type_work)
+                .map_err(|()| invalid_state())?,
+        );
+        let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+        builder
+            .reserve_resolved_binders(resolved_module_binders(module))
+            .map_err(TypeError::from)?;
+        let mut base_context = TypeContext::new();
+        for imported in module.imported_facts().globals() {
+            let (quantified, body) = match &imported.scheme {
+                Type::Forall(parameters, body) => {
+                    type_work.charge(parameters.len()).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let quantified = parameters.to_vec().into_boxed_slice();
+                    let body = clone_type_with_budget(body, &mut type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    (quantified, body)
+                }
+                scheme => (
+                    Vec::<TypeVariableId>::new().into_boxed_slice(),
+                    clone_type_with_budget(scheme, &mut type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+                ),
+            };
+            let provenance = TypeProvenance::at_span(&body, imported.origin.primary_span());
+            if base_context
+                .insert_with_provenance(imported.binder, body, provenance)?
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+            base_context.set_quantified(imported.binder, quantified)?;
+        }
+        Ok(Self {
+            builder,
+            registry,
+            state: ElaboratorState::Ready,
+            next_inference: 0,
+            inference_origins: Vec::new(),
+            next_generated_type_variable: u32::MAX,
+            inference_solutions: HashMap::new(),
+            monomorphic_recursive: HashSet::new(),
+            type_work,
+            base_context,
+        })
+    }
+
+    /// Starts the one final elaborator for a dependency-ordered module graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns a construction failure if any resolved binder identity is
+    /// duplicated or cannot be reserved before lowering begins.
+    pub fn for_module_program(program: &ResolvedModuleProgram) -> Result<Self, ElaborationFailure> {
+        let registry = Arc::clone(&program.registry);
+        let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+        let mut binders = Vec::new();
+        let mut expressions = vec![&program.result];
+        for group in &program.groups {
+            collect_definition_binders(&group.definitions, &mut binders, &mut expressions);
+        }
+        collect_expression_binders(&mut binders, expressions);
+        builder.reserve_resolved_binders(binders)?;
+        Ok(Self {
+            builder,
+            registry,
+            state: ElaboratorState::Ready,
+            next_inference: 0,
+            inference_origins: Vec::new(),
+            next_generated_type_variable: u32::MAX,
+            inference_solutions: HashMap::new(),
+            monomorphic_recursive: HashSet::new(),
+            type_work: TypeWorkBudget::default(),
+            base_context: TypeContext::new(),
         })
     }
 
@@ -762,6 +876,90 @@ impl Elaborator {
             self.state = ElaboratorState::Poisoned;
         }
         result
+    }
+
+    /// Lowers checked modules into nested ordinary Core recursive groups.
+    ///
+    /// # Errors
+    ///
+    /// Returns a source typing error or Core construction failure and poisons
+    /// the elaborator on failure.
+    pub fn synthesize_module_program(
+        &mut self,
+        program: &ResolvedModuleProgram,
+    ) -> Result<TypedNode, TypeError> {
+        if self.state == ElaboratorState::Poisoned {
+            return Err(invalid_state());
+        }
+        let result = self.elaborate_module_program(program);
+        if result.is_err() {
+            self.state = ElaboratorState::Poisoned;
+        }
+        result
+    }
+
+    fn check_module_bodies(&mut self, module: &ResolvedModule) -> Result<(), TypeError> {
+        let result = ResolvedExpr {
+            kind: ResolvedExprKind::Unit,
+            span: module.span(),
+        };
+        self.elaborate_definition_group(module.definitions(), &result, module.span())?;
+        Ok(())
+    }
+
+    fn checked_module_schemes(
+        &mut self,
+        definitions: &[crate::resolved::ResolvedDefinition],
+    ) -> Result<Vec<CheckedGlobalScheme>, TypeError> {
+        let mut checked = CheckedSchemeBuffer(Vec::with_capacity(definitions.len()));
+        for definition in definitions {
+            let (name, body, parameters) = match &definition.kind {
+                ResolvedDefinitionKind::Equational(equational) => (
+                    &equational.interface.name,
+                    self.clone_type(&equational.interface.annotation.ty)?,
+                    equational.interface.type_parameters.as_ref(),
+                ),
+                ResolvedDefinitionKind::InlineOperational(operational) => {
+                    let domain = operational_domain(
+                        &operational.header.parameters,
+                        operational.header.span,
+                        &mut self.type_work,
+                    )?;
+                    let codomain = ProvenancedType::from_resolved_with_budget(
+                        &operational.header.result_type,
+                        &mut self.type_work,
+                    )?;
+                    let function = ProvenancedType::function_with_budget(
+                        domain,
+                        codomain,
+                        Some(operational.header.span),
+                        &mut self.type_work,
+                    )?;
+                    (
+                        &operational.header.name,
+                        function.ty,
+                        operational.header.type_parameters.as_ref(),
+                    )
+                }
+            };
+            let scheme = if parameters.is_empty() {
+                body
+            } else {
+                let parameters = parameters
+                    .iter()
+                    .map(|parameter| parameter.id)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                Type::Forall(parameters, Box::new(body))
+            };
+            checked.0.push(CheckedGlobalScheme {
+                binder: name.id,
+                spelling: name.spelling.clone(),
+                scheme,
+                origin: name.origin.clone(),
+            });
+        }
+        Ok(checked.into_vec())
     }
 
     /// Consumes the elaborator and selects the program root for validation.
@@ -1133,12 +1331,72 @@ impl Elaborator {
     }
 
     fn elaborate_program(&mut self, program: &ResolvedProgram) -> Result<TypedNode, TypeError> {
-        let mut context = TypeContext::new();
-        let mut globals = Vec::with_capacity(program.definitions.len());
-        let mut global_binders = HashMap::with_capacity(program.definitions.len());
-        let mut global_quantifiers = Vec::with_capacity(program.definitions.len());
+        self.elaborate_definition_group(&program.definitions, &program.result, program.span)
+    }
 
-        for definition in &program.definitions {
+    fn elaborate_module_program(
+        &mut self,
+        program: &ResolvedModuleProgram,
+    ) -> Result<TypedNode, TypeError> {
+        let mut context = TypeContext::new();
+        let mut groups = Vec::with_capacity(program.groups.len());
+        for group in &program.groups {
+            let (members, next_context) =
+                self.elaborate_globals(&group.definitions, Some(&group.schemes), context)?;
+            context = next_context;
+            groups.push((members, group.span));
+        }
+        let mut result = self.elaborate_result(&program.result, &mut context)?;
+        for (members, span) in groups.into_iter().rev() {
+            if members.is_empty() {
+                continue;
+            }
+            let members = members
+                .into_iter()
+                .map(|member| (member.binder, member.initializer))
+                .collect();
+            let result_type = self.clone_type(&result.ty)?;
+            result.node = self.builder.recursive_binding(
+                members,
+                result.node,
+                result_type,
+                Origin::Generated {
+                    cause: Box::new(Origin::Source(span)),
+                    reason: GeneratedReason::RecursiveBindingLowering,
+                },
+            )?;
+        }
+        Ok(result)
+    }
+
+    fn elaborate_globals(
+        &mut self,
+        definitions: &[crate::resolved::ResolvedDefinition],
+        checked_schemes: Option<&[CheckedGlobalScheme]>,
+        mut context: TypeContext,
+    ) -> Result<(Vec<ElaboratedBinding>, TypeContext), TypeError> {
+        let checked_by_binder = if let Some(checked) = checked_schemes {
+            self.type_work
+                .charge(checked.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut by_binder = HashMap::new();
+            by_binder
+                .try_reserve(checked.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for scheme in checked {
+                if by_binder.insert(scheme.binder, scheme).is_some() {
+                    return Err(invalid_state());
+                }
+            }
+            Some(by_binder)
+        } else {
+            None
+        };
+        let mut globals = Vec::with_capacity(definitions.len());
+        let mut global_binders = HashMap::with_capacity(definitions.len());
+        let mut global_quantifiers = Vec::with_capacity(definitions.len());
+
+        for definition in definitions {
             let (name, function_type, type_parameters) = match &definition.kind {
                 ResolvedDefinitionKind::Equational(equational) => {
                     let function_type = ProvenancedType::from_resolved_with_budget(
@@ -1204,6 +1462,17 @@ impl Elaborator {
                         .into_boxed_slice();
                 Type::Forall(binder_parameters, Box::new(binder_body))
             };
+            let binder_type = if let Some(checked) = &checked_by_binder {
+                let checked = checked.get(&name.id).ok_or_else(invalid_state)?;
+                if checked.spelling != name.spelling || !same_type(&checked.scheme, &binder_type) {
+                    discard_type_iteratively(binder_type);
+                    return Err(invalid_state());
+                }
+                discard_type_iteratively(binder_type);
+                self.clone_type(&checked.scheme)?
+            } else {
+                binder_type
+            };
             let binder = self.builder.resolved_binder(
                 name.id,
                 binder_type,
@@ -1227,7 +1496,7 @@ impl Elaborator {
             global_quantifiers.push((name.id, quantified));
         }
 
-        for definition in &program.definitions {
+        for definition in definitions {
             let recursive_binder = match &definition.kind {
                 ResolvedDefinitionKind::Equational(equational) => equational.interface.name.id,
                 ResolvedDefinitionKind::InlineOperational(operational) => {
@@ -1335,18 +1604,59 @@ impl Elaborator {
         }
         self.monomorphic_recursive.clear();
 
+        Ok((globals, context))
+    }
+
+    fn elaborate_definition_group(
+        &mut self,
+        definitions: &[crate::resolved::ResolvedDefinition],
+        result_expression: &ResolvedExpr,
+        span: Span,
+    ) -> Result<TypedNode, TypeError> {
+        let (globals, mut context) =
+            self.elaborate_globals(definitions, None, self.base_context.clone())?;
+        let mut result = self.elaborate_result(result_expression, &mut context)?;
+        if !globals.is_empty() {
+            let members = globals
+                .into_iter()
+                .map(|global| (global.binder, global.initializer))
+                .collect();
+            let core_result_type = self.clone_type(&result.ty)?;
+            let node = self.builder.recursive_binding(
+                members,
+                result.node,
+                core_result_type,
+                Origin::Generated {
+                    cause: Box::new(Origin::Source(span)),
+                    reason: GeneratedReason::RecursiveBindingLowering,
+                },
+            )?;
+            result = TypedNode {
+                node,
+                ty: result.ty,
+                provenance: result.provenance,
+            };
+        }
+        Ok(result)
+    }
+
+    fn elaborate_result(
+        &mut self,
+        result_expression: &ResolvedExpr,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
         let mut result = self.elaborate_expression_with_context(
             ElaborationTask::Synthesize {
-                expression: &program.result,
-                cause: Some(SynthesisCause::ProgramResult(program.result.span)),
+                expression: result_expression,
+                cause: Some(SynthesisCause::ProgramResult(result_expression.span)),
             },
-            &mut context,
+            context,
         )?;
         let (zonked_result, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
         if result_is_ambiguous {
             return Err(inference_failure(
                 TypeReason::AmbiguousType,
-                program.result.span,
+                result_expression.span,
                 "this result does not determine every inferred type",
             ));
         }
@@ -1371,27 +1681,6 @@ impl Elaborator {
                 origin,
                 "this expression does not determine every inferred type",
             ));
-        }
-        if !globals.is_empty() {
-            let members = globals
-                .into_iter()
-                .map(|global| (global.binder, global.initializer))
-                .collect();
-            let core_result_type = self.clone_type(&result.ty)?;
-            let node = self.builder.recursive_binding(
-                members,
-                result.node,
-                core_result_type,
-                Origin::Generated {
-                    cause: Box::new(Origin::Source(program.span)),
-                    reason: GeneratedReason::RecursiveBindingLowering,
-                },
-            )?;
-            result = TypedNode {
-                node,
-                ty: result.ty,
-                provenance: result.provenance,
-            };
         }
         Ok(result)
     }
@@ -1493,6 +1782,7 @@ impl Elaborator {
                             .registry
                             .constructor(occurrence.constructor)
                             .ok_or_else(invalid_state)?;
+                        let declaration_span = constructor.origin.primary_span();
                         let parameters = self
                             .registry
                             .nominal_parameters(constructor.owner)
@@ -1548,9 +1838,10 @@ impl Elaborator {
                         } else {
                             result
                         };
+                        let scheme_provenance = TypeProvenance::at_span(&scheme, declaration_span);
                         let fact = TypeFact {
                             ty: scheme,
-                            provenance: TypeProvenance::atom(None),
+                            provenance: scheme_provenance,
                             quantified: quantified.into_boxed_slice(),
                         };
                         let (ty, arguments) = self.instantiate(&fact, false, current.span)?;
@@ -1584,7 +1875,7 @@ impl Elaborator {
                                 occurrence.origin.clone(),
                             )?;
                         }
-                        let provenance = self.unknown_provenance(&ty)?;
+                        let provenance = TypeProvenance::at_span(&ty, declaration_span);
                         values.push(TypedNode {
                             node,
                             provenance,
@@ -3387,6 +3678,56 @@ impl Elaborator {
     }
 }
 
+/// Checks every local definition and publishes an immutable dependency summary.
+///
+/// No Core program escapes this phase. A summary is created only after all
+/// bodies have checked against their declared interfaces.
+///
+/// # Errors
+///
+/// Returns the first source typing error or bounded internal elaboration
+/// failure. Failed modules do not produce a [`CheckedModule`].
+pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError> {
+    let mut elaborator = Elaborator::for_module(&resolved)?;
+    elaborator.check_module_bodies(&resolved)?;
+    let schemes = elaborator.checked_module_schemes(resolved.definitions())?;
+    let exports = ExportSummary::freeze(&resolved, &schemes, &mut elaborator.type_work)
+        .map_err(|()| invalid_state())?;
+    drop(elaborator);
+    Ok(CheckedModule::new(resolved, schemes, exports))
+}
+
+/// Assembles dependency-ordered checked modules for one final Core lowering.
+///
+/// # Errors
+///
+/// Returns an internal failure for duplicate module identities, a missing
+/// entry module, or conflicting full-registry identities.
+pub fn link_modules(
+    modules: Vec<CheckedModule>,
+    entry: crate::module::ModuleId,
+    result: ResolvedExpr,
+) -> Result<ResolvedModuleProgram, TypeError> {
+    if !modules.iter().any(|module| module.module() == entry) {
+        return Err(invalid_state());
+    }
+    let mut budget = TypeWorkBudget::default();
+    let registry = Arc::new(
+        ResolvedRegistry::combine_checked(&modules, &mut budget).map_err(|()| invalid_state())?,
+    );
+    let groups = modules
+        .into_iter()
+        .map(CheckedModule::into_group)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    Ok(ResolvedModuleProgram {
+        registry,
+        groups,
+        entry,
+        result,
+    })
+}
+
 impl Default for Elaborator {
     fn default() -> Self {
         Self::new()
@@ -4657,13 +4998,31 @@ fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError
 fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
     let mut binders = Vec::new();
     let mut expressions = vec![&program.result];
-    for definition in &program.definitions {
+    collect_definition_binders(&program.definitions, &mut binders, &mut expressions);
+    collect_expression_binders(&mut binders, expressions);
+    binders
+}
+
+fn resolved_module_binders(module: &ResolvedModule) -> Vec<BinderId> {
+    let mut binders = Vec::new();
+    let mut expressions = Vec::new();
+    collect_definition_binders(module.definitions(), &mut binders, &mut expressions);
+    collect_expression_binders(&mut binders, expressions);
+    binders
+}
+
+fn collect_definition_binders<'a>(
+    definitions: &'a [crate::resolved::ResolvedDefinition],
+    binders: &mut Vec<BinderId>,
+    expressions: &mut Vec<&'a ResolvedExpr>,
+) {
+    for definition in definitions {
         match &definition.kind {
             ResolvedDefinitionKind::Equational(equational) => {
                 binders.push(equational.interface.name.id);
                 for equation in &equational.equations {
                     for pattern in &equation.patterns {
-                        collect_pattern_binders(pattern, &mut binders);
+                        collect_pattern_binders(pattern, binders);
                     }
                     expressions.push(&equation.body);
                 }
@@ -4671,15 +5030,18 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
             ResolvedDefinitionKind::InlineOperational(operational) => {
                 binders.push(operational.header.name.id);
                 for parameter in &operational.header.parameters {
-                    collect_pattern_binders(&parameter.pattern, &mut binders);
+                    collect_pattern_binders(&parameter.pattern, binders);
                 }
                 expressions.push(&operational.body.result);
                 for declaration in &operational.body.declarations {
-                    collect_resolved_declaration(declaration, &mut binders, &mut expressions);
+                    collect_resolved_declaration(declaration, binders, expressions);
                 }
             }
         }
     }
+}
+
+fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<&ResolvedExpr>) {
     while let Some(expression) = expressions.pop() {
         match &expression.kind {
             ResolvedExprKind::Apply(application) => {
@@ -4695,21 +5057,21 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
             ResolvedExprKind::Block(block) => {
                 expressions.push(&block.result);
                 for declaration in &block.declarations {
-                    collect_resolved_declaration(declaration, &mut binders, &mut expressions);
+                    collect_resolved_declaration(declaration, binders, &mut expressions);
                 }
             }
             ResolvedExprKind::Function(function) => {
-                collect_pattern_binders(&function.pattern, &mut binders);
+                collect_pattern_binders(&function.pattern, binders);
                 expressions.push(&function.body.result);
                 for declaration in &function.body.declarations {
-                    collect_resolved_declaration(declaration, &mut binders, &mut expressions);
+                    collect_resolved_declaration(declaration, binders, &mut expressions);
                 }
             }
             ResolvedExprKind::Tuple(elements) => expressions.extend(elements),
             ResolvedExprKind::Match(match_expression) => {
                 expressions.push(&match_expression.scrutinee);
                 for arm in &match_expression.arms {
-                    collect_pattern_binders(&arm.pattern, &mut binders);
+                    collect_pattern_binders(&arm.pattern, binders);
                     expressions.push(&arm.body);
                 }
             }
@@ -4720,7 +5082,6 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
             | ResolvedExprKind::Constructor(_) => {}
         }
     }
-    binders
 }
 
 fn collect_resolved_declaration<'a>(

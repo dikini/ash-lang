@@ -513,10 +513,9 @@ impl CoreBuilder {
 
     /// Starts an empty arena carrying an immutable resolved data registry.
     pub fn with_registry(registry: Arc<ResolvedRegistry>) -> Self {
-        Self {
-            registry,
-            ..Self::new()
-        }
+        let mut builder = Self::new();
+        builder.registry = registry;
+        builder
     }
 
     /// Reserves the complete resolver-assigned binder namespace.
@@ -939,11 +938,11 @@ impl CoreBuilder {
             return Err(BuildError::InvalidPayload);
         };
         let cause = match expected_cause {
-            Some(span) => Origin::Related {
+            Some(span) if span.source() == current.primary_span().source() => Origin::Related {
                 primary: Box::new(current.clone()),
                 related: vec![span],
             },
-            None => current.clone(),
+            Some(_) | None => current.clone(),
         };
         let origin = admit_origin(Origin::Generated {
             cause: Box::new(cause),
@@ -1024,7 +1023,7 @@ impl CoreBuilder {
     /// # Errors
     ///
     /// Returns [`BuildError::InvalidNodeId`] unless `root` belongs to this arena.
-    pub fn finish(self, root: NodeId) -> Result<UnvalidatedProgram, BuildError> {
+    pub fn finish(mut self, root: NodeId) -> Result<UnvalidatedProgram, BuildError> {
         let Some(arena) = self.arena else {
             return Err(BuildError::InvalidNodeId);
         };
@@ -1036,9 +1035,9 @@ impl CoreBuilder {
             return Err(BuildError::InvalidNodeId);
         }
         Ok(UnvalidatedProgram {
-            registry: self.registry,
+            registry: std::mem::take(&mut self.registry),
             arena,
-            nodes: self.nodes,
+            nodes: std::mem::take(&mut self.nodes),
             root,
         })
     }
@@ -1097,6 +1096,47 @@ impl CoreBuilder {
                 return Ok((id, next));
             }
             candidate = next;
+        }
+    }
+}
+
+impl Drop for CoreBuilder {
+    fn drop(&mut self) {
+        for stored in self.nodes.drain(..) {
+            discard_type_iteratively(stored.ty);
+            if let Some(origin) = stored.origin {
+                discard_origin_iteratively(origin);
+            }
+            match stored.kind {
+                PureExprKind::Value(PureValue::Function(function)) => {
+                    function.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                    binding.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                    group.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                    match_node.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                    operation.discard_metadata();
+                }
+                PureExprKind::Value(
+                    PureValue::Integer(_)
+                    | PureValue::Boolean(_)
+                    | PureValue::Unit(_)
+                    | PureValue::Constructor(_),
+                )
+                | PureExprKind::Variable(_)
+                | PureExprKind::Computation(
+                    PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_)
+                    | PureComputation::TypeAbstraction(_),
+                ) => {}
+            }
         }
     }
 }
@@ -1772,6 +1812,30 @@ mod tests {
             };
         }
         origin
+    }
+
+    #[test]
+    fn unfinished_builder_discards_deep_payloads_on_a_small_stack() {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .stack_size(128 * 1024)
+                .spawn_scoped(scope, || {
+                    let source = SourceFile::new("temporary-check.ash", "()")
+                        .expect("test source should fit");
+                    let origin = Origin::Source(
+                        source
+                            .span(ByteRange::new(0, 2).expect("ordered range"))
+                            .expect("range should belong to source"),
+                    );
+                    let mut builder = CoreBuilder::new();
+                    for _ in 0..32 {
+                        builder
+                            .unit(function_type(CORE_PAYLOAD_DEPTH_LIMIT), origin.clone())
+                            .expect("boundary-depth payload should be admitted");
+                    }
+                })
+                .expect("small-stack builder-drop thread should complete");
+        });
     }
 
     fn related_origin(source: &SourceFile, depth: usize) -> Origin {
