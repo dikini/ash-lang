@@ -8,6 +8,7 @@ use ash::{
     core::{PureComputation, PureExprKind, PureValue, validate_modules},
     driver::{RunConfiguration, run_path},
     elaborate::{Elaborator, TypeError, check_module, link_modules},
+    eval::{TraceEvent, evaluate},
     evidence_validation::validate_interface_evidence,
     interface::RequirementOwner,
     module::{ModuleGraph, ModuleRoots, load_module_graph},
@@ -446,6 +447,169 @@ fn generic_two_prerequisite_slots_preserve_declaration_order() {
         "42",
         Type::Int,
     );
+}
+
+#[test]
+fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() {
+    let fixture = InterfaceFixture::create(concat!(
+        "type Wrap<A> = Wrap(A)\n\n",
+        "interface Read<A> {\nread : A -> Int\n}\n\n",
+        "impl Read<Int> {\nread value = value\n}\n\n",
+        "impl Read<Wrap<A>> where Read<A> {\n",
+        "read (Wrap(value)) = read value\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = read(Wrap(42))\n",
+    ));
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the generic evidence fixture should load");
+    let checked = checked_graph(&graph);
+    let module = checked
+        .first()
+        .expect("the one-module fixture should remain checked");
+    let [ground_implementation, generic_implementation] = module.implementation_facts() else {
+        panic!("the fixture should retain its ground and generic implementations");
+    };
+    let ground_method = ground_implementation.methods[0].binder;
+    let generic_method = generic_implementation.methods[0].binder;
+    let main = module
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "main")
+        .expect("the fixture should retain main")
+        .binder;
+
+    let linked = link_modules(checked, graph.entry()).expect("the fixture should link");
+    let linked =
+        validate_interface_evidence(linked).expect("the generic evidence should authenticate");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the fixture namespace should reserve");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("the generic evidence should lower");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the generic evidence Core should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let core = validate_modules(unchecked, &sources, &module_sources)
+        .expect("the unspecialized generic evidence Core should validate");
+
+    let PureExprKind::Computation(PureComputation::RecursiveBind(group)) =
+        &core.node(core.root()).expect("Core root should exist").kind
+    else {
+        panic!("the module should lower to one recursive group");
+    };
+    let main_initializer = group
+        .members()
+        .iter()
+        .find(|member| member.binder().id() == main)
+        .expect("main should remain a group member")
+        .initializer();
+    let PureExprKind::Value(PureValue::Function(main_function)) = &core
+        .node(main_initializer)
+        .expect("main initializer should exist")
+        .kind
+    else {
+        panic!("main should lower to a function");
+    };
+    let source_application_node = match &core
+        .node(main_function.body())
+        .expect("main body should exist")
+        .kind
+    {
+        PureExprKind::Computation(PureComputation::Match(match_node)) => {
+            match_node.arms()[0].body()
+        }
+        _ => main_function.body(),
+    };
+    let PureExprKind::Computation(PureComputation::Apply(source_application)) = &core
+        .node(source_application_node)
+        .expect("the source application should exist")
+        .kind
+    else {
+        panic!("the selected method should receive its source value last");
+    };
+    let evidence_application_node = source_application.function();
+    let PureExprKind::Computation(PureComputation::Apply(evidence_application)) = &core
+        .node(evidence_application_node)
+        .expect("the evidence application should exist")
+        .kind
+    else {
+        panic!("the generic method should receive prerequisite evidence");
+    };
+    let type_application_node = evidence_application.function();
+    let PureExprKind::Computation(PureComputation::TypeApplication(type_application)) = &core
+        .node(type_application_node)
+        .expect("the generic method type application should exist")
+        .kind
+    else {
+        panic!("the generic method should be type-applied before evidence");
+    };
+    let generic_method_node = type_application.function();
+    let PureExprKind::Variable(generic_method_variable) = core
+        .node(generic_method_node)
+        .expect("the generic method variable should exist")
+        .kind
+    else {
+        panic!("the generic evidence should use the linked implementation-method binder");
+    };
+    assert_eq!(generic_method_variable.binder(), generic_method);
+    let prerequisite_node = evidence_application.argument();
+    let PureExprKind::Variable(prerequisite_variable) = core
+        .node(prerequisite_node)
+        .expect("the prerequisite method variable should exist")
+        .kind
+    else {
+        panic!("the prerequisite should remain an ordinary method function");
+    };
+    assert_eq!(prerequisite_variable.binder(), ground_method);
+
+    let evaluation = evaluate(&core).expect("the unspecialized generic evidence should evaluate");
+    assert_eq!(evaluation.value.to_string(), "42");
+    let entered = evaluation
+        .trace
+        .iter()
+        .map(|event| match event {
+            TraceEvent::Enter(node) => *node,
+        })
+        .collect::<Vec<_>>();
+    let source_application_index = entered
+        .iter()
+        .position(|node| *node == source_application_node)
+        .expect("evaluation should enter the source application");
+    assert_eq!(
+        entered.get(source_application_index..source_application_index + 5),
+        Some(
+            [
+                source_application_node,
+                evidence_application_node,
+                type_application_node,
+                generic_method_node,
+                prerequisite_node,
+            ]
+            .as_slice(),
+        ),
+    );
+    let prerequisite_index = entered
+        .iter()
+        .position(|node| *node == prerequisite_node)
+        .expect("evaluation should construct prerequisite evidence");
+    let source_argument_index = entered
+        .iter()
+        .position(|node| *node == source_application.argument())
+        .expect("evaluation should enter the source value argument");
+    assert!(prerequisite_index < source_argument_index);
+    assert!(evaluation.trace.len() <= 32);
+    assert!(evaluation.max_frame_depth <= 6);
 }
 
 #[test]

@@ -117,12 +117,198 @@ fn current_source_exposes_only_the_modular_source_pipeline() {
 #[test]
 fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories() {
     for (path, source) in CORE_AND_EVALUATOR_SOURCES {
-        for mechanism in ["Interface", "Impl", "Requirement", "EvidenceSelection"] {
+        for identifier in rust_code_identifiers(source) {
             assert!(
-                !source.contains(mechanism),
-                "{path} must not gain the {mechanism} runtime mechanism"
+                !is_forbidden_interface_identifier(identifier),
+                "{path} must not gain the {identifier} interface runtime mechanism"
             );
         }
+    }
+}
+
+fn is_forbidden_interface_identifier(identifier: &str) -> bool {
+    let names_interface_abstraction = has_identifier_component(identifier, "Impl", "impl")
+        || has_camel_component(identifier, "Requirement");
+    let identifier = identifier.to_ascii_lowercase();
+    let carries_interface_vocabulary = ["interface", "evidence", "dictionary", "implementation"]
+        .iter()
+        .any(|term| identifier.contains(term));
+    let combines_runtime_or_method_dispatch = ["runtime", "method"]
+        .iter()
+        .any(|qualifier| identifier.contains(qualifier))
+        && ["registry", "lookup", "dispatch"]
+            .iter()
+            .any(|mechanism| identifier.contains(mechanism));
+    let combines_requirement_mechanism = identifier
+        .split('_')
+        .any(|component| component == "requirement")
+        && [
+            "interface",
+            "impl",
+            "evidence",
+            "dictionary",
+            "registry",
+            "lookup",
+            "dispatch",
+            "method",
+        ]
+        .iter()
+        .any(|mechanism| identifier.contains(mechanism));
+
+    names_interface_abstraction
+        || carries_interface_vocabulary
+        || combines_runtime_or_method_dispatch
+        || combines_requirement_mechanism
+}
+
+fn has_identifier_component(identifier: &str, camel: &str, snake: &str) -> bool {
+    let snake_component = identifier != snake
+        && identifier
+            .split('_')
+            .any(|component| component.eq_ignore_ascii_case(snake));
+
+    has_camel_component(identifier, camel) || snake_component
+}
+
+fn has_camel_component(identifier: &str, camel: &str) -> bool {
+    identifier.match_indices(camel).any(|(start, _)| {
+        let end = start + camel.len();
+        identifier
+            .as_bytes()
+            .get(end)
+            .is_none_or(|next| !next.is_ascii_lowercase())
+    })
+}
+
+fn rust_code_identifiers(source: &str) -> Vec<&str> {
+    let bytes = source.as_bytes();
+    let mut identifiers = Vec::new();
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        if bytes[cursor..].starts_with(b"//") {
+            cursor += 2;
+            while cursor < bytes.len() && bytes[cursor] != b'\n' {
+                cursor += 1;
+            }
+            continue;
+        }
+        if bytes[cursor..].starts_with(b"/*") {
+            cursor += 2;
+            let mut depth = 1usize;
+            while cursor < bytes.len() && depth > 0 {
+                if bytes[cursor..].starts_with(b"/*") {
+                    depth += 1;
+                    cursor += 2;
+                } else if bytes[cursor..].starts_with(b"*/") {
+                    depth -= 1;
+                    cursor += 2;
+                } else {
+                    cursor += 1;
+                }
+            }
+            continue;
+        }
+        if let Some(end) = rust_literal_end(bytes, cursor) {
+            cursor = end;
+            continue;
+        }
+        if bytes[cursor].is_ascii_alphabetic() || bytes[cursor] == b'_' {
+            let start = cursor;
+            cursor += 1;
+            while cursor < bytes.len()
+                && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+            {
+                cursor += 1;
+            }
+            identifiers.push(&source[start..cursor]);
+            continue;
+        }
+        cursor += 1;
+    }
+
+    identifiers
+}
+
+fn rust_literal_end(source: &[u8], cursor: usize) -> Option<usize> {
+    let quote = match source.get(cursor..)? {
+        [b'"', ..] => cursor,
+        [b'b' | b'c', b'"', ..] => cursor + 1,
+        [b'r', rest @ ..] => return rust_raw_literal_end(source, cursor, rest),
+        [b'b' | b'c', b'r', rest @ ..] => return rust_raw_literal_end(source, cursor + 1, rest),
+        _ => return None,
+    };
+    let mut end = quote + 1;
+    while end < source.len() {
+        match source[end] {
+            b'\\' => end = end.saturating_add(2),
+            b'"' => return Some(end + 1),
+            _ => end += 1,
+        }
+    }
+    Some(source.len())
+}
+
+fn rust_raw_literal_end(source: &[u8], raw_prefix: usize, rest: &[u8]) -> Option<usize> {
+    debug_assert_eq!(source[raw_prefix], b'r');
+    let hash_count = rest.iter().take_while(|byte| **byte == b'#').count();
+    if rest.get(hash_count) != Some(&b'"') {
+        return None;
+    }
+    let mut end = raw_prefix + hash_count + 2;
+    while end < source.len() {
+        if source[end] == b'"'
+            && source
+                .get(end + 1..end + 1 + hash_count)
+                .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
+        {
+            return Some(end + 1 + hash_count);
+        }
+        end += 1;
+    }
+    Some(source.len())
+}
+
+#[test]
+fn interface_inventory_guard_reads_code_identifiers_but_not_prose() {
+    assert_eq!(
+        rust_code_identifiers(
+            r###"
+            // InterfaceRegistry is prose.
+            const NOTE: &str = "EvidenceLookup is prose";
+            /* DictionaryDispatch is prose. */
+            struct ImplRegistry;
+            "###,
+        ),
+        ["const", "NOTE", "str", "struct", "ImplRegistry"],
+    );
+    for forbidden in [
+        "ImplRegistry",
+        "RegistryImpl",
+        "impl_lookup",
+        "lookup_impl",
+        "ImplMethod",
+        "RequirementNode",
+        "RuntimeRequirement",
+        "requirement_registry",
+        "RuntimeLookup",
+        "dispatch_runtime",
+        "registry_interface",
+    ] {
+        assert!(is_forbidden_interface_identifier(forbidden));
+    }
+    for allowed in [
+        "impl",
+        "Implicit",
+        "ImplicitFrame",
+        "Implementor",
+        "requirement",
+        "requirements",
+        "lookup",
+        "dispatch_entry",
+        "registry",
+    ] {
+        assert!(!is_forbidden_interface_identifier(allowed));
     }
 }
 
