@@ -340,6 +340,7 @@ impl ImportedFacts {
         if existing.parameter_count != fact.parameter_count
             || existing.parameters != fact.parameters
             || constructor_conflict
+            || existing.display_is_private != fact.display_is_private
         {
             for parameter in fact.parameters.into_vec() {
                 discard_origin_iteratively(parameter.origin);
@@ -421,6 +422,8 @@ pub struct ImportedNominalFact {
     pub access: ImportedTypeAccess,
     /// Display-only declaration spelling; never a resolver binding.
     pub display_spelling: Option<String>,
+    /// Whether the displayed declaration spelling is private at its definition.
+    pub display_is_private: bool,
     /// Causal declaration provenance.
     pub origin: Origin,
 }
@@ -429,8 +432,8 @@ impl ImportedNominalFact {
     /// Renders a diagnostic-only name without creating a resolver binding.
     #[must_use]
     pub fn display_name(&self, module_label: &str) -> String {
-        match (self.access, self.display_spelling.as_deref()) {
-            (ImportedTypeAccess::Hidden, Some(spelling)) => {
+        match (self.display_is_private, self.display_spelling.as_deref()) {
+            (true, Some(spelling)) => {
                 format!("{module_label}.<private {spelling}>")
             }
             (_, Some(spelling)) => format!("{module_label}.{spelling}"),
@@ -598,7 +601,7 @@ pub struct CandidateHiddenNominal {
     pub id: NominalTypeId,
     /// Number of parameters of kind `Type`.
     pub parameter_count: usize,
-    /// Display-only private spelling.
+    /// Display-only declaration spelling.
     pub spelling: String,
     /// Declaration provenance.
     pub origin: Origin,
@@ -736,8 +739,10 @@ pub struct ExportedHiddenType {
     pub parameter_count: usize,
     /// Ordered declaration parameters, preserving defining identities.
     pub parameters: Box<[ResolvedTypeVariable]>,
-    /// Display-only private spelling.
+    /// Display-only declaration spelling.
     pub spelling: String,
+    /// Whether the displayed declaration spelling is private at its definition.
+    pub display_is_private: bool,
     /// Causal declaration provenance.
     pub origin: Origin,
 }
@@ -882,6 +887,7 @@ impl ExportSummary {
                     parameter_count: candidate.parameter_count,
                     parameters,
                     spelling: candidate.spelling.clone(),
+                    display_is_private: true,
                     origin: candidate.origin.clone(),
                 },
             );
@@ -903,6 +909,7 @@ impl ExportSummary {
                         .display_spelling
                         .clone()
                         .unwrap_or_else(|| "hidden".to_owned()),
+                    display_is_private: imported.display_is_private,
                     origin: imported.origin.clone(),
                 },
             );
@@ -934,6 +941,11 @@ impl ExportSummary {
             .len()
             .saturating_add(self.nominals.len())
             .saturating_add(self.constructors.len())
+            .saturating_add(self.withheld.len())
+    }
+
+    pub(crate) fn withheld_count(&self) -> usize {
+        self.withheld.len()
     }
 
     pub(crate) fn nominals(&self) -> impl Iterator<Item = (&str, &ExportedType)> {
@@ -977,6 +989,7 @@ impl ExportSummary {
                 constructors: &exported.constructors,
                 access: exported.access.into(),
                 display_spelling: Some(spelling),
+                display_is_private: false,
                 origin: &exported.origin,
             });
         }
@@ -989,6 +1002,7 @@ impl ExportSummary {
                 constructors: &[],
                 access: ImportedTypeAccess::Hidden,
                 display_spelling: Some(&exported.spelling),
+                display_is_private: exported.display_is_private,
                 origin: &exported.origin,
             })
     }
@@ -1093,7 +1107,7 @@ impl ExportSummary {
         constructors: Vec<(&str, ConstructorId, Option<Type>, Origin)>,
         unavailable: Vec<&str>,
         opaque_constructors: Vec<(&str, Origin)>,
-        hidden_nominals: Vec<(&str, NominalTypeId, usize, Origin)>,
+        hidden_nominals: Vec<(&str, NominalTypeId, usize, bool, Origin)>,
     ) -> Self {
         let mut summary = Self::test_fixture(module, terms, nominals, constructors, unavailable);
         for (spelling, _) in &opaque_constructors {
@@ -1117,22 +1131,21 @@ impl ExportSummary {
             }));
         summary
             .hidden_nominals
-            .extend(
-                hidden_nominals
-                    .into_iter()
-                    .map(|(spelling, id, parameter_count, origin)| {
-                        (
+            .extend(hidden_nominals.into_iter().map(
+                |(spelling, id, parameter_count, display_is_private, origin)| {
+                    (
+                        id,
+                        ExportedHiddenType {
                             id,
-                            ExportedHiddenType {
-                                id,
-                                parameter_count,
-                                parameters: Vec::new().into_boxed_slice(),
-                                spelling: spelling.to_owned(),
-                                origin,
-                            },
-                        )
-                    }),
-            );
+                            parameter_count,
+                            parameters: Vec::new().into_boxed_slice(),
+                            spelling: spelling.to_owned(),
+                            display_is_private,
+                            origin,
+                        },
+                    )
+                },
+            ));
         summary
     }
 }
@@ -1172,6 +1185,7 @@ pub(crate) struct ImportedNominalFactRef<'a> {
     pub(crate) constructors: &'a [ConstructorId],
     pub(crate) access: ImportedTypeAccess,
     pub(crate) display_spelling: Option<&'a str>,
+    pub(crate) display_is_private: bool,
     pub(crate) origin: &'a Origin,
 }
 
@@ -1346,7 +1360,7 @@ impl ResolvedRegistry {
             .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
             .map(|fact| {
                 let spelling = fact.display_spelling.as_deref().unwrap_or("hidden");
-                let display = if fact.access == ImportedTypeAccess::Hidden {
+                let display = if fact.display_is_private {
                     format!("<private {spelling}>")
                 } else {
                     spelling.to_owned()

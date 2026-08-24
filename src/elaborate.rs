@@ -14,8 +14,8 @@ use crate::{
     },
     diagnostic::{Diagnostic, SourceLabel},
     pattern::{
-        UsefulnessBudget, UsefulnessError, display_witness, missing_witness_for_types,
-        missing_witness_for_types_with_budget, usefulness_with_budget,
+        UsefulnessBudget, UsefulnessError, display_witness, missing_witness_for_types_with_budget,
+        usefulness_with_budget,
     },
     resolved::{
         BinderId, CheckedGlobalScheme, CheckedModule, ExportSummary, ResolvedBinding,
@@ -2088,10 +2088,11 @@ impl Elaborator {
                         let domain = domain.ok_or_else(invalid_state)?;
                         let pattern_span = pattern.origin.primary_span();
                         let mut matrix = vec![vec![pattern]];
-                        if let Some(witness) = missing_witness_for_types(
+                        if let Some(witness) = missing_witness_for_types_with_budget(
                             &matrix,
                             std::slice::from_ref(&domain),
                             &self.registry,
+                            &mut self.coverage_work,
                         )? {
                             return Err(case_error(
                                 TypeReason::RefutableFunctionDomain,
@@ -2372,10 +2373,11 @@ impl Elaborator {
                         }
                     }
                     let mut matrix = vec![vec![pattern]];
-                    if let Some(witness) = missing_witness_for_types(
+                    if let Some(witness) = missing_witness_for_types_with_budget(
                         &matrix,
                         std::slice::from_ref(&binding_type.ty),
                         &self.registry,
+                        &mut self.coverage_work,
                     )? {
                         self.remove_pattern_binders(context, &binder_ids)?;
                         return Err(case_error(
@@ -3599,10 +3601,11 @@ impl Elaborator {
         let mut body = body_result?;
         if let Some(pattern) = retained_pattern {
             let mut matrix = vec![vec![pattern]];
-            if let Some(witness) = missing_witness_for_types(
+            if let Some(witness) = missing_witness_for_types_with_budget(
                 &matrix,
                 std::slice::from_ref(&domain.ty),
                 &self.registry,
+                &mut self.coverage_work,
             )? {
                 return Err(case_error(
                     TypeReason::RefutableFunctionDomain,
@@ -5286,6 +5289,25 @@ mod tests {
             .expect("the first module should fit the shared coverage budget");
         let failure = check_module_with_budget(second, &mut type_work, &mut coverage_work)
             .expect_err("the second module should exhaust cumulative coverage work");
+
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted)
+        );
+    }
+
+    #[test]
+    fn one_coverage_budget_spans_local_binding_irrefutability() {
+        let body = "{\nlet (left, right) = ((), ())\n()\n}";
+        let first = resolved_module_fixture("first.ash", "", "Unit", body);
+        let second = resolved_module_fixture("second.ash", "", "Unit", body);
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::with_limit(40);
+
+        check_module_with_budget(first, &mut type_work, &mut coverage_work)
+            .expect("the first local binding should fit the shared coverage budget");
+        let failure = check_module_with_budget(second, &mut type_work, &mut coverage_work)
+            .expect_err("the second local binding should exhaust cumulative coverage work");
 
         assert_eq!(
             failure,

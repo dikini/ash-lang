@@ -14,8 +14,8 @@ use crate::{
         Binder, BinderId, CandidateConstructor, CandidateGlobal, CandidateHiddenNominal,
         CandidateNominal, ExportSummary, ExportedConstructor, ExportedGlobal, ExportedType,
         ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme, ImportedNominalFact,
-        ResolvedApplicationExpr, ResolvedBinaryExpr, ResolvedBinding, ResolvedBlock,
-        ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
+        ImportedTypeAccess, ResolvedApplicationExpr, ResolvedBinaryExpr, ResolvedBinding,
+        ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
         ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
         ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
         ResolvedFunctionExpr, ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
@@ -672,6 +672,16 @@ impl Resolver {
         }
         namespaces
             .withheld
+            .try_reserve(summary.withheld_count())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    import_span,
+                    "imported namespace retention exceeded its work budget",
+                )
+            })?;
+        namespaces
+            .withheld
             .extend(summary.withheld().map(|(namespace, spelling, withheld)| {
                 (
                     (spelling.to_owned(), namespace),
@@ -769,9 +779,35 @@ impl Resolver {
                     "an exported scheme references missing nominal metadata",
                 ));
             };
-            self.retain_imported_nominal_fact(exported, span)?;
+            self.retain_scheme_nominal_fact(exported, span)?;
         }
         Ok(())
+    }
+
+    fn retain_scheme_nominal_fact(
+        &mut self,
+        exported: crate::resolved::ImportedNominalFactRef<'_>,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.charge_imported_nominal_metadata(exported.parameters.len(), 0, span)?;
+        self.imported
+            .merge_nominal(ImportedNominalFact {
+                id: exported.id,
+                parameter_count: exported.parameter_count,
+                parameters: exported.parameters.to_vec().into_boxed_slice(),
+                constructors: Vec::new().into_boxed_slice(),
+                access: ImportedTypeAccess::Hidden,
+                display_spelling: exported.display_spelling.map(str::to_owned),
+                display_is_private: exported.display_is_private,
+                origin: exported.origin.clone(),
+            })
+            .map_err(|_| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "imported routes disagree about nominal metadata",
+                )
+            })
     }
 
     fn retain_imported_nominal_fact(
@@ -779,6 +815,11 @@ impl Resolver {
         exported: crate::resolved::ImportedNominalFactRef<'_>,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        self.charge_imported_nominal_metadata(
+            exported.parameters.len(),
+            exported.constructors.len(),
+            span,
+        )?;
         self.imported
             .merge_nominal(ImportedNominalFact {
                 id: exported.id,
@@ -787,6 +828,7 @@ impl Resolver {
                 constructors: exported.constructors.to_vec().into_boxed_slice(),
                 access: exported.access,
                 display_spelling: exported.display_spelling.map(str::to_owned),
+                display_is_private: exported.display_is_private,
                 origin: exported.origin.clone(),
             })
             .map_err(|_| {
@@ -805,6 +847,11 @@ impl Resolver {
         display_spelling: Option<&str>,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        self.charge_imported_nominal_metadata(
+            exported.parameters.len(),
+            exported.constructors.len(),
+            span,
+        )?;
         self.imported
             .merge_nominal(ImportedNominalFact {
                 id: exported.id,
@@ -813,6 +860,7 @@ impl Resolver {
                 constructors: exported.constructors.to_vec().into_boxed_slice(),
                 access: exported.access.into(),
                 display_spelling: display_spelling.map(str::to_owned),
+                display_is_private: false,
                 origin: exported.origin.clone(),
             })
             .map_err(|_| {
@@ -835,6 +883,23 @@ impl Resolver {
         Ok(())
     }
 
+    fn charge_imported_nominal_metadata(
+        &mut self,
+        parameter_count: usize,
+        constructor_count: usize,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.type_work
+            .charge(parameter_count.saturating_add(constructor_count))
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported nominal metadata retention exceeded its work budget",
+                )
+            })
+    }
+
     fn retain_imported_constructor(
         &mut self,
         exported: &ExportedConstructor,
@@ -851,10 +916,10 @@ impl Resolver {
                 "an exported constructor references missing owner metadata",
             )
         })?;
-        let siblings = owner.constructors.to_vec();
+        let siblings = owner.constructors;
         self.retain_imported_nominal_fact(owner, span)?;
         for sibling in siblings {
-            let sibling = summary.constructor_by_id(sibling).ok_or_else(|| {
+            let sibling = summary.constructor_by_id(*sibling).ok_or_else(|| {
                 error(
                     ResolveReason::InternalState,
                     span,
@@ -902,6 +967,15 @@ impl Resolver {
     fn file_name_is_bound(&self, spelling: &str) -> bool {
         self.module_aliases.contains_key(spelling)
             || self.type_names.contains_key(spelling)
+            || self.constructor_names.contains_key(spelling)
+            || self
+                .scopes
+                .first()
+                .is_some_and(|scope| scope.contains_key(spelling))
+    }
+
+    fn expression_name_is_bound(&self, spelling: &str) -> bool {
+        self.module_aliases.contains_key(spelling)
             || self.constructor_names.contains_key(spelling)
             || self
                 .scopes
@@ -1097,7 +1171,7 @@ impl Resolver {
                 ));
                 return Err(diagnostic.into());
             }
-            if self.file_name_is_bound(global_name) {
+            if self.expression_name_is_bound(global_name) {
                 return Err(import_conflict(global_name_span, global_name));
             }
             let global = self.allocate_binder(global_name, global_name_span)?;
@@ -1753,19 +1827,11 @@ impl Resolver {
     ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
         let mut names = Vec::new();
         let mut seen = HashSet::new();
-        let withheld_nominals = self
-            .targeted_withheld
-            .keys()
-            .filter_map(|(spelling, namespace)| {
-                (*namespace == WithheldNamespace::Nominal).then_some(spelling.as_str())
-            })
-            .collect::<HashSet<_>>();
         match &definition.kind {
             SurfaceDefinitionKind::Equational(equational) => {
                 collect_free_type_names(
                     &equational.interface.annotation,
                     &self.type_names,
-                    &withheld_nominals,
                     &mut seen,
                     &mut names,
                     &mut self.type_work,
@@ -1776,7 +1842,6 @@ impl Resolver {
                     collect_free_type_names(
                         &parameter.annotation,
                         &self.type_names,
-                        &withheld_nominals,
                         &mut seen,
                         &mut names,
                         &mut self.type_work,
@@ -1785,7 +1850,6 @@ impl Resolver {
                 collect_free_type_names(
                     &operational.header.result_type,
                     &self.type_names,
-                    &withheld_nominals,
                     &mut seen,
                     &mut names,
                     &mut self.type_work,
@@ -2430,7 +2494,6 @@ fn type_argument_count(
 fn collect_free_type_names<'a>(
     root: &'a SurfaceType,
     nominals: &HashMap<String, NominalTypeId>,
-    withheld_nominals: &HashSet<&str>,
     seen: &mut HashSet<&'a str>,
     output: &mut Vec<crate::surface::SurfaceName>,
     budget: &mut TypeWorkBudget,
@@ -2464,10 +2527,7 @@ fn collect_free_type_names<'a>(
                 let SurfaceReference::Unqualified(name) = name else {
                     continue;
                 };
-                if !nominals.contains_key(&name.text)
-                    && !withheld_nominals.contains(name.text.as_str())
-                    && seen.insert(&name.text)
-                {
+                if !nominals.contains_key(&name.text) && seen.insert(&name.text) {
                     output.push(name.clone());
                 }
             }
@@ -2477,7 +2537,6 @@ fn collect_free_type_names<'a>(
             } => {
                 if let SurfaceReference::Unqualified(constructor) = constructor
                     && !nominals.contains_key(&constructor.text)
-                    && !withheld_nominals.contains(constructor.text.as_str())
                     && seen.insert(&constructor.text)
                 {
                     output.push(constructor.clone());
@@ -2590,7 +2649,6 @@ mod tests {
         let error = collect_free_type_names(
             &annotation,
             &HashMap::new(),
-            &HashSet::new(),
             &mut seen,
             &mut output,
             &mut budget,

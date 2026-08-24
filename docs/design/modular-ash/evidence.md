@@ -214,7 +214,7 @@ behavior.
 | Body-free immutable dependency summaries | synthetic dependency-summary resolver tests, `failed_module_body_never_publishes_an_export_summary`, and the resolved-data API boundary |
 | Exact entry contract and observation | `tests/module_entry.rs`, `tests/module_cli.rs`, and `tests/spec_examples.rs` |
 | Qualified binders, combined registries, multi-source provenance, transforms, validation, and evaluation | module resolution/elaboration tests, modular Core validator tests, cross-source diagnostics, and linked transform/revalidation cases |
-| Graph-wide source, edge, path, syntax, coverage, type, Core, and validation resources | exact graph-budget units, public path/deep-chain tests, shared syntax/type/coverage tests, and direct Core/validation boundary suites |
+| Graph-wide source, edge, path, owner-fact, syntax, coverage, type, Core, and validation resources | exact graph-budget units, public path/deep-chain tests, shared syntax/type/coverage and repeated summary-metadata tests, and direct Core/validation boundary suites |
 | Explicit worklists and small-stack destruction | deep dependency chain, parser projection, type traversal, Core disposal, validation, cyclic data, and evaluator tests |
 | Specification, tools, reasons, links, and authority | the normative replacement at `3b66040`, executable document manifest, diagnostic tests, Markdown lint, and manual review |
 
@@ -258,14 +258,20 @@ constructors. Entry checking distinguishes missing, polymorphic, wrong-domain,
 and defensive open-result failures. Cross-module diagnostics retain the
 importing occurrence as their primary cause. Cross-module type diagnostics
 also retain the exported declaration that supplied the imported type.
+Diagnostic-only nominal spellings preserve declaration visibility separately
+from importer nameability, so an unselected public type is not described as a
+private declaration.
 
-One cumulative syntax budget spans every admitted source. Resolution and
-checking retain graph-wide type budgets; checking also retains one graph-wide
-coverage budget. Core construction and independent validation apply their
-cumulative limits to the whole linked program. Pending loader work counts only
-active traversal ownership, not every edge ever visited. Deep loading,
-validation, evaluation, rendering, and destruction use explicit work stacks at
-their admitted boundaries.
+One cumulative syntax budget spans every admitted source. Loading charges
+source, edge, path-segment, and retained owner-fact limits before keeping their
+proportional graph state. Resolution charges imported namespace and nominal
+metadata to its graph-wide type budget. Checking retains a separate graph-wide
+type budget and one graph-wide coverage budget, including irrefutability
+checks. Core construction and independent validation apply their cumulative
+limits to the whole linked program. Pending loader work counts only active
+traversal ownership, not every edge ever visited. Deep loading, validation,
+evaluation, rendering, and destruction use explicit work stacks at their
+admitted boundaries.
 
 Canonical sources, module graphs, Core arenas, and heaps own identity domains.
 Alternate paths do not create semantic duplicates. Core handles and runtime
@@ -291,8 +297,8 @@ module initialization or dynamic lifetime management.
   reference. Byte-identical Core and runtime value inventories demonstrate that
   static modularity does not require a module Core node.
 - Resource accounting must span the whole admitted graph. Resetting syntax,
-  type, or coverage work at each module would make the bound route- and
-  partition-dependent.
+  type, or coverage work at each module, or retaining owner relations without
+  a cumulative charge, would make the bound route- and partition-dependent.
 - Entry-result closure is guaranteed by the checked rank-1 scheme invariant;
   the driver guard is defensive rather than a source-reachable rejection.
 - Retained design notes need explicit retrospective status after their proposal

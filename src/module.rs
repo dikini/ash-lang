@@ -2,7 +2,7 @@
 
 use std::{
     borrow::Borrow,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     error::Error,
     fmt, fs, io,
     path::{Path, PathBuf},
@@ -26,6 +26,8 @@ pub const MODULE_SOURCE_LIMIT: usize = 16_384;
 pub const MODULE_EDGE_LIMIT: usize = 65_536;
 /// Maximum module path segments processed by one module graph.
 pub const MODULE_PATH_SEGMENT_LIMIT: usize = 262_144;
+/// Maximum retained canonical-module and owning-root relations in one graph.
+pub const MODULE_OWNER_FACT_LIMIT: usize = 262_144;
 /// Maximum active traversal and owner-propagation work items.
 pub const MODULE_PENDING_LIMIT: usize = 16_384;
 
@@ -342,6 +344,8 @@ pub enum ModuleResource {
     Edges,
     /// Module-path segment processing.
     PathSegments,
+    /// Retained canonical-module and owning-root relations.
+    OwnerFacts,
     /// Active iterative traversal and owner-propagation work items.
     PendingWork,
 }
@@ -611,30 +615,52 @@ struct OwnerSet {
 }
 
 impl OwnerSet {
-    fn from_paths(paths: Vec<PathBuf>) -> Self {
-        let mut ordered = Vec::with_capacity(paths.len());
-        let mut membership = HashSet::with_capacity(paths.len());
+    fn from_paths(paths: &[PathBuf], budget: &mut GraphBudget) -> Result<Self, LoadGraphError> {
+        budget.charge_owner_facts(paths.len())?;
+        let mut ordered = Vec::new();
+        ordered
+            .try_reserve(paths.len())
+            .map_err(|_| ModuleFailure::resource(ModuleResource::OwnerFacts))?;
+        let mut membership = HashSet::new();
+        membership
+            .try_reserve(paths.len())
+            .map_err(|_| ModuleFailure::resource(ModuleResource::OwnerFacts))?;
         for path in paths {
-            if membership.insert(path.clone()) {
-                ordered.push(path);
-            }
+            let retained = path.clone();
+            let inserted = membership.insert(retained.clone());
+            debug_assert!(inserted, "admission paths must carry distinct owners");
+            ordered.push(retained);
         }
-        Self {
+        Ok(Self {
             ordered,
             membership,
-        }
+        })
     }
 
     fn contains(&self, owner: &Path) -> bool {
         self.membership.contains(owner)
     }
 
-    fn insert(&mut self, owner: PathBuf) {
-        let retained = owner.clone();
-        let inserted = self.membership.insert(owner);
+    fn insert(&mut self, owner: &Path, budget: &mut GraphBudget) -> Result<(), LoadGraphError> {
+        budget.charge_owner_facts(1)?;
+        self.ordered
+            .try_reserve(1)
+            .map_err(|_| ModuleFailure::resource(ModuleResource::OwnerFacts))?;
+        self.membership
+            .try_reserve(1)
+            .map_err(|_| ModuleFailure::resource(ModuleResource::OwnerFacts))?;
+        let retained = owner.to_path_buf();
+        let inserted = self.membership.insert(retained.clone());
         debug_assert!(inserted, "owner insertion follows a membership check");
         self.ordered.push(retained);
+        Ok(())
     }
+}
+
+#[derive(Debug)]
+enum ImportOwners {
+    Inherited(ModuleId),
+    Absolute(PathBuf),
 }
 
 #[derive(Clone, Debug)]
@@ -672,6 +698,7 @@ struct GraphLimits {
     sources: usize,
     edges: usize,
     path_segments: usize,
+    owner_facts: usize,
     pending_work: usize,
 }
 
@@ -681,6 +708,7 @@ impl Default for GraphLimits {
             sources: MODULE_SOURCE_LIMIT,
             edges: MODULE_EDGE_LIMIT,
             path_segments: MODULE_PATH_SEGMENT_LIMIT,
+            owner_facts: MODULE_OWNER_FACT_LIMIT,
             pending_work: MODULE_PENDING_LIMIT,
         }
     }
@@ -691,6 +719,7 @@ struct GraphBudget {
     sources: usize,
     edges: usize,
     path_segments: usize,
+    owner_facts: usize,
     pending_work: usize,
     syntax_work: SyntaxBudget,
     limits: GraphLimits,
@@ -724,6 +753,15 @@ impl GraphBudget {
             amount,
             self.limits.path_segments,
             ModuleResource::PathSegments,
+        )
+    }
+
+    fn charge_owner_facts(&mut self, amount: usize) -> Result<(), LoadGraphError> {
+        charge(
+            &mut self.owner_facts,
+            amount,
+            self.limits.owner_facts,
+            ModuleResource::OwnerFacts,
         )
     }
 
@@ -792,7 +830,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
     let mut by_path = HashMap::new();
     let entry_id = admit_module(
         canonical_entry,
-        vec![entry_root],
+        OwnerSet::from_paths(std::slice::from_ref(&entry_root), &mut budget)?,
         None,
         &mut staged,
         &mut by_path,
@@ -836,6 +874,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
             propagate_owners(target, owners, import.span, &mut staged, &mut budget)?;
             target
         } else {
+            let owners = admitted_owners(owners, &staged, &mut budget)?;
             admit_module(
                 target_path.clone(),
                 owners,
@@ -895,7 +934,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
 
 fn admit_module(
     canonical_path: PathBuf,
-    owners: Vec<PathBuf>,
+    owners: OwnerSet,
     import_span: Option<Span>,
     staged: &mut Vec<StagedModule>,
     by_path: &mut HashMap<PathBuf, ModuleId>,
@@ -912,7 +951,7 @@ fn admit_module(
     staged.push(StagedModule {
         id,
         canonical_path,
-        owners: OwnerSet::from_paths(owners),
+        owners,
         source,
         surface,
         dependencies: Vec::new(),
@@ -972,7 +1011,7 @@ fn resolve_import(
     module: &StagedModule,
     import: &SurfaceImport,
     roots: &ModuleRoots,
-) -> Result<(PathBuf, Vec<PathBuf>, bool), LoadGraphError> {
+) -> Result<(PathBuf, ImportOwners, bool), LoadGraphError> {
     match &import.path {
         SurfaceModulePath::Relative(segments) => {
             let parent = module.canonical_path.parent().ok_or_else(|| {
@@ -991,7 +1030,7 @@ fn resolve_import(
             for owner in &module.owners.ordered {
                 require_within_owner(&canonical, owner, import.span)?;
             }
-            Ok((canonical, module.owners.ordered.clone(), true))
+            Ok((canonical, ImportOwners::Inherited(module.id), true))
         }
         SurfaceModulePath::Absolute { root, segments } => {
             let owner = roots
@@ -1005,8 +1044,21 @@ fn resolve_import(
                     })?;
             let canonical = canonical_import_target(candidate, import.span)?;
             require_within_owner(&canonical, owner, import.span)?;
-            Ok((canonical, vec![owner.clone()], false))
+            Ok((canonical, ImportOwners::Absolute(owner.clone()), false))
         }
+    }
+}
+
+fn admitted_owners(
+    owners: ImportOwners,
+    staged: &[StagedModule],
+    budget: &mut GraphBudget,
+) -> Result<OwnerSet, LoadGraphError> {
+    match owners {
+        ImportOwners::Inherited(module) => {
+            OwnerSet::from_paths(&staged[module.index()].owners.ordered, budget)
+        }
+        ImportOwners::Absolute(owner) => OwnerSet::from_paths(std::slice::from_ref(&owner), budget),
     }
 }
 
@@ -1059,33 +1111,80 @@ fn require_within_owner(
 
 fn propagate_owners(
     start: ModuleId,
-    owners: Vec<PathBuf>,
+    owners: ImportOwners,
     causing_import: Span,
     staged: &mut [StagedModule],
     budget: &mut GraphBudget,
 ) -> Result<(), LoadGraphError> {
-    let mut pending = VecDeque::new();
-    for owner in owners {
-        budget.retain_pending_work()?;
-        pending.push_back((start, owner, causing_import));
+    struct Frame {
+        module: ModuleId,
+        owner: PathBuf,
+        cause: Span,
+        next_edge: usize,
+        entered: bool,
     }
-    while let Some((module, owner, cause)) = pending.pop_front() {
-        let module_index = module.index();
-        if staged[module_index].owners.contains(&owner) {
+
+    let owner_paths = match &owners {
+        ImportOwners::Inherited(module) => &staged[module.index()].owners.ordered,
+        ImportOwners::Absolute(owner) => std::slice::from_ref(owner),
+    };
+    let mut pending = Vec::new();
+    for owner in owner_paths.iter().rev() {
+        budget.retain_pending_work()?;
+        pending.push(Frame {
+            module: start,
+            owner: owner.clone(),
+            cause: causing_import,
+            next_edge: 0,
+            entered: false,
+        });
+    }
+    while !pending.is_empty() {
+        let frame_index = pending.len() - 1;
+        let module_index = pending[frame_index].module.index();
+        if !pending[frame_index].entered {
+            if staged[module_index]
+                .owners
+                .contains(&pending[frame_index].owner)
+            {
+                pending.pop();
+                budget.release_pending_work();
+                continue;
+            }
+            require_within_owner(
+                &staged[module_index].canonical_path,
+                &pending[frame_index].owner,
+                pending[frame_index].cause,
+            )?;
+            staged[module_index]
+                .owners
+                .insert(&pending[frame_index].owner, budget)?;
+            pending[frame_index].entered = true;
+        }
+
+        let Some(edge) = staged[module_index]
+            .relative_edges
+            .get(pending[frame_index].next_edge)
+        else {
+            pending.pop();
             budget.release_pending_work();
             continue;
-        }
-        require_within_owner(&staged[module_index].canonical_path, &owner, cause)?;
-        staged[module_index].owners.insert(owner.clone());
-        for edge_index in 0..staged[module_index].relative_edges.len() {
-            let edge = &staged[module_index].relative_edges[edge_index];
-            require_within_owner(&edge.canonical_target, &owner, edge.import_span)?;
-            let target = edge.target;
-            let import_span = edge.import_span;
-            budget.retain_pending_work()?;
-            pending.push_back((target, owner.clone(), import_span));
-        }
-        budget.release_pending_work();
+        };
+        require_within_owner(
+            &edge.canonical_target,
+            &pending[frame_index].owner,
+            edge.import_span,
+        )?;
+        let child = Frame {
+            module: edge.target,
+            owner: pending[frame_index].owner.clone(),
+            cause: edge.import_span,
+            next_edge: 0,
+            entered: false,
+        };
+        pending[frame_index].next_edge += 1;
+        budget.retain_pending_work()?;
+        pending.push(child);
     }
     Ok(())
 }
@@ -1168,6 +1267,7 @@ mod tests {
             sources: 1,
             edges: 1,
             path_segments: 2,
+            owner_facts: 1,
             pending_work: 1,
         });
 
@@ -1177,10 +1277,33 @@ mod tests {
         assert_resource(budget.charge_edge(), ModuleResource::Edges);
         assert!(budget.charge_path_segments(2).is_ok());
         assert_resource(budget.charge_path_segments(1), ModuleResource::PathSegments);
+        assert!(budget.charge_owner_facts(1).is_ok());
+        assert_resource(budget.charge_owner_facts(1), ModuleResource::OwnerFacts);
         assert!(budget.retain_pending_work().is_ok());
         assert_resource(budget.retain_pending_work(), ModuleResource::PendingWork);
         budget.release_pending_work();
         assert!(budget.retain_pending_work().is_ok());
+    }
+
+    #[test]
+    fn owner_facts_are_charged_before_initial_and_propagated_retention() {
+        let first = PathBuf::from("first");
+        let second = PathBuf::from("second");
+        let mut budget = GraphBudget::with_limits(GraphLimits {
+            sources: 1,
+            edges: 1,
+            path_segments: 1,
+            owner_facts: 1,
+            pending_work: 1,
+        });
+
+        let mut owners = OwnerSet::from_paths(std::slice::from_ref(&first), &mut budget)
+            .expect("the exact initial owner allowance should fit");
+        assert_resource(
+            owners.insert(&second, &mut budget),
+            ModuleResource::OwnerFacts,
+        );
+        assert!(!owners.contains(&second));
     }
 
     #[test]

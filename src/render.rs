@@ -163,6 +163,7 @@ const fn module_resource(resource: ModuleResource) -> &'static str {
         ModuleResource::Sources => "sources",
         ModuleResource::Edges => "edges",
         ModuleResource::PathSegments => "path-segments",
+        ModuleResource::OwnerFacts => "owner-facts",
         ModuleResource::PendingWork => "pending-work",
     }
 }

@@ -123,6 +123,33 @@ fn targeted_constructor_import_retains_unselected_siblings_for_coverage() {
 }
 
 #[test]
+fn targeted_term_import_hides_an_unselected_transparent_nominal_in_its_scheme() {
+    let (_tree, graph) = load(
+        concat!(
+            "import dependency (make)\n",
+            "main : Unit -> Unit\n",
+            "main () = {\n",
+            "let value = make(())\n",
+            "()\n",
+            "}\n",
+        ),
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub type Choice =\n",
+                "First\n",
+                "| Second\n",
+                "pub make : Unit -> Choice\n",
+                "make () = First\n",
+            ),
+        )],
+    );
+
+    check_graph(&graph)
+        .expect("a selected function may retain an unselected nominal identity in its scheme");
+}
+
+#[test]
 fn imported_opaque_nominal_is_not_an_empty_constructor_family() {
     let (_tree, graph) = load(
         concat!(
@@ -224,6 +251,41 @@ fn hidden_identity_mismatch_uses_private_names_and_export_provenance() {
             .iter()
             .any(|label| label.span().source() != diagnostic.primary.span().source()),
         "the imported declaration should remain a separate cross-source label"
+    );
+}
+
+#[test]
+fn targeted_term_scheme_does_not_label_an_unselected_public_type_private() {
+    let (_tree, graph) = load(
+        concat!(
+            "import dependency (make)\n",
+            "bad : Unit -> Int\n",
+            "bad () = make(())\n",
+        ),
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub type Choice =\n",
+                "First\n",
+                "| Second\n",
+                "pub make : Unit -> Choice\n",
+                "make () = First\n",
+            ),
+        )],
+    );
+
+    let error = check_graph(&graph).expect_err("Choice and Int must not unify");
+    let TypeError::Source(diagnostic) = error else {
+        panic!("the mismatch should retain a source diagnostic");
+    };
+    let found = diagnostic
+        .found
+        .as_deref()
+        .expect("the mismatch should render the produced type");
+    assert!(found.contains("Choice"));
+    assert!(
+        !found.contains("<private Choice>"),
+        "an unselected public name is not a private declaration: {found}"
     );
 }
 

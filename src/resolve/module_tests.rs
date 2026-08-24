@@ -7,14 +7,15 @@ use std::{
 use crate::{
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolved::{
-        BinderId, ExportSummary, ExportedTypeAccess, ImportedTypeAccess, ResolvedDefinitionKind,
-        ResolvedExprKind, ResolvedModule, ResolvedPatternKind,
+        BinderId, ExportSummary, ExportedTypeAccess, ImportedNominalFactRef, ImportedTypeAccess,
+        ResolvedDefinitionKind, ResolvedExprKind, ResolvedModule, ResolvedPatternKind,
+        ResolvedTypeVariable,
     },
     source::Origin,
-    types::{ConstructorId, NominalTypeId, Type},
+    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
 };
 
-use super::{DependencyExports, ResolveError, ResolveReason, resolve_module};
+use super::{DependencyExports, ResolveError, ResolveReason, Resolver, resolve_module};
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -419,6 +420,65 @@ fn targeted_import_cannot_shadow_a_local_global() {
 }
 
 #[test]
+fn a_renamed_imported_type_does_not_conflict_with_a_local_global() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (Token as token)\n",
+            "token : Unit -> Unit\n",
+            "token value = value\n",
+        ),
+        &[("dependency.ash", "")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let nominal = NominalTypeId::new(dependency.id(), 0);
+    let summary = ExportSummary::test_fixture(
+        dependency.id(),
+        vec![],
+        vec![(
+            "Token",
+            nominal,
+            ExportedTypeAccess::Transparent,
+            Origin::Source(dependency.surface().span),
+        )],
+        vec![],
+        vec![],
+    );
+
+    resolve_with(importer, &[&summary])
+        .expect("the nominal and expression namespaces should remain distinct");
+}
+
+#[test]
+fn qualified_import_charges_withheld_namespace_retention() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency as Dependency\n",
+        &[("dependency.ash", "")],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let summary =
+        ExportSummary::test_fixture(dependency.id(), vec![], vec![], vec![], vec!["private"]);
+    let dependencies = importer
+        .dependencies()
+        .iter()
+        .map(|edge| DependencyExports::new(edge, &summary).expect("matching summary"))
+        .collect::<Vec<_>>();
+    let mut resolver = Resolver::with_type_work(importer.id(), TypeWorkBudget::with_limit(2));
+
+    let error = resolver
+        .install_imports(importer.surface(), &dependencies)
+        .expect_err("three withheld namespace entries should exceed two retained units");
+
+    assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+    assert!(resolver.module_aliases.is_empty());
+}
+
+#[test]
 fn selecting_a_withheld_private_spelling_reports_unavailable_export() {
     let tree = TempTree::create();
     let graph = load(
@@ -786,7 +846,7 @@ fn hidden_scheme_summary(
         vec![],
         vec![hidden_spelling],
         vec![],
-        vec![(hidden_spelling, hidden, 0, origin)],
+        vec![(hidden_spelling, hidden, 0, true, origin)],
     );
     (summary, hidden)
 }
@@ -851,6 +911,104 @@ fn a_hidden_nominal_in_a_public_scheme_is_retained_without_becoming_nameable() {
         .expect_err("hidden metadata must not add a source type binding");
 
     assert_eq!(error.reason, ResolveReason::UnavailableExport);
+}
+
+#[test]
+fn a_public_transparent_nominal_in_a_targeted_term_scheme_is_hidden() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (make)\nmain : Unit -> Unit\nmain () = ()\n",
+        &[(
+            "dependency.ash",
+            "pub type Choice =\nFirst\n| Second\npub make : Unit -> Choice\nmake () = First\n",
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let choice = NominalTypeId::new(dependency.id(), 0);
+    let origin = Origin::Source(dependency.surface().span);
+    let summary = ExportSummary::test_fixture(
+        dependency.id(),
+        vec![(
+            "make",
+            BinderId::resolved(dependency.id(), 0),
+            Type::Function(Box::new(Type::Unit), Box::new(Type::Nominal(choice))),
+            origin.clone(),
+        )],
+        vec![("Choice", choice, ExportedTypeAccess::Transparent, origin)],
+        vec![],
+        vec![],
+    );
+
+    let resolved = resolve_with(importer, &[&summary])
+        .expect("a targeted term should retain its transparent nominal identity");
+    let fact = resolved
+        .imported_facts()
+        .nominal(choice)
+        .expect("the scheme nominal should be retained");
+
+    assert_eq!(fact.access, ImportedTypeAccess::Hidden);
+    assert!(fact.constructors.is_empty());
+}
+
+#[test]
+fn scheme_only_nominal_retention_charges_only_hidden_metadata() {
+    let tree = TempTree::create();
+    let graph = load(&tree, "", &[]);
+    let module = module_named(&graph, "entry.ash");
+    let nominal = NominalTypeId::new(module.id(), 0);
+    let constructors = (0..32)
+        .map(|index| ConstructorId::new(nominal, index))
+        .collect::<Vec<_>>();
+    let origin = Origin::Source(module.surface().span);
+    let mut exact = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(0));
+
+    exact
+        .retain_scheme_nominal_fact(
+            ImportedNominalFactRef {
+                id: nominal,
+                parameter_count: 0,
+                parameters: &[],
+                constructors: &constructors,
+                access: ImportedTypeAccess::Transparent,
+                display_spelling: Some("Wide"),
+                display_is_private: false,
+                origin: &origin,
+            },
+            module.surface().span,
+        )
+        .expect("unretained constructors must not consume hidden-metadata work");
+    assert!(
+        exact
+            .imported
+            .nominal(nominal)
+            .is_some_and(|fact| fact.constructors.is_empty())
+    );
+
+    let parameter = ResolvedTypeVariable {
+        id: TypeVariableId::resolved(module.id(), 0),
+        spelling: "A".to_owned(),
+        origin: origin.clone(),
+    };
+    let mut short = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(0));
+    let error = short
+        .retain_scheme_nominal_fact(
+            ImportedNominalFactRef {
+                id: nominal,
+                parameter_count: 1,
+                parameters: std::slice::from_ref(&parameter),
+                constructors: &constructors,
+                access: ImportedTypeAccess::Transparent,
+                display_spelling: Some("Wide"),
+                display_is_private: false,
+                origin: &origin,
+            },
+            module.surface().span,
+        )
+        .expect_err("one retained parameter must consume one hidden-metadata unit");
+
+    assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
 }
 
 #[test]
@@ -919,7 +1077,7 @@ fn direct_nominal_access_upgrades_the_same_identity_reached_hidden_in_either_imp
             vec![],
             vec![],
             vec![],
-            vec![("Token", token, 0, owner_origin.clone())],
+            vec![("Token", token, 0, false, owner_origin.clone())],
         );
         let owner_summary = ExportSummary::test_fixture(
             owner.id(),
@@ -1020,7 +1178,7 @@ fn a_local_constructor_wins_over_a_targeted_opaque_marker_with_the_same_spelling
 }
 
 #[test]
-fn targeted_public_constructor_does_not_hide_a_private_type_denial_with_the_same_spelling() {
+fn targeted_public_constructor_does_not_block_a_same_spelled_type_parameter() {
     let tree = TempTree::create();
     let graph = load(
         &tree,
@@ -1045,8 +1203,13 @@ fn targeted_public_constructor_does_not_hide_a_private_type_denial_with_the_same
         vec!["Foo"],
     );
 
-    let error = resolve_with(importer, &[&summary])
-        .expect_err("the targeted constructor must not erase the private nominal denial");
+    let resolved = resolve_with(importer, &[&summary])
+        .expect("withheld diagnostic metadata must not bind the type namespace");
+    let definition = equational(&resolved, 0);
 
-    assert_eq!(error.reason, ResolveReason::UnavailableExport);
+    assert_eq!(definition.interface.type_parameters.len(), 1);
+    assert!(matches!(
+        definition.interface.annotation.ty,
+        Type::Function(ref domain, _) if matches!(domain.as_ref(), Type::Variable(_))
+    ));
 }

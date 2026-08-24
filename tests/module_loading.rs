@@ -284,7 +284,8 @@ fn overlapping_owner_failures_follow_source_order_through_descendants() {
         "root/pkg/shared.ash",
         "import first as First\nimport second as Second\n",
     );
-    tree.write("root/pkg/first.ash", "import escape_first.child as Child\n");
+    tree.write("root/pkg/first.ash", "import deep as Deep\n");
+    tree.write("root/pkg/deep.ash", "import escape_first.child as Child\n");
     tree.write(
         "root/pkg/second.ash",
         "import escape_second.child as Child\n",

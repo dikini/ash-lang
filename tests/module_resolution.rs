@@ -246,3 +246,38 @@ fn repeated_summary_imports_share_one_graph_type_work_budget() {
     };
     assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
 }
+
+#[test]
+fn repeated_targeted_nominal_metadata_shares_one_graph_type_work_budget() {
+    const CONSTRUCTOR_COUNT: usize = 1_024;
+    const ALIAS_COUNT: usize = TYPE_WORK_LIMIT / CONSTRUCTOR_COUNT + 1;
+
+    let tree = TempTree::create();
+    let mut base = String::from("pub type Wide =\n");
+    for index in 0..CONSTRUCTOR_COUNT {
+        if index > 0 {
+            base.push_str("\n| ");
+        }
+        base.push_str(&format!("Case{index}"));
+    }
+    base.push('\n');
+    tree.write("base.ash", &base);
+
+    let mut entry = String::new();
+    for index in 0..ALIAS_COUNT {
+        entry.push_str(&format!("import base (Wide as Alias{index})\n"));
+    }
+    entry.push_str("main : Unit -> Unit\nmain value = value\n");
+    let entry = tree.write("entry.ash", &entry);
+
+    let failure = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("repeated nominal metadata retention must share graph type work");
+
+    let FileFailure::Pipeline(PipelineFailure::Resolution(error)) = failure else {
+        panic!("graph type work should remain owned by resolution: {failure:?}");
+    };
+    assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+}
