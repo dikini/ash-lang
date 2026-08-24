@@ -131,6 +131,26 @@ fn rejects_a_polymorphic_main_before_inspecting_its_domain() {
 }
 
 #[test]
+fn rejects_a_constrained_main_before_lowering_entry_evidence() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "interface Marker<A> {\n",
+            "marker : A -> Bool\n",
+            "}\n",
+            "main : Unit -> Int where Marker<Int>\n",
+            "main () = 42\n",
+        ),
+    );
+
+    let failure = run(&entry).expect_err("main must not require interface evidence");
+
+    assert_eq!(failure.reason_code(), "entry.main-constrained");
+    assert!(failure.is_source_rejection());
+}
+
+#[test]
 fn retains_source_caused_module_loading_failures() {
     let tree = TempTree::create();
     let entry = tree.write(

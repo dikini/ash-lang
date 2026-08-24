@@ -13,6 +13,9 @@ use crate::{
         CorePatternKind, NodeId, Primitive, TypedBinder, UnvalidatedProgram,
     },
     diagnostic::{Diagnostic, SourceLabel},
+    interface::{
+        CheckedRequirement, ConstrainedScheme, InterfaceConstraintBudget, InterfaceReason,
+    },
     pattern::{
         UsefulnessBudget, UsefulnessError, display_witness, missing_witness_for_types_with_budget,
         usefulness_with_budget,
@@ -151,6 +154,8 @@ pub enum ElaborationFailure {
     CoverageResourceExhausted,
     /// Cumulative inference and type construction exceeded its work budget.
     TypeResourceExhausted,
+    /// Graph-wide interface and constraint processing exceeded its work budget.
+    ConstraintResourceExhausted,
 }
 
 impl ElaborationFailure {
@@ -162,6 +167,7 @@ impl ElaborationFailure {
             Self::InvalidState => "type.internal",
             Self::CoverageResourceExhausted => "internal.resource.coverage",
             Self::TypeResourceExhausted => "internal.resource.type-work",
+            Self::ConstraintResourceExhausted => "internal.resource.constraint-work",
         }
     }
 }
@@ -175,6 +181,9 @@ impl fmt::Display for ElaborationFailure {
                 formatter.write_str("pattern coverage resource limit exceeded")
             }
             Self::TypeResourceExhausted => formatter.write_str("type work resource limit exceeded"),
+            Self::ConstraintResourceExhausted => {
+                formatter.write_str("interface and constraint work resource limit exceeded")
+            }
         }
     }
 }
@@ -196,6 +205,8 @@ impl From<BuildError> for ElaborationFailure {
 pub enum TypeError {
     /// A categorized Ash source rejection.
     Source(Box<Diagnostic<TypeReason>>),
+    /// A categorized interface or implementation source rejection.
+    Interface(Box<Diagnostic<InterfaceReason>>),
     /// The general checking rule found structurally unequal types.
     Mismatch(TypeMismatch),
     /// Typed elaboration could not preserve its compiler invariants.
@@ -206,6 +217,7 @@ impl fmt::Display for TypeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Source(diagnostic) => formatter.write_str(&diagnostic.render_plain()),
+            Self::Interface(diagnostic) => formatter.write_str(&diagnostic.render_plain()),
             Self::Mismatch(mismatch) => write!(
                 formatter,
                 "type mismatch: expected {}, found {}",
@@ -626,7 +638,7 @@ impl CheckedSchemeBuffer {
 impl Drop for CheckedSchemeBuffer {
     fn drop(&mut self) {
         for checked in self.0.drain(..) {
-            discard_type_iteratively(checked.scheme);
+            drop(checked.scheme);
             discard_origin_iteratively(checked.origin);
         }
     }
@@ -700,24 +712,17 @@ impl Elaborator {
             .map_err(TypeError::from)?;
         let mut base_context = TypeContext::new();
         for imported in module.imported_facts().globals() {
-            let (quantified, body) = match &imported.scheme {
-                Type::Forall(parameters, body) => {
-                    type_work.charge(parameters.len()).map_err(|()| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                    let quantified = parameters.to_vec().into_boxed_slice();
-                    let body = clone_type_with_budget(body, &mut type_work).map_err(|()| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                    (quantified, body)
-                }
-                scheme => (
-                    Vec::<TypeVariableId>::new().into_boxed_slice(),
-                    clone_type_with_budget(scheme, &mut type_work).map_err(|()| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?,
-                ),
-            };
+            type_work
+                .charge(imported.scheme.type_parameters.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut quantified = Vec::new();
+            quantified
+                .try_reserve(imported.scheme.type_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            quantified.extend_from_slice(&imported.scheme.type_parameters);
+            let quantified = quantified.into_boxed_slice();
+            let body = clone_type_with_budget(&imported.scheme.value_type, &mut type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let provenance = TypeProvenance::at_span(&body, imported.origin.primary_span());
             if base_context
                 .insert_with_provenance(imported.binder, body, provenance)?
@@ -894,12 +899,43 @@ impl Elaborator {
     ) -> Result<Vec<CheckedGlobalScheme>, TypeError> {
         let mut checked = CheckedSchemeBuffer(Vec::with_capacity(definitions.len()));
         for definition in definitions {
-            let (name, body, parameters) = match &definition.kind {
+            let (name, parameters, requirements) = match &definition.kind {
                 ResolvedDefinitionKind::Equational(equational) => (
                     &equational.interface.name,
-                    self.clone_type(&equational.interface.annotation.ty)?,
                     equational.interface.type_parameters.as_ref(),
+                    equational.interface.requirements.as_ref(),
                 ),
+                ResolvedDefinitionKind::InlineOperational(operational) => (
+                    &operational.header.name,
+                    operational.header.type_parameters.as_ref(),
+                    operational.header.requirements.as_ref(),
+                ),
+            };
+            self.type_work
+                .charge(parameters.len().saturating_add(requirements.len()))
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut type_parameters = Vec::new();
+            type_parameters
+                .try_reserve(parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            type_parameters.extend(parameters.iter().map(|parameter| parameter.id));
+            let mut checked_requirements = Vec::new();
+            checked_requirements
+                .try_reserve(requirements.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for requirement in requirements {
+                checked_requirements.push(CheckedRequirement {
+                    id: requirement.id,
+                    interface: requirement.interface.id,
+                    argument: self.clone_type(&requirement.argument.ty)?,
+                    origin: Origin::Source(requirement.span),
+                    span: requirement.span,
+                });
+            }
+            let body = match &definition.kind {
+                ResolvedDefinitionKind::Equational(equational) => {
+                    self.clone_type(&equational.interface.annotation.ty)?
+                }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
                     let domain = operational_domain(
                         &operational.header.parameters,
@@ -916,22 +952,13 @@ impl Elaborator {
                         Some(operational.header.span),
                         &mut self.type_work,
                     )?;
-                    (
-                        &operational.header.name,
-                        function.ty,
-                        operational.header.type_parameters.as_ref(),
-                    )
+                    function.ty
                 }
             };
-            let scheme = if parameters.is_empty() {
-                body
-            } else {
-                let parameters = parameters
-                    .iter()
-                    .map(|parameter| parameter.id)
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice();
-                Type::Forall(parameters, Box::new(body))
+            let scheme = ConstrainedScheme {
+                type_parameters: type_parameters.into_boxed_slice(),
+                requirements: checked_requirements.into_boxed_slice(),
+                value_type: body,
             };
             checked.0.push(CheckedGlobalScheme {
                 binder: name.id,
@@ -1374,7 +1401,7 @@ impl Elaborator {
         let mut global_quantifiers = Vec::with_capacity(definitions.len());
 
         for definition in definitions {
-            let (name, function_type, type_parameters) = match &definition.kind {
+            let (name, function_type, type_parameters, requirements) = match &definition.kind {
                 ResolvedDefinitionKind::Equational(equational) => {
                     let function_type = ProvenancedType::from_resolved_with_budget(
                         &equational.interface.annotation,
@@ -1391,6 +1418,7 @@ impl Elaborator {
                         &equational.interface.name,
                         function_type,
                         equational.interface.type_parameters.as_ref(),
+                        equational.interface.requirements.as_ref(),
                     )
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
@@ -1412,6 +1440,7 @@ impl Elaborator {
                             &mut self.type_work,
                         )?,
                         operational.header.type_parameters.as_ref(),
+                        operational.header.requirements.as_ref(),
                     )
                 }
             };
@@ -1441,12 +1470,23 @@ impl Elaborator {
             };
             let binder_type = if let Some(checked) = &checked_by_binder {
                 let checked = checked.get(&name.id).ok_or_else(invalid_state)?;
-                if checked.spelling != name.spelling || !same_type(&checked.scheme, &binder_type) {
+                let requirements_match = checked.scheme.requirements.len() == requirements.len()
+                    && checked.scheme.requirements.iter().zip(requirements).all(
+                        |(checked, resolved)| {
+                            checked.id == resolved.id
+                                && checked.interface == resolved.interface.id
+                                && same_type(&checked.argument, &resolved.argument.ty)
+                        },
+                    );
+                if checked.spelling != name.spelling
+                    || checked.scheme.type_parameters.as_ref() != quantified.as_ref()
+                    || !same_type(&checked.scheme.value_type, &function_type.ty)
+                    || !requirements_match
+                {
                     discard_type_iteratively(binder_type);
                     return Err(invalid_state());
                 }
-                discard_type_iteratively(binder_type);
-                self.clone_type(&checked.scheme)?
+                binder_type
             } else {
                 binder_type
             };
@@ -3656,6 +3696,304 @@ impl Elaborator {
     }
 }
 
+fn check_interface_declarations(
+    module: &ResolvedModule,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    for interface in module.interfaces() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        for method in &interface.methods {
+            budget
+                .charge(method.type_parameters.len().saturating_add(1))
+                .map_err(|()| constraint_resource())?;
+            let parameter_occurs =
+                type_contains_variable(&method.annotation.ty, interface.parameter.id, budget)
+                    .map_err(|()| constraint_resource())?;
+            if !method.type_parameters.is_empty() || !parameter_occurs {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::MethodParameter,
+                    SourceLabel::new(
+                        method.span,
+                        "this method signature must use only its interface parameter",
+                    ),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    interface.parameter.origin.primary_span(),
+                    "the interface parameter is declared here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+            if !matches!(method.annotation.ty, Type::Function(_, _)) {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::MethodNotFunction,
+                    SourceLabel::new(method.annotation.span, "this method type is not a function"),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    method.span,
+                    "the method signature is declared here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_global_requirements(
+    module: &ResolvedModule,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    for definition in module.definitions() {
+        let (name, requirements, value_type_count) = match &definition.kind {
+            ResolvedDefinitionKind::Equational(global) => {
+                (&global.interface.name, &global.interface.requirements, 1)
+            }
+            ResolvedDefinitionKind::InlineOperational(global) => (
+                &global.header.name,
+                &global.header.requirements,
+                global.header.parameters.len().saturating_add(1),
+            ),
+        };
+        if requirements.is_empty() {
+            continue;
+        }
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        budget
+            .charge(value_type_count)
+            .map_err(|()| constraint_resource())?;
+        let mut value_types = Vec::new();
+        value_types
+            .try_reserve(value_type_count)
+            .map_err(|_| constraint_resource())?;
+        match &definition.kind {
+            ResolvedDefinitionKind::Equational(global) => {
+                value_types.push(&global.interface.annotation.ty);
+            }
+            ResolvedDefinitionKind::InlineOperational(global) => {
+                value_types.extend(
+                    global
+                        .header
+                        .parameters
+                        .iter()
+                        .map(|parameter| &parameter.annotation.ty),
+                );
+                value_types.push(&global.header.result_type.ty);
+            }
+        }
+        let public = module.export_candidate().term(&name.spelling).is_some();
+        if public {
+            for requirement in requirements.iter() {
+                budget.charge(1).map_err(|()| constraint_resource())?;
+                let mut private = None;
+                for interface in module.interfaces() {
+                    budget.charge(1).map_err(|()| constraint_resource())?;
+                    if interface.id == requirement.interface.id {
+                        private = (!interface.public).then_some(interface);
+                        break;
+                    }
+                }
+                if let Some(interface) = private {
+                    let mut diagnostic = Diagnostic::new(
+                        InterfaceReason::ConstraintPrivateInterface,
+                        SourceLabel::new(
+                            requirement.span,
+                            "a public global cannot expose this private interface",
+                        ),
+                    );
+                    diagnostic.related.push(SourceLabel::new(
+                        interface.span,
+                        "the private interface is declared here",
+                    ));
+                    return Err(TypeError::Interface(Box::new(diagnostic)));
+                }
+            }
+        }
+        for (index, requirement) in requirements.iter().enumerate() {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            let mut duplicate = None;
+            for first in &requirements[..index] {
+                budget.charge(1).map_err(|()| constraint_resource())?;
+                if first.interface.id == requirement.interface.id
+                    && same_type_with_constraint_budget(
+                        &first.argument.ty,
+                        &requirement.argument.ty,
+                        budget,
+                    )
+                    .map_err(|()| constraint_resource())?
+                {
+                    duplicate = Some(first);
+                    break;
+                }
+            }
+            if let Some(first) = duplicate {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::DuplicateRequirement,
+                    SourceLabel::new(requirement.span, "this requirement is already declared"),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    first.span,
+                    "the first identical requirement is here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+        for requirement in requirements.iter() {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            if let Some(variable) =
+                first_variable_absent_from_types(&requirement.argument.ty, &value_types, budget)
+                    .map_err(|()| constraint_resource())?
+            {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::UndeterminedParameter,
+                    SourceLabel::new(
+                        requirement.span,
+                        "this requirement parameter is not determined by the value type",
+                    ),
+                );
+                if let Some(parameter) = module.registry().type_variable(variable) {
+                    diagnostic.related.push(SourceLabel::new(
+                        parameter.origin.primary_span(),
+                        "this candidate parameter occurs only in a requirement",
+                    ));
+                }
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn constraint_resource() -> TypeError {
+    TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
+}
+
+fn type_contains_variable(
+    root: &Type,
+    needle: TypeVariableId,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    visit_type_variables(root, budget, |variable, _| Ok(variable == needle))
+}
+
+fn first_variable_absent_from_types(
+    root: &Type,
+    value_types: &[&Type],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<Option<TypeVariableId>, ()> {
+    let mut seen = HashSet::new();
+    let mut absent = None;
+    visit_type_variables(root, budget, |variable, budget| {
+        budget.charge(1)?;
+        if seen.contains(&variable) {
+            return Ok(false);
+        }
+        budget.charge(1)?;
+        seen.try_reserve(1).map_err(|_| ())?;
+        seen.insert(variable);
+        for value_type in value_types {
+            budget.charge(1)?;
+            if type_contains_variable(value_type, variable, budget)? {
+                return Ok(false);
+            }
+        }
+        absent = Some(variable);
+        Ok(true)
+    })?;
+    Ok(absent)
+}
+
+fn visit_type_variables<F>(
+    root: &Type,
+    budget: &mut InterfaceConstraintBudget,
+    mut visit: F,
+) -> Result<bool, ()>
+where
+    F: FnMut(TypeVariableId, &mut InterfaceConstraintBudget) -> Result<bool, ()>,
+{
+    budget.charge(1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push(root);
+    while let Some(ty) = pending.pop() {
+        budget.charge(1)?;
+        match ty {
+            Type::Variable(variable) => {
+                if visit(*variable, budget)? {
+                    return Ok(true);
+                }
+            }
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                budget.charge(elements.len())?;
+                pending.try_reserve(elements.len()).map_err(|_| ())?;
+                pending.extend(elements.iter().rev());
+            }
+            Type::Function(domain, codomain) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push(codomain);
+                pending.push(domain);
+            }
+            Type::Forall(parameters, body) => {
+                budget.charge(parameters.len().saturating_add(1))?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push(body);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+        }
+    }
+    Ok(false)
+}
+
+fn same_type_with_constraint_budget(
+    left: &Type,
+    right: &Type,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    budget.charge(1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push((left, right));
+    while let Some((left, right)) = pending.pop() {
+        budget.charge(1)?;
+        match (left, right) {
+            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::Variable(left), Type::Variable(right)) if left == right => {}
+            (Type::Inference(left), Type::Inference(right)) if left == right => {}
+            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
+                if left_id == right_id && left.len() == right.len() =>
+            {
+                budget.charge(left.len())?;
+                pending.try_reserve(left.len()).map_err(|_| ())?;
+                pending.extend(left.iter().zip(right).rev());
+            }
+            (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
+                if left_parameters == right_parameters =>
+            {
+                budget.charge(left_parameters.len().saturating_add(1))?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push((left, right));
+            }
+            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
+                budget.charge(left.len())?;
+                pending.try_reserve(left.len()).map_err(|_| ())?;
+                pending.extend(left.iter().zip(right).rev());
+            }
+            (
+                Type::Function(left_domain, left_codomain),
+                Type::Function(right_domain, right_codomain),
+            ) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push((left_codomain, right_codomain));
+                pending.push((left_domain, right_domain));
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
 /// Checks every local definition and publishes an immutable dependency summary.
 ///
 /// No Core program escapes this phase. A summary is created only after all
@@ -3668,7 +4006,13 @@ impl Elaborator {
 pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError> {
     let mut type_work = TypeWorkBudget::default();
     let mut coverage_work = UsefulnessBudget::default();
-    check_module_with_budget(resolved, &mut type_work, &mut coverage_work)
+    let mut constraint_work = InterfaceConstraintBudget::default();
+    check_module_with_budget(
+        resolved,
+        &mut type_work,
+        &mut coverage_work,
+        &mut constraint_work,
+    )
 }
 
 /// Checks one module while sharing type-work accounting across a graph pass.
@@ -3676,7 +4020,10 @@ pub(crate) fn check_module_with_budget(
     resolved: ResolvedModule,
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<CheckedModule, TypeError> {
+    check_interface_declarations(&resolved, constraint_work)?;
+    check_global_requirements(&resolved, constraint_work)?;
     let mut elaborator =
         Elaborator::for_module_with_work(&resolved, type_work.clone(), coverage_work.clone())?;
     let result: Result<_, TypeError> = (|| {
@@ -5365,11 +5712,22 @@ mod tests {
         let second = resolved_module_fixture("second.ash", "", "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::with_limit(20);
+        let mut constraint_work = InterfaceConstraintBudget::default();
 
-        check_module_with_budget(first, &mut type_work, &mut coverage_work)
-            .expect("the first module should fit the shared coverage budget");
-        let failure = check_module_with_budget(second, &mut type_work, &mut coverage_work)
-            .expect_err("the second module should exhaust cumulative coverage work");
+        check_module_with_budget(
+            first,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect("the first module should fit the shared coverage budget");
+        let failure = check_module_with_budget(
+            second,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect_err("the second module should exhaust cumulative coverage work");
 
         assert_eq!(
             failure,
@@ -5384,11 +5742,22 @@ mod tests {
         let second = resolved_module_fixture("second.ash", "", "Unit", body);
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::with_limit(40);
+        let mut constraint_work = InterfaceConstraintBudget::default();
 
-        check_module_with_budget(first, &mut type_work, &mut coverage_work)
-            .expect("the first local binding should fit the shared coverage budget");
-        let failure = check_module_with_budget(second, &mut type_work, &mut coverage_work)
-            .expect_err("the second local binding should exhaust cumulative coverage work");
+        check_module_with_budget(
+            first,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect("the first local binding should fit the shared coverage budget");
+        let failure = check_module_with_budget(
+            second,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect_err("the second local binding should exhaust cumulative coverage work");
 
         assert_eq!(
             failure,
@@ -5402,15 +5771,56 @@ mod tests {
         let second = resolved_module_fixture("second.ash", "", "Unit", "()");
         let mut type_work = TypeWorkBudget::with_limit(60);
         let mut coverage_work = UsefulnessBudget::default();
+        let mut constraint_work = InterfaceConstraintBudget::default();
 
-        check_module_with_budget(first, &mut type_work, &mut coverage_work)
-            .expect("the first module should fit the shared type budget");
-        let failure = check_module_with_budget(second, &mut type_work, &mut coverage_work)
-            .expect_err("the second module should exhaust cumulative type work");
+        check_module_with_budget(
+            first,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect("the first module should fit the shared type budget");
+        let failure = check_module_with_budget(
+            second,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect_err("the second module should exhaust cumulative type work");
 
         assert_eq!(
             failure,
             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+        );
+    }
+
+    #[test]
+    fn one_constraint_budget_spans_all_checked_modules() {
+        let interface = "interface Marker<A> {\nmarker : A -> Bool\n}\n";
+        let first = resolved_module_fixture("first-constraint.ash", interface, "Unit", "()");
+        let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(7);
+
+        check_module_with_budget(
+            first,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect("one interface should fit the exact constraint budget");
+        let failure = check_module_with_budget(
+            second,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect_err("the second module should exhaust cumulative constraint work");
+
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
         );
     }
 
@@ -6385,6 +6795,56 @@ mod tests {
             .expect("the depth-boundary thread should start")
             .join()
             .expect("public type depth rejection must fit the small stack");
+    }
+
+    #[test]
+    fn constrained_scheme_construction_has_an_exact_stack_safe_type_budget() {
+        std::thread::Builder::new()
+            .name("constrained-scheme-budget".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 10_000;
+                const EXACT_WORK: usize = 2 * DEPTH + 4;
+                let resolved = resolved_module_fixture(
+                    "constrained-scheme-budget.ash",
+                    "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nvalue : A -> Bool where Equal<A>\nvalue argument = true\n",
+                    "Unit",
+                    "()",
+                );
+                let mut definitions = resolved.definitions()[..1].to_vec();
+                let ResolvedDefinitionKind::Equational(global) = &mut definitions[0].kind else {
+                    panic!("the constrained fixture should be equational");
+                };
+                global.interface.annotation.ty = nested_function_type(DEPTH);
+
+                let mut short = Elaborator::for_module(&resolved)
+                    .expect("the constrained fixture namespace should fit");
+                short.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+                assert_eq!(
+                    short.checked_module_schemes(&definitions),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+
+                let mut exact = Elaborator::for_module(&resolved)
+                    .expect("the constrained fixture namespace should fit");
+                exact.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+                let schemes = exact
+                    .checked_module_schemes(&definitions)
+                    .expect("the exact constrained-scheme type budget should fit");
+                assert_eq!(exact.type_work.charge(1), Err(()));
+                drop(schemes);
+
+                let ResolvedDefinitionKind::Equational(global) = &mut definitions[0].kind else {
+                    unreachable!()
+                };
+                let deep = std::mem::replace(&mut global.interface.annotation.ty, Type::Unit);
+                discard_type_iteratively(deep);
+            })
+            .expect("the constrained-scheme budget thread should start")
+            .join()
+            .expect("constrained-scheme construction must fit the small stack");
     }
 
     #[test]

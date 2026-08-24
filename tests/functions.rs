@@ -150,7 +150,7 @@ fn validated_program(fixture: &ModuleFixture) -> (ValidatedProgram, Type) {
         .iter()
         .find(|scheme| scheme.spelling == "main")
         .expect("entry should declare main");
-    let Type::Function(domain, codomain) = &main.scheme else {
+    let Type::Function(domain, codomain) = &main.scheme.value_type else {
         panic!("main should have a function scheme");
     };
     assert_eq!(domain.as_ref(), &Type::Unit);

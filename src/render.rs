@@ -48,7 +48,9 @@ pub fn pipeline_failure(failure: &PipelineFailure) -> String {
         PipelineFailure::Syntax(failure) => syntax_failure(failure),
         PipelineFailure::Projection(error) => projection_failure(*error),
         PipelineFailure::Resolution(error) => error.to_string(),
-        PipelineFailure::Typing(error @ TypeError::Source(_)) => error.to_string(),
+        PipelineFailure::Typing(error @ (TypeError::Source(_) | TypeError::Interface(_))) => {
+            error.to_string()
+        }
         PipelineFailure::Typing(error @ TypeError::Mismatch(_)) => {
             format!("type.mismatch\n{error}")
         }

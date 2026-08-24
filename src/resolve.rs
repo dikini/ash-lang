@@ -10,7 +10,8 @@ use std::{
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     interface::{
-        EvidenceSlot, ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId, RequirementOwner,
+        ConstrainedScheme, EvidenceSlot, ImplId, ImplMethodId, InterfaceConstraintBudget,
+        InterfaceId, MethodId, RequirementId, RequirementOwner,
     },
     module::{LoadedModule, ModuleDependency, ModuleId},
     resolved::{
@@ -89,6 +90,8 @@ pub enum ResolveReason {
     BinderIdExhausted,
     /// Cumulative source-type resolution exceeded the compiler work budget.
     TypeResourceExhausted,
+    /// Graph-wide interface and constraint processing exceeded its work budget.
+    ConstraintResourceExhausted,
     /// An internal resolver invariant was lost.
     InternalState,
 }
@@ -116,6 +119,7 @@ impl fmt::Display for ResolveReason {
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
             Self::BinderIdExhausted => "resolve.binder-id-exhausted",
             Self::TypeResourceExhausted => "resolve.type-resource",
+            Self::ConstraintResourceExhausted => "internal.resource.constraint-work",
             Self::InternalState => "resolve.internal-state",
         })
     }
@@ -209,7 +213,8 @@ pub fn resolve_module(
     dependencies: &[DependencyExports<'_>],
 ) -> Result<ResolvedModule, ResolveError> {
     let mut type_work = TypeWorkBudget::default();
-    resolve_module_with_budget(loaded, dependencies, &mut type_work)
+    let mut constraint_work = InterfaceConstraintBudget::default();
+    resolve_module_with_budget(loaded, dependencies, &mut type_work, &mut constraint_work)
 }
 
 /// Resolves one module while sharing type-work accounting across a graph pass.
@@ -217,6 +222,7 @@ pub(crate) fn resolve_module_with_budget(
     loaded: &LoadedModule,
     dependencies: &[DependencyExports<'_>],
     type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<ResolvedModule, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
@@ -240,7 +246,11 @@ pub(crate) fn resolve_module_with_budget(
         ));
     }
 
-    let mut resolver = Resolver::with_type_work(module, std::mem::take(type_work));
+    let mut resolver = Resolver::with_budgets(
+        module,
+        std::mem::take(type_work),
+        std::mem::take(constraint_work),
+    );
     let result = (|| {
         resolver.install_imports(surface, dependencies)?;
         resolver.validate_local_namespaces(surface)?;
@@ -284,6 +294,7 @@ pub(crate) fn resolve_module_with_budget(
         }))
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
+    *constraint_work = std::mem::take(&mut resolver.constraint_work);
     result
 }
 
@@ -451,6 +462,7 @@ struct Resolver {
     type_scopes: Vec<HashMap<String, ResolvedTypeVariable>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     type_work: TypeWorkBudget,
+    constraint_work: InterfaceConstraintBudget,
     #[cfg(test)]
     max_type_pending_tasks: usize,
 }
@@ -508,10 +520,23 @@ struct ImportedNominalName {
 impl Resolver {
     #[cfg(test)]
     fn new(module: ModuleId) -> Self {
-        Self::with_type_work(module, TypeWorkBudget::default())
+        Self::with_budgets(
+            module,
+            TypeWorkBudget::default(),
+            InterfaceConstraintBudget::default(),
+        )
     }
 
+    #[cfg(test)]
     fn with_type_work(module: ModuleId, type_work: TypeWorkBudget) -> Self {
+        Self::with_budgets(module, type_work, InterfaceConstraintBudget::default())
+    }
+
+    fn with_budgets(
+        module: ModuleId,
+        type_work: TypeWorkBudget,
+        constraint_work: InterfaceConstraintBudget,
+    ) -> Self {
         Self {
             module,
             next_binder: 0,
@@ -529,6 +554,7 @@ impl Resolver {
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
             type_work,
+            constraint_work,
             #[cfg(test)]
             max_type_pending_tasks: 0,
         }
@@ -1102,11 +1128,61 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        let constrained = !exported.scheme.requirements.is_empty();
+        if constrained {
+            self.constraint_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported constraint route retention exceeded its work budget",
+                )
+            })?;
+        }
         if self.imported.contains_global(exported.binder) {
             return Ok(());
         }
-        let scheme =
-            clone_type_with_budget(&exported.scheme, &mut self.type_work).map_err(|()| {
+        if constrained {
+            self.constraint_work
+                .charge(
+                    exported
+                        .scheme
+                        .type_parameters
+                        .len()
+                        .saturating_add(exported.scheme.requirements.len())
+                        .saturating_add(1),
+                )
+                .map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported constrained scheme exceeded its work budget",
+                    )
+                })?;
+            self.constraint_work
+                .charge_type(&exported.scheme.value_type)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported constrained value type exceeded its work budget",
+                    )
+                })?;
+            for requirement in &exported.scheme.requirements {
+                self.constraint_work
+                    .charge_type(&requirement.argument)
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::ConstraintResourceExhausted,
+                            span,
+                            "imported requirement type exceeded its work budget",
+                        )
+                    })?;
+            }
+        }
+        let scheme = exported
+            .scheme
+            .clone_with_budget(&mut self.type_work)
+            .map_err(|()| {
                 error(
                     ResolveReason::TypeResourceExhausted,
                     span,
@@ -1118,11 +1194,26 @@ impl Resolver {
             scheme,
             origin: exported.origin.clone(),
         });
+        self.global_requirement_counts
+            .insert(exported.binder, exported.scheme.requirements.len());
         self.retain_scheme_nominals(&exported.scheme, summary, span)?;
         Ok(())
     }
 
     fn retain_scheme_nominals(
+        &mut self,
+        scheme: &ConstrainedScheme,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.retain_type_nominals(&scheme.value_type, summary, span)?;
+        for requirement in &scheme.requirements {
+            self.retain_type_nominals(&requirement.argument, summary, span)?;
+        }
+        Ok(())
+    }
+
+    fn retain_type_nominals(
         &mut self,
         scheme: &Type,
         summary: &ExportSummary,
@@ -1340,7 +1431,7 @@ impl Resolver {
             return Ok(());
         }
         if let Some(payload) = &exported.payload {
-            self.retain_scheme_nominals(payload, summary, span)?;
+            self.retain_type_nominals(payload, summary, span)?;
         }
         let payload = exported
             .payload

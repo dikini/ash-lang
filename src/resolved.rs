@@ -7,7 +7,9 @@ use std::{
 
 use crate::{
     integer::Integer,
-    interface::{EvidenceSlot, ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId},
+    interface::{
+        ConstrainedScheme, EvidenceSlot, ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId,
+    },
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
     surface::SurfaceTypeVisibility,
@@ -236,8 +238,8 @@ pub struct CheckedGlobalScheme {
     pub binder: BinderId,
     /// Source declaration spelling.
     pub spelling: String,
-    /// Closed, inference-free rank-1 scheme.
-    pub scheme: Type,
+    /// Closed, inference-free constrained rank-1 scheme.
+    pub scheme: ConstrainedScheme,
     /// Causal declaration provenance.
     pub origin: Origin,
 }
@@ -339,7 +341,7 @@ impl CheckedModule {
 impl Drop for CheckedModule {
     fn drop(&mut self) {
         for checked in self.schemes.drain(..) {
-            discard_type_iteratively(checked.scheme);
+            drop(checked.scheme);
             discard_origin_iteratively(checked.origin);
         }
     }
@@ -367,7 +369,7 @@ pub struct ResolvedModuleGroup {
 impl Drop for ResolvedModuleGroup {
     fn drop(&mut self) {
         for checked in std::mem::take(&mut self.schemes).into_vec() {
-            discard_type_iteratively(checked.scheme);
+            drop(checked.scheme);
             discard_origin_iteratively(checked.origin);
         }
     }
@@ -481,7 +483,7 @@ impl ImportedFacts {
 impl Drop for ImportedFacts {
     fn drop(&mut self) {
         for (_, fact) in self.globals.drain() {
-            discard_type_iteratively(fact.scheme);
+            drop(fact.scheme);
             discard_origin_iteratively(fact.origin);
         }
         for (_, fact) in self.nominals.drain() {
@@ -504,8 +506,8 @@ impl Drop for ImportedFacts {
 pub struct ImportedGlobalScheme {
     /// Stable defining binder identity.
     pub binder: BinderId,
-    /// Fully zonked closed rank-1 scheme.
-    pub scheme: Type,
+    /// Fully zonked closed constrained rank-1 scheme.
+    pub scheme: ConstrainedScheme,
     /// Causal declaration provenance.
     pub origin: Origin,
 }
@@ -778,8 +780,8 @@ impl ImportedTypeAccess {
 pub struct ExportedGlobal {
     /// Stable binder identity from the defining module.
     pub binder: BinderId,
-    /// Fully zonked closed rank-1 scheme.
-    pub scheme: Type,
+    /// Fully zonked closed constrained rank-1 scheme.
+    pub scheme: ConstrainedScheme,
     /// Causal declaration provenance.
     pub origin: Origin,
 }
@@ -892,7 +894,9 @@ impl ExportSummary {
                 spelling.clone(),
                 ExportedGlobal {
                     binder: scheme.binder,
-                    scheme: clone_type_with_budget(&scheme.scheme, budget)
+                    scheme: scheme
+                        .scheme
+                        .clone_with_budget(budget)
                         .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                     origin: scheme.origin.clone(),
                 },
@@ -963,7 +967,7 @@ impl ExportSummary {
 
         let mut referenced_nominals = HashSet::new();
         for exported in summary.terms.values() {
-            collect_nominal_identities(&exported.scheme, &mut referenced_nominals, budget)
+            collect_scheme_nominal_identities(&exported.scheme, &mut referenced_nominals, budget)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         }
         for exported in summary.constructors.values() {
@@ -1140,7 +1144,7 @@ impl ExportSummary {
                         spelling.to_owned(),
                         ExportedGlobal {
                             binder,
-                            scheme,
+                            scheme: ConstrainedScheme::from_rank1_type(scheme),
                             origin,
                         },
                     )
@@ -1281,6 +1285,18 @@ fn collect_nominal_identities(
     Ok(())
 }
 
+fn collect_scheme_nominal_identities(
+    scheme: &ConstrainedScheme,
+    output: &mut HashSet<NominalTypeId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    collect_nominal_identities(&scheme.value_type, output, budget)?;
+    for requirement in &scheme.requirements {
+        collect_nominal_identities(&requirement.argument, output, budget)?;
+    }
+    Ok(())
+}
+
 pub(crate) struct ImportedNominalFactRef<'a> {
     pub(crate) id: NominalTypeId,
     pub(crate) parameter_count: usize,
@@ -1295,7 +1311,7 @@ pub(crate) struct ImportedNominalFactRef<'a> {
 impl Drop for ExportSummary {
     fn drop(&mut self) {
         for (_, exported) in self.terms.drain() {
-            discard_type_iteratively(exported.scheme);
+            drop(exported.scheme);
             discard_origin_iteratively(exported.origin);
         }
         for (_, exported) in self.nominals.drain() {

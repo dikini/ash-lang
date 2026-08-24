@@ -145,8 +145,9 @@ fn imported_polymorphic_scheme_instantiates_at_unrelated_types_without_re_genera
         .find(|scheme| scheme.spelling == "id")
         .expect("the dependency should retain its checked id scheme");
 
-    assert!(matches!(exported.scheme, Type::Forall(_, _)));
-    assert!(!contains_inference(&exported.scheme));
+    assert_eq!(exported.scheme.type_parameters.len(), 1);
+    assert!(exported.scheme.requirements.is_empty());
+    assert!(!contains_inference(&exported.scheme.value_type));
     assert_eq!(dependency.exports().module(), dependency.module());
 }
 

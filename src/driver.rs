@@ -7,6 +7,7 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
     elaborate::{Elaborator, TypeError, check_module_with_budget, link_modules},
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
+    interface::InterfaceConstraintBudget,
     lexer::LexReason,
     module::{LoadGraphError, ModuleId, ModuleRoots, load_module_graph},
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
@@ -40,6 +41,8 @@ pub enum EntryReason {
     MainDomain,
     /// The local `main` result is not closed.
     MainOpenResult,
+    /// The local `main` requires interface evidence.
+    MainConstrained,
 }
 
 impl fmt::Display for EntryReason {
@@ -49,6 +52,7 @@ impl fmt::Display for EntryReason {
             Self::MainPolymorphic => "entry.main-polymorphic",
             Self::MainDomain => "entry.main-domain",
             Self::MainOpenResult => "entry.main-open-result",
+            Self::MainConstrained => "entry.main-constrained",
         })
     }
 }
@@ -67,6 +71,7 @@ impl EntryFailure {
             EntryReason::MainPolymorphic => "this main has a polymorphic scheme",
             EntryReason::MainDomain => "this main does not accept Unit",
             EntryReason::MainOpenResult => "this main result is not closed",
+            EntryReason::MainConstrained => "this main requires interface evidence",
         };
         Self {
             diagnostic: Box::new(Diagnostic::new(reason, SourceLabel::new(primary, message))),
@@ -162,6 +167,7 @@ impl PipelineFailure {
             Self::Projection(error) => projection_reason(*error).into(),
             Self::Resolution(error) => error.reason.to_string(),
             Self::Typing(TypeError::Source(diagnostic)) => diagnostic.reason.to_string(),
+            Self::Typing(TypeError::Interface(diagnostic)) => diagnostic.reason.to_string(),
             Self::Typing(TypeError::Mismatch(_)) => "type.mismatch".into(),
             Self::Typing(TypeError::Internal(failure)) => failure.reason_code().into(),
             Self::Entry(failure) => failure.reason().to_string(),
@@ -182,9 +188,12 @@ impl PipelineFailure {
                 error.reason,
                 ResolveReason::BinderIdExhausted
                     | ResolveReason::TypeResourceExhausted
+                    | ResolveReason::ConstraintResourceExhausted
                     | ResolveReason::InternalState
             ),
-            Self::Typing(TypeError::Source(_) | TypeError::Mismatch(_)) => true,
+            Self::Typing(
+                TypeError::Source(_) | TypeError::Interface(_) | TypeError::Mismatch(_),
+            ) => true,
             Self::Entry(_) => true,
             Self::SourceModel(_)
             | Self::Projection(_)
@@ -339,6 +348,7 @@ where
     let mut resolution_type_work = TypeWorkBudget::default();
     let mut checking_type_work = TypeWorkBudget::default();
     let mut coverage_work = UsefulnessBudget::default();
+    let mut constraint_work = InterfaceConstraintBudget::default();
     for module in graph.modules() {
         let dependencies = module
             .dependencies()
@@ -358,14 +368,23 @@ where
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(FileFailure::Pipeline)?;
-        let resolved = resolve_module_with_budget(module, &dependencies, &mut resolution_type_work)
-            .map_err(PipelineFailure::Resolution)
-            .map_err(FileFailure::Pipeline)?;
+        let resolved = resolve_module_with_budget(
+            module,
+            &dependencies,
+            &mut resolution_type_work,
+            &mut constraint_work,
+        )
+        .map_err(PipelineFailure::Resolution)
+        .map_err(FileFailure::Pipeline)?;
         drop(dependencies);
-        let checked_module =
-            check_module_with_budget(resolved, &mut checking_type_work, &mut coverage_work)
-                .map_err(PipelineFailure::Typing)
-                .map_err(FileFailure::Pipeline)?;
+        let checked_module = check_module_with_budget(
+            resolved,
+            &mut checking_type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
         checked_by_module.insert(module.id(), checked.len());
         checked.push(checked_module);
     }
@@ -385,7 +404,10 @@ where
             )))
         })?;
     let main_span = main.origin.primary_span();
-    let result_type = match &main.scheme {
+    if !main.scheme.type_parameters.is_empty() {
+        return Err(entry_failure(EntryReason::MainPolymorphic, main_span));
+    }
+    let result_type = match &main.scheme.value_type {
         Type::Forall(_, _) => {
             return Err(entry_failure(EntryReason::MainPolymorphic, main_span));
         }
@@ -404,6 +426,9 @@ where
     };
     if !closed_entry_result(result_type) {
         return Err(entry_failure(EntryReason::MainOpenResult, main_span));
+    }
+    if !main.scheme.requirements.is_empty() {
+        return Err(entry_failure(EntryReason::MainConstrained, main_span));
     }
     let result = ResolvedExpr {
         kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
