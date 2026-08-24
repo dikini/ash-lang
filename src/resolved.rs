@@ -375,7 +375,12 @@ pub enum ImplementationRoute {
     /// The implementation is declared by the checked module.
     Local,
     /// The implementation first arrived through this direct import occurrence.
-    DirectImport(Span),
+    DirectImport {
+        /// Canonical identity of the direct dependency that published the implementation.
+        direct_dependency: ModuleId,
+        /// Source import occurrence that first made the implementation available.
+        available_at: Span,
+    },
 }
 
 /// One implementation in deterministic effective-environment order.
@@ -393,10 +398,17 @@ impl AvailableImplementation {
         }
     }
 
-    pub(crate) const fn direct_import(id: ImplId, available_at: Span) -> Self {
+    pub(crate) const fn direct_import(
+        id: ImplId,
+        direct_dependency: ModuleId,
+        available_at: Span,
+    ) -> Self {
         Self {
             id,
-            route: ImplementationRoute::DirectImport(available_at),
+            route: ImplementationRoute::DirectImport {
+                direct_dependency,
+                available_at,
+            },
         }
     }
 
@@ -867,12 +879,16 @@ impl ImportedFacts {
     pub(crate) fn insert_implementation(
         &mut self,
         fact: CheckedImplementationFact,
+        direct_dependency: ModuleId,
         available_at: Span,
     ) {
         let position = self.implementations.len();
         self.implementation_positions.insert(fact.id, position);
-        self.implementations
-            .push(ImportedImplementationFact { fact, available_at });
+        self.implementations.push(ImportedImplementationFact {
+            fact,
+            direct_dependency,
+            available_at,
+        });
     }
 
     pub(crate) fn reserve_implementation(&mut self) -> Result<(), ()> {
@@ -1002,6 +1018,8 @@ pub struct CheckedImplementationFact {
 pub struct ImportedImplementationFact {
     /// Defining implementation fact retained without a body.
     pub fact: CheckedImplementationFact,
+    /// Canonical direct dependency that published the implementation.
+    pub direct_dependency: ModuleId,
     /// Direct import occurrence that first made the fact available.
     pub available_at: Span,
 }
@@ -3492,7 +3510,7 @@ mod tests {
         });
         let imported_id = ImplId::new(ModuleId::new(20), 0);
         let available = vec![
-            AvailableImplementation::direct_import(imported_id, span),
+            AvailableImplementation::direct_import(imported_id, ModuleId::new(20), span),
             AvailableImplementation::local(implementation_id),
         ]
         .into_boxed_slice();
@@ -3571,7 +3589,13 @@ mod tests {
                 .map(|available| (available.id(), available.route()))
                 .collect::<Vec<_>>(),
             vec![
-                (imported_id, ImplementationRoute::DirectImport(span)),
+                (
+                    imported_id,
+                    ImplementationRoute::DirectImport {
+                        direct_dependency: ModuleId::new(20),
+                        available_at: span,
+                    },
+                ),
                 (implementation_id, ImplementationRoute::Local),
             ]
         );
@@ -3825,6 +3849,7 @@ mod tests {
                         origin: Origin::Source(span),
                         span,
                     },
+                    module,
                     span,
                 );
 

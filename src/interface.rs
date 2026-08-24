@@ -951,7 +951,15 @@ enum EvidenceNodeData {
 
 #[derive(Debug)]
 struct EvidencePlan {
+    interface: InterfaceId,
+    argument: Type,
     nodes: Box<[EvidenceNodeData]>,
+}
+
+impl Drop for EvidencePlan {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
+    }
 }
 
 /// Read-only view of one structural evidence node.
@@ -985,6 +993,18 @@ pub struct EvidenceSelection {
 }
 
 impl EvidenceSelection {
+    /// Returns the checked interface obligation authenticated by this selection.
+    #[must_use]
+    pub fn interface(&self) -> InterfaceId {
+        self.plan.interface
+    }
+
+    /// Returns the zonked checked obligation argument retained with this selection.
+    #[must_use]
+    pub fn argument(&self) -> &Type {
+        &self.plan.argument
+    }
+
     /// Returns the root node selected for this requirement.
     #[must_use]
     pub const fn root(&self) -> EvidenceNodeId {
@@ -1099,12 +1119,20 @@ impl EvidenceSelectionBuilder {
         Ok(id)
     }
 
-    pub(crate) fn finish(self, root: EvidenceNodeId) -> Result<EvidenceSelection, ()> {
+    pub(crate) fn finish(
+        self,
+        root: EvidenceNodeId,
+        interface: InterfaceId,
+        argument: Type,
+    ) -> Result<EvidenceSelection, ()> {
         if root.0 >= self.nodes.len() {
+            discard_type_iteratively(argument);
             return Err(());
         }
         Ok(EvidenceSelection {
             plan: Arc::new(EvidencePlan {
+                interface,
+                argument,
                 nodes: self.nodes.into_boxed_slice(),
             }),
             root,
@@ -1465,9 +1493,13 @@ mod tests {
         let root = builder
             .push_abstract(requirement, &methods, &mut exact_budget)
             .expect("one node and two method slots should fit exactly");
-        let selection = builder.finish(root).expect("the root should be retained");
+        let selection = builder
+            .finish(root, interface, Type::Int)
+            .expect("the root should be retained");
         assert_eq!(exact_budget.used(), 3);
         assert_eq!(exact_budget.charge(1), Err(()));
+        assert_eq!(selection.interface(), interface);
+        assert_eq!(selection.argument(), &Type::Int);
         assert_eq!(selection.node_count(), 1);
         assert_eq!(
             selection.node(root),
@@ -1508,7 +1540,9 @@ mod tests {
                 &mut exact,
             )
             .expect("one node and its three retained slots should fit exactly");
-        let selection = builder.finish(root).expect("the root should exist");
+        let selection = builder
+            .finish(root, interface, Type::Int)
+            .expect("the root should exist");
         let Some(EvidenceNode::Implementation {
             implementation: actual,
             substitution,
@@ -1729,7 +1763,6 @@ mod tests {
                 )
                 .expect("the deep checked head should be valid")
                 .expect("the candidate variable should bind the deep goal");
-                discard_type_iteratively(deep_type);
                 root = builder
                     .push_implementation(
                         implementation,
@@ -1739,7 +1772,9 @@ mod tests {
                         &mut InterfaceConstraintBudget::default(),
                     )
                     .expect("the implementation node should fit");
-                let selection = builder.finish(root).expect("the root should exist");
+                let selection = builder
+                    .finish(root, interface, deep_type)
+                    .expect("the root should exist");
                 let clone = selection.clone();
                 assert!(selection.shares_plan_with(&clone));
                 drop(selection);
@@ -1760,7 +1795,9 @@ mod tests {
                 &mut InterfaceConstraintBudget::default(),
             )
             .expect("the abstract node should fit");
-        builder.finish(root).expect("the root should exist")
+        builder
+            .finish(root, method.interface(), Type::Int)
+            .expect("the root should exist")
     }
 
     #[test]

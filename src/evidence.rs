@@ -743,10 +743,24 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<EvidenceSelection, SelectionFailure> {
+        if matches!(&argument, Type::Inference(_)) {
+            discard_type_iteratively(argument);
+            return Err(SelectionFailure::Reason(InterfaceReason::Ambiguous));
+        }
+        if matches!(&argument, Type::Forall(_, _)) {
+            discard_type_iteratively(argument);
+            return Err(SelectionFailure::InvalidState);
+        }
         let mut builder = EvidenceSelectionBuilder::new();
-        let mut work = SelectionWork::new(Goal {
+        let mut checked_goal = Goal {
             interface,
             argument,
+        };
+        let work_argument = clone_type_with_budget(&checked_goal.argument, type_work)
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        let mut work = SelectionWork::new(Goal {
+            interface,
+            argument: work_argument,
         })?;
         let mut results = Vec::new();
         let mut active = std::collections::HashSet::new();
@@ -955,8 +969,9 @@ impl EvidenceSelector {
         if !active.is_empty() || results.len() != 1 {
             return Err(SelectionFailure::InvalidState);
         }
+        let argument = std::mem::replace(&mut checked_goal.argument, Type::Unit);
         builder
-            .finish(results[0])
+            .finish(results[0], interface, argument)
             .map_err(|()| SelectionFailure::InvalidState)
     }
 

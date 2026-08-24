@@ -5602,7 +5602,11 @@ pub(crate) fn check_module_with_budget(
         .try_reserve(imported_implementation_count.saturating_add(local_implementation_count))
         .map_err(|_| constraint_resource())?;
     available_implementations.extend(resolved.imported_facts().implementations().map(|imported| {
-        AvailableImplementation::direct_import(imported.fact.id, imported.available_at)
+        AvailableImplementation::direct_import(
+            imported.fact.id,
+            imported.direct_dependency,
+            imported.available_at,
+        )
     }));
     available_implementations.extend(
         resolved
@@ -7704,6 +7708,7 @@ mod tests {
                 origin: Origin::Source(first_definition),
                 span: first_definition,
             },
+            direct_dependency: ModuleId::new(90),
             available_at: first_route,
         };
         let second = crate::resolved::ImportedImplementationFact {
@@ -7717,6 +7722,7 @@ mod tests {
                 origin: Origin::Source(second_definition),
                 span: second_definition,
             },
+            direct_dependency: ModuleId::new(10),
             available_at: second_route,
         };
         let effective = [

@@ -82,6 +82,15 @@ Execute the linked plan to:
   resource-accounting defects after the review fixes. The implementation plan
   records the commands and the remaining validation, lowering, resource,
   documentation, and corpus checkpoints.
+- Task 6's first bounded checkpoint retains the checker-certified interface and
+  zonked argument with each immutable evidence plan. Direct implementation
+  routes now retain both the authenticated dependency identity and the source
+  import occurrence. These facts are the minimum input needed for independent
+  linked validation; they do not yet admit final Core synthesis.
+- The checkpoint's 12 focused integration tests and 252 library tests pass,
+  together with format, all-target checking, and Clippy. An independent
+  high-reasoning review found no remaining goal-retention, budget, iterative-
+  destruction, error-precedence, or route-provenance defect.
 
 ## Verification
 
@@ -138,3 +147,8 @@ dispatch rule.
   entry `main ()` expression derived from the checked entry module. A separate
   resolved-expression constructor retains standalone elaboration probes without
   letting callers present an unchecked expression as a checked linked result.
+- Task 6 begins with a bounded representation checkpoint because the pre-Core
+  validator cannot authenticate a selection from its root node alone, and an
+  import span cannot identify the dependency whose direct export admitted an
+  implementation. Validation, evidence lowering, and the end-to-end corpus
+  remain deliberately outside this checkpoint.

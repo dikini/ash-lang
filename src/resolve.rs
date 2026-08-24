@@ -887,7 +887,11 @@ impl Resolver {
         dependencies: &[DependencyExports<'_>],
     ) -> Result<(), ResolveError> {
         for (import, dependency) in surface.imports.iter().zip(dependencies) {
-            self.retain_dependency_interface_facts(dependency.summary, import.span)?;
+            self.retain_dependency_interface_facts(
+                dependency.summary,
+                dependency.edge.target(),
+                import.span,
+            )?;
             match &import.selection {
                 SurfaceImportSelection::Qualified { alias } => {
                     if self.file_name_is_bound(&alias.text) {
@@ -1187,6 +1191,7 @@ impl Resolver {
     fn retain_dependency_interface_facts(
         &mut self,
         summary: &ExportSummary,
+        direct_dependency: ModuleId,
         import_span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         for interface in summary.interfaces() {
@@ -1194,7 +1199,12 @@ impl Resolver {
         }
 
         for implementation in summary.implementations() {
-            self.retain_imported_implementation_fact(implementation, summary, import_span)?;
+            self.retain_imported_implementation_fact(
+                implementation,
+                summary,
+                direct_dependency,
+                import_span,
+            )?;
         }
         Ok(())
     }
@@ -1304,6 +1314,7 @@ impl Resolver {
         &mut self,
         exported: &CheckedImplementationFact,
         summary: &ExportSummary,
+        direct_dependency: ModuleId,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         self.constraint_work.charge(1).map_err(|()| {
@@ -1539,6 +1550,7 @@ impl Resolver {
                 origin: exported.origin.clone(),
                 span: exported.span,
             },
+            direct_dependency,
             span,
         );
         Ok(())

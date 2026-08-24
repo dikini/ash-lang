@@ -18,9 +18,9 @@ use ash::{
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{
-        CheckedDefinition, CheckedImplementationBody, CheckedModule, ResolvedDefinitionKind,
-        ResolvedExpr, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedOccurrence,
-        ResolvedTermName,
+        CheckedDefinition, CheckedImplementationBody, CheckedModule, ImplementationRoute,
+        ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind, ResolvedLocalDeclaration,
+        ResolvedOccurrence, ResolvedTermName,
     },
     types::Type,
 };
@@ -60,6 +60,47 @@ impl SelectionFixture {
         }
         fs::write(path, text).expect("selection fixture dependency should be writable");
     }
+}
+
+#[test]
+fn imported_implementation_route_retains_its_exact_direct_dependency_identity() {
+    let fixture = SelectionFixture::create(concat!(
+        "import dependency as Dependency\n",
+        "main : Unit -> Int\n",
+        "main () = Dependency.render(42)\n",
+    ));
+    fixture.write(
+        "dependency.ash",
+        concat!(
+            "pub interface Render<A> {\nrender : A -> Int\n}\n\n",
+            "pub impl Render<Int> {\nrender value = value\n}\n",
+        ),
+    );
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("selection fixture graph should load");
+    let checked = check_graph(&graph).expect("the imported concrete implementation should check");
+    let entry = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .expect("the checked graph should retain its entry module");
+    let loaded_entry = graph
+        .module(graph.entry())
+        .expect("the loaded graph should retain its entry module");
+    let [dependency_edge] = loaded_entry.dependencies() else {
+        panic!("the entry should retain exactly one direct dependency edge");
+    };
+    let [available] = entry.available_implementations() else {
+        panic!("the entry should retain exactly one available implementation");
+    };
+
+    assert_eq!(available.id(), ImplId::new(dependency_edge.target(), 0),);
+    assert_eq!(
+        available.route(),
+        ImplementationRoute::DirectImport {
+            direct_dependency: dependency_edge.target(),
+            available_at: dependency_edge.import_span(),
+        },
+    );
 }
 
 impl Drop for SelectionFixture {
@@ -239,8 +280,11 @@ fn assert_abstract_selection(
     occurrence: &ResolvedOccurrence,
     requirement: RequirementId,
     methods: &[MethodId],
+    argument: &Type,
 ) {
     let selection = selection_for_occurrence(occurrence);
+    assert_eq!(selection.interface(), methods[0].interface());
+    assert_eq!(selection.argument(), argument);
     assert_eq!(selection.node_count(), 1);
     assert_eq!(
         selection.node(selection.root()),
@@ -281,7 +325,7 @@ fn constrained_method_selects_its_exact_abstract_requirement_before_a_matching_i
         !checked.available_implementations().is_empty(),
         "the matching implementation must be available so abstract selection proves precedence"
     );
-    assert_abstract_selection(occurrence, requirement.id, &[method]);
+    assert_abstract_selection(occurrence, requirement.id, &[method], &Type::Int);
 }
 
 #[test]
@@ -651,8 +695,8 @@ fn recursive_constrained_global_reuses_its_declared_abstract_evidence() {
     let [recursive_occurrence] = recursive_occurrences.as_slice() else {
         panic!("the recursive body should retain one loop occurrence");
     };
-    assert_abstract_selection(method_occurrence, requirement.id, &[method]);
-    assert_abstract_selection(recursive_occurrence, requirement.id, &[method]);
+    assert_abstract_selection(method_occurrence, requirement.id, &[method], &Type::Int);
+    assert_abstract_selection(recursive_occurrence, requirement.id, &[method], &Type::Int);
 }
 
 #[test]

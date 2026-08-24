@@ -256,7 +256,9 @@ mod tests {
         let root = builder
             .push_abstract(requirement, &[], &mut InterfaceConstraintBudget::default())
             .expect("the tiny selection should fit");
-        let selection = builder.finish(root).expect("the root should exist");
+        let selection = builder
+            .finish(root, InterfaceId::new(module, 0), Type::Int)
+            .expect("the root should exist");
         slot.handle()
             .fill(selection)
             .expect("the fresh slot should accept evidence");
