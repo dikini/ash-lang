@@ -175,9 +175,9 @@ and every evidence slot is a function. A method introduces no additional type
 parameters or constraints. Methods have no default bodies in the first
 increment.
 
-[CP-0006](../proposals/CP-0006-interfaces-and-implementations.md) proposes one
-trailing `where` clause shared by global signatures, operational headers, and
-impl heads. The earlier comparison form is:
+Accepted [CP-0006](../proposals/CP-0006-interfaces-and-implementations.md)
+specifies one trailing `where` clause shared by global signatures, operational
+headers, and impl heads. The earlier comparison form is:
 
 ```ash
 pub interface Equal<A> {
@@ -239,8 +239,8 @@ pub impl Equal<Option<A>> where Equal<A> {
 }
 ```
 
-[CP-0006](../proposals/CP-0006-interfaces-and-implementations.md) selects this
-`where` spelling as part of its complete proposed grammar.
+Accepted [CP-0006](../proposals/CP-0006-interfaces-and-implementations.md)
+selects this `where` spelling as part of its complete grammar.
 
 `impl` is private by default. `pub impl` publishes an anonymous implementation
 fact in the defining module's checked export summary. A public implementation

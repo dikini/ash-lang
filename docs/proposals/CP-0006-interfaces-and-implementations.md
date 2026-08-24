@@ -1,7 +1,7 @@
 # CP-0006: Interfaces and Implementations
 
 - ID: `CP-0006`
-- Status: proposed
+- Status: accepted
 - Related: [DN-0023: Interfaces and Implementations](../design/DN-0023-interfaces-and-implementations.md), [DN-0022: Passive Static Modules](../design/DN-0022-passive-static-modules.md), [DN-0020: Ash Dialect Milestones](../design/DN-0020-ash-dialect-milestones.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), and [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md)
 
 > This proposal is not current Ash.
