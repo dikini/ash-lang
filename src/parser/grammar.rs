@@ -806,6 +806,9 @@ fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
         return;
     }
     match form {
+        Some(PatternForm::Binder) if starts_lowercase_qualification(parser) => {
+            reject_lowercase_qualification(parser);
+        }
         Some(PatternForm::Binder) => binder(parser),
         Some(PatternForm::Wildcard) => {
             parser.start(NodeKind::WildcardPattern);
@@ -929,29 +932,33 @@ fn type_expression(parser: &mut Parser<'_>) {
 
 fn atomic_type(parser: &mut Parser<'_>) {
     parser.start(NodeKind::AtomicType);
-    match atomic_type_form(parser) {
-        Some(AtomicTypeForm::Int | AtomicTypeForm::Bool | AtomicTypeForm::Unit) => {
-            let _ = parser.bump();
-            if parser.at(&TokenKind::Less) {
-                parser.error_at_current(ParseReason::UnexpectedToken);
-                type_arguments(parser);
-            }
-        }
-        Some(AtomicTypeForm::Nominal) => {
-            if parser
-                .nth(1)
-                .is_some_and(|kind| matches!(kind, TokenKind::Dot))
-            {
-                qualified_name(parser, true);
-            } else {
+    if starts_lowercase_qualification(parser) {
+        reject_lowercase_qualification(parser);
+    } else {
+        match atomic_type_form(parser) {
+            Some(AtomicTypeForm::Int | AtomicTypeForm::Bool | AtomicTypeForm::Unit) => {
                 let _ = parser.bump();
+                if parser.at(&TokenKind::Less) {
+                    parser.error_at_current(ParseReason::UnexpectedToken);
+                    type_arguments(parser);
+                }
             }
-            if parser.at(&TokenKind::Less) {
-                type_arguments(parser);
+            Some(AtomicTypeForm::Nominal) => {
+                if parser
+                    .nth(1)
+                    .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+                {
+                    qualified_name(parser, true);
+                } else {
+                    let _ = parser.bump();
+                }
+                if parser.at(&TokenKind::Less) {
+                    type_arguments(parser);
+                }
             }
+            Some(AtomicTypeForm::Parenthesized) => parenthesized_type(parser),
+            _ => parser.report(ParseReason::ExpectedForm, ExpectedForm::Type),
         }
-        Some(AtomicTypeForm::Parenthesized) => parenthesized_type(parser),
-        _ => parser.report(ParseReason::ExpectedForm, ExpectedForm::Type),
     }
     parser.finish();
 }
@@ -991,6 +998,27 @@ pub(super) fn qualified_name(parser: &mut Parser<'_>, uppercase_member: bool) {
         expect_upper_identifier(parser);
     } else {
         expect_import_name(parser);
+    }
+    parser.finish();
+}
+
+pub(super) fn starts_lowercase_qualification(parser: &Parser<'_>) -> bool {
+    matches!(parser.current(), Some(TokenKind::Identifier(_)))
+        && parser
+            .nth(1)
+            .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+}
+
+pub(super) fn reject_lowercase_qualification(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    parser.error_at_current(ParseReason::UnexpectedToken);
+    let _ = parser.bump();
+    let _ = parser.bump();
+    if matches!(
+        parser.current(),
+        Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+    ) {
+        let _ = parser.bump();
     }
     parser.finish();
 }

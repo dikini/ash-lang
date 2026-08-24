@@ -2,14 +2,15 @@
 
 - ID: `TASK-0011`
 - Status: active
-- Related: [CP-0005: Passive Static Modules](../proposals/CP-0005-passive-static-modules.md), [DN-0022: Passive Static Modules](../design/DN-0022-passive-static-modules.md), [DN-0020: Ash Dialect Milestones](../design/DN-0020-ash-dialect-milestones.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), and the [execution plan](../plans/2026-08-23-implement-passive-static-modules.md)
+- Related: [CP-0005: Passive Static Modules](../proposals/CP-0005-passive-static-modules.md), [DN-0022: Passive Static Modules](../design/DN-0022-passive-static-modules.md), [DN-0020: Ash Dialect Milestones](../design/DN-0020-ash-dialect-milestones.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), the [passive-module evidence](../design/modular-ash/evidence.md), and the [execution plan](../plans/2026-08-23-implement-passive-static-modules.md)
 
 > This task organizes work. It does not define Ash semantics.
 
 ## Dependencies
 
-- CP-0005 is accepted transition authority. Current `spec/` remains normative
-  until implementation, tests, and specification changes merge together.
+- CP-0005 is the accepted transition authority. Commit `3b66040` replaced the
+  normative specification after the implementation and test checkpoints made
+  those claims true. Current `spec/` now defines Modular Ash.
 - Work runs on `feature/modular-ash` in `.worktrees/modular-ash`.
 - The `mini-ash` tag retains the historical compiler and corpus. Current source
   receives no Mini-Ash dialect selector or compatibility grammar.
@@ -44,14 +45,45 @@ Execute the linked plan to:
 - `cargo build --locked` and `cargo test --locked --all-targets` pass before
   implementation. The baseline contains 565 passing tests and no failure.
 - The implementation plan records the intended red-green checkpoints.
-- Declarations-only module syntax and import spellings are implemented and
-  committed with focused syntax evidence.
-- Canonical graph loading is implemented and committed with focused loader
+- Commit `0bc17bd` implements declarations-only module syntax and import
+  spellings with focused syntax evidence.
+- Commit `a9f923d` implements canonical graph loading with focused loader
   evidence.
-- Import resolution now preserves structured qualifier/member spans, uses
-  compilation- and module-qualified identities, consumes body-free dependency
-  summaries, and produces a declarations-only resolved module plus a distinct
-  unchecked export candidate. Focused Task 4 evidence is green.
+- Commit `d00fd10` makes import resolution preserve structured
+  qualifier/member spans, use compilation- and module-qualified identities,
+  consume body-free dependency summaries, and produce a declarations-only
+  resolved module plus a distinct unchecked export candidate. Focused Task 4
+  evidence is green.
+- Commit `be610c8` enforces private, public opaque, and public transparent type
+  visibility through checked export summaries. Hidden nominal identities can
+  flow through public schemes without exporting their source names.
+- Commit `8b9e19f` links dependency-ordered module groups and a generated entry
+  application into the existing pure Core dialect. Core retains no module,
+  import, export, alias, or opacity node.
+- Commit `1906c6a` enforces the local `main : Unit -> R` entry contract and runs
+  modular entry graphs. Commit `6506d00` records why open results remain a
+  defensive checked-boundary case rather than a source-level negative fixture.
+- Commit `270adb6` migrates the current corpus and architecture guards to the
+  declarations-only modular grammar. The current tree retains no Mini-Ash
+  parser selector, file-result driver, or compatibility lowering.
+- Commit `b2e69bf` closes the passive-module diagnostic and graph-wide resource
+  evidence, including exact syntax, type, coverage, Core, validation, path,
+  source, and edge accounting with explicit-worklist and small-stack cases.
+- Commit `3b66040` replaces the normative specification and tool documentation
+  with implemented Modular Ash behavior and executable examples.
+- The final evidence audit adds exact lexer, CST, projection, export, import,
+  and execution coverage for `pub fn`; exact parser recovery for leading,
+  trailing, and empty relative-path segments; and exact malformed term, type,
+  and pattern qualification recovery.
+- A detached worktree at `mini-ash^{commit}` resolved to `d62d3ba`. Its full
+  documented verification passed 514 tests across 22 binaries with no failed,
+  ignored, measured, or filtered tests.
+- The bounded comparison produced the same six exact observations from both
+  historical Mini-Ash and current Modular Ash, with exit status 0 and empty
+  standard error in every run: integer `7 : Int\n`, function `42 : Int\n`,
+  global recursion `42 : Int\n`, higher-order constructor `42 : Int\n`,
+  transparent tree matching `4 : Int\n`, and rank-1 Option/local
+  generalization `(Some(42), false) : (Option<Int>, Bool)\n`.
 
 ## Verification
 
@@ -71,6 +103,19 @@ provenance, historical-tag comparison, and the absence of interfaces, module
 signatures, parent traversal, runtime modules, or a current-tree Mini-Ash
 compatibility path.
 
+The historical verification ran under Rust 1.97.1 and Cargo 1.97.1:
+
+```text
+rustc --version --verbose
+cargo --version --verbose
+cargo xtask verify
+```
+
+Formatting, metadata, build, Clippy, all 514 tests, and rustdoc passed. Current
+`cargo xtask verify` also passed at commit `3b66040`. After recording the
+retained evidence, every completion command above passed again. Markdown and
+repository-diff checks also passed before artifact retirement.
+
 ## Discoveries
 
 - One canonical source may be reached through several configured roots. It has
@@ -87,6 +132,15 @@ compatibility path.
   the `entry.main-open-result` guard as a defensive boundary, but current source
   cannot supply the plan's proposed negative case without first failing the
   polymorphic-entry check.
+- The six-case historical comparison shows that replacing the source root and
+  adding module assembly did not change the selected integer, function,
+  recursion, nominal-data, pattern, or rank-1 observations. This result is
+  bounded to those cases; it does not make the Mini-Ash compiler part of
+  current verification.
+- A checked dependency summary needs schemes, authenticated identities,
+  visibility metadata, constructor families, and provenance, but no dependency
+  body. The complete implementation becomes visible again only when the graph
+  assembles and independently validates one linked Core program.
 
 ## Deviations
 
@@ -102,3 +156,15 @@ compatibility path.
   traversal coverage. Constructing an open checked scheme would contradict the
   checker contract and would not be valid language evidence; the accepted
   entry contract and its defensive reason family remain unchanged.
+- Task 11 also updates DN-0022, although the execution plan omitted it from the
+  file list. Retaining a design note that still called Mini-Ash current and left
+  implemented choices open would contradict the new normative specification;
+  the update preserves the exploration while recording its result and evidence.
+- Task 11 adds exact syntax cases in `tests/modules_syntax.rs` and an operational
+  export case in `tests/module_resolution.rs`, although its listed checkpoint
+  was documentation-only. Review of those cases also found that a qualified
+  term ending after `.` bypassed qualified-name recovery and that lowercase
+  qualification-shaped forms cascaded through later grammar owners. The parser
+  now recognizes the valid qualified prefix before requiring its member and
+  consumes a lowercase qualification-shaped form once at its term, type, or
+  pattern owner.

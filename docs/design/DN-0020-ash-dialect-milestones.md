@@ -2,28 +2,31 @@
 
 - ID: `DN-0020`
 - Status: exploring
-- Related: [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), and the [Mini-Ash closure report](mini-ash/closure.md)
+- Related: [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), the [Mini-Ash closure report](mini-ash/closure.md), and the [passive-module evidence](modular-ash/evidence.md)
 
 > This design note is informative. It does not define current Ash, accept
-> module or interface semantics, or authorize roadmap work.
+> future interface semantics, or authorize roadmap work.
 
-The Mini-Ash milestone is complete. Its `mini-ash` Git tag, closure report, and
-integration evidence provide the stable historical input to Modular Ash design.
-The current specification continues to define the language implemented on
-`main`.
+The Mini-Ash milestone and the passive-static-module increment are complete.
+The `mini-ash` Git tag, closure report, and integration evidence retain the
+historical dialect. The [current specification](../../spec/README.md) defines
+Modular Ash with passive source modules. The next increment concerns Ash
+interfaces and `impl`, which are type-class-like relationships rather than
+module signatures.
 
 ## Question
 
-How should the completed Mini-Ash milestone constrain an evolving Modular Ash
+How should the completed Mini-Ash milestone constrain the Modular Ash
 milestone, and which design questions belong to each Modular Ash increment?
 
 ## Context
 
 Mini-Ash closed with a single-file, pure, rank-1 language and a simplification
-analysis. The `mini-ash` tag retains its implementation, tests, specification,
-and evidence. A differential experiment can build that tag separately; current
-source does not need to keep Mini-Ash and Modular Ash as selectable compiler
-dialects.
+analysis. The `mini-ash` tag at commit `d62d3ba` retains its implementation,
+tests, specification, and evidence. The passive-module comparison built that
+tag separately and confirmed representative unchanged observations. Current
+source keeps no Mini-Ash grammar, driver, lowering, or selectable compiler
+dialect.
 
 [DN-0019](DN-0019-primitive-feature-composition.md) found that later work
 should first try to elaborate a feature through existing forms or place
@@ -43,7 +46,7 @@ imports, exports, visibility, and typed composition.
 
 ### Retain Mini-Ash historically
 
-The `mini-ash` tag is the runnable retained dialect. Current source evolves
+The `mini-ash` tag is the runnable retained dialect. Current source has evolved
 into Modular Ash rather than carrying two grammars, drivers, lowerings, or Core
 compatibility paths. Current artifacts may reference the tag and build it for
 bounded comparison evidence.
@@ -61,9 +64,10 @@ does not require a one-to-one sequence of typed Core dialects.
 
 ### Add Modular Ash in bounded increments
 
-The first increment should add only passive static modules, imports, exports,
+The first increment added only passive static modules, imports, exports,
 visibility, opacity, and typed composition. [DN-0022](DN-0022-passive-static-modules.md)
-develops that boundary.
+records the exploration that developed that boundary, and the
+[passive-module evidence](modular-ash/evidence.md) records its implementation.
 
 The next increment should design Ash interfaces, `impl`, associated-type and
 constraint needs, satisfaction and rejection, and separate interface checking
@@ -99,8 +103,9 @@ evidence no longer depend on it.
 The leading trajectory is:
 
 1. Preserve completed Mini-Ash at the `mini-ash` tag with its closure evidence.
+   This is complete.
 2. Evolve current source through a passive-static-module proposal based on
-   DN-0022.
+   DN-0022. This is complete.
 3. Design and propose interfaces and `impl` against the implemented module
    boundary.
 4. Compare representative core primitives with library definitions.
@@ -118,10 +123,10 @@ module boundary to be tested before it supports automatic typed resolution.
 
 ## Evidence and experiments
 
-The passive-module increment should test the cases and boundaries named by
-[DN-0022](DN-0022-passive-static-modules.md), including generated export
-summaries, hidden identities, opaque types, acyclic rooted imports, and one
-linked Core program.
+The [passive-module evidence](modular-ash/evidence.md) records the cases and
+boundaries named by [DN-0022](DN-0022-passive-static-modules.md), including
+generated export summaries, hidden identities, opaque types, acyclic rooted
+imports, and one linked Core program.
 
 The interface increment should compare method-only and associated-type cases,
 explicit and inferred evidence, ambiguity, orphan or coherence policy, and

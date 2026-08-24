@@ -153,6 +153,32 @@ fn export_candidates_reflect_term_and_type_visibility() {
 }
 
 #[test]
+fn a_public_inline_operational_global_is_available_to_a_targeted_import() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "import operations (increment)\n",
+            "main : Unit -> Int\n",
+            "main () = increment 41\n",
+        ),
+    );
+    tree.write(
+        "operations.ash",
+        "pub fn increment(value : Int) -> Int {\n    value + 1\n}\n",
+    );
+
+    let observation = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the public operational term should enter the targeted import scope");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
 fn duplicate_module_aliases_are_rejected_before_export_lookup() {
     let tree = TempTree::create();
     let graph = load(

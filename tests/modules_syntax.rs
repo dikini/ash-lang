@@ -1,12 +1,18 @@
 use ash::{
+    integer::Integer,
     lexer::{TokenKind, lex},
-    parser::{NodeKind, ProjectionError, parse, project_module},
+    parser::{
+        ConcreteElement, Event, ExpectedForm, NodeKind, ParseReason, ProjectionError, parse,
+        project_module,
+    },
     source::SourceFile,
     surface::{
         SurfaceDefinitionKind, SurfaceExprKind, SurfaceImportSelection, SurfaceModulePath,
         SurfacePatternKind, SurfaceReference, SurfaceTypeKind, SurfaceTypeVisibility,
     },
 };
+
+type ExpectedParserDiagnostic<'a> = (ParseReason, Option<&'a str>, Option<&'a str>, u32, u32);
 
 fn parse_valid(text: &str) -> ash::surface::SurfaceModule {
     let source = SourceFile::new("module.ash", text).expect("module source should fit");
@@ -47,6 +53,25 @@ fn assert_parser_rejected(case: &str, text: &str) {
     );
 }
 
+fn assert_exact_parser_diagnostics(
+    case: &str,
+    tree: &ash::parser::ConcreteTree,
+    expected: &[ExpectedParserDiagnostic<'_>],
+) {
+    assert_eq!(tree.parse_diagnostics().len(), expected.len(), "{case}");
+    for (diagnostic, &(reason, expected_form, found, start, end)) in
+        tree.parse_diagnostics().iter().zip(expected)
+    {
+        assert_eq!(diagnostic.reason, reason, "{case}");
+        assert_eq!(diagnostic.expected.as_deref(), expected_form, "{case}");
+        assert_eq!(diagnostic.found.as_deref(), found, "{case}");
+        assert_eq!(diagnostic.primary.span().range().start(), start, "{case}");
+        assert_eq!(diagnostic.primary.span().range().end(), end, "{case}");
+        assert!(diagnostic.related.is_empty(), "{case}");
+        assert!(diagnostic.context.is_empty(), "{case}");
+    }
+}
+
 #[test]
 fn modular_reserved_words_and_path_punctuation_are_closed_tokens() {
     let source = SourceFile::new(
@@ -83,6 +108,127 @@ fn modular_reserved_words_and_path_punctuation_are_closed_tokens() {
             .iter()
             .any(|token| token.kind == TokenKind::Opaque)
     );
+}
+
+#[test]
+fn public_inline_operational_global_is_exact_through_projection() {
+    let text = "pub fn increment(value : Int) -> Int {\n    value + 1\n}\n";
+    let source = SourceFile::new("public-operational.ash", text).expect("source should fit");
+    let lexed = lex(&source).expect("source should lex");
+
+    assert!(lexed.diagnostics.is_empty());
+    assert_eq!(
+        lexed
+            .tokens
+            .iter()
+            .map(|token| (token.kind.clone(), spanned_text(&source, token.span)))
+            .collect::<Vec<_>>(),
+        vec![
+            (TokenKind::Pub, "pub"),
+            (TokenKind::Fn, "fn"),
+            (TokenKind::Identifier("increment".into()), "increment"),
+            (TokenKind::LeftParen, "("),
+            (TokenKind::Identifier("value".into()), "value"),
+            (TokenKind::Colon, ":"),
+            (TokenKind::IntType, "Int"),
+            (TokenKind::RightParen, ")"),
+            (TokenKind::Arrow, "->"),
+            (TokenKind::IntType, "Int"),
+            (TokenKind::LeftBrace, "{"),
+            (TokenKind::LineEnd, "\n"),
+            (TokenKind::Identifier("value".into()), "value"),
+            (TokenKind::Plus, "+"),
+            (
+                TokenKind::Integer(Integer::parse_decimal("1").expect("one is an integer")),
+                "1",
+            ),
+            (TokenKind::LineEnd, "\n"),
+            (TokenKind::RightBrace, "}"),
+            (TokenKind::LineEnd, "\n"),
+            (TokenKind::EndOfFile, ""),
+        ]
+    );
+
+    let tree = parse(lexed);
+    assert!(tree.lexical_diagnostics().is_empty());
+    assert!(tree.parse_diagnostics().is_empty());
+    let root = tree
+        .root()
+        .expect("the parser should retain one module root");
+    assert_eq!(root.kind, NodeKind::Module);
+    let [
+        ConcreteElement::Node(definition_node),
+        ConcreteElement::Token(line_end),
+        ConcreteElement::Token(end_of_file),
+    ] = root.children.as_slice()
+    else {
+        panic!("the module CST should contain one declaration and its boundaries");
+    };
+    assert_eq!(definition_node.kind, NodeKind::InlineOperationalGlobal);
+    let [
+        ConcreteElement::Token(public),
+        ConcreteElement::Node(header),
+        ConcreteElement::Node(body),
+    ] = definition_node.children.as_slice()
+    else {
+        panic!("the operational CST should retain pub, its header, and its body");
+    };
+    assert_eq!(tree.tokens()[*public].kind, TokenKind::Pub);
+    assert_eq!(header.kind, NodeKind::InlineOperationalHeader);
+    assert_eq!(body.kind, NodeKind::Block);
+    assert_eq!(tree.tokens()[*line_end].kind, TokenKind::LineEnd);
+    assert_eq!(tree.tokens()[*end_of_file].kind, TokenKind::EndOfFile);
+    assert_eq!(
+        tree.events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Start(kind) => Some(*kind),
+                _ => None,
+            })
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    NodeKind::InlineOperationalGlobal | NodeKind::InlineOperationalHeader
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            NodeKind::InlineOperationalGlobal,
+            NodeKind::InlineOperationalHeader,
+        ]
+    );
+    assert_eq!(
+        tree.events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Token(index) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        (0..tree.tokens().len()).collect::<Vec<_>>()
+    );
+
+    let module = project_module(&source, &tree).expect("public operational source should project");
+    assert!(module.imports.is_empty());
+    assert!(module.type_declarations.is_empty());
+    let [definition] = module.definitions.as_slice() else {
+        panic!("expected exactly one projected definition");
+    };
+    assert!(definition.public);
+    assert_eq!(spanned_text(&source, definition.span), text.trim_end());
+    let SurfaceDefinitionKind::InlineOperational(operational) = &definition.kind else {
+        panic!("expected an inline operational definition");
+    };
+    assert_eq!(operational.header.name.text, "increment");
+    assert_eq!(operational.header.parameters.len(), 1);
+    assert!(matches!(
+        operational.header.result_type.kind,
+        SurfaceTypeKind::Int
+    ));
+    assert!(matches!(
+        operational.body.result.kind,
+        SurfaceExprKind::Add(_)
+    ));
 }
 
 #[test]
@@ -248,13 +394,234 @@ fn rejects_malformed_absolute_module_paths() {
 }
 
 #[test]
+fn malformed_relative_module_paths_retain_exact_parser_recovery() {
+    let cases = [
+        ("leading dot", "import .math as Math\n", ".", ".", 7, 8),
+        ("trailing dot", "import math. as Math\n", "as", "as", 13, 15),
+        (
+            "empty internal segment",
+            "import math..more as Math\n",
+            ".",
+            ".",
+            12,
+            13,
+        ),
+    ];
+
+    for (case, import, offending_text, found, start, end) in cases {
+        let text = format!("{import}main : Unit -> Int\nmain () = 0\n");
+        let source = SourceFile::new("relative-path.ash", text).expect("source should fit");
+        let lexed = lex(&source).expect("source should lex");
+        assert!(
+            lexed.diagnostics.is_empty(),
+            "{case} should reach the parser"
+        );
+        let tree = parse(lexed);
+
+        let [diagnostic] = tree.parse_diagnostics() else {
+            panic!("{case} should produce exactly one parser diagnostic");
+        };
+        assert_eq!(diagnostic.reason, ParseReason::ExpectedForm, "{case}");
+        assert_eq!(
+            diagnostic.expected.as_deref(),
+            Some("an identifier"),
+            "{case}"
+        );
+        assert_eq!(diagnostic.found.as_deref(), Some(found), "{case}");
+        assert_eq!(diagnostic.primary.span().range().start(), start, "{case}");
+        assert_eq!(diagnostic.primary.span().range().end(), end, "{case}");
+        assert_eq!(
+            spanned_text(&source, diagnostic.primary.span()),
+            offending_text,
+            "{case}"
+        );
+        assert!(diagnostic.related.is_empty(), "{case}");
+        assert!(diagnostic.context.is_empty(), "{case}");
+
+        let recovery = tree
+            .events()
+            .iter()
+            .filter(|event| matches!(event, Event::Error(_) | Event::Missing { .. }))
+            .collect::<Vec<_>>();
+        assert!(
+            matches!(
+                recovery.as_slice(),
+                [
+                    Event::Error(ParseReason::ExpectedForm),
+                    Event::Missing {
+                        expected: ExpectedForm::Identifier,
+                        at,
+                    },
+                ] if *at == diagnostic.primary.span()
+            ),
+            "{case}: {recovery:?}"
+        );
+        assert!(
+            tree.events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::EquationalGlobal))),
+            "{case} should recover locally and parse the following declaration"
+        );
+        assert_eq!(
+            project_module(&source, &tree),
+            Err(ProjectionError::RecoveryNodesPresent),
+            "{case} should stop at the parser recovery boundary"
+        );
+    }
+}
+
+#[test]
 fn rejects_qualifications_without_an_uppercase_module_alias() {
-    assert_parser_rejected(
-        "lowercase qualifier",
-        "main : Unit -> Int\nmain () = lower.member\n",
-    );
     assert_parser_rejected(
         "literal qualifier",
         "main : Unit -> Int\nmain () = 1.member\n",
     );
+}
+
+#[test]
+fn malformed_qualified_members_retain_exact_parser_recovery() {
+    let cases = [
+        (
+            "term trailing dot",
+            "main : Unit -> Int\nmain () = Math.\n",
+            &[(
+                ParseReason::ExpectedForm,
+                Some("an identifier"),
+                Some("line end"),
+                34,
+                35,
+            )][..],
+            1,
+        ),
+        (
+            "type trailing dot",
+            "main : Math.\nmain _ = 0\n",
+            &[(
+                ParseReason::ExpectedForm,
+                Some("an identifier"),
+                Some("line end"),
+                12,
+                13,
+            )][..],
+            1,
+        ),
+        (
+            "pattern trailing dot",
+            "main : Unit -> Int\nmain Math. = 0\n",
+            &[(
+                ParseReason::ExpectedForm,
+                Some("an identifier"),
+                Some("="),
+                30,
+                31,
+            )][..],
+            1,
+        ),
+    ];
+
+    for (case, text, expected, qualified_nodes) in cases {
+        let source = SourceFile::new("qualified-member.ash", text).expect("source should fit");
+        let lexed = lex(&source).expect("source should lex");
+        assert!(
+            lexed.diagnostics.is_empty(),
+            "{case} should reach the parser"
+        );
+        let tree = parse(lexed);
+
+        assert_exact_parser_diagnostics(case, &tree, expected);
+        assert_eq!(
+            tree.events()
+                .iter()
+                .filter(|event| matches!(event, Event::Start(NodeKind::QualifiedName)))
+                .count(),
+            qualified_nodes,
+            "{case}"
+        );
+        assert!(
+            tree.events()
+                .iter()
+                .any(|event| matches!(event, Event::Error(_))),
+            "{case} should retain its error in the CST"
+        );
+        assert_eq!(
+            tree.events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Token(index) => Some(*index),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            (0..tree.tokens().len()).collect::<Vec<_>>(),
+            "{case} should retain every lexer token"
+        );
+        assert_eq!(
+            project_module(&source, &tree),
+            Err(ProjectionError::RecoveryNodesPresent),
+            "{case} should stop at the parser recovery boundary"
+        );
+    }
+}
+
+#[test]
+fn lowercase_qualifiers_never_enter_the_qualified_name_grammar() {
+    let cases = [
+        (
+            "term qualifier",
+            "main : Unit -> Int\nmain () = lower.member\n",
+            &[(
+                ParseReason::UnexpectedToken,
+                None,
+                Some("identifier"),
+                29,
+                34,
+            )][..],
+        ),
+        (
+            "type qualifier",
+            "main : lower.Member -> Int\nmain _ = 0\n",
+            &[(
+                ParseReason::UnexpectedToken,
+                None,
+                Some("identifier"),
+                7,
+                12,
+            )][..],
+        ),
+        (
+            "pattern qualifier",
+            "main : Unit -> Int\nmain lower.Member = 0\n",
+            &[(
+                ParseReason::UnexpectedToken,
+                None,
+                Some("identifier"),
+                24,
+                29,
+            )][..],
+        ),
+    ];
+
+    for (case, text, expected) in cases {
+        let source = SourceFile::new("lowercase-qualifier.ash", text).expect("source should fit");
+        let tree = parse(lex(&source).expect("source should lex"));
+
+        assert_exact_parser_diagnostics(case, &tree, expected);
+        assert!(
+            !tree
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::QualifiedName))),
+            "{case} must not enter the qualified-name grammar"
+        );
+        assert!(
+            tree.events()
+                .iter()
+                .any(|event| matches!(event, Event::Error(_))),
+            "{case} should retain parser recovery"
+        );
+        assert_eq!(
+            project_module(&source, &tree),
+            Err(ProjectionError::RecoveryNodesPresent),
+            "{case} should stop at the parser recovery boundary"
+        );
+    }
 }

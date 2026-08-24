@@ -90,6 +90,9 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
     let start_event = parser.event_position();
     parser.start(NodeKind::PrimaryExpression);
     match primary_form(parser, forms) {
+        Some(PrimaryForm::Identifier) if grammar::starts_lowercase_qualification(parser) => {
+            grammar::reject_lowercase_qualification(parser);
+        }
         Some(
             PrimaryForm::Integer
             | PrimaryForm::Boolean
@@ -196,17 +199,9 @@ fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryFor
             | (PrimaryForm::Identifier, Some(TokenKind::Identifier(_)))
             | (PrimaryForm::UpperIdentifier, Some(TokenKind::UpperIdentifier(_)))
             | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen)) => true,
-            (PrimaryForm::Qualified, Some(TokenKind::UpperIdentifier(_))) => {
-                parser
-                    .nth(1)
-                    .is_some_and(|kind| matches!(kind, TokenKind::Dot))
-                    && parser.nth(2).is_some_and(|kind| {
-                        matches!(
-                            kind,
-                            TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
-                        )
-                    })
-            }
+            (PrimaryForm::Qualified, Some(TokenKind::UpperIdentifier(_))) => parser
+                .nth(1)
+                .is_some_and(|kind| matches!(kind, TokenKind::Dot)),
             _ => false,
         })
 }
