@@ -2,12 +2,12 @@
 
 - ID: `DN-0023`
 - Status: exploring
-- Related: [CP-0006: Interfaces and Implementations](../proposals/CP-0006-interfaces-and-implementations.md), [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), and the [passive-module evidence](modular-ash/evidence.md)
+- Related: [CP-0006: Interfaces and Implementations](../proposals/CP-0006-interfaces-and-implementations.md), [TASK-0012: Implement Interfaces and Implementations](../tasks/TASK-0012-implement-interfaces-and-implementations.md), [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), the [passive-module evidence](modular-ash/evidence.md), and the [interface implementation evidence](modular-ash/interfaces-evidence.md)
 
-> This design note is informative. It explores a candidate interface and
-> implementation increment. It does not define current Ash, accept the
-> candidate semantics, or authorize product implementation. Syntax is
-> illustrative until an accepted change proposal specifies it.
+> This design note is informative. It records the exploration that led to the
+> implemented method-only interface increment, but it does not define current
+> Ash. The [specification](../../spec/README.md) is the source of current
+> language behavior.
 
 ## Question
 
@@ -16,20 +16,40 @@ that exercises separately checked passive modules, constrained rank-1 code,
 typed implementation selection, and explicit Core evidence without turning
 modules into signatures or adding associated-type machinery prematurely?
 
-## Current boundary
+## Result
 
-Current Modular Ash has passive declarations-only modules, canonical
-module-qualified identities, direct imports, private and opaque types,
-body-free checked export summaries, rank-1 schemes, and one linked pure Core
-program. It has no interface declaration, implementation declaration,
+Method-only interfaces and implementations now provide that increment. Ash has
+one-parameter interfaces, explicit requirements on global signatures, private
+and public implementations, direct-dependency implementation availability,
+typed selection retained on checked occurrences, linked evidence validation,
+and lowering through ordinary pure Core functions and applications. The
+normative replacement is present at unsigned checkpoint `f783271`.
+
+The [interface implementation evidence](modular-ash/interfaces-evidence.md)
+records the implemented corpus, diagnostic and resource boundaries, Core and
+evaluator locality, and the unspecialized generic evidence trace. Current
+semantic details belong to the [specification](../../spec/README.md), not this
+retained design account. Associated types, specialization, first-class
+dictionaries, and runtime implementation lookup remain outside the implemented
+increment.
+
+## Original boundary
+
+When this exploration began, Modular Ash had passive declarations-only modules,
+canonical module-qualified identities, direct imports, private and opaque
+types, body-free checked export summaries, rank-1 schemes, and one linked pure
+Core program. It had no interface declaration, implementation declaration,
 constraint, associated projection, implementation selection, or source-level
 evidence value.
 
-The compiler currently uses *global interface* and *external interface* to
-mean a function's declared type signature. That terminology predates
-type-class-like interfaces. The interface increment should call those forms
-*global signatures* in specification prose and implementation APIs so that
-`interface` has one Ash meaning.
+Project prose then used *global interface* and *external interface* to mean a
+function's declared type signature. The implemented specification uses *global
+signature* so `interface` has one Ash meaning.
+
+The remaining sections retain the original alternatives, selected model,
+comparison cases, and future pressure. Statements about a candidate or
+recommendation describe that exploration; they do not supersede the current
+specification.
 
 The passive-module boundary is the starting invariant:
 
@@ -41,7 +61,8 @@ canonical module identity
     -> whole-program validation and evaluation
 ```
 
-The new relationship should fit between checking and Core construction:
+The proposed relationship was required to fit between checking and Core
+construction:
 
 ```text
 checked constraint + available checked impl facts
@@ -151,7 +172,7 @@ first-class evidence representation; a structural tuple would erase identity
 before source checking had authenticated it. Explicit dictionaries would also
 need construction, naming, visibility, and ambiguity rules.
 
-The recommended candidate instead infers evidence in source and makes it
+The selected candidate instead infers evidence in source and makes it
 explicit only in checked elaboration and Core method arguments. This supports
 separately checked constrained code without adding a new source value category.
 No current corpus case needs to store or pass evidence independently from a
@@ -164,7 +185,7 @@ That is a different abstraction. It would conflate module nameability and
 opacity with constraint satisfaction and implementation selection. This
 direction is rejected for the Modular Ash interface increment.
 
-## Recommended source model
+## Selected source model
 
 ### Declarations and constraints
 
@@ -204,8 +225,8 @@ are rejected. Constraints are part of the checked rank-1 scheme and export
 summary; they are not ordinary source types or runtime values.
 
 An inline operational global carries the same ordered requirement list in its
-header and produces the same constrained scheme. The change proposal should
-choose the token placement; equational and operational presentations do not
+header and produces the same constrained scheme. CP-0006 selected one token
+placement for both presentations; equational and operational globals do not
 have different constraint semantics.
 
 An interface method behaves as a constrained term with the interface's
@@ -403,13 +424,14 @@ EvidenceSelection =
 The abstract form refers to ordered evidence parameters from a constrained
 global or impl prerequisite. The implementation form records the matched type
 substitution, recursively selected prerequisites, and ordered impl methods.
-Later linking consumes these facts exactly once to construct Core. It does not
-repeat implementation selection. The body-free summary exposes only the
+Later linking retains these facts without repeating implementation selection.
+Linked interface-evidence validation authenticates them, and Core synthesis
+then consumes them exactly once. The body-free summary exposes only the
 constraints and impl facts a dependent needs.
 
 ## Core evidence and erasure
 
-The recommended canonical elaboration flattens one logical interface
+The selected elaboration flattens one logical interface
 dictionary into ordered method evidence. Constraint order follows the source
 signature; method order follows the interface declaration. Each evidence slot
 is an ordinary function value.
@@ -453,12 +475,13 @@ registry, dictionary lookup, interface node, or evaluator dispatch rule is
 required.
 
 Typed elaboration produces the per-occurrence `EvidenceSelection` records and
-stores them in the graph-owned checked modules. One interface-evidence
-validation entry point consumes the resolved interface and impl registries plus
-those selections before Core synthesis. Core synthesis is their only semantic
-consumer; it resolves stable `ImplMethodId` values through retained
-module-qualified `BinderId` mappings and releases the selections after
-constructing and validating the applications.
+stores them in graph-owned checked modules. Linking retains those selections in
+the combined checked groups. Linked interface-evidence validation authenticates
+the selections against the combined interface and implementation registries and
+produces a validated capability before Core synthesis. Core synthesis consumes
+the validated selections: it resolves stable `ImplMethodId` values through
+retained module-qualified `BinderId` mappings and releases the selections after
+constructing the applications.
 These records extend the existing `CheckedModule` boundary; they are not a
 separate typed surface tree, general constraint IR, or new Core dialect.
 
@@ -487,8 +510,8 @@ Impl selection is complete before evaluation. A generic evidence expression may
 use type and prerequisite-evidence applications; existing pure machine frames
 evaluate it to a function closure before the source value argument is applied.
 Unspecialized evidence passing therefore introduces no runtime search or new
-failure mode. A retained evaluation trace should compare its application order
-and final observation with specialized Core.
+failure mode. The retained implementation evidence records its application
+order and final observation as a baseline for any later specialized Core.
 
 A future specialization transform may replace known evidence binders and
 applications with selected method globals. The unspecialized evidence-passing
@@ -622,8 +645,8 @@ through every nested constrained call.
 
 Together these traces preserve every source relationship until its owning
 validation judgment and then use only existing Core binders and applications.
-They expose no unresolved representation question, so this increment does not
-need a disposable compiler probe before a change proposal.
+They exposed no unresolved representation question, so the increment did not
+require a disposable compiler probe before CP-0006.
 
 ## Associated-type pressure
 
@@ -657,10 +680,11 @@ Failures remain owned by the first judgment that can establish them:
 - resolution owns interface and method names, access, identities, and imported
   summary authentication;
 - interface and impl checking own malformed declarations, orphan violations,
-  overlap, prerequisite admissibility, and method conformance;
+  overlap, prerequisite admissibility, method membership, and method typing;
 - constraint resolution owns unsatisfied, ambiguous, cyclic, and resource
   failures;
-- evidence construction owns missing or ill-typed method evidence; and
+- linked interface-evidence validation owns forged or inconsistent retained
+  evidence as `evidence.validation.*`; and
 - Core validation owns malformed lowered binders, applications, types, scope,
   dialect membership, and provenance.
 
@@ -678,17 +702,17 @@ One graph-wide constraint budget charges proportional work before retaining:
 - obligations, candidate matches, prerequisite edges, active goals, and
   evidence nodes.
 
-A specialization experiment owns and reports its separate output-growth
-measurement; that cost is not part of the first product increment's constraint
-budget.
+A future specialization experiment would own and report its separate
+output-growth measurement; that cost is not part of the first product
+increment's constraint budget.
 
 Candidate traversal and diagnostic selection use deterministic dependency,
 import, and source order. Prerequisite resolution and destruction use explicit
 worklists at admitted depth.
 
-## Required comparison corpus
+## Original required comparison corpus
 
-Positive cases should include:
+The original positive corpus required:
 
 - a local method-only interface, concrete impl, constrained call, and exact
   observation;
@@ -714,7 +738,7 @@ Positive cases should include:
 - a bounded representation trace comparing retained evidence with later
   specialization, without making specialization product behavior.
 
-Negative cases should include:
+The original negative corpus required:
 
 - a private interface access failure and a private impl unavailable to an
   importer, producing an unsatisfied obligation without leaking private
@@ -741,9 +765,9 @@ ambiguous projection, one cycle, one wrong associated definition, and one use
 across a module summary. These are design evidence, not required product cases
 for the method-only increment.
 
-## Recommended increment and exclusions
+## Selected increment and exclusions
 
-The recommended first product increment contains:
+The selected and implemented product increment contains:
 
 - one-parameter method-only interfaces;
 - required methods without defaults or method-local polymorphism;
@@ -763,18 +787,21 @@ impls, first-class source dictionaries, inferred local constraints, interface
 objects, module signatures, import re-exports, dynamic loading, providers,
 registration, unloading, effects, and runtime implementation lookup.
 
-## Transition to proposal
+## Implemented boundary and future pressure
 
-The current rank-1 Core and implemented module summaries provide substrate,
-not direct interface evidence. The elaboration traces above cover a constrained
-summary crossing a module boundary, a generic impl method applied to
-prerequisite evidence, two same-typed method slots, recursive method identities,
-and abstract evidence supplied by a caller. They expose no representation
-uncertainty that requires a disposable probe.
+[CP-0006](../proposals/CP-0006-interfaces-and-implementations.md) selected the
+method-only transition explored here, and
+[TASK-0012](../tasks/TASK-0012-implement-interfaces-and-implementations.md)
+organized its implementation. The current
+[specification](../../spec/README.md) now owns the grammar, checking,
+selection, evidence, lowering, and evaluation rules. The retained
+[implementation evidence](modular-ash/interfaces-evidence.md) maps the original
+comparison corpus to tests and implementation boundaries.
 
-[CP-0006](../proposals/CP-0006-interfaces-and-implementations.md) makes the
-grammar exact, states the constraint and coherence judgments, defines resulting
-specification truth, names structured failures, and retains the positive and
-negative product corpus. Associated-type cases remain the reason for keeping
-normalization and constraint resolution separate, not partially implemented
-behavior.
+The interface increment supplies the consumer needed by a separately
+authorized core-versus-library audit. This note does not perform or authorize
+that audit. Associated-type examples continue to pressure normalization and
+separate checking, while specialization may later compare optimized Core with
+the retained unspecialized evidence trace. Associated types, specialization,
+first-class dictionaries, and runtime lookup remain future design questions,
+not partially implemented behavior.

@@ -132,6 +132,61 @@ Execute the linked plan to:
   with format, all-target checking, strict Clippy, and diff hygiene. Repeated
   high-reasoning semantic and Core reviews plus an independent coverage review
   found no remaining Task 7 defect.
+- Task 8's diagnostic checkpoint `6f36d77` separates public interface names
+  from hidden checked interface facts needed to close constrained exports and
+  public implementation facts. The hidden closure creates no source binding,
+  transports no imported implementation, and cannot be re-exported. Alternate
+  hidden and public routes retain one stable interface identity while a later
+  direct public route promotes source access without changing that identity.
+- Imported global and interface-method occurrences now retain the exact
+  complete import declaration or targeted selector item used at that
+  occurrence. Constraint failures retain a typed, deterministic causal chain
+  through the interface, admitted direct import, selected implementation, and
+  implementation method. Private and transitive-only implementation metadata
+  does not enter diagnostics. Entry failures keep their established precedence,
+  and the CLI renders the driver's structured failure without reclassifying it.
+- Task 8's resource checkpoint `a93bdbb` proves that one charged constraint
+  budget persists from dependency-summary admission through linking and
+  interface-evidence validation. Exact boundary cases distinguish
+  `internal.resource.constraint-work` from `evidence.validation.*`, and a
+  retained constraint cycle wins before exhaustion for the same work.
+  Independent high-reasoning specification and code-quality reviews were clear
+  after fixes. The reviewer verified 89 focused integration tests, 288 library
+  tests, strict Clippy, formatting, and diff hygiene.
+- Task 9 checkpoint `1dc03c2` retains the end-to-end interface corpus and adds
+  a bounded unspecialized generic-prerequisite Core and evaluator trace. The
+  observation is `42 : Int`; the trace authenticates method binders and
+  type-application, evidence-application, and source-application order within
+  32 node-entry events and six frames. The architecture guard reads Rust
+  identifiers while ignoring comments and literals, and rejects interface,
+  evidence, dictionary, implementation, registry, lookup, or dispatch
+  mechanisms in the closed Core and evaluator inventories.
+- Task 9's existing end-to-end corpus, new trace, and architecture inventory
+  passed a 36-test focused matrix, strict Clippy, formatting, and diff hygiene.
+  An independent medium-reasoning review found no remaining corpus or guard
+  defect.
+- Task 10 adds 45 executable specification examples and replaces the normative
+  interface truth across the overview, lexical structure, syntax, name
+  resolution, static semantics, elaboration, and dynamic semantics. The tool
+  guide now records observed interface diagnostics and resource behavior
+  without adding invocation or runtime-loading behavior. The normative
+  checkpoint is `f783271`.
+- Independent reviews cleared every Task 10 slice after fixes: high-reasoning
+  compliance and medium-reasoning quality reviews covered surface syntax,
+  overview and name resolution, static semantics, elaboration and dynamics,
+  and the tool guide. The tool behavior review also used high reasoning. Static
+  semantics review exposed and corrected the nested-arrow implementation defect
+  in `301de2a`; a separate high-reasoning code-quality review cleared that Rust
+  and resource-accounting change.
+- Fresh post-checkpoint checks pass 45 specification examples, 20 interface
+  integrations, and 289 library tests, together with strict all-target Clippy,
+  formatting, Markdown lint, and diff hygiene. These focused checks are not the
+  final Task 11 review or complete verification boundary.
+- Drafting retained implementation evidence and updating the design indexes,
+  milestone trajectory, and task state remain in progress. Complete-branch
+  review against `main`, implementation-locality inspection, final verification,
+  witnessed evidence finalization, and transition-artifact cleanup remain Task
+  11 work. The task stays active, and the branch remains unmerged.
 
 ## Verification
 
@@ -166,6 +221,15 @@ dispatch rule.
   the checked-module and linked-group ownership transitions.
 - Resolution charges and reserves the exact requirement-count-by-occurrence
   evidence-slot product before constructing its heap-backed one-shot cells.
+- A body-free summary needs separate public interface names and hidden checked
+  interface facts. The latter authenticate public constrained schemes and
+  implementation facts that mention a dependency's interface without making
+  that interface nameable or transporting the dependency's implementations.
+- CP-0006 permits an interface method type when a function arrow occurs anywhere
+  in the type. Normative review found that the checker accepted only a top-level
+  arrow. Commit `301de2a` replaces that root-shape check with an iterative
+  traversal that charges the graph-wide constraint budget before visiting or
+  retaining work and has an exact resource-boundary test.
 
 ## Deviations
 
@@ -205,3 +269,20 @@ dispatch rule.
   multi-method Core quantifier reuse. Review additions then exposed inference
   zonking that could reintroduce a source parameter after alpha-renaming; both
   failures were fixed before the Task 7 checkpoint.
+- Task 8 did not require the planned `src/diagnostic.rs`, `src/render.rs`, or
+  `src/interface.rs` changes. Exact occurrence provenance belongs to resolution,
+  while typed selection causes belong to checked evidence and use the existing
+  structured diagnostic and rendering boundary. The checkpoint therefore
+  changes `src/resolved.rs`, `src/resolve.rs`, `src/evidence.rs`,
+  `src/evidence_audit.rs`, and `src/elaborate.rs`, with focused diagnostics and
+  module regressions. Resource persistence remains isolated to `src/driver.rs`
+  and `tests/interface_resources.rs`.
+- Task 9 leaves the already complete `tests/interface_corpus.rs` unchanged. It
+  adds the missing bounded unspecialized trace to `tests/interfaces.rs` and
+  strengthens `tests/architecture.rs` rather than duplicating existing
+  end-to-end observations.
+- Task 10 required the product fix in `301de2a` before the normative checkpoint.
+  The accepted proposal required an arrow anywhere in an interface method type,
+  so documenting the top-level-only implementation would have made incorrect
+  behavior normative. The specification review returned the mismatch to the
+  implementation instead.

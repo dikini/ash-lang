@@ -2,17 +2,20 @@
 
 - ID: `DN-0020`
 - Status: exploring
-- Related: [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), the [Mini-Ash closure report](mini-ash/closure.md), and the [passive-module evidence](modular-ash/evidence.md)
+- Related: [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), the [Mini-Ash closure report](mini-ash/closure.md), the [passive-module evidence](modular-ash/evidence.md), and the [interface implementation evidence](modular-ash/interfaces-evidence.md)
 
-> This design note is informative. It does not define current Ash, accept
-> future interface semantics, or authorize roadmap work.
+> This design note is informative. It records implemented dialect increments
+> and future sequencing pressure, but it does not define current Ash or
+> authorize roadmap work.
 
-The Mini-Ash milestone and the passive-static-module increment are complete.
-The `mini-ash` Git tag, closure report, and integration evidence retain the
-historical dialect. The [current specification](../../spec/README.md) defines
-Modular Ash with passive source modules. The next increment concerns Ash
-interfaces and `impl`, which are type-class-like relationships rather than
-module signatures.
+The Mini-Ash milestone and passive-static-module increment are complete. The
+method-only interface increment is implemented and specified while its final
+review and task closure remain pending. The `mini-ash` Git tag, closure report,
+and integration evidence retain the historical dialect. The
+[current specification](../../spec/README.md) defines Modular Ash with passive
+source modules and type-class-like interfaces and `impl`; these interfaces are
+not module signatures. A separately authorized core-versus-library audit is the
+next Modular Ash increment. This note does not begin that audit.
 
 ## Question
 
@@ -39,8 +42,8 @@ unloading. Those later mechanisms should not enter the initial static-module
 increment.
 
 Ash interfaces and `impl` are type-class-like typed relationships, not module
-signatures. They require their own increment after passive modules establish
-imports, exports, visibility, and typed composition.
+signatures. Their implemented and specified increment followed passive modules
+so imports, exports, visibility, and typed composition were established first.
 
 ## Constraints
 
@@ -69,16 +72,18 @@ visibility, opacity, and typed composition. [DN-0022](DN-0022-passive-static-mod
 records the exploration that developed that boundary, and the
 [passive-module evidence](modular-ash/evidence.md) records its implementation.
 
-[DN-0023](DN-0023-interfaces-and-implementations.md) develops the next
-increment: method-only Ash interfaces, `impl`, constraints, satisfaction and
-rejection, and separate interface checking against real module boundaries. It
-retains associated types as later comparison pressure rather than including
-them in the first interface increment.
+[DN-0023](DN-0023-interfaces-and-implementations.md) records the exploration
+that led to implemented method-only Ash interfaces, `impl`, constraints,
+satisfaction and rejection, and separate checking against real module
+boundaries. The
+[interface implementation evidence](modular-ash/interfaces-evidence.md)
+retains the resulting corpus and compiler boundaries. Associated types remain
+later comparison pressure rather than part of this increment.
 
-Only then should Modular Ash use representative cases to compare core forms
-with library definitions. The audit should state the typing, diagnostic, Core,
-and evaluation consequences rather than treating “move to a library” as a
-source-layout change.
+Modular Ash can now use representative cases to compare core forms with library
+definitions. That audit requires separate authorization and should state the
+typing, diagnostic, Core, and evaluation consequences rather than treating
+“move to a library” as a source-layout change.
 
 Dynamic loading, providers, effects, registration, unloading, and runtime
 resolution remain later pressure.
@@ -108,9 +113,11 @@ The leading trajectory is:
    This is complete.
 2. Evolve current source through a passive-static-module proposal based on
    DN-0022. This is complete.
-3. Design and propose interfaces and `impl` against the implemented module
-   boundary.
-4. Compare representative core primitives with library definitions.
+3. Design, specify, and implement interfaces and `impl` against the passive
+   module boundary. This is implemented and specified; final task closure
+   remains pending.
+4. Separately authorize and compare representative core primitives with library
+   definitions. This is next and has not begun.
 5. Close Modular Ash with its own simplification analysis and tag.
 
 Keeping both Mini-Ash and Modular Ash runnable in the same current compiler
@@ -130,10 +137,11 @@ boundaries named by [DN-0022](DN-0022-passive-static-modules.md), including
 generated export summaries, hidden identities, opaque types, acyclic rooted
 imports, and one linked Core program.
 
-The interface increment should compare method-only and associated-type cases,
-explicit and inferred evidence, ambiguity, orphan or coherence policy, and
-dictionary retention or specialization. Modules must package interfaces and
-implementations passively rather than acting as module signatures.
+The [interface implementation evidence](modular-ash/interfaces-evidence.md)
+records method-only declarations, explicit requirements, implicit evidence,
+ambiguity, orphan and overlap policy, passive summaries, validation, Core
+lowering, runtime observations, and the retained unspecialized trace. It leaves
+associated types and specialization as future comparison pressure.
 
 The core-versus-library audit should retain at least one representative
 primitive in Core and express at least one representative operation through a
@@ -146,9 +154,10 @@ make routine current-tree verification depend on two implementations.
 
 ## Open questions
 
-- Which interface and `impl` semantics best exercise generated module export
-  summaries without turning them into source module signatures?
 - Which current primitives become credible library candidates after interfaces
   exist?
-- Which Core boundaries retain interface evidence only as long as a consumer
-  needs it?
+- What bounded audit corpus can compare a retained Core primitive with a
+  library-interface definition without silently changing diagnostics or
+  evaluation?
+- Which separately proposed associated-type or specialization semantics, if
+  any, are justified by later library pressure?
