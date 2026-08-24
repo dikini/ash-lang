@@ -17,6 +17,4 @@ No change proposal is currently under consideration.
 
 ## Accepted changes
 
-- [CP-0005: Passive Static Modules](CP-0005-passive-static-modules.md) —
-  declarations-only modules, deterministic imports, visibility, opacity,
-  generated export summaries, and execution through entry `main`.
+No accepted change proposal is awaiting implementation.
