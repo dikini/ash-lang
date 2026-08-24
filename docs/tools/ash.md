@@ -1,14 +1,66 @@
 # The `ash` Executable
 
-`ash` reads and runs one Mini-Ash source file:
+`ash` loads and runs one modular Ash program:
 
 ```text
-ash <source-file>
+ash [--root name=path]... <entry-file>
 ```
 
-The invocation requires exactly one path. The file must contain UTF-8 text and
-must be complete in itself. Mini-Ash has no modules or imports. The executable
-does not read a program from standard input.
+The invocation requires exactly one entry path. Every `--root` option must
+precede that path. The executable reads UTF-8 Ash source files and does not read
+a program from standard input.
+
+The entry file's containing directory is the implicit root for its relative
+imports. A relative import maps dotted segments to child directories and adds
+the `.ash` extension: `import helpers.math as Math` selects
+`./helpers/math.ash` relative to the importer.
+
+Each repeatable `--root name=path` option configures a lowercase Ash identifier
+as a named root. For example, `import @std.collections.list as List` selects
+`collections/list.ash` beneath the path configured as `std`. Root names must be
+distinct. The executable canonicalizes configured roots and loaded sources,
+rejects targets outside their owning roots, and loads each canonical source
+once.
+
+## Complete module-tree example
+
+Given this tree:
+
+```text
+example/
+|-- app/
+|   `-- main.ash
+`-- standard/
+    `-- answer.ash
+```
+
+`app/main.ash` imports `answer.ash` through the named root:
+
+```ash
+import @std.answer as Answer
+
+main : Unit -> Int
+main () = Answer.value(())
+```
+
+`standard/answer.ash` exports the referenced function:
+
+```ash
+pub value : Unit -> Int
+value () = 42
+```
+
+Run the program from `example`:
+
+```text
+ash --root std=standard app/main.ash
+```
+
+The exact standard output is:
+
+```text
+42 : Int
+```
 
 ## Successful output
 
@@ -25,9 +77,48 @@ function-valued domain. Tuples and nominal data render structurally. Rendering
 uses `<cycle>` only when a heap location repeats on the active structural path.
 Nominal result types use their source declaration spelling.
 
-Parameterized nominal result types retain that spelling and render their
-structural arguments. The executable test
-`tool_rank_one_example_has_exact_cli_observation` runs:
+The executable test `tool_success_example_has_exact_cli_observation` runs this
+module:
+
+```ash
+increment : Int -> Int
+increment value = value + 1
+
+fn double(value : Int) -> Int {
+    value * 2
+}
+
+main : Unit -> Int
+main () = double (increment 20)
+```
+
+Its exact standard output is `42 : Int` followed by a newline.
+
+Global functions have module-wide recursive scope. The executable test
+`tool_recursive_example_has_exact_cli_observation` runs this mutually recursive
+module, in which the earlier equational definition refers forward to the later
+inline operational definition:
+
+```ash
+first : Unit -> Int
+first ignored = second ()
+
+fn second(ignored : Unit) -> Int {
+    let retain : Unit -> Int = fn(value) {
+        first value
+    }
+    42
+}
+
+main : Unit -> Int
+main () = first ()
+```
+
+Its exact standard output is also `42 : Int` followed by a newline.
+
+Parameterized nominal result types retain their spelling and render structural
+arguments. The executable test `tool_rank_one_example_has_exact_cli_observation`
+runs:
 
 ```ash
 type Option<A> =
@@ -37,7 +128,8 @@ type Option<A> =
 id : A -> A
 id value = value
 
-{
+main : Unit -> (Option<Int>, Bool)
+main () = {
     let local = fn(value) {
         value
     }
@@ -56,59 +148,15 @@ instantiates its outer scheme. The unannotated local anonymous function is the
 only local initializer form that generalizes. These type operations are erased
 before producing runtime values.
 
-The executable test `tool_success_example_has_exact_cli_observation` runs this
-file:
-
-```ash
-increment : Int -> Int
-increment value = value + 1
-
-fn double(value : Int) -> Int {
-    value * 2
-}
-
-double (increment 20)
-```
-
-Its exact standard output is:
-
-```text
-42 : Int
-```
-
-Global functions have file-wide recursive scope. The executable test
-`tool_recursive_example_has_exact_cli_observation` runs this mutually recursive
-file, in which the earlier equational definition refers forward to the later
-inline operational definition:
-
-```ash
-first : Unit -> Int
-first ignored = second ()
-
-fn second(ignored : Unit) -> Int {
-    let retain : Unit -> Int = fn(value) {
-        first value
-    }
-    42
-}
-
-first ()
-```
-
-Its exact standard output is also:
-
-```text
-42 : Int
-```
-
-The executable test `tool_function_result_uses_opaque_rendering` runs a file
-whose result is a function:
+The executable test `tool_function_result_uses_opaque_rendering` runs a module
+whose `main` result is a function:
 
 ```ash
 identity : Int -> Int
 identity value = value
 
-identity
+main : Unit -> (Int -> Int)
+main () = identity
 ```
 
 Its exact standard output is:
@@ -123,7 +171,8 @@ The executable test `tool_cyclic_data_uses_structural_rendering` runs:
 type Stream =
     Next(Int, Stream)
 
-{
+main : Unit -> Stream
+main () = {
     let rec ones : Stream = Next(1, ones)
     ones
 }
@@ -138,33 +187,38 @@ Next(1, <cycle>) : Stream
 ## Failures
 
 A source rejection writes structured diagnostics to standard error, writes no
-success value to standard output, and exits with status `1`. The first line of
-each diagnostic is its stable reason, followed by its plain-text explanation
-and source labels.
+success value to standard output, and exits with status `1`. The first line is
+a stable reason code followed by a plain-text explanation and causal source
+labels.
 
-Data and pattern diagnostics include stable reasons for duplicate or unknown
-types and constructors, constructor ownership and payload mismatches, duplicate
-pattern binders, equation arity, refutable local bindings, non-exhaustive and
-redundant cases, unsafe recursive roots, and unguarded recursive uses. A
-non-exhaustive diagnostic includes one concrete uncovered pattern witness.
-
-Rank-1 diagnostics include stable reasons for duplicate declaration type
-parameters, unknown types, incorrect type-argument counts, kind errors,
-infinite inferred types, ambiguous unsolved inference, and rejected
-polymorphic recursion. Source diagnostics render nominal declaration spellings
-and applied arguments rather than internal identities.
+Source-caused loading failures include `module.unknown-root`,
+`module.not-found`, `module.path-escape`, and `module.import-cycle`. The primary
+label identifies the import that caused the failure. Syntax, resolution,
+access, type, coverage, and entry-contract rejections also use status `1`.
+Entry failures include `entry.missing-main`, `entry.main-polymorphic`,
+`entry.main-domain`, and `entry.main-open-result`.
 
 The executable test `tool_source_rejection_uses_status_one_and_stderr` checks
-that this file reports `type.operator-operand` on standard error:
+that this module reports `type.operator-operand` on standard error:
 
 ```ash
-true + 1
+main : Unit -> Int
+main () = true + 1
 ```
 
-Invocation, file-input, invalid UTF-8, compiler-internal, and runtime-internal
-failures detected before success output exit with status `2`. They use standard
-error and do not write a success value. Supplying no path or more than one path
-prints `usage: ash <source-file>` to standard error and exits with status `2`.
+Invocation, input, compiler-internal, resource, validation, and runtime-internal
+failures exit with status `2`. Malformed root options and missing or extra entry
+paths print this exact usage line:
+
+```text
+usage: ash [--root name=path]... <entry-file>
+```
+
+Duplicate, invalid, or unavailable named roots instead report an
+`invocation.*` reason. An entry file that cannot be read, an invalid UTF-8
+source, and comparable non-source input failures report an `input.*` reason.
+An imported file can retain its causal import label even when the input failure
+uses status `2`.
 
 An output write or flush failure also exits with status `2` and attempts to
 report `internal.output-write` on standard error. Standard-output bytes accepted
@@ -172,5 +226,5 @@ before the failure may contain part or all of the success line; the executable
 cannot withdraw them. If writing the fallback diagnostic also fails, status `2`
 remains the only guaranteed observation.
 
-Exact diagnostic colors, gutters, and prose are presentation details. The
-semantic reason and causal source labels remain structured before rendering.
+Exact diagnostic colors, gutters, and prose are presentation details. Stable
+reason codes and causal source labels remain structured before rendering.

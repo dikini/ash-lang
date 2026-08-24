@@ -1,6 +1,6 @@
 # Static Semantics
 
-Mini-Ash has `Int`, `Bool`, `Unit`, rigid type variables, structural tuples,
+Ash has `Int`, `Bool`, `Unit`, rigid type variables, structural tuples,
 parameterized nominal algebraic data types, and unary functions. A tuple
 contains at least two element types. Surface `domain -> codomain` denotes a
 function type.
@@ -148,6 +148,11 @@ no witness outside all arms. A useless arm is rejected with
 `coverage.redundant-case`; a remaining witness is reported with
 `coverage.non-exhaustive`.
 
+For a local or imported transparent nominal, coverage uses its complete
+constructor family. An imported opaque or hidden nominal has no accessible
+constructor pattern and is not treated as an empty sum. A binder or wildcard
+can cover such a value without inspecting its representation.
+
 ```sequent
 family match-typing:
   T-Match-Synthesize :=
@@ -191,7 +196,8 @@ fn choose(flag : Bool) -> Int -> Int {
     }
 }
 
-choose true 41
+main : Unit -> Int
+main () = choose true 41
 ```
 
 The same usefulness relation checks equation groups. Each equation pattern
@@ -204,7 +210,8 @@ The executable test `static_semantics_irrefutable_tuple_binding_is_executable`
 checks local destructuring:
 
 ```ash
-{
+main : Unit -> Int
+main () = {
     let (left, right) = (20, 22)
     left + right
 }
@@ -285,7 +292,8 @@ The executable test
 anonymous-function result receives the binding annotation's expected type:
 
 ```ash
-{
+main : Unit -> Int
+main () = {
     let constant : Unit -> Int = {
         fn(ignored) {
             1
@@ -307,7 +315,8 @@ fn add(left : Int) -> Int -> Int {
     }
 }
 
-add 20 22
+main : Unit -> Int
+main () = add 20 22
 ```
 
 ## Inference and rank-1 restrictions
@@ -316,19 +325,13 @@ Inference variables are compiler facts, not source types. Unification compares
 primitive and nominal identities, descends structurally through applications,
 tuples, and functions, and solves inference variables only with types of kind
 `Type`. The occurs check rejects a solution containing the variable being
-solved with `type.infinite`. While deriving a complete program, typing
+solved with `type.infinite`. While checking one complete module, typing
 accumulates the substitution `THETA` and records each allocated inference
-variable's causal origin in allocation order. Successful program typing
+variable's causal origin in allocation order. Successful module checking
 requires every allocated inference variable to occur in the domain of
-`THETA`.
-
-Ambiguity reporting first applies `THETA` to the program result type. If that
-type still contains an inference variable, typing reports `type.ambiguous` at
-the complete result-expression span. This result diagnostic takes precedence
-over allocation origins. Otherwise typing selects the first identity outside
-the domain of `THETA` in allocation order and reports its retained causal
-origin. This second check covers discarded expressions and unused initializers
-whose inference variables cannot appear in the result type.
+`THETA`. Otherwise typing selects the first unsolved identity in allocation
+order and reports `type.ambiguous` at its retained causal origin. This check
+includes discarded expressions and unused initializers.
 
 Global type parameters and generalized local parameters are rigid within their
 definitions. A recursive self-use receives the same rigid arguments rather
@@ -352,7 +355,8 @@ type Option<A> =
 id : A -> A
 id value = value
 
-{
+main : Unit -> (Option<Int>, Bool)
+main () = {
     let local = fn(value) {
         value
     }
@@ -404,7 +408,8 @@ The executable test
 program:
 
 ```ash
-{
+main : Unit -> Int
+main () = {
     let rec value : Int = 1
     value
 }
@@ -413,7 +418,7 @@ program:
 ## Primitive operations
 
 Addition and multiplication require two `Int` operands and synthesize `Int`.
-Equality compares only integers in Mini-Ash and synthesizes `Bool`.
+Equality compares only integers and synthesizes `Bool`.
 
 ```sequent
 family primitive-operation-typing:
@@ -438,13 +443,14 @@ family primitive-operation-typing:
 
 The rules reject an operand that does not check as `Int`. The executable test
 `static_semantics_operand_example_has_its_documented_reason` checks that this
-file is rejected with `type.operator-operand`:
+module is rejected with `type.operator-operand`:
 
 ```ash
-true + 1
+main : Unit -> Int
+main () = true + 1
 ```
 
-## Globals and programs
+## Globals and modules
 
 An equational interface must expose at least as many arrow layers as each
 clause has patterns. The patterns receive those domains in order, and the body
@@ -452,11 +458,12 @@ checks against the remaining codomain. An inline operational header supplies
 its domain and result directly. One typed parameter gives that domain; multiple
 typed parameters combine into one tuple domain. Free uppercase names in either
 interface become ordered implicit type parameters. Each form contributes one
-rank-1 function scheme. All global schemes form `GAMMA_G` before any body is
-checked.
+rank-1 function scheme. All local global schemes form `GAMMA_G` before any
+body is checked. Imported schemes come from immutable summaries of the
+module's direct dependencies.
 
 ```sequent
-family global-and-program-typing:
+family global-and-module-typing:
   T-Equational-Clause :=
     patterns ⇐ domains => bindings
     useful(previous_clauses, patterns, domains)
@@ -486,16 +493,25 @@ family global-and-program-typing:
     ===>
     GAMMA |-definition definition ⇒ name : scheme
 
-  T-Recursive-Program :=
+  T-Module :=
+    GAMMA_D = checked schemes imported from direct dependency summaries
     scheme_i = forall free_parameters_i. definition_type_i
     GAMMA_G = { name_i : scheme_i | 1 <= i <= n }
-    GAMMA_i = GAMMA_G[name_i : definition_type_i]
+    GAMMA_i = GAMMA_D, GAMMA_G[name_i : definition_type_i]
     for each i, GAMMA_i |-definition definition_i ⇒ name_i : scheme_i
-    GAMMA_G |- result ⇒ result_type
     every inference variable allocated by these premises is in domain(THETA)
-    apply(THETA, result_type) contains no inference variable
+    freeze_public(module, apply(THETA, GAMMA_G)) = summary
     ===>
-    |-program definitions; result ⇒ apply(THETA, result_type)
+    GAMMA_D |-module module ⇒ summary
+
+  T-Program :=
+    modules are in dependency order
+    for each module_i, summaries(direct_dependencies_i) |-module module_i ⇒ summary_i
+    main is a local checked scheme in entry
+    main = Function(Unit, result_type)
+    closed(result_type)
+    ===>
+    |-program modules, entry ⇒ result_type
 ```
 
 `ordered_free_parameters` returns the free uppercase variables in their first
@@ -509,15 +525,35 @@ scheme.
 interface. `T-Equational-Global` checks every contiguous clause under the same
 rigid parameters and requires the complete group to be exhaustive under the
 shared coverage relation. The definition judgments check parameters and bodies
-but do not determine global visibility. `T-Recursive-Program` establishes all
-global schemes before checking any definition and synthesizes the file type
-from its required result expression. Its final two premises close inference
-over the whole program, including types inferred only inside discarded
-expressions, and expose the substituted result type. `THETA` is the accumulated
-first-order substitution described above. While definition `i` is checked,
-`GAMMA_i` replaces only its own scheme with the opened monotype. Its recursive
-self-occurrences therefore use the same rigid arguments, while occurrences of
-other globals remain ordinary schemes and instantiate freshly.
+but do not determine global visibility. `T-Module` establishes all local
+global schemes before checking any definition. Its inference premise closes
+inference over the complete module, including types inferred only inside
+discarded expressions. `THETA` is the accumulated first-order substitution
+described above. While definition `i` is checked, `GAMMA_i` replaces only its
+own scheme with the opened monotype. Its recursive self-occurrences therefore
+use the same rigid arguments, while occurrences of other local and imported
+globals remain ordinary schemes and instantiate freshly.
+
+`freeze_public` derives a body-free summary only after every module body
+checks. It retains public global identities with their fully substituted
+rank-1 schemes, public nominal identities and parameter facts, constructors of
+public transparent types, access facts for public opaque types, and any hidden
+nominal identities needed by public schemes. It also retains causal
+declaration provenance. The summary gives an importer no private source name
+or body. Importing a scheme instantiates that checked scheme; it does not infer
+or generalize the dependency again.
+
+When more than one imported scheme refers to the same module-qualified nominal
+identity, those occurrences remain equal. Compatible access facts for that
+identity preserve the access established by the importing module's routes;
+they do not create a second nominal type. Hidden and opaque access never
+contribute a constructor family to coverage.
+
+`T-Program` checks each module after all its dependencies. The entry must
+declare exactly one local `main`; an imported `main` cannot satisfy the
+premise. The scheme must be monomorphic with domain `Unit`, and its result must
+contain no free type or inference variable. The closed `result_type` is the
+type observed for the whole program. `main` need not be public.
 Semicolons in these judgments separate semantic fields and are not source
 punctuation. Resolution has already ensured global-name freshness and
 equational name agreement. For `T-Operational-Global`, one typed source
@@ -534,11 +570,13 @@ fn add((left, right) : (Int, Int)) -> Int {
     left + right
 }
 
-add(20, 22)
+main : Unit -> Int
+main () = add(20, 22)
 ```
 
-Mini-Ash has no higher-rank or higher-kinded polymorphism, explicit source type
+Ash has no higher-rank or higher-kinded polymorphism, explicit source type
 application, broad application-shaped local generalization, overloading,
 subtyping, implicit conversions, explicit structural recursive-type operators,
 or polymorphic recursion. Nominal declarations may refer to themselves and to
-other nominal declarations in the same file.
+other nominal declarations in the same module. Recursive global visibility
+does not cross a module boundary.

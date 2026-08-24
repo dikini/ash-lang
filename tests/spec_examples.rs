@@ -23,41 +23,13 @@ const RECURSIVE_GLOBAL: &str = include_str!("fixtures/recursion/valid/global-mut
 const RECURSIVE_LOCAL: &str = include_str!("fixtures/recursion/valid/local-mutual.ash");
 const UNSAFE_RECURSIVE_INITIALIZER: &str =
     include_str!("fixtures/recursion/type/unsafe-initializer.ash");
-const DOCUMENTED_V001: &str = "1 + 2 * 3\n";
-const DOCUMENTED_V002_EQUATIONAL: &str =
-    "increment : Int -> Int\nincrement value = value + 1\n\nincrement 41\n";
-const DOCUMENTED_V002_OPERATIONAL: &str =
-    "fn increment(value : Int) -> Int {\n    value + 1\n}\n\nincrement 41\n";
-const DOCUMENTED_V003: &str = "{\n    let value = 1\n    let value = value + 1\n    value\n}\n";
-const DOCUMENTED_V004: &str = "{\n    let offset = 40\n    let add_offset : Int -> Int = fn(value) {\n        value + offset\n    }\n    add_offset 2\n}\n";
-const DOCUMENTED_V008: &str = "increment : Int -> Int\nincrement value = value + 1\n\nfn double(value : Int) -> Int {\n    value * 2\n}\n\ndouble (increment 20)\n";
-const DOCUMENTED_RECURSIVE_GLOBAL: &str = "first : Unit -> Int\nfirst ignored = second ()\n\nfn second(ignored : Unit) -> Int {\n    let retain : Unit -> Int = fn(value) {\n        first value\n    }\n    42\n}\n\nfirst ()\n";
-const DOCUMENTED_RECURSIVE_LOCAL: &str = "{\n    let rec first : Unit -> Int = fn(ignored) {\n        second ()\n    }\n    and second : Unit -> Int = fn(ignored) {\n        let retain : Unit -> Int = fn(value) {\n            first value\n        }\n        42\n    }\n    first ()\n}\n";
-const DOCUMENTED_UNSAFE_RECURSIVE_INITIALIZER: &str =
-    "{\n    let rec value : Int = 1\n    value\n}\n";
-const CURRIED_EQUATIONAL: &str =
-    "add : Int -> Int -> Int\nadd left = fn(right) {\n    left + right\n}\n\nadd 20 22\n";
-const CONTEXTUAL_BLOCK: &str = "{\n    let constant : Unit -> Int = {\n        fn(ignored) {\n            1\n        }\n    }\n    constant ()\n}\n";
-const HIGHER_ORDER_OPERATIONAL: &str = "fn add(left : Int) -> Int -> Int {\n    fn(right) {\n        left + right\n    }\n}\n\nadd 20 22\n";
-const FUNCTION_RESULT: &str = "identity : Int -> Int\nidentity value = value\n\nidentity\n";
-const COMMENT_REJECTION: &str = "// comments are not in Mini-Ash\n1\n";
-const UNKNOWN_NAME_REJECTION: &str = "missing 1\n";
-const TYPE_REJECTION: &str = "true + 1\n";
-const IRREFUTABLE_TUPLE: &str = "{\n    let (left, right) = (20, 22)\n    left + right\n}\n";
-const OPERATIONAL_TUPLE_PATTERN: &str =
-    "fn add((left, right) : (Int, Int)) -> Int {\n    left + right\n}\n\nadd(20, 22)\n";
-const CONTEXTUAL_MATCH: &str = "fn choose(flag : Bool) -> Int -> Int {\n    match flag {\n        true => fn(value) {\n            value + 1\n        }\n        false => fn(value) {\n            value * 2\n        }\n    }\n}\n\nchoose true 41\n";
-const TREE_PRESENTATIONS: &str = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn size_match(tree : Tree) -> Int {\n    match tree {\n        Tip(value) => 1\n        Fork(left, right) => size_match left + size_match right\n    }\n}\n\nsize (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))\n";
-const HIGHER_ORDER_CONSTRUCTOR: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmatch build Wrap {\n    Wrap(value) => value\n}\n";
-const CYCLIC_STREAM: &str = "type Stream =\n    Next(Int, Stream)\n\n{\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
-const RANK_ONE_POLYMORPHISM: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\n{\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
 
 const CURRIED_EQUATIONAL_MODULE: &str = "add : Int -> Int -> Int\nadd left = fn(right) {\n    left + right\n}\n\nmain : Unit -> Int\nmain () = add 20 22\n";
 const CONTEXTUAL_BLOCK_MODULE: &str = "main : Unit -> Int\nmain () = {\n    let constant : Unit -> Int = {\n        fn(ignored) {\n            1\n        }\n    }\n    constant ()\n}\n";
 const HIGHER_ORDER_OPERATIONAL_MODULE: &str = "fn add(left : Int) -> Int -> Int {\n    fn(right) {\n        left + right\n    }\n}\n\nmain : Unit -> Int\nmain () = add 20 22\n";
 const FUNCTION_RESULT_MODULE: &str = "identity : Int -> Int\nidentity value = value\n\nmain : Unit -> (Int -> Int)\nmain () = identity\n";
 const COMMENT_REJECTION_MODULE: &str =
-    "// comments are not in Mini-Ash\nmain : Unit -> Int\nmain () = 1\n";
+    "// comments are not in Ash\nmain : Unit -> Int\nmain () = 1\n";
 const UNKNOWN_NAME_REJECTION_MODULE: &str = "main : Unit -> Int\nmain () = missing 1\n";
 const TYPE_REJECTION_MODULE: &str = "main : Unit -> Int\nmain () = true + 1\n";
 const IRREFUTABLE_TUPLE_MODULE: &str =
@@ -68,6 +40,21 @@ const TREE_PRESENTATIONS_MODULE: &str = "type Tree =\n    Tip(Int)\n    | Fork(T
 const HIGHER_ORDER_CONSTRUCTOR_MODULE: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmain : Unit -> Int\nmain () = match build Wrap {\n    Wrap(value) => value\n}\n";
 const CYCLIC_STREAM_MODULE: &str = "type Stream =\n    Next(Int, Stream)\n\nmain : Unit -> Stream\nmain () = {\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
 const RANK_ONE_POLYMORPHISM_MODULE: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\nmain : Unit -> (Option<Int>, Bool)\nmain () = {\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
+
+const MAIN_MODULE: &str = "main : Unit -> Int\nmain () = 42\n";
+const SIBLING_ENTRY_MODULE: &str =
+    "import arithmetic as Arithmetic\n\nmain : Unit -> Int\nmain () = Arithmetic.answer(())\n";
+const SIBLING_ARITHMETIC_MODULE: &str = "pub answer : Unit -> Int\nanswer () = 42\n";
+const NAMED_ROOT_ENTRY_MODULE: &str =
+    "import @std.answer as Answer\n\nmain : Unit -> Int\nmain () = Answer.value(())\n";
+const NAMED_ROOT_ANSWER_MODULE: &str = "pub value : Unit -> Int\nvalue () = 42\n";
+const TARGETED_ENTRY_MODULE: &str = "import arithmetic (answer as imported_answer)\n\nmain : Unit -> Int\nmain () = imported_answer(())\n";
+const OPAQUE_ENTRY_MODULE: &str = "import token as Token\n\nmain : Unit -> Int\nmain () = {\n    let token : Token.Token = Token.make(41)\n    Token.read(Token.step(token))\n}\n";
+const OPAQUE_TOKEN_MODULE: &str = "pub opaque type Token = Token(Int)\n\npub make : Int -> Token\nmake value = Token(value)\n\npub step : Token -> Token\nstep (Token value) = Token(value + 1)\n\npub read : Token -> Int\nread (Token value) = value\n";
+const HIDDEN_ENTRY_MODULE: &str = "import carrier as Carrier\n\nmain : Unit -> Int\nmain () = {\n    let hidden = Carrier.make(41)\n    Carrier.read(Carrier.step(hidden))\n}\n";
+const HIDDEN_CARRIER_MODULE: &str = "type Hidden = Hidden(Int)\n\npub make : Int -> Hidden\nmake value = Hidden(value)\n\npub step : Hidden -> Hidden\nstep (Hidden value) = Hidden(value + 1)\n\npub read : Hidden -> Int\nread (Hidden value) = value\n";
+const TRANSPARENT_ENTRY_MODULE: &str = "import choice as Choice\n\nmain : Unit -> Int\nmain () = match Choice.sample(()) {\n    Choice.First(value) => value\n    Choice.Second(value) => value + 1\n}\n";
+const TRANSPARENT_CHOICE_MODULE: &str = "pub type Choice =\n    First(Int)\n    | Second(Int)\n\npub sample : Unit -> Choice\nsample () = First(42)\n";
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -86,11 +73,26 @@ impl TempDirectory {
             }
         }
     }
+
+    fn write(&self, relative: &str, text: &str) -> PathBuf {
+        let path = self.0.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("the example parent should be creatable");
+        }
+        fs::write(&path, text).expect("the module example should be writable");
+        path
+    }
+
+    fn directory(&self, relative: &str) -> PathBuf {
+        let path = self.0.join(relative);
+        fs::create_dir_all(&path).expect("the module-root example should be creatable");
+        path
+    }
 }
 
 impl Drop for TempDirectory {
     fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.0);
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -165,28 +167,130 @@ fn assert_documented(path: &str, source: &str) {
     );
 }
 
+fn assert_module_tree(
+    entry_text: &str,
+    dependencies: &[(&str, &str)],
+    roots: ModuleRoots,
+) -> ash::driver::Observation {
+    let tree = TempDirectory::create();
+    let entry = tree.write("app/main.ash", entry_text);
+    for (path, text) in dependencies {
+        tree.write(path, text);
+    }
+    run_path(RunConfiguration { entry, roots })
+        .expect("the documented module tree should be accepted")
+}
+
+#[test]
+fn overview_main_application_example_is_executable() {
+    assert_observation("main.ash", MAIN_MODULE, "42", "Int");
+    assert_documented("README.md", MAIN_MODULE);
+}
+
+#[test]
+fn overview_sibling_import_example_is_executable() {
+    let observation = assert_module_tree(
+        SIBLING_ENTRY_MODULE,
+        &[("app/arithmetic.ash", SIBLING_ARITHMETIC_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+    assert_documented("spec/README.md", SIBLING_ENTRY_MODULE);
+    assert_documented("spec/README.md", SIBLING_ARITHMETIC_MODULE);
+}
+
+#[test]
+fn tool_named_root_example_has_exact_cli_observation() {
+    let tree = TempDirectory::create();
+    tree.write("app/main.ash", NAMED_ROOT_ENTRY_MODULE);
+    tree.directory("standard");
+    tree.write("standard/answer.ash", NAMED_ROOT_ANSWER_MODULE);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .current_dir(&tree.0)
+        .arg("--root")
+        .arg("std=standard")
+        .arg("app/main.ash")
+        .output()
+        .expect("the documented executable should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : Int\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", NAMED_ROOT_ENTRY_MODULE);
+    assert_documented("docs/tools/ash.md", NAMED_ROOT_ANSWER_MODULE);
+}
+
+#[test]
+fn overview_targeted_import_example_is_executable() {
+    let observation = assert_module_tree(
+        TARGETED_ENTRY_MODULE,
+        &[("app/arithmetic.ash", SIBLING_ARITHMETIC_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_documented("spec/README.md", TARGETED_ENTRY_MODULE);
+}
+
+#[test]
+fn overview_opaque_smart_constructor_example_is_executable() {
+    let observation = assert_module_tree(
+        OPAQUE_ENTRY_MODULE,
+        &[("app/token.ash", OPAQUE_TOKEN_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_documented("spec/README.md", OPAQUE_ENTRY_MODULE);
+    assert_documented("spec/README.md", OPAQUE_TOKEN_MODULE);
+}
+
+#[test]
+fn overview_hidden_carrier_example_is_executable() {
+    let observation = assert_module_tree(
+        HIDDEN_ENTRY_MODULE,
+        &[("app/carrier.ash", HIDDEN_CARRIER_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_documented("spec/README.md", HIDDEN_ENTRY_MODULE);
+    assert_documented("spec/README.md", HIDDEN_CARRIER_MODULE);
+}
+
+#[test]
+fn overview_transparent_matching_example_is_executable() {
+    let observation = assert_module_tree(
+        TRANSPARENT_ENTRY_MODULE,
+        &[("app/choice.ash", TRANSPARENT_CHOICE_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_documented("spec/README.md", TRANSPARENT_ENTRY_MODULE);
+    assert_documented("spec/README.md", TRANSPARENT_CHOICE_MODULE);
+}
+
 #[test]
 fn syntax_equational_global_example_v002_is_executable() {
     assert_observation("spec-v002-equational.ash", V002_EQUATIONAL, "42", "Int");
-    assert_documented("spec/syntax.md", DOCUMENTED_V002_EQUATIONAL);
+    assert_documented("spec/syntax.md", V002_EQUATIONAL);
 }
 
 #[test]
 fn syntax_inline_operational_global_example_v002_is_executable() {
     assert_observation("spec-v002-operational.ash", V002_OPERATIONAL, "42", "Int");
-    assert_documented("spec/syntax.md", DOCUMENTED_V002_OPERATIONAL);
+    assert_documented("spec/syntax.md", V002_OPERATIONAL);
 }
 
 #[test]
 fn syntax_local_recursive_group_example_is_executable() {
     assert_observation("spec-local-recursion.ash", RECURSIVE_LOCAL, "42", "Int");
-    assert_documented("spec/syntax.md", DOCUMENTED_RECURSIVE_LOCAL);
+    assert_documented("spec/syntax.md", RECURSIVE_LOCAL);
 }
 
 #[test]
 fn resolution_global_recursive_scope_example_is_executable() {
     assert_observation("spec-global-recursion.ash", RECURSIVE_GLOBAL, "42", "Int");
-    assert_documented("spec/name-resolution.md", DOCUMENTED_RECURSIVE_GLOBAL);
+    assert_documented("spec/name-resolution.md", RECURSIVE_GLOBAL);
 }
 
 #[test]
@@ -197,16 +301,13 @@ fn static_semantics_rejects_unsafe_recursive_initialization() {
         panic!("unsafe recursive initialization should fail during typing")
     };
     assert_eq!(actual.reason, TypeReason::UnsafeRecursiveRoot);
-    assert_documented(
-        "spec/static-semantics.md",
-        DOCUMENTED_UNSAFE_RECURSIVE_INITIALIZER,
-    );
+    assert_documented("spec/static-semantics.md", UNSAFE_RECURSIVE_INITIALIZER);
 }
 
 #[test]
 fn dynamic_recursive_group_example_is_executable() {
     assert_observation("spec-dynamic-recursion.ash", RECURSIVE_LOCAL, "42", "Int");
-    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_RECURSIVE_LOCAL);
+    assert_documented("spec/dynamic-semantics.md", RECURSIVE_LOCAL);
 }
 
 #[test]
@@ -218,7 +319,7 @@ fn tool_recursive_example_has_exact_cli_observation() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"42 : Int\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", DOCUMENTED_RECURSIVE_GLOBAL);
+    assert_documented("docs/tools/ash.md", RECURSIVE_GLOBAL);
 }
 
 #[test]
@@ -229,7 +330,7 @@ fn syntax_curried_equational_example_is_executable() {
         "42",
         "Int",
     );
-    assert_documented("spec/elaboration.md", CURRIED_EQUATIONAL);
+    assert_documented("spec/elaboration.md", CURRIED_EQUATIONAL_MODULE);
 }
 
 #[test]
@@ -247,7 +348,7 @@ fn lexical_comment_rejection_example_has_its_documented_reason() {
             .collect::<Vec<_>>(),
         vec![LexReason::Comment]
     );
-    assert_documented("spec/lexical-structure.md", COMMENT_REJECTION);
+    assert_documented("spec/lexical-structure.md", COMMENT_REJECTION_MODULE);
 }
 
 #[test]
@@ -258,7 +359,7 @@ fn resolution_unknown_name_example_has_its_documented_reason() {
         panic!("the unknown-name example should fail during resolution");
     };
     assert_eq!(actual.reason, ResolveReason::UnknownName);
-    assert_documented("spec/name-resolution.md", UNKNOWN_NAME_REJECTION);
+    assert_documented("spec/name-resolution.md", UNKNOWN_NAME_REJECTION_MODULE);
 }
 
 #[test]
@@ -269,7 +370,7 @@ fn static_semantics_operand_example_has_its_documented_reason() {
         panic!("the operand example should fail during typing");
     };
     assert_eq!(actual.reason, TypeReason::OperatorOperand);
-    assert_documented("spec/static-semantics.md", TYPE_REJECTION);
+    assert_documented("spec/static-semantics.md", TYPE_REJECTION_MODULE);
 }
 
 #[test]
@@ -280,7 +381,7 @@ fn static_semantics_contextual_block_example_is_executable() {
         "1",
         "Int",
     );
-    assert_documented("spec/static-semantics.md", CONTEXTUAL_BLOCK);
+    assert_documented("spec/static-semantics.md", CONTEXTUAL_BLOCK_MODULE);
 }
 
 #[test]
@@ -291,7 +392,7 @@ fn static_semantics_higher_order_operational_example_is_executable() {
         "42",
         "Int",
     );
-    assert_documented("spec/static-semantics.md", HIGHER_ORDER_OPERATIONAL);
+    assert_documented("spec/static-semantics.md", HIGHER_ORDER_OPERATIONAL_MODULE);
 }
 
 #[test]
@@ -302,7 +403,7 @@ fn static_semantics_irrefutable_tuple_binding_is_executable() {
         "42",
         "Int",
     );
-    assert_documented("spec/static-semantics.md", IRREFUTABLE_TUPLE);
+    assert_documented("spec/static-semantics.md", IRREFUTABLE_TUPLE_MODULE);
 }
 
 #[test]
@@ -313,7 +414,7 @@ fn static_semantics_operational_tuple_pattern_is_executable() {
         "42",
         "Int",
     );
-    assert_documented("spec/static-semantics.md", OPERATIONAL_TUPLE_PATTERN);
+    assert_documented("spec/static-semantics.md", OPERATIONAL_TUPLE_PATTERN_MODULE);
 }
 
 #[test]
@@ -324,7 +425,7 @@ fn static_semantics_contextual_match_checks_function_arms() {
         "42",
         "Int",
     );
-    assert_documented("spec/static-semantics.md", CONTEXTUAL_MATCH);
+    assert_documented("spec/static-semantics.md", CONTEXTUAL_MATCH_MODULE);
 }
 
 #[test]
@@ -335,7 +436,7 @@ fn static_semantics_rank_one_polymorphism_is_executable() {
         "(Some(42), false)",
         "(Option<Int>, Bool)",
     );
-    assert_documented("spec/static-semantics.md", RANK_ONE_POLYMORPHISM);
+    assert_documented("spec/static-semantics.md", RANK_ONE_POLYMORPHISM_MODULE);
 }
 
 #[test]
@@ -346,7 +447,7 @@ fn elaboration_tree_presentations_are_equivalent() {
         "4",
         "Int",
     );
-    assert_documented("spec/elaboration.md", TREE_PRESENTATIONS);
+    assert_documented("spec/elaboration.md", TREE_PRESENTATIONS_MODULE);
 }
 
 #[test]
@@ -357,7 +458,7 @@ fn elaboration_payload_constructor_is_higher_order() {
         "42",
         "Int",
     );
-    assert_documented("spec/elaboration.md", HIGHER_ORDER_CONSTRUCTOR);
+    assert_documented("spec/elaboration.md", HIGHER_ORDER_CONSTRUCTOR_MODULE);
 }
 
 #[test]
@@ -368,37 +469,37 @@ fn dynamic_cyclic_data_observation_is_finite() {
         "Next(1, <cycle>)",
         "Stream",
     );
-    assert_documented("spec/dynamic-semantics.md", CYCLIC_STREAM);
+    assert_documented("spec/dynamic-semantics.md", CYCLIC_STREAM_MODULE);
 }
 
 #[test]
 fn dynamic_binding_derivation_example_v003_is_executable() {
     assert_observation("spec-v003.ash", V003, "2", "Int");
-    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V003);
+    assert_documented("spec/dynamic-semantics.md", V003);
 }
 
 #[test]
 fn dynamic_primitive_derivation_example_v001_is_executable() {
     assert_observation("spec-v001.ash", V001, "7", "Int");
-    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V001);
+    assert_documented("spec/dynamic-semantics.md", V001);
 }
 
 #[test]
 fn dynamic_application_derivation_example_v002_is_executable() {
     assert_observation("spec-v002.ash", V002_EQUATIONAL, "42", "Int");
-    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V002_EQUATIONAL);
+    assert_documented("spec/dynamic-semantics.md", V002_EQUATIONAL);
 }
 
 #[test]
 fn dynamic_capture_derivation_example_v004_is_executable() {
     assert_observation("spec-v004.ash", V004, "42", "Int");
-    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V004);
+    assert_documented("spec/dynamic-semantics.md", V004);
 }
 
 #[test]
 fn dynamic_nested_application_derivation_example_v008_is_executable() {
     assert_observation("spec-v008.ash", V008, "42", "Int");
-    assert_documented("spec/dynamic-semantics.md", DOCUMENTED_V008);
+    assert_documented("spec/dynamic-semantics.md", V008);
 }
 
 #[test]
@@ -410,7 +511,7 @@ fn tool_success_example_has_exact_cli_observation() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"42 : Int\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", DOCUMENTED_V008);
+    assert_documented("docs/tools/ash.md", V008);
 }
 
 #[test]
@@ -451,7 +552,7 @@ fn tool_function_result_uses_opaque_rendering() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"<function> : Int -> Int\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", FUNCTION_RESULT);
+    assert_documented("docs/tools/ash.md", FUNCTION_RESULT_MODULE);
 }
 
 #[test]
@@ -465,7 +566,7 @@ fn tool_cyclic_data_uses_structural_rendering() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"Next(1, <cycle>) : Stream\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", CYCLIC_STREAM);
+    assert_documented("docs/tools/ash.md", CYCLIC_STREAM_MODULE);
 }
 
 #[test]
@@ -479,7 +580,7 @@ fn tool_rank_one_example_has_exact_cli_observation() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"(Some(42), false) : (Option<Int>, Bool)\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", RANK_ONE_POLYMORPHISM);
+    assert_documented("docs/tools/ash.md", RANK_ONE_POLYMORPHISM_MODULE);
 }
 
 #[test]
@@ -493,7 +594,7 @@ fn tool_source_rejection_uses_status_one_and_stderr() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).starts_with("type.operator-operand\n"));
-    assert_documented("docs/tools/ash.md", TYPE_REJECTION);
+    assert_documented("docs/tools/ash.md", TYPE_REJECTION_MODULE);
 }
 
 #[test]

@@ -14,6 +14,12 @@ constructor occurrences, typed patterns, and matches remain structured semantic
 terms. Their nominal and constructor references use registry identities rather
 than source spellings.
 
+Module paths, imports, aliases, targeted bindings, declaration visibility, and
+opacity do not become Core terms. Resolution has already authenticated each
+cross-module occurrence against the defining module's export summary. These
+forms therefore erase while their module-qualified term, nominal, constructor,
+type-parameter, source, and origin identities remain.
+
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
 checking, but it solves and removes every inference variable before constructing
@@ -24,11 +30,11 @@ An ordinary local binding becomes a nonrecursive Core binding around the
 remainder of its block. Its initializer remains outside its new binder's
 scope.
 
-All file globals elaborate together through one recursive binding around
-the file result. One explicit local recursive group elaborates through the
-same form around the remainder of its block. The recursive binding owns a
-nonempty ordered sequence of annotated member initializers followed by one body
-term. Every group binder is in scope in every initializer and in that body.
+All globals in one module elaborate together through one recursive binding.
+One explicit local recursive group elaborates through the same form around the
+remainder of its block. The recursive binding owns a nonempty ordered sequence
+of annotated member initializers followed by one body term. Every group binder
+is in scope in every initializer and in that body.
 
 A local binder pattern uses the ordinary nonrecursive Core binding. Any other
 local pattern becomes a one-arm structured match whose static coverage proves
@@ -36,6 +42,31 @@ the arm irrefutable. An equational clause group becomes one structured match
 over its curried arguments. An operational multi-parameter header and a
 multi-parameter anonymous function each receive one tuple-domain value and
 match it with the source pattern in the function body.
+
+## Module linking and entry generation
+
+After every module checks, elaboration combines the complete defining nominal
+and constructor registries of all admitted modules. Each declaration retains
+its module-qualified identity. Distinct identities remain distinct even when
+their source spellings or representations match. Access-compatible import
+routes have already converged on the same identities. Public summaries can
+carry a private nominal identity without giving it a source name. The combined
+registry retains that identity so all compatible imported schemes continue to
+refer to the same type. Opaque constructor access has already been enforced and
+does not restrict the defining constructor facts needed by the linked program.
+
+Each nonempty module definition group becomes one ordinary Core recursive
+binding. Groups appear in dependency order: a dependency's group surrounds the
+groups that depend on it. An imported binder occurrence therefore refers to an
+outer binder with the identity supplied by the dependency summary. Modules do
+not form one mutually recursive group, and an import cycle cannot reach this
+phase.
+
+Elaboration generates an occurrence of the entry module's local `main` and
+applies it to unit. This application is the innermost body of the linked module
+groups. It has the closed result type established by the entry contract.
+Module linking introduces no initialization, lookup, or runtime module value;
+the result is one pure Core expression.
 
 ## Explicit rank-1 operations
 
@@ -83,7 +114,8 @@ add left = fn(right) {
     left + right
 }
 
-add 20 22
+main : Unit -> Int
+main () = add 20 22
 ```
 
 The inline operational header also defines one unary function. A
@@ -116,7 +148,8 @@ fn size_match(tree : Tree) -> Int {
     }
 }
 
-size (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))
+main : Unit -> Int
+main () = size (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))
 ```
 
 The executable test `elaboration_payload_constructor_is_higher_order` checks
@@ -130,7 +163,8 @@ fn build(make : Int -> Wrapped) -> Wrapped {
     make 42
 }
 
-match build Wrap {
+main : Unit -> Int
+main () = match build Wrap {
     Wrap(value) => value
 }
 ```
@@ -153,16 +187,19 @@ group; it cannot silently treat the members as sequential bindings.
 ## Validation boundary
 
 Every semantic binder, pattern, and expression carries its type and causal
-source origin. The resolved and checked programs carry immutable nominal and
-constructor registries. Before evaluation, validation independently checks
-registry closure and identities, binder scope, node and branch types,
-constructor ownership and payloads, pattern bindings, coverage, recursive
-groups, type-variable scope, rank-1 scheme shape, type-operation substitution,
-origins, child handles, reachability, and cumulative resource limits. A type
-application must supply exactly one kind-`Type` monotype per quantified
-parameter, and its annotated result must equal simultaneous substitution into
-the scheme body. Failure of this boundary is an internal compiler failure, not
-a source-language typing result.
+source origin. Validation receives the linked program and its combined
+immutable nominal and constructor registry, the admitted source set, and each
+module's source identity. Before evaluation, it independently checks registry
+closure and identities, module and source provenance, binder scope, node and
+branch types, constructor ownership and payloads, pattern bindings, coverage,
+recursive groups, type-variable scope, rank-1 scheme shape, type-operation
+substitution, origins, child handles, reachability, and cumulative resource
+limits. A type application must supply exactly one kind-`Type` monotype per
+quantified parameter, and its annotated result must equal simultaneous
+substitution into the scheme body. Validation applies once to the whole linked
+Core program, including every module group and the generated entry application.
+Failure of this boundary is an internal compiler failure, not a source-language
+typing result.
 
 This requirement does not prescribe a Rust representation, storage strategy,
 or evaluator mechanism.
