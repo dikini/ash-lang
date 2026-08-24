@@ -282,12 +282,11 @@ freshened heads can unify. Prerequisites do not make overlap safe. Source or
 import order selects only which conflict is reported first; it never selects a
 winner.
 
-This is scoped coherence. Two sibling modules may contain overlapping public
-impls while no module imports both. A later caller that imports one sibling or
-the other can therefore supply different evidence to the same constrained
-generic function. A module that imports both rejects the overlap rather than
-choosing. The direct-import boundary makes this variation explicit in the
-caller's dependency set.
+The orphan rule and Ash's acyclic dependency graph make overlapping public
+impls from distinct modules unreachable: unifying heads require a shared
+interface and outer-head ownership pair, which only one defining module can
+own. The checker still deduplicates direct implementation facts and rejects
+overlap among admitted facts in an effective environment.
 
 There are no priorities, negative impls, default impls, specialization rules,
 or condition-entailment exceptions in this increment.
@@ -669,9 +668,7 @@ Constraint-satisfaction diagnostics retain the requirement use as primary and
 relate the interface, selected or competing impl declarations, method
 declaration, impl method, and import occurrence needed to explain the result.
 A local orphan or overlap diagnostic uses the offending impl head as primary.
-An imported overlap uses the later direct-import occurrence or local impl as
-primary and relates both implementation declarations and relevant import
-edges. Equal display names from different modules remain distinct.
+Equal display names from different modules remain distinct.
 
 One graph-wide constraint budget charges proportional work before retaining:
 
@@ -705,8 +702,8 @@ Positive cases should include:
 - complete and targeted method imports plus automatic impl availability from a
   direct dependency;
 - alternate routes that preserve one interface and impl identity;
-- two overlapping impls in non-coimported sibling modules, followed by callers
-  that deliberately select different evidence through their direct imports;
+- direct routes that deduplicate one implementation identity, plus synthetic
+  checked facts that exercise effective-environment overlap;
 - recursive and higher-order constrained functions that thread evidence;
 - two same-typed method slots whose declaration order remains distinct in the
   checked evidence plan;
@@ -723,7 +720,8 @@ Negative cases should include:
   importer, producing an unsatisfied obligation without leaking private
   metadata;
 - a foreign-interface/foreign-type orphan and an unconstrained blanket impl;
-- duplicate and generic-overlap impls, including conflicts from direct imports;
+- duplicate and generic-overlap local impls, plus authenticated
+  effective-environment overlap facts;
 - no transitive ambient impl through an intermediary import;
 - unsatisfied and inference-ambiguous obligations;
 - a constrained `main` and a public requirement naming a private interface;

@@ -262,7 +262,7 @@ current head under those same rigid variables. It does not freshly instantiate
 the generic impl. Calls on proper components use declared prerequisite evidence.
 This preserves the current prohibition on polymorphic recursion.
 
-### Availability, overlap, and scoped coherence
+### Implementation availability and overlap
 
 A module's effective implementation environment contains:
 
@@ -273,7 +273,7 @@ Both complete and targeted imports make the direct dependency's public impl
 facts available. Target selectors affect source names only. An imported impl is
 not copied into the importer's summary and therefore does not become ambient in
 the importer's dependents. Alternate routes to one `ImplId` deduplicate before
-coherence checking.
+overlap checking.
 
 For each interface, the checker freshens the bound variables of every pair of
 distinct effective impl heads. If the heads unify, the module is incoherent and
@@ -296,10 +296,11 @@ An invalid local header therefore fails at its owning judgment and never
 creates a secondary overlap conflict. Imported summaries contain only headers
 admitted by the same sequence in their defining modules.
 
-This rule provides scoped coherence. Two sibling modules may export overlapping
-impls while no module imports both. A caller that directly imports one sibling
-or the other deliberately selects different evidence through a different
-dependency set. A module that imports both rejects the overlap.
+With this orphan rule and Ash's acyclic dependency graph, distinct modules
+cannot publish unifying heads for one interface and outer-head ownership pair.
+The effective environment still deduplicates direct implementation facts and
+rejects overlap among admitted facts. Cross-module co-import conflicts are not
+source-expressible under these ownership rules.
 
 There are no priority, negative, default, specialization, or condition-
 entailment rules.
@@ -532,8 +533,7 @@ validation families.
 Constraint diagnostics use the requirement occurrence as primary and relate
 the interface, selected or competing impl declarations, method declaration,
 impl method, and relevant import occurrences. A local orphan or overlap uses
-the impl head as primary. An imported overlap uses the later direct import or
-local impl in deterministic source order and relates both impl declarations.
+the impl head as primary.
 
 One graph-wide interface-and-constraint budget persists from imported-summary
 admission through effective-environment construction, checking, linking, and
@@ -553,10 +553,10 @@ worklists.
 ## Semantic delta
 
 Ash gains one-parameter method-only interfaces, local and exported impl facts,
-explicit global requirements, scoped coherence, typed implementation selection,
-and implicit source evidence. Separately checked constrained globals remain
-abstract in export summaries; callers supply evidence selected from their own
-direct dependency environment.
+explicit global requirements, implementation overlap checking, typed
+implementation selection, and implicit source evidence. Separately checked
+constrained globals remain abstract in export summaries; callers supply
+evidence selected from their own direct dependency environment.
 
 Type equality, unification, rank-1 generalization, module identity, visibility,
 opacity, linking, pure Core, and expression evaluation retain their current
@@ -657,8 +657,8 @@ Implementation must provide:
   re-export, hidden-head retention, public-interface closure, and failed-module
   summary atomicity;
 - local, primitive, nominal, foreign-interface/foreign-type orphan, bare
-  variable, duplicate, generic-overlap, co-imported conflict, and legal sibling
-  alternative cases;
+  variable, duplicate, generic-overlap, direct-route deduplication, and
+  authenticated effective-environment overlap cases;
 - proper-subterm generic prerequisites, expanding rejection, ground cycles,
   rigid head matching, abstract-evidence priority, unsatisfied and ambiguous
   obligations, and no inferred local or exported requirements;
@@ -679,7 +679,7 @@ Implementation must provide:
   evidence precedes source arguments, impl methods share their module recursive
   group, and no interface runtime node or registry exists;
 - exact end-to-end observations for local, cross-module, generic, hidden,
-  opaque, recursive, and caller-selected sibling cases;
+  opaque, and recursive cases;
 - deterministic structured diagnostics with causal related labels and no
   private metadata leak;
 - graph-wide exact-boundary resource cases for imported facts, overlap, wide

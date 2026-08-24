@@ -9,6 +9,7 @@ use ash::{
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::CheckedModule,
+    types::Type,
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -75,9 +76,56 @@ fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
 
 fn check_error(text: &str) -> TypeError {
     let fixture = ImplementationFixture::create(text, &[]);
+    check_fixture_error(&fixture)
+}
+
+fn check_error_with_dependencies(text: &str, dependencies: &[(&str, &str)]) -> TypeError {
+    let fixture = ImplementationFixture::create(text, dependencies);
+    check_fixture_error(&fixture)
+}
+
+fn check_fixture_error(fixture: &ImplementationFixture) -> TypeError {
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the implementation fixture should load");
     check_graph(&graph).expect_err("the implementation fixture should fail checking")
+}
+
+fn public_impl_failure_does_not_publish(text: &str, expected_reason: &str) {
+    let fixture = ImplementationFixture::create(
+        "import broken as Broken\nentry : Unit -> Unit\nentry () = ()\n",
+        &[("broken.ash", text)],
+    );
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the implementation fixture should load");
+    let broken = graph
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("broken.ash"))
+        .expect("the fixture should retain the broken dependency");
+    let resolved = resolve_module(broken, &[]).expect("the broken dependency should resolve");
+
+    let published = match check_module(resolved) {
+        Ok(checked) => {
+            let _summary = checked.exports();
+            true
+        }
+        Err(error) => {
+            let actual_reason = match &error {
+                TypeError::Interface(diagnostic) => diagnostic.reason.to_string(),
+                TypeError::Source(diagnostic) => diagnostic.reason.to_string(),
+                TypeError::Mismatch(_) | TypeError::Internal(_) => {
+                    panic!("expected a categorized public implementation failure, found {error:?}")
+                }
+            };
+            assert_eq!(actual_reason, expected_reason);
+            false
+        }
+    };
+
+    assert!(
+        !published,
+        "a failed public implementation must not produce a checked export summary"
+    );
 }
 
 fn checked_valid(text: &str) -> Vec<CheckedModule> {
@@ -112,6 +160,44 @@ fn rejects_bare_type_variable_impl_head() {
     );
 
     assert_eq!(reason(&error), "impl.variable-head");
+}
+
+#[test]
+fn invalid_bare_variable_head_precedes_imported_implementation_overlap() {
+    let error = check_error_with_dependencies(
+        concat!(
+            "import equality (Equal, equal)\n",
+            "impl Equal<A> {\nequal value = value\n}\n",
+        ),
+        &[(
+            "equality.ash",
+            concat!(
+                "pub interface Equal<A> {\nequal : A -> A\n}\n",
+                "pub impl Equal<Int> {\nequal value = value\n}\n",
+            ),
+        )],
+    );
+
+    assert_eq!(reason(&error), "impl.variable-head");
+}
+
+#[test]
+fn orphan_header_precedes_imported_implementation_overlap() {
+    let error = check_error_with_dependencies(
+        concat!(
+            "import equality (Equal, equal)\n",
+            "impl Equal<Int> {\nequal value = value\n}\n",
+        ),
+        &[(
+            "equality.ash",
+            concat!(
+                "pub interface Equal<A> {\nequal : A -> A\n}\n",
+                "pub impl Equal<Int> {\nequal value = value\n}\n",
+            ),
+        )],
+    );
+
+    assert_eq!(reason(&error), "impl.orphan");
 }
 
 #[test]
@@ -276,6 +362,45 @@ fn checked_membership_uses_interface_order_and_authenticates_source_groups() {
 }
 
 #[test]
+fn checked_impl_method_owns_substituted_constrained_scheme() {
+    let checked = checked_valid(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n",
+        "interface Equal<A> {\nequal : A -> A\n}\n\n",
+        "impl Equal<Option<A>> where Equal<A> {\nequal value = value\n}\n",
+    ));
+    let module = checked
+        .last()
+        .expect("the fixture should retain its module");
+    let [implementation] = module.implementation_facts() else {
+        panic!("the module should retain one checked implementation fact");
+    };
+    let [method] = implementation.methods.as_ref() else {
+        panic!("the implementation should retain one checked method fact");
+    };
+    let [parameter] = implementation.head_parameters.as_ref() else {
+        panic!("the implementation should retain its generic head parameter");
+    };
+    let [prerequisite] = implementation.prerequisites.as_ref() else {
+        panic!("the implementation should retain its prerequisite");
+    };
+
+    assert_eq!(method.scheme.type_parameters.as_ref(), &[parameter.id]);
+    let [method_requirement] = method.scheme.requirements.as_ref() else {
+        panic!("the method scheme should retain its implementation prerequisite");
+    };
+    assert_eq!(method_requirement.id, prerequisite.id);
+    assert_eq!(method_requirement.interface, prerequisite.interface);
+    assert_eq!(method_requirement.argument, prerequisite.argument);
+    let Type::Function(domain, codomain) = &method.scheme.value_type else {
+        panic!("the substituted method scheme should remain callable");
+    };
+    assert_eq!(domain.as_ref(), &implementation.argument);
+    assert_eq!(codomain.as_ref(), &implementation.argument);
+    assert_eq!(method.id.implementation(), implementation.id);
+    assert_eq!(method.id.method(), method.method);
+}
+
+#[test]
 fn rejects_identity_equal_local_implementation_heads() {
     let error = check_error(concat!(
         "interface Equal<A> {\nequal : A -> A\n}\n\n",
@@ -347,6 +472,16 @@ fn rejects_impl_method_equation_arity() {
 }
 
 #[test]
+fn rejects_impl_method_pattern_with_the_wrong_instantiated_type() {
+    let error = check_error(concat!(
+        "interface Keep<A> {\nkeep : A -> A\n}\n",
+        "impl Keep<Int> {\nkeep true = 1\n}\n",
+    ));
+
+    assert_eq!(source_reason(&error), "pattern.type-mismatch");
+}
+
+#[test]
 fn rejects_non_exhaustive_impl_method_equations() {
     let error = check_error(concat!(
         "interface Decide<A> {\ndecide : A -> Int\n}\n\n",
@@ -364,4 +499,31 @@ fn rejects_redundant_impl_method_equation() {
     ));
 
     assert_eq!(source_reason(&error), "coverage.redundant-case");
+}
+
+#[test]
+fn failed_public_impl_stages_never_produce_a_checked_summary() {
+    public_impl_failure_does_not_publish(
+        concat!(
+            "pub interface Equal<A> {\nequal : A -> A\n}\n",
+            "pub impl Equal<A> {\nequal value = value\n}\n",
+        ),
+        "impl.variable-head",
+    );
+
+    public_impl_failure_does_not_publish(
+        concat!(
+            "pub interface Equal<A> {\nequal : A -> A\n}\n",
+            "pub impl Equal<Int> {\n}\n",
+        ),
+        "impl.missing-method",
+    );
+
+    public_impl_failure_does_not_publish(
+        concat!(
+            "pub interface Equal<A> {\nequal : A -> A\n}\n",
+            "pub impl Equal<Int> {\nequal value = false\n}\n",
+        ),
+        "type.definition-result",
+    );
 }

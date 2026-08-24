@@ -8,8 +8,8 @@ use std::{
 use crate::{
     integer::Integer,
     interface::{
-        CheckedImplementation, CheckedInterface, ConstrainedScheme, EvidenceSlot, ImplId,
-        ImplMethodId, InterfaceId, MethodId, RequirementId,
+        CheckedImplementation, CheckedInterface, CheckedRequirement, ConstrainedScheme,
+        EvidenceSlot, ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId,
     },
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
@@ -257,6 +257,8 @@ pub struct CheckedModule {
     schemes: Vec<CheckedGlobalScheme>,
     checked_interfaces: Box<[CheckedInterface]>,
     checked_implementations: Box<[CheckedImplementation]>,
+    interface_facts: Box<[CheckedInterfaceFact]>,
+    implementation_facts: Box<[CheckedImplementationFact]>,
     exports: ExportSummary,
     span: Span,
 }
@@ -267,6 +269,8 @@ impl CheckedModule {
         schemes: Vec<CheckedGlobalScheme>,
         checked_interfaces: Box<[CheckedInterface]>,
         checked_implementations: Box<[CheckedImplementation]>,
+        interface_facts: Box<[CheckedInterfaceFact]>,
+        implementation_facts: Box<[CheckedImplementationFact]>,
         exports: ExportSummary,
     ) -> Self {
         Self {
@@ -279,6 +283,8 @@ impl CheckedModule {
             schemes,
             checked_interfaces,
             checked_implementations,
+            interface_facts,
+            implementation_facts,
             exports,
             span: resolved.span,
         }
@@ -332,6 +338,18 @@ impl CheckedModule {
         &self.checked_implementations
     }
 
+    /// Returns checked local interface semantic facts in declaration order.
+    #[must_use]
+    pub const fn interface_facts(&self) -> &[CheckedInterfaceFact] {
+        &self.interface_facts
+    }
+
+    /// Returns checked local implementation semantic facts in declaration order.
+    #[must_use]
+    pub const fn implementation_facts(&self) -> &[CheckedImplementationFact] {
+        &self.implementation_facts
+    }
+
     /// Returns the immutable body-free dependency summary.
     #[must_use]
     pub const fn exports(&self) -> &ExportSummary {
@@ -354,6 +372,8 @@ impl CheckedModule {
             schemes: std::mem::take(&mut self.schemes).into_boxed_slice(),
             checked_interfaces: std::mem::take(&mut self.checked_interfaces),
             checked_implementations: std::mem::take(&mut self.checked_implementations),
+            interface_facts: std::mem::take(&mut self.interface_facts),
+            implementation_facts: std::mem::take(&mut self.implementation_facts),
             span: self.span,
         }
     }
@@ -387,6 +407,10 @@ pub struct ResolvedModuleGroup {
     pub checked_interfaces: Box<[CheckedInterface]>,
     /// Checked local implementations in declaration order.
     pub checked_implementations: Box<[CheckedImplementation]>,
+    /// Checked local interface semantic facts in declaration order.
+    pub interface_facts: Box<[CheckedInterfaceFact]>,
+    /// Checked local implementation semantic facts in declaration order.
+    pub implementation_facts: Box<[CheckedImplementationFact]>,
     /// Complete defining source span.
     pub span: Span,
 }
@@ -419,6 +443,10 @@ pub struct ImportedFacts {
     globals: HashMap<BinderId, ImportedGlobalScheme>,
     nominals: HashMap<NominalTypeId, ImportedNominalFact>,
     constructors: HashMap<ConstructorId, ImportedConstructorFact>,
+    interfaces: Vec<CheckedInterfaceFact>,
+    interface_positions: HashMap<InterfaceId, usize>,
+    implementations: Vec<ImportedImplementationFact>,
+    implementation_positions: HashMap<ImplId, usize>,
 }
 
 impl ImportedFacts {
@@ -440,12 +468,33 @@ impl ImportedFacts {
         self.constructors.get(&id)
     }
 
+    /// Looks up one imported checked interface by semantic identity.
+    #[must_use]
+    pub fn interface(&self, id: InterfaceId) -> Option<&CheckedInterfaceFact> {
+        self.interfaces.get(*self.interface_positions.get(&id)?)
+    }
+
+    /// Looks up one directly imported public implementation by semantic identity.
+    #[must_use]
+    pub fn implementation(&self, id: ImplId) -> Option<&CheckedImplementationFact> {
+        Some(
+            &self
+                .implementations
+                .get(*self.implementation_positions.get(&id)?)?
+                .fact,
+        )
+    }
+
     pub(crate) fn globals(&self) -> impl Iterator<Item = &ImportedGlobalScheme> {
         self.globals.values()
     }
 
     pub(crate) fn nominals(&self) -> impl Iterator<Item = &ImportedNominalFact> {
         self.nominals.values()
+    }
+
+    pub(crate) fn implementations(&self) -> impl Iterator<Item = &ImportedImplementationFact> {
+        self.implementations.iter()
     }
 
     pub(crate) fn contains_global(&self, id: BinderId) -> bool {
@@ -503,6 +552,33 @@ impl ImportedFacts {
     pub(crate) fn insert_constructor(&mut self, fact: ImportedConstructorFact) {
         self.constructors.insert(fact.id, fact);
     }
+
+    pub(crate) fn insert_interface(&mut self, fact: CheckedInterfaceFact) {
+        let position = self.interfaces.len();
+        self.interface_positions.insert(fact.id, position);
+        self.interfaces.push(fact);
+    }
+
+    pub(crate) fn reserve_interface(&mut self) -> Result<(), ()> {
+        self.interfaces.try_reserve(1).map_err(|_| ())?;
+        self.interface_positions.try_reserve(1).map_err(|_| ())
+    }
+
+    pub(crate) fn insert_implementation(
+        &mut self,
+        fact: CheckedImplementationFact,
+        available_at: Span,
+    ) {
+        let position = self.implementations.len();
+        self.implementation_positions.insert(fact.id, position);
+        self.implementations
+            .push(ImportedImplementationFact { fact, available_at });
+    }
+
+    pub(crate) fn reserve_implementation(&mut self) -> Result<(), ()> {
+        self.implementations.try_reserve(1).map_err(|_| ())?;
+        self.implementation_positions.try_reserve(1).map_err(|_| ())
+    }
 }
 
 impl Drop for ImportedFacts {
@@ -523,7 +599,302 @@ impl Drop for ImportedFacts {
             }
             discard_origin_iteratively(fact.origin);
         }
+        for fact in self.interfaces.drain(..) {
+            drop(fact);
+        }
+        self.interface_positions.clear();
+        for imported in self.implementations.drain(..) {
+            drop(imported.fact);
+        }
+        self.implementation_positions.clear();
     }
+}
+
+/// One body-free checked interface fact keyed by stable semantic identity.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CheckedInterfaceFact {
+    /// Stable defining interface identity.
+    pub id: InterfaceId,
+    /// Exact defining source spelling.
+    pub spelling: String,
+    /// The interface's single parameter with its defining identity.
+    pub parameter: ResolvedTypeVariable,
+    /// Checked methods in semantic declaration order.
+    pub methods: Box<[CheckedInterfaceMethodFact]>,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+    /// Complete declaration span.
+    pub span: Span,
+}
+
+impl CheckedInterfaceFact {
+    /// Looks up one checked method within its owning interface.
+    #[must_use]
+    pub fn method(&self, id: MethodId) -> Option<&CheckedInterfaceMethodFact> {
+        self.methods.iter().find(|method| method.id == id)
+    }
+}
+
+impl Drop for CheckedInterfaceFact {
+    fn drop(&mut self) {
+        discard_origin_iteratively(std::mem::replace(
+            &mut self.parameter.origin,
+            Origin::Source(self.span),
+        ));
+        for method in std::mem::take(&mut self.methods).into_vec() {
+            drop(method);
+        }
+        discard_origin_iteratively(std::mem::replace(
+            &mut self.origin,
+            Origin::Source(self.span),
+        ));
+    }
+}
+
+/// One checked method signature nested under an interface fact.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CheckedInterfaceMethodFact {
+    /// Stable method identity.
+    pub id: MethodId,
+    /// Exact defining source spelling.
+    pub spelling: String,
+    /// Checked source value type before evidence lowering.
+    pub value_type: Type,
+    /// Causal method provenance.
+    pub origin: Origin,
+    /// Complete method-signature span.
+    pub span: Span,
+}
+
+impl Drop for CheckedInterfaceMethodFact {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.value_type, Type::Unit));
+        discard_origin_iteratively(std::mem::replace(
+            &mut self.origin,
+            Origin::Source(self.span),
+        ));
+    }
+}
+
+/// One body-free checked implementation fact available for scoped coherence.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CheckedImplementationFact {
+    /// Stable anonymous implementation identity.
+    pub id: ImplId,
+    /// Stable implemented interface identity.
+    pub interface: InterfaceId,
+    /// Ordered rigid head parameters with defining identities.
+    pub head_parameters: Box<[ResolvedTypeVariable]>,
+    /// Checked implementation head argument.
+    pub argument: Type,
+    /// Ordered checked prerequisites.
+    pub prerequisites: Box<[CheckedRequirement]>,
+    /// Method mappings in interface declaration order.
+    pub methods: Box<[CheckedImplementationMethodFact]>,
+    /// Causal implementation provenance.
+    pub origin: Origin,
+    /// Complete implementation span.
+    pub span: Span,
+}
+
+/// One checked implementation admitted through its first direct import edge.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ImportedImplementationFact {
+    /// Defining implementation fact retained without a body.
+    pub fact: CheckedImplementationFact,
+    /// Direct import occurrence that first made the fact available.
+    pub available_at: Span,
+}
+
+impl Drop for CheckedImplementationFact {
+    fn drop(&mut self) {
+        for parameter in std::mem::take(&mut self.head_parameters).into_vec() {
+            discard_origin_iteratively(parameter.origin);
+        }
+        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
+        for prerequisite in std::mem::take(&mut self.prerequisites).into_vec() {
+            drop(prerequisite);
+        }
+        for method in std::mem::take(&mut self.methods).into_vec() {
+            drop(method);
+        }
+        discard_origin_iteratively(std::mem::replace(
+            &mut self.origin,
+            Origin::Source(self.span),
+        ));
+    }
+}
+
+/// One checked implementation-method identity-to-binder relation.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CheckedImplementationMethodFact {
+    /// Stable implementation-method identity.
+    pub id: ImplMethodId,
+    /// Stable interface method supplied by the body.
+    pub method: MethodId,
+    /// Hidden module-qualified implementation-method binder.
+    pub binder: BinderId,
+    /// Checked conceptual scheme after rigid implementation-head substitution.
+    pub scheme: ConstrainedScheme,
+    /// Causal method-body provenance.
+    pub origin: Origin,
+    /// Complete implementation-method group span.
+    pub span: Span,
+}
+
+impl Drop for CheckedImplementationMethodFact {
+    fn drop(&mut self) {
+        drop(std::mem::replace(
+            &mut self.scheme,
+            ConstrainedScheme {
+                type_parameters: Box::new([]),
+                requirements: Box::new([]),
+                value_type: Type::Unit,
+            },
+        ));
+        discard_origin_iteratively(std::mem::replace(
+            &mut self.origin,
+            Origin::Source(self.span),
+        ));
+    }
+}
+
+fn clone_checked_requirement(
+    requirement: &CheckedRequirement,
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<CheckedRequirement, ResolvedBuildFailure> {
+    constraint_work
+        .charge_type(&requirement.argument)
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    Ok(CheckedRequirement {
+        id: requirement.id,
+        interface: requirement.interface,
+        argument: clone_type_with_budget(&requirement.argument, type_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+        origin: requirement.origin.clone(),
+        span: requirement.span,
+    })
+}
+
+fn clone_checked_interface_fact(
+    fact: &CheckedInterfaceFact,
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<CheckedInterfaceFact, ResolvedBuildFailure> {
+    constraint_work
+        .charge(fact.methods.len().saturating_add(1))
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let mut methods = Vec::new();
+    methods
+        .try_reserve(fact.methods.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    for method in &fact.methods {
+        constraint_work
+            .charge_type(&method.value_type)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        methods.push(CheckedInterfaceMethodFact {
+            id: method.id,
+            spelling: method.spelling.clone(),
+            value_type: clone_type_with_budget(&method.value_type, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            origin: method.origin.clone(),
+            span: method.span,
+        });
+    }
+    Ok(CheckedInterfaceFact {
+        id: fact.id,
+        spelling: fact.spelling.clone(),
+        parameter: fact.parameter.clone(),
+        methods: methods.into_boxed_slice(),
+        origin: fact.origin.clone(),
+        span: fact.span,
+    })
+}
+
+fn clone_checked_implementation_fact(
+    fact: &CheckedImplementationFact,
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<CheckedImplementationFact, ResolvedBuildFailure> {
+    constraint_work
+        .charge(
+            fact.head_parameters
+                .len()
+                .saturating_add(fact.prerequisites.len())
+                .saturating_add(fact.methods.len())
+                .saturating_add(1),
+        )
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    constraint_work
+        .charge_type(&fact.argument)
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+
+    let mut head_parameters = Vec::new();
+    head_parameters
+        .try_reserve(fact.head_parameters.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    head_parameters.extend(fact.head_parameters.iter().cloned());
+
+    let mut prerequisites = Vec::new();
+    prerequisites
+        .try_reserve(fact.prerequisites.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    for prerequisite in &fact.prerequisites {
+        prerequisites.push(clone_checked_requirement(
+            prerequisite,
+            type_work,
+            constraint_work,
+        )?);
+    }
+
+    let mut methods = Vec::new();
+    methods
+        .try_reserve(fact.methods.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    for method in &fact.methods {
+        constraint_work
+            .charge(
+                method
+                    .scheme
+                    .type_parameters
+                    .len()
+                    .saturating_add(method.scheme.requirements.len())
+                    .saturating_add(1),
+            )
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        constraint_work
+            .charge_type(&method.scheme.value_type)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        for requirement in &method.scheme.requirements {
+            constraint_work
+                .charge_type(&requirement.argument)
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        }
+        methods.push(CheckedImplementationMethodFact {
+            id: method.id,
+            method: method.method,
+            binder: method.binder,
+            scheme: method
+                .scheme
+                .clone_with_budget(type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            origin: method.origin.clone(),
+            span: method.span,
+        });
+    }
+
+    Ok(CheckedImplementationFact {
+        id: fact.id,
+        interface: fact.interface,
+        head_parameters: head_parameters.into_boxed_slice(),
+        argument: clone_type_with_budget(&fact.argument, type_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+        prerequisites: prerequisites.into_boxed_slice(),
+        methods: methods.into_boxed_slice(),
+        origin: fact.origin.clone(),
+        span: fact.span,
+    })
 }
 
 /// One imported checked global scheme.
@@ -850,6 +1221,12 @@ pub struct ExportSummary {
     nominal_names_by_id: HashMap<NominalTypeId, String>,
     constructors: HashMap<String, ExportedConstructor>,
     constructor_names_by_id: HashMap<ConstructorId, String>,
+    interface_names: HashMap<String, InterfaceId>,
+    method_names: HashMap<String, MethodId>,
+    interfaces: Vec<CheckedInterfaceFact>,
+    interface_positions: HashMap<InterfaceId, usize>,
+    implementations: Vec<CheckedImplementationFact>,
+    implementation_positions: HashMap<ImplId, usize>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
     withheld: HashMap<(String, WithheldNamespace), WithheldExport>,
 }
@@ -858,6 +1235,7 @@ pub struct ExportSummary {
 pub(crate) enum ResolvedBuildFailure {
     InvalidState,
     TypeResource,
+    ConstraintResource,
 }
 
 /// One hidden nominal fact retained by identity without a source name binding.
@@ -886,17 +1264,21 @@ impl ExportSummary {
 
     pub(crate) fn freeze(
         resolved: &ResolvedModule,
-        checked: &[CheckedGlobalScheme],
-        budget: &mut TypeWorkBudget,
+        checked_globals: &[CheckedGlobalScheme],
+        checked_interfaces: &[CheckedInterfaceFact],
+        admitted_implementations: &[CheckedImplementation],
+        checked_implementations: &[CheckedImplementationFact],
+        type_work: &mut TypeWorkBudget,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
-        budget
-            .charge(checked.len())
+        type_work
+            .charge(checked_globals.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         let mut checked_by_binder = HashMap::new();
         checked_by_binder
-            .try_reserve(checked.len())
+            .try_reserve(checked_globals.len())
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        for scheme in checked {
+        for scheme in checked_globals {
             if checked_by_binder.insert(scheme.binder, scheme).is_some() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -908,6 +1290,12 @@ impl ExportSummary {
             nominal_names_by_id: HashMap::new(),
             constructors: HashMap::new(),
             constructor_names_by_id: HashMap::new(),
+            interface_names: HashMap::new(),
+            method_names: HashMap::new(),
+            interfaces: Vec::new(),
+            interface_positions: HashMap::new(),
+            implementations: Vec::new(),
+            implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
             withheld: resolved.export_candidate.withheld.clone(),
         };
@@ -921,11 +1309,131 @@ impl ExportSummary {
                     binder: scheme.binder,
                     scheme: scheme
                         .scheme
-                        .clone_with_budget(budget)
+                        .clone_with_budget(type_work)
                         .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                     origin: scheme.origin.clone(),
                 },
             );
+        }
+
+        constraint_work
+            .charge(
+                checked_interfaces
+                    .len()
+                    .saturating_add(checked_implementations.len()),
+            )
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        if checked_interfaces.len() != resolved.interfaces.len()
+            || admitted_implementations.len() != checked_implementations.len()
+            || checked_implementations.len() != resolved.implementations.len()
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        summary
+            .interfaces
+            .try_reserve(checked_interfaces.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        summary
+            .interface_positions
+            .try_reserve(checked_interfaces.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        summary
+            .interface_names
+            .try_reserve(checked_interfaces.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        for (interface, checked) in resolved.interfaces.iter().zip(checked_interfaces) {
+            if interface.id != checked.id
+                || interface.spelling != checked.spelling
+                || interface.methods.len() != checked.methods.len()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if !interface.public {
+                summary.withheld.insert(
+                    (interface.spelling.clone(), WithheldNamespace::Nominal),
+                    WithheldExport {
+                        kind: WithheldExportKind::Private,
+                        origin: Some(interface.origin.clone()),
+                    },
+                );
+                for method in &interface.methods {
+                    summary.withheld.insert(
+                        (method.spelling.clone(), WithheldNamespace::Term),
+                        WithheldExport {
+                            kind: WithheldExportKind::Private,
+                            origin: Some(method.origin.clone()),
+                        },
+                    );
+                }
+                continue;
+            }
+
+            summary
+                .method_names
+                .try_reserve(interface.methods.len())
+                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+            for (method, checked_method) in interface.methods.iter().zip(&checked.methods) {
+                if method.id != checked_method.id || method.spelling != checked_method.spelling {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                if summary
+                    .method_names
+                    .insert(method.spelling.clone(), method.id)
+                    .is_some()
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+            let fact = clone_checked_interface_fact(checked, type_work, constraint_work)?;
+            let position = summary.interfaces.len();
+            if summary
+                .interface_names
+                .insert(interface.spelling.clone(), interface.id)
+                .is_some()
+                || summary
+                    .interface_positions
+                    .insert(interface.id, position)
+                    .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            summary.interfaces.push(fact);
+        }
+
+        summary
+            .implementations
+            .try_reserve(checked_implementations.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        summary
+            .implementation_positions
+            .try_reserve(checked_implementations.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        for (admitted, checked) in admitted_implementations.iter().zip(checked_implementations) {
+            let implementation = resolved
+                .implementations
+                .get(admitted.source_index)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if implementation.id != admitted.id
+                || implementation.interface.id != admitted.interface
+                || checked.id != admitted.id
+                || checked.interface != admitted.interface
+                || checked.methods.len() != admitted.methods.len()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if !implementation.public {
+                continue;
+            }
+            let fact = clone_checked_implementation_fact(checked, type_work, constraint_work)?;
+            let position = summary.implementations.len();
+            if summary
+                .implementation_positions
+                .insert(implementation.id, position)
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            summary.implementations.push(fact);
         }
 
         for (spelling, candidate) in &resolved.export_candidate.nominals {
@@ -982,7 +1490,7 @@ impl ExportSummary {
                     payload: constructor
                         .payload
                         .as_ref()
-                        .map(|payload| clone_type_with_budget(payload, budget))
+                        .map(|payload| clone_type_with_budget(payload, type_work))
                         .transpose()
                         .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                     origin: candidate.origin.clone(),
@@ -992,13 +1500,47 @@ impl ExportSummary {
 
         let mut referenced_nominals = HashSet::new();
         for exported in summary.terms.values() {
-            collect_scheme_nominal_identities(&exported.scheme, &mut referenced_nominals, budget)
-                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            collect_scheme_nominal_identities(
+                &exported.scheme,
+                &mut referenced_nominals,
+                type_work,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         }
         for exported in summary.constructors.values() {
             if let Some(payload) = &exported.payload {
-                collect_nominal_identities(payload, &mut referenced_nominals, budget)
+                collect_nominal_identities(payload, &mut referenced_nominals, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+        }
+        for interface in &summary.interfaces {
+            for method in &interface.methods {
+                collect_nominal_identities(&method.value_type, &mut referenced_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+        }
+        for implementation in &summary.implementations {
+            collect_nominal_identities(
+                &implementation.argument,
+                &mut referenced_nominals,
+                type_work,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            for prerequisite in &implementation.prerequisites {
+                collect_nominal_identities(
+                    &prerequisite.argument,
+                    &mut referenced_nominals,
+                    type_work,
+                )
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+            for method in &implementation.methods {
+                collect_scheme_nominal_identities(
+                    &method.scheme,
+                    &mut referenced_nominals,
+                    type_work,
+                )
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             }
         }
 
@@ -1062,6 +1604,35 @@ impl ExportSummary {
         self.constructors.get(spelling)
     }
 
+    pub(crate) fn interface(&self, spelling: &str) -> Option<&CheckedInterfaceFact> {
+        let id = self.interface_names.get(spelling)?;
+        self.interfaces.get(*self.interface_positions.get(id)?)
+    }
+
+    pub(crate) fn method(&self, spelling: &str) -> Option<MethodId> {
+        self.method_names.get(spelling).copied()
+    }
+
+    pub(crate) fn interfaces(&self) -> impl Iterator<Item = &CheckedInterfaceFact> {
+        self.interfaces.iter()
+    }
+
+    pub(crate) fn implementations(&self) -> impl Iterator<Item = &CheckedImplementationFact> {
+        self.implementations.iter()
+    }
+
+    pub(crate) fn interface_names(&self) -> impl Iterator<Item = (&str, InterfaceId)> {
+        self.interface_names
+            .iter()
+            .map(|(spelling, id)| (spelling.as_str(), *id))
+    }
+
+    pub(crate) fn method_names(&self) -> impl Iterator<Item = (&str, MethodId)> {
+        self.method_names
+            .iter()
+            .map(|(spelling, id)| (spelling.as_str(), *id))
+    }
+
     pub(crate) fn terms(&self) -> impl Iterator<Item = (&str, &ExportedGlobal)> {
         self.terms
             .iter()
@@ -1073,6 +1644,8 @@ impl ExportSummary {
             .len()
             .saturating_add(self.nominals.len())
             .saturating_add(self.constructors.len())
+            .saturating_add(self.interface_names.len())
+            .saturating_add(self.method_names.len())
             .saturating_add(self.withheld.len())
     }
 
@@ -1207,6 +1780,12 @@ impl ExportSummary {
                 })
                 .collect(),
             constructor_names_by_id,
+            interface_names: HashMap::new(),
+            method_names: HashMap::new(),
+            interfaces: Vec::new(),
+            interface_positions: HashMap::new(),
+            implementations: Vec::new(),
+            implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
             withheld: unavailable
                 .into_iter()
@@ -1353,6 +1932,16 @@ impl Drop for ExportSummary {
             discard_origin_iteratively(exported.origin);
         }
         self.constructor_names_by_id.clear();
+        self.interface_names.clear();
+        self.method_names.clear();
+        for fact in self.interfaces.drain(..) {
+            drop(fact);
+        }
+        self.interface_positions.clear();
+        for fact in self.implementations.drain(..) {
+            drop(fact);
+        }
+        self.implementation_positions.clear();
         for (_, exported) in self.hidden_nominals.drain() {
             for parameter in exported.parameters.into_vec() {
                 discard_origin_iteratively(parameter.origin);
@@ -2352,6 +2941,103 @@ mod tests {
     use super::*;
     use crate::module::ModuleId;
     use crate::source::{ByteRange, GeneratedReason, SourceFile};
+
+    #[test]
+    fn checked_impl_summary_clone_uses_its_exact_constraint_budget() {
+        let source = SourceFile::new("checked-impl-summary.ash", "impl")
+            .expect("the summary fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the summary range should be ordered"))
+            .expect("the summary range should belong to the fixture");
+        let module = ModuleId::new(8);
+        let interface = InterfaceId::new(module, 0);
+        let implementation = ImplId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let fact = CheckedImplementationFact {
+            id: implementation,
+            interface,
+            head_parameters: Box::new([]),
+            argument: Type::Int,
+            prerequisites: Box::new([]),
+            methods: vec![CheckedImplementationMethodFact {
+                id: ImplMethodId::new(implementation, method),
+                method,
+                binder: BinderId::resolved(module, 0),
+                scheme: ConstrainedScheme {
+                    type_parameters: Box::new([]),
+                    requirements: Box::new([]),
+                    value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                },
+                origin: Origin::Source(span),
+                span,
+            }]
+            .into_boxed_slice(),
+            origin: Origin::Source(span),
+            span,
+        };
+
+        let mut type_work = TypeWorkBudget::default();
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(10);
+        assert_eq!(
+            clone_checked_implementation_fact(&fact, &mut type_work, &mut short),
+            Err(ResolvedBuildFailure::ConstraintResource)
+        );
+
+        let mut type_work = TypeWorkBudget::default();
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(11);
+        let cloned = clone_checked_implementation_fact(&fact, &mut type_work, &mut exact)
+            .expect("the exact summary budget should clone the checked fact");
+        assert_eq!(cloned, fact);
+        assert_eq!(exact.used(), 11);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn imported_impl_identity_dedup_does_not_compare_deep_fact_payloads() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-imported-impl.ash", "impl")
+                    .expect("the imported fact fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 4).expect("the fact range should be ordered"))
+                    .expect("the fact range should belong to the fixture");
+                let module = ModuleId::new(13);
+                let implementation = ImplId::new(module, 0);
+                let mut argument = Type::Int;
+                for _ in 0..20_000 {
+                    argument = Type::Function(Box::new(Type::Unit), Box::new(argument));
+                }
+                let mut imported = ImportedFacts::default();
+                imported
+                    .reserve_implementation()
+                    .expect("one imported fact slot should reserve");
+                imported.insert_implementation(
+                    CheckedImplementationFact {
+                        id: implementation,
+                        interface: InterfaceId::new(module, 0),
+                        head_parameters: Box::new([]),
+                        argument,
+                        prerequisites: Box::new([]),
+                        methods: Box::new([]),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                    span,
+                );
+
+                for _ in 0..2 {
+                    assert_eq!(
+                        imported.implementation(implementation).map(|fact| fact.id),
+                        Some(implementation)
+                    );
+                }
+                drop(imported);
+            })
+            .expect("the small-stack imported fact thread should start")
+            .join()
+            .expect("identity-only dedup and cleanup should remain iterative");
+    }
 
     #[test]
     fn binder_identities_separate_modules_and_generated_core() {

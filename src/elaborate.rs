@@ -15,7 +15,7 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     interface::{
         CheckedImplMethod, CheckedImplementation, CheckedInterface, CheckedRequirement,
-        ConstrainedScheme, InterfaceConstraintBudget, InterfaceReason,
+        ConstrainedScheme, InterfaceConstraintBudget, InterfaceReason, OverlapFailure,
         implementation_heads_overlap,
     },
     pattern::{
@@ -23,8 +23,9 @@ use crate::{
         usefulness_with_budget,
     },
     resolved::{
-        BinderId, CheckedGlobalScheme, CheckedModule, ExportSummary, ResolvedBinding,
-        ResolvedBlock, ResolvedBuildFailure, ResolvedDefinitionKind, ResolvedExpr,
+        BinderId, CheckedGlobalScheme, CheckedImplementationFact, CheckedImplementationMethodFact,
+        CheckedInterfaceFact, CheckedInterfaceMethodFact, CheckedModule, ExportSummary,
+        ResolvedBinding, ResolvedBlock, ResolvedBuildFailure, ResolvedDefinitionKind, ResolvedExpr,
         ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleProgram,
         ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry,
         ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
@@ -637,6 +638,22 @@ impl CheckedSchemeBuffer {
     }
 }
 
+struct CheckedImplementationFactBuffer(Vec<CheckedImplementationFact>);
+
+impl CheckedImplementationFactBuffer {
+    fn into_boxed_slice(mut self) -> Box<[CheckedImplementationFact]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for CheckedImplementationFactBuffer {
+    fn drop(&mut self) {
+        for fact in self.0.drain(..) {
+            drop(fact);
+        }
+    }
+}
+
 impl Drop for CheckedSchemeBuffer {
     fn drop(&mut self) {
         for checked in self.0.drain(..) {
@@ -902,9 +919,17 @@ impl Elaborator {
         checked_interfaces: &[CheckedInterface],
         checked_implementations: &[CheckedImplementation],
         constraint_work: &mut InterfaceConstraintBudget,
-    ) -> Result<(), TypeError> {
+    ) -> Result<Box<[CheckedImplementationFact]>, TypeError> {
         let base_context = self.base_context.clone();
         let (_, mut context) = self.elaborate_globals(module.definitions(), None, base_context)?;
+        constraint_work
+            .charge(checked_implementations.len())
+            .map_err(|()| constraint_resource())?;
+        let mut facts = CheckedImplementationFactBuffer(Vec::new());
+        facts
+            .0
+            .try_reserve(checked_implementations.len())
+            .map_err(|_| constraint_resource())?;
         for checked in checked_implementations {
             let implementation = module
                 .implementations()
@@ -913,17 +938,13 @@ impl Elaborator {
             if implementation.id != checked.id || implementation.interface.id != checked.interface {
                 return Err(invalid_state());
             }
-            let checked_interface = checked_interfaces
-                .iter()
-                .find(|interface| interface.id == checked.interface)
-                .ok_or_else(invalid_state)?;
-            let interface = module
-                .interfaces()
-                .get(checked_interface.source_index)
-                .ok_or_else(invalid_state)?;
-            if interface.id != checked_interface.id {
-                return Err(invalid_state());
-            }
+            let interface = checked_interface(
+                module,
+                checked_interfaces,
+                checked.interface,
+                constraint_work,
+            )?
+            .ok_or_else(invalid_state)?;
 
             self.type_work
                 .charge(1)
@@ -934,20 +955,35 @@ impl Elaborator {
                 .try_reserve(1)
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             replacements.0.insert(
-                interface.parameter.id,
+                interface.parameter(),
                 self.clone_type(&implementation.argument.ty)?,
             );
 
-            if checked.methods.len() != interface.methods.len() {
+            if checked.methods.len() != interface.method_count() {
                 return Err(invalid_state());
             }
-            for (checked_method, method) in checked.methods.iter().zip(&interface.methods) {
+            constraint_work
+                .charge(
+                    implementation
+                        .head_parameters
+                        .len()
+                        .saturating_add(implementation.prerequisites.len())
+                        .saturating_add(checked.methods.len())
+                        .saturating_add(1),
+                )
+                .map_err(|()| constraint_resource())?;
+            let mut method_facts = Vec::new();
+            method_facts
+                .try_reserve(checked.methods.len())
+                .map_err(|_| constraint_resource())?;
+            for (method_index, checked_method) in checked.methods.iter().enumerate() {
+                let method = interface.method(method_index).ok_or_else(invalid_state)?;
                 let group = implementation
                     .method_groups
                     .get(checked_method.source_group)
                     .ok_or_else(invalid_state)?;
-                if method.id != checked_method.method
-                    || group.method != Some(method.id)
+                if method.id() != checked_method.method
+                    || group.method != Some(method.id())
                     || group.identity != Some(checked_method.id)
                     || group.binder.id != checked_method.binder
                     || checked_method.id.implementation() != implementation.id
@@ -955,7 +991,7 @@ impl Elaborator {
                     return Err(invalid_state());
                 }
                 let method_type = substitute_type_variables_with(
-                    &method.annotation.ty,
+                    method.value_type(),
                     &replacements.0,
                     |cells| {
                         constraint_work
@@ -968,9 +1004,14 @@ impl Elaborator {
                 )?;
                 charge_type_provenance_nodes(&method_type, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let provenance = TypeProvenance::at_span(&method_type, method.annotation.span);
-                let presentation = implementation_method_origin(implementation, group, method);
-                self.elaborate_equations(
+                let provenance = TypeProvenance::at_span(&method_type, method.annotation_span());
+                let presentation = implementation_method_origin(
+                    implementation,
+                    group,
+                    method.span(),
+                    method.annotation_span(),
+                );
+                let checked_body = self.elaborate_equations(
                     &group.equations,
                     ProvenancedType {
                         ty: method_type,
@@ -980,7 +1021,43 @@ impl Elaborator {
                     group.span,
                     &presentation,
                 )?;
+                let scheme = self.checked_implementation_method_scheme(
+                    implementation,
+                    &checked_body.ty,
+                    constraint_work,
+                )?;
+                method_facts.push(CheckedImplementationMethodFact {
+                    id: checked_method.id,
+                    method: checked_method.method,
+                    binder: checked_method.binder,
+                    scheme,
+                    origin: presentation,
+                    span: group.span,
+                });
             }
+
+            let mut head_parameters = Vec::new();
+            head_parameters
+                .try_reserve(implementation.head_parameters.len())
+                .map_err(|_| constraint_resource())?;
+            head_parameters.extend(implementation.head_parameters.iter().cloned());
+            let prerequisites = self.clone_implementation_requirements(
+                &implementation.prerequisites,
+                constraint_work,
+            )?;
+            constraint_work
+                .charge_type(&implementation.argument.ty)
+                .map_err(|()| constraint_resource())?;
+            facts.0.push(CheckedImplementationFact {
+                id: implementation.id,
+                interface: implementation.interface.id,
+                head_parameters: head_parameters.into_boxed_slice(),
+                argument: self.clone_type(&implementation.argument.ty)?,
+                prerequisites,
+                methods: method_facts.into_boxed_slice(),
+                origin: Origin::Source(implementation.span),
+                span: implementation.span,
+            });
         }
 
         let result = ResolvedExpr {
@@ -988,7 +1065,75 @@ impl Elaborator {
             span: module.span(),
         };
         self.elaborate_result(&result, &mut context)?;
-        Ok(())
+        Ok(facts.into_boxed_slice())
+    }
+
+    fn checked_implementation_method_scheme(
+        &mut self,
+        implementation: &crate::resolved::ResolvedImplementation,
+        value_type: &Type,
+        constraint_work: &mut InterfaceConstraintBudget,
+    ) -> Result<ConstrainedScheme, TypeError> {
+        constraint_work
+            .charge(
+                implementation
+                    .head_parameters
+                    .len()
+                    .saturating_add(implementation.prerequisites.len())
+                    .saturating_add(1),
+            )
+            .map_err(|()| constraint_resource())?;
+        constraint_work
+            .charge_type(value_type)
+            .map_err(|()| constraint_resource())?;
+        self.type_work
+            .charge(implementation.head_parameters.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut type_parameters = Vec::new();
+        type_parameters
+            .try_reserve(implementation.head_parameters.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        type_parameters.extend(
+            implementation
+                .head_parameters
+                .iter()
+                .map(|parameter| parameter.id),
+        );
+        Ok(ConstrainedScheme {
+            type_parameters: type_parameters.into_boxed_slice(),
+            requirements: self.clone_implementation_requirements(
+                &implementation.prerequisites,
+                constraint_work,
+            )?,
+            value_type: self.clone_type(value_type)?,
+        })
+    }
+
+    fn clone_implementation_requirements(
+        &mut self,
+        requirements: &[crate::resolved::ResolvedRequirement],
+        constraint_work: &mut InterfaceConstraintBudget,
+    ) -> Result<Box<[CheckedRequirement]>, TypeError> {
+        constraint_work
+            .charge(requirements.len())
+            .map_err(|()| constraint_resource())?;
+        let mut checked = Vec::new();
+        checked
+            .try_reserve(requirements.len())
+            .map_err(|_| constraint_resource())?;
+        for requirement in requirements {
+            constraint_work
+                .charge_type(&requirement.argument.ty)
+                .map_err(|()| constraint_resource())?;
+            checked.push(CheckedRequirement {
+                id: requirement.id,
+                interface: requirement.interface.id,
+                argument: self.clone_type(&requirement.argument.ty)?,
+                origin: Origin::Source(requirement.span),
+                span: requirement.span,
+            });
+        }
+        Ok(checked.into_boxed_slice())
     }
 
     fn checked_module_schemes(
@@ -3878,9 +4023,13 @@ fn check_global_requirements(
         if public {
             for requirement in requirements.iter() {
                 budget.charge(1).map_err(|()| constraint_resource())?;
-                let private =
-                    local_interface(module, checked_interfaces, requirement.interface.id, budget)?
-                        .filter(|interface| !interface.public);
+                let private = checked_interface(
+                    module,
+                    checked_interfaces,
+                    requirement.interface.id,
+                    budget,
+                )?
+                .filter(|interface| !interface.is_public());
                 if let Some(interface) = private {
                     let mut diagnostic = Diagnostic::new(
                         InterfaceReason::ConstraintPrivateInterface,
@@ -3890,7 +4039,7 @@ fn check_global_requirements(
                         ),
                     );
                     diagnostic.related.push(SourceLabel::new(
-                        interface.span,
+                        interface.span(),
                         "the private interface is declared here",
                     ));
                     return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -3960,7 +4109,7 @@ fn check_implementation_headers_and_membership(
     for implementation in module.implementations() {
         check_implementation_header(module, checked_interfaces, implementation, budget)?;
     }
-    check_local_implementation_overlap(module, budget)?;
+    check_effective_implementation_overlap(module, budget)?;
 
     budget
         .charge(module.implementations().len())
@@ -3981,35 +4130,150 @@ fn check_implementation_headers_and_membership(
     Ok(checked.into_boxed_slice())
 }
 
-fn check_local_implementation_overlap(
+#[derive(Clone, Copy)]
+enum ImplementationHeadRef<'a> {
+    Imported(&'a crate::resolved::ImportedImplementationFact),
+    Local(&'a crate::resolved::ResolvedImplementation),
+}
+
+impl<'a> ImplementationHeadRef<'a> {
+    const fn id(self) -> crate::interface::ImplId {
+        match self {
+            Self::Imported(implementation) => implementation.fact.id,
+            Self::Local(implementation) => implementation.id,
+        }
+    }
+
+    const fn interface(self) -> crate::interface::InterfaceId {
+        match self {
+            Self::Imported(implementation) => implementation.fact.interface,
+            Self::Local(implementation) => implementation.interface.id,
+        }
+    }
+
+    const fn argument(self) -> &'a Type {
+        match self {
+            Self::Imported(implementation) => &implementation.fact.argument,
+            Self::Local(implementation) => &implementation.argument.ty,
+        }
+    }
+
+    const fn head_parameters(self) -> &'a [crate::resolved::ResolvedTypeVariable] {
+        match self {
+            Self::Imported(implementation) => &implementation.fact.head_parameters,
+            Self::Local(implementation) => &implementation.head_parameters,
+        }
+    }
+
+    const fn primary_span(self) -> Span {
+        match self {
+            Self::Imported(implementation) => implementation.available_at,
+            Self::Local(implementation) => implementation.argument.span,
+        }
+    }
+
+    const fn definition_span(self) -> Span {
+        match self {
+            Self::Imported(implementation) => implementation.fact.span,
+            Self::Local(implementation) => implementation.argument.span,
+        }
+    }
+
+    const fn import_span(self) -> Option<Span> {
+        match self {
+            Self::Imported(implementation) => Some(implementation.available_at),
+            Self::Local(_) => None,
+        }
+    }
+}
+
+fn check_effective_implementation_overlap(
     module: &ResolvedModule,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<(), TypeError> {
-    for (index, implementation) in module.implementations().iter().enumerate() {
+    let imported_count = module.imported_facts().implementations().count();
+    budget
+        .charge(imported_count.saturating_add(module.implementations().len()))
+        .map_err(|()| constraint_resource())?;
+    let mut imported = Vec::new();
+    imported
+        .try_reserve(imported_count)
+        .map_err(|_| constraint_resource())?;
+    imported.extend(
+        module
+            .imported_facts()
+            .implementations()
+            .map(ImplementationHeadRef::Imported),
+    );
+    let mut effective = imported;
+    effective
+        .try_reserve(module.implementations().len())
+        .map_err(|_| constraint_resource())?;
+    effective.extend(
+        module
+            .implementations()
+            .iter()
+            .map(ImplementationHeadRef::Local),
+    );
+
+    check_effective_implementation_heads(&effective, budget)
+}
+
+fn check_effective_implementation_heads(
+    effective: &[ImplementationHeadRef<'_>],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    for (index, implementation) in effective.iter().copied().enumerate() {
         budget.charge(1).map_err(|()| constraint_resource())?;
-        for previous in &module.implementations()[..index] {
+        for previous in effective[..index].iter().copied() {
             budget.charge(1).map_err(|()| constraint_resource())?;
-            if implementation.interface.id != previous.interface.id {
+            if implementation.interface() != previous.interface()
+                || implementation.id() == previous.id()
+            {
                 continue;
             }
-            if implementation_heads_overlap(
-                &previous.argument.ty,
-                &implementation.argument.ty,
+            let overlaps = implementation_heads_overlap(
+                previous
+                    .head_parameters()
+                    .iter()
+                    .map(|parameter| parameter.id),
+                previous.argument(),
+                implementation
+                    .head_parameters()
+                    .iter()
+                    .map(|parameter| parameter.id),
+                implementation.argument(),
                 budget,
-            )
-            .map_err(|()| constraint_resource())?
-            {
+            );
+            let overlaps = match overlaps {
+                Ok(overlaps) => overlaps,
+                Err(OverlapFailure::Resource) => return Err(constraint_resource()),
+                Err(OverlapFailure::InvalidState) => return Err(invalid_state()),
+            };
+            if overlaps {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::ImplOverlap,
                     SourceLabel::new(
-                        implementation.argument.span,
+                        implementation.primary_span(),
                         "this implementation overlaps an earlier available implementation",
                     ),
                 );
                 diagnostic.related.push(SourceLabel::new(
-                    previous.argument.span,
+                    previous.definition_span(),
                     "the earlier overlapping implementation head is here",
                 ));
+                if let Some(span) = previous.import_span() {
+                    diagnostic.related.push(SourceLabel::new(
+                        span,
+                        "the earlier implementation became available through this import",
+                    ));
+                }
+                if implementation.import_span().is_some() {
+                    diagnostic.related.push(SourceLabel::new(
+                        implementation.definition_span(),
+                        "the later implementation is defined here",
+                    ));
+                }
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
         }
@@ -4043,12 +4307,12 @@ fn check_implementation_header(
     }
 
     if implementation.public {
-        if let Some(interface) = local_interface(
+        if let Some(interface) = checked_interface(
             module,
             checked_interfaces,
             implementation.interface.id,
             budget,
-        )? && !interface.public
+        )? && !interface.is_public()
         {
             let mut diagnostic = Diagnostic::new(
                 InterfaceReason::ImplPrivateInterface,
@@ -4058,18 +4322,18 @@ fn check_implementation_header(
                 ),
             );
             diagnostic.related.push(SourceLabel::new(
-                interface.span,
+                interface.span(),
                 "the private interface is declared here",
             ));
             return Err(TypeError::Interface(Box::new(diagnostic)));
         }
         for prerequisite in &implementation.prerequisites {
-            if let Some(interface) = local_interface(
+            if let Some(interface) = checked_interface(
                 module,
                 checked_interfaces,
                 prerequisite.interface.id,
                 budget,
-            )? && !interface.public
+            )? && !interface.is_public()
             {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::ImplPrivateInterface,
@@ -4079,7 +4343,7 @@ fn check_implementation_header(
                     ),
                 );
                 diagnostic.related.push(SourceLabel::new(
-                    interface.span,
+                    interface.span(),
                     "the private interface is declared here",
                 ));
                 return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -4176,7 +4440,7 @@ fn check_implementation_membership(
     implementation: &crate::resolved::ResolvedImplementation,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<CheckedImplementation, TypeError> {
-    let interface = local_interface(
+    let interface = checked_interface(
         module,
         checked_interfaces,
         implementation.interface.id,
@@ -4194,7 +4458,7 @@ fn check_implementation_membership(
         budget.charge(1).map_err(|()| constraint_resource())?;
         let Some(method) = group
             .method
-            .filter(|method| method.interface() == interface.id)
+            .filter(|method| method.interface() == interface.id())
         else {
             let mut diagnostic = Diagnostic::new(
                 InterfaceReason::ImplExtraMethod,
@@ -4204,7 +4468,7 @@ fn check_implementation_membership(
                 ),
             );
             diagnostic.related.push(SourceLabel::new(
-                interface.span,
+                interface.span(),
                 "the implemented interface is declared here",
             ));
             return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -4221,9 +4485,10 @@ fn check_implementation_membership(
             return Err(TypeError::Interface(Box::new(diagnostic)));
         }
     }
-    for method in &interface.methods {
+    for method_index in 0..interface.method_count() {
+        let method = interface.method(method_index).ok_or_else(invalid_state)?;
         budget.charge(1).map_err(|()| constraint_resource())?;
-        if !supplied.contains_key(&method.id) {
+        if !supplied.contains_key(&method.id()) {
             let mut diagnostic = Diagnostic::new(
                 InterfaceReason::ImplMissingMethod,
                 SourceLabel::new(
@@ -4232,7 +4497,7 @@ fn check_implementation_membership(
                 ),
             );
             diagnostic.related.push(SourceLabel::new(
-                method.span,
+                method.span(),
                 "this required method is missing",
             ));
             return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -4240,22 +4505,23 @@ fn check_implementation_membership(
     }
 
     budget
-        .charge(interface.methods.len().saturating_add(1))
+        .charge(interface.method_count().saturating_add(1))
         .map_err(|()| constraint_resource())?;
     let mut methods = Vec::new();
     methods
-        .try_reserve(interface.methods.len())
+        .try_reserve(interface.method_count())
         .map_err(|_| constraint_resource())?;
-    for method in &interface.methods {
-        let (source_group, group) = supplied.get(&method.id).ok_or_else(invalid_state)?;
+    for method_index in 0..interface.method_count() {
+        let method = interface.method(method_index).ok_or_else(invalid_state)?;
+        let (source_group, group) = supplied.get(&method.id()).ok_or_else(invalid_state)?;
         let identity = group.identity.ok_or_else(invalid_state)?;
-        if identity != crate::interface::ImplMethodId::new(implementation.id, method.id) {
+        if identity != crate::interface::ImplMethodId::new(implementation.id, method.id()) {
             return Err(invalid_state());
         }
         methods.push(CheckedImplMethod {
             source_group: *source_group,
             id: identity,
-            method: method.id,
+            method: method.id(),
             binder: group.binder.id,
         });
     }
@@ -4267,12 +4533,104 @@ fn check_implementation_membership(
     })
 }
 
-fn local_interface<'a>(
+#[derive(Clone, Copy)]
+enum CheckedInterfaceRef<'a> {
+    Local(&'a crate::resolved::ResolvedInterfaceDeclaration),
+    Imported(&'a crate::resolved::CheckedInterfaceFact),
+}
+
+impl<'a> CheckedInterfaceRef<'a> {
+    const fn id(self) -> crate::interface::InterfaceId {
+        match self {
+            Self::Local(interface) => interface.id,
+            Self::Imported(interface) => interface.id,
+        }
+    }
+
+    const fn is_public(self) -> bool {
+        match self {
+            Self::Local(interface) => interface.public,
+            Self::Imported(_) => true,
+        }
+    }
+
+    const fn parameter(self) -> TypeVariableId {
+        match self {
+            Self::Local(interface) => interface.parameter.id,
+            Self::Imported(interface) => interface.parameter.id,
+        }
+    }
+
+    const fn span(self) -> Span {
+        match self {
+            Self::Local(interface) => interface.span,
+            Self::Imported(interface) => interface.span,
+        }
+    }
+
+    fn method_count(self) -> usize {
+        match self {
+            Self::Local(interface) => interface.methods.len(),
+            Self::Imported(interface) => interface.methods.len(),
+        }
+    }
+
+    fn method(self, index: usize) -> Option<CheckedInterfaceMethodRef<'a>> {
+        match self {
+            Self::Local(interface) => interface
+                .methods
+                .get(index)
+                .map(CheckedInterfaceMethodRef::Local),
+            Self::Imported(interface) => interface
+                .methods
+                .get(index)
+                .map(CheckedInterfaceMethodRef::Imported),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CheckedInterfaceMethodRef<'a> {
+    Local(&'a crate::resolved::ResolvedInterfaceMethod),
+    Imported(&'a crate::resolved::CheckedInterfaceMethodFact),
+}
+
+impl<'a> CheckedInterfaceMethodRef<'a> {
+    const fn id(self) -> crate::interface::MethodId {
+        match self {
+            Self::Local(method) => method.id,
+            Self::Imported(method) => method.id,
+        }
+    }
+
+    const fn value_type(self) -> &'a Type {
+        match self {
+            Self::Local(method) => &method.annotation.ty,
+            Self::Imported(method) => &method.value_type,
+        }
+    }
+
+    const fn annotation_span(self) -> Span {
+        match self {
+            Self::Local(method) => method.annotation.span,
+            Self::Imported(method) => method.span,
+        }
+    }
+
+    const fn span(self) -> Span {
+        match self {
+            Self::Local(method) => method.span,
+            Self::Imported(method) => method.span,
+        }
+    }
+}
+
+fn checked_interface<'a>(
     module: &'a ResolvedModule,
     checked_interfaces: &[CheckedInterface],
     id: crate::interface::InterfaceId,
     budget: &mut InterfaceConstraintBudget,
-) -> Result<Option<&'a crate::resolved::ResolvedInterfaceDeclaration>, TypeError> {
+) -> Result<Option<CheckedInterfaceRef<'a>>, TypeError> {
     for checked in checked_interfaces {
         budget.charge(1).map_err(|()| constraint_resource())?;
         let interface = module
@@ -4283,10 +4641,14 @@ fn local_interface<'a>(
             return Err(invalid_state());
         }
         if checked.id == id {
-            return Ok(Some(interface));
+            return Ok(Some(CheckedInterfaceRef::Local(interface)));
         }
     }
-    Ok(None)
+    budget.charge(1).map_err(|()| constraint_resource())?;
+    Ok(module
+        .imported_facts()
+        .interface(id)
+        .map(CheckedInterfaceRef::Imported))
 }
 
 fn type_contains_any_variable(
@@ -4521,27 +4883,103 @@ pub(crate) fn check_module_with_budget(
     let mut elaborator =
         Elaborator::for_module_with_work(&resolved, type_work.clone(), coverage_work.clone())?;
     let result: Result<_, TypeError> = (|| {
-        elaborator.check_module_bodies(
+        let implementation_facts = elaborator.check_module_bodies(
             &resolved,
             &checked_interfaces,
             &checked_implementations,
             constraint_work,
         )?;
+        let interface_facts = checked_interface_facts(
+            &resolved,
+            &checked_interfaces,
+            &mut elaborator.type_work,
+            constraint_work,
+        )?;
         let schemes = elaborator.checked_module_schemes(resolved.definitions())?;
-        let exports = ExportSummary::freeze(&resolved, &schemes, &mut elaborator.type_work)
-            .map_err(resolved_build_error)?;
-        Ok((schemes, checked_implementations, exports))
+        let exports = ExportSummary::freeze(
+            &resolved,
+            &schemes,
+            &interface_facts,
+            &checked_implementations,
+            &implementation_facts,
+            &mut elaborator.type_work,
+            constraint_work,
+        )
+        .map_err(resolved_build_error)?;
+        Ok((
+            schemes,
+            checked_implementations,
+            interface_facts,
+            implementation_facts,
+            exports,
+        ))
     })();
     *type_work = std::mem::take(&mut elaborator.type_work);
     *coverage_work = std::mem::take(&mut elaborator.coverage_work);
-    let (schemes, checked_implementations, exports) = result?;
+    let (schemes, checked_implementations, interface_facts, implementation_facts, exports) =
+        result?;
     Ok(CheckedModule::new(
         resolved,
         schemes,
         checked_interfaces,
         checked_implementations,
+        interface_facts,
+        implementation_facts,
         exports,
     ))
+}
+
+fn checked_interface_facts(
+    resolved: &ResolvedModule,
+    checked: &[CheckedInterface],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<Box<[CheckedInterfaceFact]>, TypeError> {
+    constraint_work
+        .charge(checked.len())
+        .map_err(|()| constraint_resource())?;
+    let mut facts = Vec::new();
+    facts
+        .try_reserve(checked.len())
+        .map_err(|_| constraint_resource())?;
+    for token in checked {
+        let interface = resolved
+            .interfaces()
+            .get(token.source_index)
+            .ok_or_else(invalid_state)?;
+        if interface.id != token.id {
+            return Err(invalid_state());
+        }
+        constraint_work
+            .charge(interface.methods.len().saturating_add(1))
+            .map_err(|()| constraint_resource())?;
+        let mut methods = Vec::new();
+        methods
+            .try_reserve(interface.methods.len())
+            .map_err(|_| constraint_resource())?;
+        for method in &interface.methods {
+            constraint_work
+                .charge_type(&method.annotation.ty)
+                .map_err(|()| constraint_resource())?;
+            methods.push(CheckedInterfaceMethodFact {
+                id: method.id,
+                spelling: method.spelling.clone(),
+                value_type: clone_type_with_budget(&method.annotation.ty, type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+                origin: method.origin.clone(),
+                span: method.span,
+            });
+        }
+        facts.push(CheckedInterfaceFact {
+            id: interface.id,
+            spelling: interface.spelling.clone(),
+            parameter: interface.parameter.clone(),
+            methods: methods.into_boxed_slice(),
+            origin: interface.origin.clone(),
+            span: interface.span,
+        });
+    }
+    Ok(facts.into_boxed_slice())
 }
 
 /// Assembles dependency-ordered checked modules for one final Core lowering.
@@ -5065,6 +5503,7 @@ fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
         ResolvedBuildFailure::TypeResource => {
             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
         }
+        ResolvedBuildFailure::ConstraintResource => constraint_resource(),
     }
 }
 
@@ -5361,7 +5800,8 @@ fn equational_origin(
 fn implementation_method_origin(
     implementation: &crate::resolved::ResolvedImplementation,
     group: &crate::resolved::ResolvedImplementationMethodGroup,
-    method: &crate::resolved::ResolvedInterfaceMethod,
+    method_span: Span,
+    annotation_span: Span,
 ) -> Origin {
     let first = group.equations.first();
     Origin::Related {
@@ -5371,8 +5811,8 @@ fn implementation_method_origin(
         related: [
             implementation.span,
             group.span,
-            method.span,
-            method.annotation.span,
+            method_span,
+            annotation_span,
         ]
         .into_iter()
         .chain(first.map(|equation| equation.body.span))
@@ -6030,7 +6470,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        module::{ModuleRoots, load_module_graph},
+        module::{ModuleId, ModuleRoots, load_module_graph},
         resolve::resolve_module,
         source::{ByteRange, SourceFile},
     };
@@ -6328,7 +6768,7 @@ mod tests {
         let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut constraint_work = InterfaceConstraintBudget::with_limit(8);
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(18);
 
         check_module_with_budget(
             first,
@@ -6367,7 +6807,7 @@ mod tests {
             resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(21);
+        let mut short = InterfaceConstraintBudget::with_limit(46);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -6379,11 +6819,83 @@ mod tests {
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut exact = InterfaceConstraintBudget::with_limit(22);
+        let mut exact = InterfaceConstraintBudget::with_limit(47);
         check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
             .expect("the exact budget should admit one implementation method");
 
-        assert_eq!(exact.used(), 22);
+        assert_eq!(exact.used(), 47);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn imported_overlap_uses_retained_route_order_and_exact_budget() {
+        let source = SourceFile::new("import-overlap.ash", "abcdefghijklmnop")
+            .expect("the overlap span fixture should fit");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the span should be ordered"))
+                .expect("the span should belong to the fixture")
+        };
+        let first_definition = span(0, 2);
+        let first_route = span(3, 5);
+        let second_definition = span(6, 8);
+        let second_route = span(9, 11);
+        let interface = crate::interface::InterfaceId::new(ModuleId::new(40), 0);
+        let first = crate::resolved::ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: crate::interface::ImplId::new(ModuleId::new(90), 0),
+                interface,
+                head_parameters: Box::new([]),
+                argument: Type::Int,
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(first_definition),
+                span: first_definition,
+            },
+            available_at: first_route,
+        };
+        let second = crate::resolved::ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: crate::interface::ImplId::new(ModuleId::new(10), 0),
+                interface,
+                head_parameters: Box::new([]),
+                argument: Type::Int,
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(second_definition),
+                span: second_definition,
+            },
+            available_at: second_route,
+        };
+        let effective = [
+            ImplementationHeadRef::Imported(&first),
+            ImplementationHeadRef::Imported(&second),
+        ];
+
+        let mut short = InterfaceConstraintBudget::with_limit(6);
+        assert_eq!(
+            check_effective_implementation_heads(&effective, &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+
+        let mut exact = InterfaceConstraintBudget::with_limit(7);
+        let error = check_effective_implementation_heads(&effective, &mut exact)
+            .expect_err("the later retained route should expose the overlap");
+        let TypeError::Interface(diagnostic) = error else {
+            panic!("the overlap should use an interface diagnostic");
+        };
+        assert_eq!(diagnostic.primary.span(), second_route);
+        assert_eq!(
+            diagnostic
+                .related
+                .iter()
+                .map(SourceLabel::span)
+                .collect::<Vec<_>>(),
+            vec![first_definition, first_route, second_definition]
+        );
+        assert_eq!(exact.used(), 7);
         assert_eq!(exact.charge(1), Err(()));
     }
 

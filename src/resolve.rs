@@ -10,17 +10,18 @@ use std::{
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     interface::{
-        ConstrainedScheme, EvidenceSlot, ImplId, ImplMethodId, InterfaceConstraintBudget,
-        InterfaceId, MethodId, RequirementId, RequirementOwner,
+        CheckedRequirement, ConstrainedScheme, EvidenceSlot, ImplId, ImplMethodId,
+        InterfaceConstraintBudget, InterfaceId, MethodId, RequirementId, RequirementOwner,
     },
     module::{LoadedModule, ModuleDependency, ModuleId},
     resolved::{
         Binder, BinderId, CandidateConstructor, CandidateGlobal, CandidateHiddenNominal,
-        CandidateNominal, ExportSummary, ExportedConstructor, ExportedGlobal, ExportedType,
-        ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme, ImportedNominalFact,
-        ImportedTypeAccess, ResolvedApplicationExpr, ResolvedBinaryExpr, ResolvedBinding,
-        ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
-        ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
+        CandidateNominal, CheckedImplementationFact, CheckedInterfaceFact,
+        CheckedInterfaceMethodFact, ExportSummary, ExportedConstructor, ExportedGlobal,
+        ExportedType, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
+        ImportedNominalFact, ImportedTypeAccess, ResolvedApplicationExpr, ResolvedBinaryExpr,
+        ResolvedBinding, ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence,
+        ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
         ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
         ResolvedFunctionExpr, ResolvedImplementation, ResolvedImplementationMethodGroup,
         ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
@@ -501,6 +502,7 @@ enum LocalTypeDeclarationKind {
 struct ImportedNamespaces {
     terms: HashMap<String, ResolvedTermName>,
     nominals: HashMap<String, ImportedNominalName>,
+    interfaces: HashMap<String, InterfaceId>,
     constructors: HashMap<String, ConstructorId>,
     withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
 }
@@ -885,6 +887,7 @@ impl Resolver {
         dependencies: &[DependencyExports<'_>],
     ) -> Result<(), ResolveError> {
         for (import, dependency) in surface.imports.iter().zip(dependencies) {
+            self.retain_dependency_interface_facts(dependency.summary, import.span)?;
             match &import.selection {
                 SurfaceImportSelection::Qualified { alias } => {
                     if self.file_name_is_bound(&alias.text) {
@@ -903,7 +906,9 @@ impl Resolver {
                         let mut selected = false;
                         if let Some(exported) = dependency.summary.term(&item.name.text) {
                             selected = true;
-                            if self.constructor_names.contains_key(&local.text) {
+                            if self.constructor_names.contains_key(&local.text)
+                                || self.method_names.contains_key(&local.text)
+                            {
                                 return Err(import_conflict(local.span, &local.text));
                             }
                             let scope = self.scopes.first_mut().ok_or_else(|| {
@@ -926,9 +931,24 @@ impl Resolver {
                             );
                             self.retain_imported_global(exported, dependency.summary, item.span)?;
                         }
+                        if let Some(method) = dependency.summary.method(&item.name.text) {
+                            selected = true;
+                            if self.constructor_names.contains_key(&local.text)
+                                || self.method_names.contains_key(&local.text)
+                                || self
+                                    .scopes
+                                    .first()
+                                    .is_some_and(|scope| scope.contains_key(&local.text))
+                            {
+                                return Err(import_conflict(local.span, &local.text));
+                            }
+                            self.method_names.insert(local.text.clone(), method);
+                        }
                         if let Some(exported) = dependency.summary.nominal(&item.name.text) {
                             selected = true;
-                            if self.type_names.contains_key(&local.text) {
+                            if self.type_names.contains_key(&local.text)
+                                || self.interface_names.contains_key(&local.text)
+                            {
                                 return Err(import_conflict(local.span, &local.text));
                             }
                             self.type_names.insert(local.text.clone(), exported.id);
@@ -941,9 +961,19 @@ impl Resolver {
                                 item.span,
                             )?;
                         }
+                        if let Some(exported) = dependency.summary.interface(&item.name.text) {
+                            selected = true;
+                            if self.type_names.contains_key(&local.text)
+                                || self.interface_names.contains_key(&local.text)
+                            {
+                                return Err(import_conflict(local.span, &local.text));
+                            }
+                            self.interface_names.insert(local.text.clone(), exported.id);
+                        }
                         if let Some(exported) = dependency.summary.constructor(&item.name.text) {
                             selected = true;
                             if self.constructor_names.contains_key(&local.text)
+                                || self.method_names.contains_key(&local.text)
                                 || self
                                     .scopes
                                     .first()
@@ -1054,6 +1084,22 @@ impl Resolver {
             self.retain_imported_global(exported, summary, import_span)?;
         }
 
+        let mut methods = summary.method_names().collect::<Vec<_>>();
+        methods.sort_unstable_by_key(|(spelling, _)| *spelling);
+        for (spelling, method) in methods {
+            if namespaces
+                .terms
+                .insert(spelling.to_owned(), ResolvedTermName::Method(method))
+                .is_some()
+            {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    import_span,
+                    "an export summary contains duplicate term spellings",
+                ));
+            }
+        }
+
         let mut nominals = Vec::new();
         nominals
             .try_reserve(summary.nominals().size_hint().0)
@@ -1075,6 +1121,22 @@ impl Resolver {
                 },
             );
             self.retain_imported_nominal(exported, summary, Some(spelling), import_span)?;
+        }
+
+        let mut interfaces = summary.interface_names().collect::<Vec<_>>();
+        interfaces.sort_unstable_by_key(|(spelling, _)| *spelling);
+        for (spelling, interface) in interfaces {
+            if namespaces
+                .interfaces
+                .insert(spelling.to_owned(), interface)
+                .is_some()
+            {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    import_span,
+                    "an export summary contains duplicate interface spellings",
+                ));
+            }
         }
 
         let mut constructors = Vec::new();
@@ -1120,6 +1182,366 @@ impl Resolver {
                 )
             }));
         Ok(namespaces)
+    }
+
+    fn retain_dependency_interface_facts(
+        &mut self,
+        summary: &ExportSummary,
+        import_span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        for interface in summary.interfaces() {
+            self.retain_imported_interface_fact(interface, summary, import_span)?;
+        }
+
+        for implementation in summary.implementations() {
+            self.retain_imported_implementation_fact(implementation, summary, import_span)?;
+        }
+        Ok(())
+    }
+
+    fn retain_imported_interface_fact(
+        &mut self,
+        exported: &CheckedInterfaceFact,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.constraint_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported interface route retention exceeded its work budget",
+            )
+        })?;
+        if exported.id.module() != summary.module() {
+            return Err(error(
+                ResolveReason::InternalState,
+                span,
+                "an interface summary contains identities from another owner",
+            ));
+        }
+        if let Some(existing) = self.imported.interface(exported.id) {
+            debug_assert_eq!(existing.id, exported.id);
+            return Ok(());
+        }
+        self.imported.reserve_interface().map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported interface storage exceeded its work budget",
+            )
+        })?;
+        self.constraint_work
+            .charge(exported.methods.len().saturating_add(1))
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported interface retention exceeded its work budget",
+                )
+            })?;
+        self.type_work
+            .charge(exported.methods.len().saturating_add(1))
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported interface retention exceeded its type-work budget",
+                )
+            })?;
+        let mut methods = Vec::new();
+        methods.try_reserve(exported.methods.len()).map_err(|_| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported interface retention exceeded its work budget",
+            )
+        })?;
+        for method in &exported.methods {
+            if method.id.interface() != exported.id {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an interface summary contains a method from another interface",
+                ));
+            }
+            self.constraint_work
+                .charge_type(&method.value_type)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported method signature exceeded its work budget",
+                    )
+                })?;
+            self.retain_type_nominals(&method.value_type, summary, span)?;
+            methods.push(CheckedInterfaceMethodFact {
+                id: method.id,
+                spelling: method.spelling.clone(),
+                value_type: clone_type_with_budget(&method.value_type, &mut self.type_work)
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "imported method signature exceeded its type-work budget",
+                        )
+                    })?,
+                origin: method.origin.clone(),
+                span: method.span,
+            });
+        }
+        self.imported.insert_interface(CheckedInterfaceFact {
+            id: exported.id,
+            spelling: exported.spelling.clone(),
+            parameter: exported.parameter.clone(),
+            methods: methods.into_boxed_slice(),
+            origin: exported.origin.clone(),
+            span: exported.span,
+        });
+        Ok(())
+    }
+
+    fn retain_imported_implementation_fact(
+        &mut self,
+        exported: &CheckedImplementationFact,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.constraint_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported implementation route retention exceeded its work budget",
+            )
+        })?;
+        if exported.id.module() != summary.module() {
+            return Err(error(
+                ResolveReason::InternalState,
+                span,
+                "an implementation summary contains an identity from another owner",
+            ));
+        }
+        if let Some(existing) = self.imported.implementation(exported.id) {
+            debug_assert_eq!(existing.id, exported.id);
+            return Ok(());
+        }
+        self.imported.reserve_implementation().map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported implementation storage exceeded its work budget",
+            )
+        })?;
+        self.constraint_work
+            .charge(
+                exported
+                    .head_parameters
+                    .len()
+                    .saturating_add(exported.prerequisites.len())
+                    .saturating_add(exported.methods.len())
+                    .saturating_add(1),
+            )
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported implementation retention exceeded its work budget",
+                )
+            })?;
+        self.constraint_work
+            .charge_type(&exported.argument)
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported implementation head exceeded its work budget",
+                )
+            })?;
+        self.retain_type_nominals(&exported.argument, summary, span)?;
+
+        self.type_work
+            .charge(
+                exported
+                    .head_parameters
+                    .len()
+                    .saturating_add(exported.prerequisites.len())
+                    .saturating_add(exported.methods.len()),
+            )
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation retention exceeded its type-work budget",
+                )
+            })?;
+        let mut prerequisites = Vec::new();
+        prerequisites
+            .try_reserve(exported.prerequisites.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported prerequisite retention exceeded its work budget",
+                )
+            })?;
+        for (index, prerequisite) in exported.prerequisites.iter().enumerate() {
+            if prerequisite.id.owner() != RequirementOwner::Impl(exported.id)
+                || usize::try_from(prerequisite.id.declaration()) != Ok(index)
+            {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an implementation summary contains an invalid prerequisite identity",
+                ));
+            }
+            self.constraint_work
+                .charge_type(&prerequisite.argument)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported prerequisite exceeded its work budget",
+                    )
+                })?;
+            self.retain_type_nominals(&prerequisite.argument, summary, span)?;
+            prerequisites.push(CheckedRequirement {
+                id: prerequisite.id,
+                interface: prerequisite.interface,
+                argument: clone_type_with_budget(&prerequisite.argument, &mut self.type_work)
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "imported prerequisite exceeded its type-work budget",
+                        )
+                    })?,
+                origin: prerequisite.origin.clone(),
+                span: prerequisite.span,
+            });
+        }
+        let mut head_parameters = Vec::new();
+        head_parameters
+            .try_reserve(exported.head_parameters.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported implementation parameters exceeded their work budget",
+                )
+            })?;
+        head_parameters.extend(exported.head_parameters.iter().cloned());
+        let mut methods = Vec::new();
+        methods.try_reserve(exported.methods.len()).map_err(|_| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported implementation methods exceeded their work budget",
+            )
+        })?;
+        for (index, method) in exported.methods.iter().enumerate() {
+            self.constraint_work
+                .charge(
+                    method
+                        .scheme
+                        .type_parameters
+                        .len()
+                        .saturating_add(method.scheme.requirements.len())
+                        .saturating_add(1),
+                )
+                .map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported implementation method exceeded its work budget",
+                    )
+                })?;
+            let method_identity_is_valid = method.id.implementation() == exported.id
+                && method.id.method() == method.method
+                && method.method.interface() == exported.interface
+                && usize::try_from(method.method.declaration()) == Ok(index)
+                && method.binder.module() == Some(summary.module())
+                && method.scheme.type_parameters.len() == exported.head_parameters.len()
+                && method.scheme.type_parameters.iter().copied().eq(exported
+                    .head_parameters
+                    .iter()
+                    .map(|parameter| parameter.id))
+                && method.scheme.requirements.len() == exported.prerequisites.len()
+                && method
+                    .scheme
+                    .requirements
+                    .iter()
+                    .zip(&exported.prerequisites)
+                    .all(|(requirement, prerequisite)| {
+                        requirement.id == prerequisite.id
+                            && requirement.interface == prerequisite.interface
+                    });
+            if !method_identity_is_valid {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an implementation summary contains an unauthenticated method scheme",
+                ));
+            }
+            self.constraint_work
+                .charge_type(&method.scheme.value_type)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported implementation method type exceeded its work budget",
+                    )
+                })?;
+            for requirement in &method.scheme.requirements {
+                self.constraint_work
+                    .charge_type(&requirement.argument)
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::ConstraintResourceExhausted,
+                            span,
+                            "imported implementation method requirement exceeded its work budget",
+                        )
+                    })?;
+            }
+            self.retain_scheme_nominals(&method.scheme, summary, span)?;
+            methods.push(crate::resolved::CheckedImplementationMethodFact {
+                id: method.id,
+                method: method.method,
+                binder: method.binder,
+                scheme: method
+                    .scheme
+                    .clone_with_budget(&mut self.type_work)
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "imported implementation method scheme exceeded its type-work budget",
+                        )
+                    })?,
+                origin: method.origin.clone(),
+                span: method.span,
+            });
+        }
+        self.imported.insert_implementation(
+            CheckedImplementationFact {
+                id: exported.id,
+                interface: exported.interface,
+                head_parameters: head_parameters.into_boxed_slice(),
+                argument: clone_type_with_budget(&exported.argument, &mut self.type_work).map_err(
+                    |()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "imported implementation head exceeded its type-work budget",
+                        )
+                    },
+                )?,
+                prerequisites: prerequisites.into_boxed_slice(),
+                methods: methods.into_boxed_slice(),
+                origin: exported.origin.clone(),
+                span: exported.span,
+            },
+            span,
+        );
+        Ok(())
     }
 
     fn retain_imported_global(
@@ -1496,6 +1918,12 @@ impl Resolver {
         reference: &SurfaceReference,
     ) -> Result<ImportedNominalName, ResolveError> {
         if let Some(namespace) = self.imported_namespace(reference)? {
+            if namespace.interfaces.contains_key(&reference.member().text) {
+                return Err(type_kind_error(
+                    reference.member().span,
+                    &reference.member().text,
+                ));
+            }
             return namespace
                 .nominals
                 .get(&reference.member().text)
@@ -1549,13 +1977,27 @@ impl Resolver {
     ) -> Result<ResolvedInterfaceOccurrence, ResolveError> {
         let member = reference.member();
         if let Some(namespace) = self.imported_namespace(reference)? {
+            if let Some(id) = namespace.interfaces.get(&member.text).copied() {
+                return Ok(ResolvedInterfaceOccurrence {
+                    id,
+                    spelling: member.text.clone(),
+                    origin: Origin::Source(reference.span()),
+                });
+            }
             if namespace.nominals.contains_key(&member.text)
                 || namespace.constructors.contains_key(&member.text)
                 || namespace.terms.contains_key(&member.text)
             {
                 return Err(interface_kind_error(member.span, &member.text));
             }
-            return Err(unknown_interface_error(member.span, &member.text));
+            return Err(withheld_export_error(
+                member.span,
+                &member.text,
+                namespace
+                    .withheld
+                    .get(&(member.text.clone(), WithheldNamespace::Nominal))
+                    .copied(),
+            ));
         }
         if let Some(id) = self.interface_names.get(&member.text).copied() {
             return Ok(ResolvedInterfaceOccurrence {
@@ -1572,6 +2014,17 @@ impl Resolver {
                 .any(|scope| scope.contains_key(&member.text))
         {
             return Err(interface_kind_error(member.span, &member.text));
+        }
+        if let Some(withheld) = self
+            .targeted_withheld
+            .get(&(member.text.clone(), WithheldNamespace::Nominal))
+            .copied()
+        {
+            return Err(withheld_export_error(
+                member.span,
+                &member.text,
+                Some(withheld),
+            ));
         }
         Err(unknown_interface_error(member.span, &member.text))
     }
@@ -3425,7 +3878,15 @@ mod module_tests;
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
     use super::*;
+    use crate::elaborate::check_module;
+    use crate::module::{ModuleRoots, load_module_graph};
     use crate::source::{ByteRange, SourceFile};
     use crate::surface::{SurfaceDefinitionKind, SurfaceName, SurfaceTypeKind};
     use crate::types::TYPE_WORK_LIMIT;
@@ -3433,6 +3894,109 @@ mod tests {
         lexer::lex,
         parser::{parse, project_module},
     };
+
+    static IMPORT_BUDGET_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    struct ImportBudgetFixture(PathBuf);
+
+    impl ImportBudgetFixture {
+        fn create(entry: &str) -> Self {
+            loop {
+                let id = IMPORT_BUDGET_FIXTURE_IDS.fetch_add(1, Ordering::Relaxed);
+                let directory = std::env::temp_dir()
+                    .join(format!("ash-import-budget-{}-{id}", std::process::id()));
+                match fs::create_dir(&directory) {
+                    Ok(()) => {
+                        fs::write(directory.join("entry.ash"), entry)
+                            .expect("the import budget entry should be writable");
+                        fs::write(
+                            directory.join("dependency.ash"),
+                            concat!(
+                                "pub interface Equal<A> {\nequal : A -> A\n}\n",
+                                "pub impl Equal<Int> {\nequal value = value\n}\n",
+                            ),
+                        )
+                        .expect("the import budget dependency should be writable");
+                        return Self(directory);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("the import budget fixture should be creatable: {error}"),
+                }
+            }
+        }
+    }
+
+    impl Drop for ImportBudgetFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn resolve_import_fixture_with_limit(
+        entry: &str,
+        limit: usize,
+    ) -> (Result<ResolvedModule, ResolveError>, usize) {
+        let fixture = ImportBudgetFixture::create(entry);
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the import budget graph should load");
+        let dependency = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name()
+                    == Some("dependency.ash".as_ref())
+            })
+            .expect("the import budget dependency should load");
+        let dependency =
+            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
+                .expect("the dependency should check");
+        let entry = graph
+            .module(graph.entry())
+            .expect("the import budget entry should load");
+        let dependencies = entry
+            .dependencies()
+            .iter()
+            .map(|edge| DependencyExports::new(edge, dependency.exports()).unwrap())
+            .collect::<Vec<_>>();
+        let mut type_work = TypeWorkBudget::default();
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(limit);
+        let result =
+            resolve_module_with_budget(entry, &dependencies, &mut type_work, &mut constraint_work);
+        (result, constraint_work.used())
+    }
+
+    #[test]
+    fn duplicate_impl_route_charges_lookup_without_retaining_a_second_fact() {
+        let (one, one_used) =
+            resolve_import_fixture_with_limit("import dependency as Dependency\n", 21);
+        one.expect("one direct implementation route should resolve");
+        let (two, two_used) = resolve_import_fixture_with_limit(
+            "import dependency as First\nimport dependency as Second\n",
+            23,
+        );
+        let two = two.expect("the duplicate implementation route should deduplicate");
+        assert_eq!(two_used, 23);
+        assert_eq!(one_used, 21);
+        let implementation = two
+            .imported_facts()
+            .implementations()
+            .next()
+            .expect("one implementation fact should remain");
+        assert!(
+            two.imported_facts()
+                .implementation(implementation.fact.id)
+                .is_some()
+        );
+        assert_eq!(two.imported_facts().implementations().count(), 1);
+
+        let (short, short_used) = resolve_import_fixture_with_limit(
+            "import dependency as First\nimport dependency as Second\n",
+            22,
+        );
+        let error = short.expect_err("one missing route unit should reject the duplicate edge");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(short_used, 22);
+    }
 
     #[test]
     fn binder_identity_allocation_reports_exhaustion_without_wrapping() {

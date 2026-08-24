@@ -37,7 +37,7 @@ Execute the linked plan to:
 - extend checked schemes and body-free summaries without changing ordinary
   type equality or turning summaries into source module signatures;
 - check interface and impl headers, visibility, orphan ownership, structural
-  termination, exact method membership, and scoped overlap;
+  termination, exact method membership, and implementation overlap;
 - select abstract, exact-rigid self, concrete, and generic prerequisite evidence
   once and retain it on the checked occurrence;
 - validate linked evidence identities, availability, substitutions, method
@@ -57,15 +57,22 @@ Execute the linked plan to:
 
 - CP-0006 converged through independent syntax, semantics, and implementation-
   boundary reviews and is accepted.
-- The worktree baseline is unsigned commit `ca79328` on
-  `feature/modular-ash`.
-- `cargo xtask verify` passes before implementation. The baseline contains 645
-  passing tests across the library, executable, integration targets, and
-  `xtask`, with no failure.
-- Markdown lint with existing line-length exceptions, relative-link checks, and
-  `git diff --check` pass for the accepted design and proposal artifacts.
-- The implementation plan records the intended red-green checkpoints. No
-  production interface implementation has started.
+- Unsigned checkpoints through `f3bbc3a` implement parsing, stable identity and
+  constraint resolution, interface checking, and implementation-header
+  admission on `feature/modular-ash`.
+- Task 4 now retains checked interface and implementation facts, publishes
+  direct-only summaries, preserves import-route provenance, deduplicates stable
+  identities, and rejects overlapping admitted heads after pair-freshening.
+- Focused tests cover exact resource limits, deep payloads on a 64-KiB stack,
+  public and private module boundaries, targeted imports, direct-only
+  availability, and alternate-route deduplication.
+- Task 4's implementation and evidence passed independent high-reasoning
+  reviews of ownership, budgets, stable-identity deduplication, overlap,
+  summary transport, orphan precedence, opacity, and dependency diamonds.
+- `cargo xtask verify` passes after the completed Task 4 test matrix, including
+  format, build, Clippy, all test targets, and documentation.
+- The implementation plan records the remaining selection, linking, lowering,
+  resource, documentation, and corpus checkpoints.
 
 ## Verification
 
@@ -89,8 +96,15 @@ dispatch rule.
 
 ## Discoveries
 
-None yet.
+- CP-0006's orphan rule and the existing acyclic module graph prevent distinct
+  modules from publishing unifying implementation heads. The planned legal
+  sibling and co-import conflict cases were therefore not source-expressible.
+  CP-0006 and DN-0023 now state that consequence while retaining overlap checks
+  over admitted effective-environment facts.
 
 ## Deviations
 
-None.
+- Task 4 exercises cross-route effective-environment overlap with authenticated
+  synthetic facts instead of orphan-invalid sibling source fixtures. Source
+  tests retain local overlap, orphan precedence, direct fact availability,
+  route deduplication, and no re-export.

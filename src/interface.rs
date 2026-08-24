@@ -103,128 +103,306 @@ impl InterfaceConstraintBudget {
     }
 }
 
-pub(crate) fn implementation_heads_overlap(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OverlapFailure {
+    InvalidState,
+    Resource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum OverlapSide {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy)]
+struct OverlapHead<'a> {
+    side: OverlapSide,
+    ty: &'a Type,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct FreshOverlapVariable {
+    side: OverlapSide,
+    parameter: usize,
+}
+
+pub(crate) fn implementation_heads_overlap<L, R>(
+    left_parameters: L,
     left: &Type,
+    right_parameters: R,
     right: &Type,
     budget: &mut InterfaceConstraintBudget,
-) -> Result<bool, ()> {
-    budget.charge(1)?;
+) -> Result<bool, OverlapFailure>
+where
+    L: ExactSizeIterator<Item = TypeVariableId>,
+    R: ExactSizeIterator<Item = TypeVariableId>,
+{
+    let left_positions = overlap_parameter_positions(left_parameters, budget)?;
+    let right_positions = overlap_parameter_positions(right_parameters, budget)?;
+    budget.charge(1).map_err(|()| OverlapFailure::Resource)?;
     let mut pending = Vec::new();
-    pending.try_reserve(1).map_err(|_| ())?;
-    pending.push((left, right));
+    pending
+        .try_reserve(1)
+        .map_err(|_| OverlapFailure::Resource)?;
+    pending.push((
+        OverlapHead {
+            side: OverlapSide::Left,
+            ty: left,
+        },
+        OverlapHead {
+            side: OverlapSide::Right,
+            ty: right,
+        },
+    ));
     let mut solutions = HashMap::new();
     while let Some((left, right)) = pending.pop() {
-        let left = follow_overlap_solution(left, &solutions, budget)?;
-        let right = follow_overlap_solution(right, &solutions, budget)?;
-        budget.charge(1)?;
-        match (left, right) {
-            (Type::Variable(left), Type::Variable(right)) if left == right => {}
-            (Type::Variable(variable), ty) | (ty, Type::Variable(variable)) => {
-                if overlap_occurs(*variable, ty, &solutions, budget)? {
-                    return Ok(false);
-                }
-                budget.charge(1)?;
-                solutions.try_reserve(1).map_err(|_| ())?;
-                solutions.insert(*variable, ty);
+        let left =
+            follow_overlap_solution(left, &solutions, &left_positions, &right_positions, budget)?;
+        let right =
+            follow_overlap_solution(right, &solutions, &left_positions, &right_positions, budget)?;
+        budget.charge(1).map_err(|()| OverlapFailure::Resource)?;
+        let left_variable = overlap_variable(left, &left_positions, &right_positions)?;
+        let right_variable = overlap_variable(right, &left_positions, &right_positions)?;
+        if left_variable.is_some() || right_variable.is_some() {
+            if left_variable == right_variable {
+                continue;
             }
+            let (variable, value) = if let Some(variable) = left_variable {
+                (variable, right)
+            } else {
+                (right_variable.ok_or(OverlapFailure::InvalidState)?, left)
+            };
+            if overlap_occurs(
+                variable,
+                value,
+                &solutions,
+                &left_positions,
+                &right_positions,
+                budget,
+            )? {
+                return Ok(false);
+            }
+            budget.charge(1).map_err(|()| OverlapFailure::Resource)?;
+            solutions
+                .try_reserve(1)
+                .map_err(|_| OverlapFailure::Resource)?;
+            solutions.insert(variable, value);
+            continue;
+        }
+        match (left.ty, right.ty) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-            (Type::Inference(left), Type::Inference(right)) if left == right => {}
-            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
-                if left_id == right_id && left.len() == right.len() =>
-            {
-                schedule_overlap_pairs(left, right, &mut pending, budget)?;
+            (
+                Type::AppliedNominal(left_id, left_types),
+                Type::AppliedNominal(right_id, right_types),
+            ) if left_id == right_id && left_types.len() == right_types.len() => {
+                schedule_overlap_pairs(
+                    left_types,
+                    left.side,
+                    right_types,
+                    right.side,
+                    &mut pending,
+                    budget,
+                )?;
             }
-            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
-                schedule_overlap_pairs(left, right, &mut pending, budget)?;
+            (Type::Tuple(left_types), Type::Tuple(right_types))
+                if left_types.len() == right_types.len() =>
+            {
+                schedule_overlap_pairs(
+                    left_types,
+                    left.side,
+                    right_types,
+                    right.side,
+                    &mut pending,
+                    budget,
+                )?;
             }
             (
                 Type::Function(left_domain, left_codomain),
                 Type::Function(right_domain, right_codomain),
             ) => {
-                budget.charge(2)?;
-                pending.try_reserve(2).map_err(|_| ())?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
+                budget.charge(2).map_err(|()| OverlapFailure::Resource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| OverlapFailure::Resource)?;
+                pending.push((
+                    OverlapHead {
+                        side: left.side,
+                        ty: left_codomain,
+                    },
+                    OverlapHead {
+                        side: right.side,
+                        ty: right_codomain,
+                    },
+                ));
+                pending.push((
+                    OverlapHead {
+                        side: left.side,
+                        ty: left_domain,
+                    },
+                    OverlapHead {
+                        side: right.side,
+                        ty: right_domain,
+                    },
+                ));
             }
-            (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
-                if left_parameters == right_parameters =>
-            {
-                budget.charge(left_parameters.len().saturating_add(1))?;
-                pending.try_reserve(1).map_err(|_| ())?;
-                pending.push((left, right));
+            (Type::Variable(_), _) | (_, Type::Variable(_)) => {
+                return Err(OverlapFailure::InvalidState);
             }
+            (Type::Forall(_, _), _)
+            | (_, Type::Forall(_, _))
+            | (Type::Inference(_), _)
+            | (_, Type::Inference(_)) => return Err(OverlapFailure::InvalidState),
             _ => return Ok(false),
         }
     }
     Ok(true)
 }
 
+fn overlap_parameter_positions(
+    parameters: impl ExactSizeIterator<Item = TypeVariableId>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<HashMap<TypeVariableId, usize>, OverlapFailure> {
+    let parameter_count = parameters.len();
+    budget
+        .charge(parameter_count)
+        .map_err(|()| OverlapFailure::Resource)?;
+    let mut positions = HashMap::new();
+    positions
+        .try_reserve(parameter_count)
+        .map_err(|_| OverlapFailure::Resource)?;
+    for (position, parameter) in parameters.enumerate() {
+        budget.charge(1).map_err(|()| OverlapFailure::Resource)?;
+        if positions.insert(parameter, position).is_some() {
+            return Err(OverlapFailure::InvalidState);
+        }
+    }
+    Ok(positions)
+}
+
+fn overlap_variable(
+    head: OverlapHead<'_>,
+    left_positions: &HashMap<TypeVariableId, usize>,
+    right_positions: &HashMap<TypeVariableId, usize>,
+) -> Result<Option<FreshOverlapVariable>, OverlapFailure> {
+    let Type::Variable(variable) = head.ty else {
+        return Ok(None);
+    };
+    let parameter = match head.side {
+        OverlapSide::Left => left_positions.get(variable),
+        OverlapSide::Right => right_positions.get(variable),
+    }
+    .copied()
+    .ok_or(OverlapFailure::InvalidState)?;
+    Ok(Some(FreshOverlapVariable {
+        side: head.side,
+        parameter,
+    }))
+}
+
 fn schedule_overlap_pairs<'a>(
     left: &'a [Type],
+    left_side: OverlapSide,
     right: &'a [Type],
-    pending: &mut Vec<(&'a Type, &'a Type)>,
+    right_side: OverlapSide,
+    pending: &mut Vec<(OverlapHead<'a>, OverlapHead<'a>)>,
     budget: &mut InterfaceConstraintBudget,
-) -> Result<(), ()> {
-    budget.charge(left.len())?;
-    pending.try_reserve(left.len()).map_err(|_| ())?;
-    pending.extend(left.iter().zip(right).rev());
+) -> Result<(), OverlapFailure> {
+    budget
+        .charge(left.len())
+        .map_err(|()| OverlapFailure::Resource)?;
+    pending
+        .try_reserve(left.len())
+        .map_err(|_| OverlapFailure::Resource)?;
+    pending.extend(left.iter().zip(right).rev().map(|(left, right)| {
+        (
+            OverlapHead {
+                side: left_side,
+                ty: left,
+            },
+            OverlapHead {
+                side: right_side,
+                ty: right,
+            },
+        )
+    }));
     Ok(())
 }
 
 fn follow_overlap_solution<'a>(
-    mut ty: &'a Type,
-    solutions: &HashMap<TypeVariableId, &'a Type>,
+    mut head: OverlapHead<'a>,
+    solutions: &HashMap<FreshOverlapVariable, OverlapHead<'a>>,
+    left_positions: &HashMap<TypeVariableId, usize>,
+    right_positions: &HashMap<TypeVariableId, usize>,
     budget: &mut InterfaceConstraintBudget,
-) -> Result<&'a Type, ()> {
+) -> Result<OverlapHead<'a>, OverlapFailure> {
     loop {
-        budget.charge(1)?;
-        let Type::Variable(variable) = ty else {
-            return Ok(ty);
+        budget.charge(1).map_err(|()| OverlapFailure::Resource)?;
+        let Some(variable) = overlap_variable(head, left_positions, right_positions)? else {
+            return Ok(head);
         };
-        let Some(solution) = solutions.get(variable) else {
-            return Ok(ty);
+        let Some(solution) = solutions.get(&variable) else {
+            return Ok(head);
         };
-        ty = solution;
+        head = *solution;
     }
 }
 
 fn overlap_occurs<'a>(
-    needle: TypeVariableId,
-    root: &'a Type,
-    solutions: &HashMap<TypeVariableId, &'a Type>,
+    needle: FreshOverlapVariable,
+    root: OverlapHead<'a>,
+    solutions: &HashMap<FreshOverlapVariable, OverlapHead<'a>>,
+    left_positions: &HashMap<TypeVariableId, usize>,
+    right_positions: &HashMap<TypeVariableId, usize>,
     budget: &mut InterfaceConstraintBudget,
-) -> Result<bool, ()> {
-    budget.charge(1)?;
+) -> Result<bool, OverlapFailure> {
+    budget.charge(1).map_err(|()| OverlapFailure::Resource)?;
     let mut pending = Vec::new();
-    pending.try_reserve(1).map_err(|_| ())?;
+    pending
+        .try_reserve(1)
+        .map_err(|_| OverlapFailure::Resource)?;
     pending.push(root);
-    while let Some(ty) = pending.pop() {
-        let ty = follow_overlap_solution(ty, solutions, budget)?;
-        budget.charge(1)?;
-        match ty {
-            Type::Variable(variable) => {
-                if *variable == needle {
-                    return Ok(true);
-                }
+    while let Some(head) = pending.pop() {
+        let head =
+            follow_overlap_solution(head, solutions, left_positions, right_positions, budget)?;
+        budget.charge(1).map_err(|()| OverlapFailure::Resource)?;
+        if let Some(variable) = overlap_variable(head, left_positions, right_positions)? {
+            if variable == needle {
+                return Ok(true);
             }
+            continue;
+        }
+        match head.ty {
             Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
-                budget.charge(elements.len())?;
-                pending.try_reserve(elements.len()).map_err(|_| ())?;
-                pending.extend(elements.iter().rev());
+                budget
+                    .charge(elements.len())
+                    .map_err(|()| OverlapFailure::Resource)?;
+                pending
+                    .try_reserve(elements.len())
+                    .map_err(|_| OverlapFailure::Resource)?;
+                pending.extend(elements.iter().rev().map(|ty| OverlapHead {
+                    side: head.side,
+                    ty,
+                }));
             }
             Type::Function(domain, codomain) => {
-                budget.charge(2)?;
-                pending.try_reserve(2).map_err(|_| ())?;
-                pending.push(codomain);
-                pending.push(domain);
+                budget.charge(2).map_err(|()| OverlapFailure::Resource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| OverlapFailure::Resource)?;
+                pending.push(OverlapHead {
+                    side: head.side,
+                    ty: codomain,
+                });
+                pending.push(OverlapHead {
+                    side: head.side,
+                    ty: domain,
+                });
             }
-            Type::Forall(parameters, body) => {
-                budget.charge(parameters.len().saturating_add(1))?;
-                pending.try_reserve(1).map_err(|_| ())?;
-                pending.push(body);
-            }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+            Type::Variable(_) => return Err(OverlapFailure::InvalidState),
+            Type::Forall(_, _) | Type::Inference(_) => return Err(OverlapFailure::InvalidState),
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
         }
     }
     Ok(false)
@@ -657,19 +835,183 @@ mod tests {
 
     #[test]
     fn overlap_unification_accepts_its_exact_budget_and_rejects_the_next_unit() {
-        let variable = Type::Variable(TypeVariableId::new(0));
+        let parameter = TypeVariableId::new(0);
+        let variable = Type::Variable(parameter);
 
-        let mut short = InterfaceConstraintBudget::with_limit(7);
+        let mut short = InterfaceConstraintBudget::with_limit(9);
         assert_eq!(
-            implementation_heads_overlap(&variable, &Type::Int, &mut short),
-            Err(())
+            implementation_heads_overlap(
+                std::iter::once(parameter),
+                &variable,
+                std::iter::empty(),
+                &Type::Int,
+                &mut short,
+            ),
+            Err(OverlapFailure::Resource)
         );
 
-        let mut exact = InterfaceConstraintBudget::with_limit(8);
+        let mut exact = InterfaceConstraintBudget::with_limit(10);
         assert_eq!(
-            implementation_heads_overlap(&variable, &Type::Int, &mut exact),
+            implementation_heads_overlap(
+                std::iter::once(parameter),
+                &variable,
+                std::iter::empty(),
+                &Type::Int,
+                &mut exact,
+            ),
             Ok(true)
         );
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn overlap_freshens_equal_raw_parameter_identities_per_side() {
+        let parameter = TypeVariableId::new(0);
+        let left = Type::Tuple(vec![Type::Variable(parameter), Type::Int].into_boxed_slice());
+        let right = Type::Tuple(vec![Type::Bool, Type::Variable(parameter)].into_boxed_slice());
+
+        let mut short = InterfaceConstraintBudget::with_limit(23);
+        assert_eq!(
+            implementation_heads_overlap(
+                std::iter::once(parameter),
+                &left,
+                std::iter::once(parameter),
+                &right,
+                &mut short,
+            ),
+            Err(OverlapFailure::Resource)
+        );
+
+        let mut exact = InterfaceConstraintBudget::with_limit(24);
+        assert_eq!(
+            implementation_heads_overlap(
+                std::iter::once(parameter),
+                &left,
+                std::iter::once(parameter),
+                &right,
+                &mut exact,
+            ),
+            Ok(true)
+        );
+        assert_eq!(exact.used(), 24);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn overlap_preserves_repeated_variables_within_one_head() {
+        let parameter = TypeVariableId::new(0);
+        let left = Type::Tuple(
+            vec![Type::Variable(parameter), Type::Variable(parameter)].into_boxed_slice(),
+        );
+        let right = Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice());
+
+        assert_eq!(
+            implementation_heads_overlap(
+                std::iter::once(parameter),
+                &left,
+                std::iter::empty(),
+                &right,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn overlap_rejects_unlisted_head_variables() {
+        let variable = Type::Variable(TypeVariableId::new(0));
+
+        assert_eq!(
+            implementation_heads_overlap(
+                std::iter::empty(),
+                &variable,
+                std::iter::empty(),
+                &Type::Int,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Err(OverlapFailure::InvalidState)
+        );
+    }
+
+    #[test]
+    fn overlap_occurs_check_uses_fresh_side_keys() {
+        let left_parameter = TypeVariableId::new(0);
+        let right_parameter = TypeVariableId::new(0);
+        let left = Type::Tuple(
+            vec![
+                Type::Variable(left_parameter),
+                Type::Variable(left_parameter),
+            ]
+            .into_boxed_slice(),
+        );
+        let right = Type::Tuple(
+            vec![
+                Type::Variable(right_parameter),
+                Type::Tuple(vec![Type::Variable(right_parameter), Type::Unit].into_boxed_slice()),
+            ]
+            .into_boxed_slice(),
+        );
+
+        assert_eq!(
+            implementation_heads_overlap(
+                std::iter::once(left_parameter),
+                &left,
+                std::iter::once(right_parameter),
+                &right,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn overlap_rejects_inference_and_forall_in_checked_heads() {
+        for invalid in [
+            Type::Inference(crate::types::InferenceVariableId::new(0)),
+            Type::Forall(Box::new([]), Box::new(Type::Int)),
+        ] {
+            assert_eq!(
+                implementation_heads_overlap(
+                    std::iter::empty(),
+                    &invalid,
+                    std::iter::empty(),
+                    &Type::Int,
+                    &mut InterfaceConstraintBudget::default(),
+                ),
+                Err(OverlapFailure::InvalidState)
+            );
+        }
+    }
+
+    #[test]
+    fn overlap_matching_is_stack_safe_for_deep_function_heads() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let nested = || {
+                    let mut ty = Type::Unit;
+                    for _ in 0..20_000 {
+                        ty = Type::Function(Box::new(Type::Unit), Box::new(ty));
+                    }
+                    ty
+                };
+                let left = nested();
+                let right = nested();
+                assert_eq!(
+                    implementation_heads_overlap(
+                        std::iter::empty(),
+                        &left,
+                        std::iter::empty(),
+                        &right,
+                        &mut InterfaceConstraintBudget::default(),
+                    ),
+                    Ok(true)
+                );
+                discard_type_iteratively(left);
+                discard_type_iteratively(right);
+            })
+            .expect("the small-stack overlap thread should start")
+            .join()
+            .expect("deep overlap matching and cleanup should remain iterative");
     }
 }

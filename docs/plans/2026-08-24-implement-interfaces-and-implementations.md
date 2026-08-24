@@ -10,7 +10,7 @@ selection per occurrence, and lowering through the existing pure Core.
 **Architecture:** Extend the lossless surface and resolved module forms with
 stable interface identities and constrained schemes. Keep constraints outside
 the ordinary `Type` algebra. A focused interface subsystem owns checked header
-facts, scoped coherence, the persistent graph-wide work budget, evidence
+facts, implementation overlap, the persistent graph-wide work budget, evidence
 selection, and pre-Core evidence validation. Checked definitions structurally
 retain selections through `CheckedModule`, linking, and final synthesis. Impl
 methods receive hidden module-qualified binders and join their module's existing
@@ -345,7 +345,7 @@ absence of string-encoded identities. Commit unsigned as:
 feat: resolve interface identities and constraints
 ```
 
-## Task 4: Check headers, publish summaries, and enforce scoped coherence
+## Task 4: Check headers, publish summaries, and enforce implementation overlap
 
 ### Task 4 — Files
 
@@ -354,10 +354,15 @@ feat: resolve interface identities and constraints
 - Modify: `src/resolve.rs`
 - Modify: `src/elaborate.rs`
 - Modify: `src/driver.rs`
-- Modify: `src/diagnostic.rs`
+- Modify: `src/render.rs`
 - Create: `tests/interfaces.rs`
-- Modify: `tests/module_resolution.rs`
-- Modify: `tests/module_visibility.rs`
+- Create: `tests/interface_modules.rs`
+- Create: `tests/interface_identity_diamond.rs`
+- Create: `tests/interface_generic_summary.rs`
+- Modify: `tests/implementations.rs`
+- Modify: `tests/functions.rs`
+- Modify: `tests/module_elaboration.rs`
+- Modify: `tests/module_entry.rs`
 
 ### Task 4 — Step 1: Check interface declarations RED to GREEN
 
@@ -393,18 +398,18 @@ method bodies. Assert every corresponding `impl.*` reason before implementing
 the behavior. Add precedence cases proving an invalid header never enters the
 effective environment and therefore cannot produce a secondary overlap.
 
-Name the complete ownership matrix directly:
+Name the complete ownership and opacity matrix directly:
 
-- `accepts_impl_owned_by_local_interface`;
-- `accepts_impl_owned_by_local_outer_nominal_type`;
-- `rejects_impl_for_foreign_interface_and_foreign_type`;
-- `rejects_primitive_impl_without_local_interface_owner`; and
+- `accepts_impl_for_local_interface`;
+- `accepts_impl_for_local_outer_nominal`;
+- `rejects_foreign_interface_and_foreign_nominal_impl_as_orphan`;
+- `rejects_primitive_impl_for_foreign_interface_as_orphan`; and
 - `rejects_external_opaque_constructor_and_pattern_in_impl_body`.
 
-Use `rejects_missing_impl_method_after_header_admission` as the first witness:
+Use `rejects_missing_impl_method` as the first membership witness:
 
 ```text
-cargo test --locked --test interfaces rejects_missing_impl_method_after_header_admission -- --exact
+cargo test --locked --test implementations rejects_missing_impl_method -- --exact
 ```
 
 Implement, in order, header admission, environment and overlap validation,
@@ -441,24 +446,32 @@ maps retain tagged global and method entries. Qualified requirement references
 are first resolved here, after the dependency's checked interface summary is
 available.
 
-Use `publishes_checked_interface_and_impl_summary_atomically` as the first
-witness:
+Use `public_impl_fact_is_available_on_a_targeted_direct_import_edge` as the
+first publication witness:
 
 ```text
-cargo test --locked --test module_resolution publishes_checked_interface_and_impl_summary_atomically -- --exact
+cargo test --locked --test interface_modules public_impl_fact_is_available_on_a_targeted_direct_import_edge -- --exact
 ```
 
-Rerun the focused `interfaces`, `module_resolution`, and `module_visibility`
-tests GREEN.
+Use `failed_public_impl_stages_never_produce_a_checked_summary` for header,
+completeness, and body-failure atomicity:
 
-### Task 4 — Step 4: Enforce scoped coherence RED to GREEN
+```text
+cargo test --locked --test implementations failed_public_impl_stages_never_produce_a_checked_summary -- --exact
+```
+
+Rerun the focused `interfaces`, `interface_modules`, `module_resolution`, and
+`module_visibility` tests GREEN.
+
+### Task 4 — Step 4: Enforce implementation overlap RED to GREEN
 
 Add RED cases for:
 
 - no impl re-export through an intermediary;
 - route deduplication by `ImplId`;
-- legal overlapping sibling modules and rejection only when co-imported;
-- `rejects_overlapping_generic_heads_after_freshening`; and
+- authenticated effective-environment overlap through an internal fact
+  harness;
+- `rejects_generic_local_overlap_after_pair_local_freshening`; and
 - an injectable graph budget proving the same budget instance charges imported
   dependency facts and then local module checking without reset.
 
@@ -468,14 +481,16 @@ Introduce one `InterfaceConstraintBudget` in the driver before the module loop;
 pass it mutably through dependency fact admission and
 `check_module_with_budget`. Task 6 must receive this same retained budget.
 
-Use `rejects_overlap_only_in_the_coimporting_module` as the first witness:
+Use `alternate_direct_routes_to_one_impl_identity_do_not_self_overlap` as the
+first module-boundary witness:
 
 ```text
-cargo test --locked --test module_resolution rejects_overlap_only_in_the_coimporting_module -- --exact
+cargo test --locked --test interface_modules alternate_direct_routes_to_one_impl_identity_do_not_self_overlap -- --exact
 ```
 
 Run the exact RED case, implement route deduplication and fresh-head overlap,
-rerun it GREEN, then rerun:
+cover synthetic-fact conflict order and provenance through the authenticated
+internal harness, rerun the cases GREEN, then rerun:
 
 ```text
 cargo test --locked --test interfaces
@@ -488,20 +503,28 @@ Run:
 
 ```text
 cargo test --locked --test interfaces
+cargo test --locked --test implementations --test interface_modules
 cargo test --locked --test module_resolution --test module_visibility
 cargo test --locked --test resolution --test polymorphism
 cargo fmt --check
 ```
 
 Expected GREEN. Request an independent review of the namespace, summary,
-orphan, termination, and scoped-coherence boundaries.
+orphan, termination, and implementation-overlap boundaries.
 
 ### Task 4 — Step 6: Commit
 
-Commit unsigned as:
+The header-admission checkpoint is unsigned commit `f3bbc3a`:
 
 ```text
 feat: check interface implementation headers
+```
+
+Commit checked summaries, direct fact transport, identity deduplication,
+overlap enforcement, and the completed Task 4 evidence unsigned as:
+
+```text
+feat: publish interface implementation summaries
 ```
 
 ## Task 5: Select and retain abstract and concrete evidence
@@ -637,9 +660,7 @@ cases with exact observations:
 - `opaque_carrier_uses_public_operations` -> `true : Bool`;
 - `higher_order_abstract_evidence_observes_true` -> `true : Bool`;
 - `equational_and_operational_constraints_agree` ->
-  `(true, true) : (Bool, Bool)`; and
-- `scoped_sibling_selections_observe_distinct_results` ->
-  `(true, false) : (Bool, Bool)` through separate importing entries.
+  `(true, true) : (Bool, Bool)`.
 
 Run the corpus target RED before production changes in this task. Its failures
 must be missing evidence validation/lowering behavior, not fixture setup.
@@ -883,9 +904,6 @@ with these exact observations:
 - `higher_order_abstract_evidence_observes_true` -> `true : Bool`;
 - `equational_and_operational_constraints_agree` ->
   `(true, true) : (Bool, Bool)`; and
-- `scoped_sibling_selections_observe_distinct_results` ->
-  `(true, false) : (Bool, Bool)`, paired with co-imported `impl.overlap`
-  rejection.
 
 Retain separate direct-only/no-reexport rejection, same-typed slot order, and
 type-application/evidence-application/value-application trace cases.
@@ -948,7 +966,7 @@ Expected RED until normative documents contain and agree with the examples.
 
 Apply CP-0006 to every affected specification area. Use `global signature` for
 the pre-existing function annotation. State syntax, stable identities,
-namespaces, checked schemes, impl admission, scoped coherence, selection,
+namespaces, checked schemes, impl admission, implementation overlap, selection,
 summary lifecycle, structural evidence, validation, lowering, entry, failure
 ownership, resources, and unchanged evaluation. Follow the formal-notation
 guide for grammar and judgments.
