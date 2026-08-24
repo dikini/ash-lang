@@ -1,18 +1,88 @@
 //! Reusable, stage-preserving Ash pipeline orchestration.
 
-use std::{error::Error, fmt, fs, io, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, error::Error, fmt, io, path::PathBuf, sync::Arc};
 
 use crate::{
-    core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate},
-    diagnostic::Diagnostic,
-    elaborate::{Elaborator, TypeError},
+    core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate, validate_modules},
+    diagnostic::{Diagnostic, SourceLabel},
+    elaborate::{Elaborator, TypeError, check_module, link_modules},
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
     lexer::{LexReason, lex},
+    module::{LoadGraphError, ModuleId, ModuleRoots, load_module_graph},
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure, parse, project},
-    resolve::{ResolveError, ResolveReason, resolve},
-    source::{SourceError, SourceFile},
+    resolve::{DependencyExports, ResolveError, ResolveReason, resolve, resolve_module},
+    resolved::{ResolvedApplicationExpr, ResolvedExpr, ResolvedExprKind, ResolvedOccurrence},
+    source::{SourceError, SourceFile, Span},
     types::Type,
 };
+
+/// Tool-facing inputs for one modular Ash execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunConfiguration {
+    /// Entry module source path.
+    pub entry: PathBuf,
+    /// Explicit named module roots.
+    pub roots: ModuleRoots,
+}
+
+/// Stable entry-contract failure families.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EntryReason {
+    /// The entry module declares no local `main`.
+    MissingMain,
+    /// The local `main` scheme is polymorphic.
+    MainPolymorphic,
+    /// The local `main` domain is not `Unit`.
+    MainDomain,
+    /// The local `main` result is not closed.
+    MainOpenResult,
+}
+
+impl fmt::Display for EntryReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::MissingMain => "entry.missing-main",
+            Self::MainPolymorphic => "entry.main-polymorphic",
+            Self::MainDomain => "entry.main-domain",
+            Self::MainOpenResult => "entry.main-open-result",
+        })
+    }
+}
+
+/// One source-owned entry-contract rejection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EntryFailure {
+    /// Structured entry-contract diagnostic.
+    pub diagnostic: Box<Diagnostic<EntryReason>>,
+}
+
+impl EntryFailure {
+    fn new(reason: EntryReason, primary: Span) -> Self {
+        let message = match reason {
+            EntryReason::MissingMain => "this entry module declares no local main",
+            EntryReason::MainPolymorphic => "this main has a polymorphic scheme",
+            EntryReason::MainDomain => "this main does not accept Unit",
+            EntryReason::MainOpenResult => "this main result is not closed",
+        };
+        Self {
+            diagnostic: Box::new(Diagnostic::new(reason, SourceLabel::new(primary, message))),
+        }
+    }
+
+    /// Returns the stable entry-contract reason.
+    #[must_use]
+    pub fn reason(&self) -> EntryReason {
+        self.diagnostic.reason
+    }
+}
+
+impl fmt::Display for EntryFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.diagnostic.reason.fmt(formatter)
+    }
+}
+
+impl Error for EntryFailure {}
 
 /// The observable result of one successful source-file pipeline.
 ///
@@ -68,6 +138,8 @@ pub enum PipelineFailure {
     Resolution(ResolveError),
     /// Typed elaboration rejected the source or lost an invariant.
     Typing(TypeError),
+    /// The entry module violated the local `main` contract.
+    Entry(EntryFailure),
     /// Independent Core validation rejected compiler output.
     Validation(ValidationError),
     /// The explicit evaluator reported a runtime invariant failure.
@@ -92,11 +164,12 @@ impl PipelineFailure {
                         .map(|diagnostic| diagnostic.reason.to_string())
                 })
                 .unwrap_or_else(|| "parse.resource".into()),
-            Self::Projection(_) => "projection.malformed-tree".into(),
+            Self::Projection(error) => projection_reason(*error).into(),
             Self::Resolution(error) => error.reason.to_string(),
             Self::Typing(TypeError::Source(diagnostic)) => diagnostic.reason.to_string(),
             Self::Typing(TypeError::Mismatch(_)) => "type.mismatch".into(),
             Self::Typing(TypeError::Internal(_)) => "type.internal".into(),
+            Self::Entry(failure) => failure.reason().to_string(),
             Self::Validation(error) => error.reason().to_string(),
             Self::Runtime(error) => format!("runtime.{error:?}"),
         }
@@ -117,6 +190,7 @@ impl PipelineFailure {
                     | ResolveReason::InternalState
             ),
             Self::Typing(TypeError::Source(_) | TypeError::Mismatch(_)) => true,
+            Self::Entry(_) => true,
             Self::SourceModel(_)
             | Self::Projection(_)
             | Self::Typing(TypeError::Internal(_))
@@ -134,6 +208,7 @@ impl fmt::Display for PipelineFailure {
             Self::Projection(_) => "surface projection failure",
             Self::Resolution(_) => "name-resolution failure",
             Self::Typing(_) => "typed-elaboration failure",
+            Self::Entry(_) => "entry-contract failure",
             Self::Validation(_) => "Core validation failure",
             Self::Runtime(_) => "runtime failure",
         })
@@ -145,6 +220,8 @@ impl Error for PipelineFailure {}
 /// A file-input failure or a stage-preserving pipeline failure.
 #[derive(Debug)]
 pub enum FileFailure {
+    /// Module graph loading failed at its owning stage.
+    Graph(LoadGraphError),
     /// The source path could not be read.
     Read {
         /// The requested path.
@@ -168,13 +245,50 @@ impl FileFailure {
     /// input, compiler, or runtime state.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        matches!(self, Self::Pipeline(failure) if failure.is_source_rejection())
+        match self {
+            Self::Graph(error) => error.is_source_rejection(),
+            Self::Pipeline(failure) => failure.is_source_rejection(),
+            Self::Read { .. } | Self::InvalidUtf8 { .. } | Self::Source(_) => false,
+        }
+    }
+
+    /// Returns the stable first-stage reason code.
+    #[must_use]
+    pub fn reason_code(&self) -> String {
+        match self {
+            Self::Graph(error) => match error {
+                LoadGraphError::Module(failure) => failure.reason().to_string(),
+                LoadGraphError::Read { .. } => "input.read".to_owned(),
+                LoadGraphError::InvalidUtf8 { .. } => "input.invalid-utf8".to_owned(),
+                LoadGraphError::SourceModel { .. } => "input.source-model".to_owned(),
+                LoadGraphError::Syntax(failure) if failure.resource.is_some() => {
+                    "parse.resource".to_owned()
+                }
+                LoadGraphError::Syntax(failure) => failure
+                    .lexical
+                    .first()
+                    .map(|diagnostic| diagnostic.reason.to_string())
+                    .or_else(|| {
+                        failure
+                            .parser
+                            .first()
+                            .map(|diagnostic| diagnostic.reason.to_string())
+                    })
+                    .unwrap_or_else(|| "parse.resource".to_owned()),
+                LoadGraphError::Projection { error, .. } => projection_reason(*error).to_owned(),
+            },
+            Self::Read { .. } => "input.read".to_owned(),
+            Self::InvalidUtf8 { .. } => "input.invalid-utf8".to_owned(),
+            Self::Source(_) => "input.source-model".to_owned(),
+            Self::Pipeline(failure) => failure.reason_code(),
+        }
     }
 }
 
 impl fmt::Display for FileFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Graph(error) => error.fmt(formatter),
             Self::Read { path, kind } => {
                 write!(formatter, "cannot read {}: {kind}", path.display())
             }
@@ -246,21 +360,182 @@ where
     })
 }
 
-/// Reads one path as UTF-8 and runs the complete retained pipeline.
+/// Loads, checks, links, validates, and evaluates one modular Ash graph.
 ///
 /// # Errors
 ///
 /// Returns a structured input, source-model, compiler, source-rejection, or
 /// runtime failure.
-pub fn run_path(path: PathBuf) -> Result<Observation, FileFailure> {
-    let bytes = fs::read(&path).map_err(|error| FileFailure::Read {
-        path: path.clone(),
-        kind: error.kind(),
-    })?;
-    let text =
-        String::from_utf8(bytes).map_err(|_| FileFailure::InvalidUtf8 { path: path.clone() })?;
-    let source = SourceFile::new(path.to_string_lossy(), text).map_err(FileFailure::Source)?;
-    run_source(source).map_err(FileFailure::Pipeline)
+pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFailure> {
+    let graph = load_module_graph(&configuration.entry, &configuration.roots)
+        .map_err(FileFailure::Graph)?;
+    let mut checked: Vec<crate::resolved::CheckedModule> =
+        Vec::with_capacity(graph.modules().len());
+    let mut checked_by_module: HashMap<ModuleId, usize> =
+        HashMap::with_capacity(graph.modules().len());
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked_by_module
+                    .get(&edge.target())
+                    .and_then(|index| checked.get(*index))
+                    .ok_or(PipelineFailure::Typing(TypeError::Internal(
+                        crate::elaborate::ElaborationFailure::InvalidState,
+                    )))?;
+                DependencyExports::new(edge, dependency.exports()).map_err(|_| {
+                    PipelineFailure::Typing(TypeError::Internal(
+                        crate::elaborate::ElaborationFailure::InvalidState,
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(FileFailure::Pipeline)?;
+        let resolved = resolve_module(module, &dependencies)
+            .map_err(PipelineFailure::Resolution)
+            .map_err(FileFailure::Pipeline)?;
+        drop(dependencies);
+        let checked_module = check_module(resolved)
+            .map_err(PipelineFailure::Typing)
+            .map_err(FileFailure::Pipeline)?;
+        checked_by_module.insert(module.id(), checked.len());
+        checked.push(checked_module);
+    }
+
+    let entry = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .ok_or_else(internal_file_failure)?;
+    let main = entry
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "main")
+        .ok_or_else(|| {
+            FileFailure::Pipeline(PipelineFailure::Entry(EntryFailure::new(
+                EntryReason::MissingMain,
+                entry.span(),
+            )))
+        })?;
+    let main_span = main.origin.primary_span();
+    let result_type = match &main.scheme {
+        Type::Forall(_, _) => {
+            return Err(entry_failure(EntryReason::MainPolymorphic, main_span));
+        }
+        Type::Function(domain, result) if matches!(domain.as_ref(), Type::Unit) => result.as_ref(),
+        Type::Function(_, _)
+        | Type::Int
+        | Type::Bool
+        | Type::Unit
+        | Type::Tuple(_)
+        | Type::Nominal(_)
+        | Type::AppliedNominal(_, _)
+        | Type::Variable(_)
+        | Type::Inference(_) => {
+            return Err(entry_failure(EntryReason::MainDomain, main_span));
+        }
+    };
+    if !closed_entry_result(result_type) {
+        return Err(entry_failure(EntryReason::MainOpenResult, main_span));
+    }
+    let result = ResolvedExpr {
+        kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+            function: Box::new(ResolvedExpr {
+                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                    binder: main.binder,
+                    spelling: "main".to_owned(),
+                    origin: main.origin.clone(),
+                }),
+                span: main_span,
+            }),
+            argument: Box::new(ResolvedExpr {
+                kind: ResolvedExprKind::Unit,
+                span: main_span,
+            }),
+        }),
+        span: main_span,
+    };
+    let linked = link_modules(checked, graph.entry(), result)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let registry = Arc::clone(&linked.registry);
+    let mut elaborator = Elaborator::for_module_program(&linked)
+        .map_err(TypeError::Internal)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let ty = typed.ty;
+    let type_display = registry.display_type(&ty);
+    let unchecked = elaborator
+        .finish(typed.node)
+        .map_err(TypeError::Internal)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let validated = validate_modules(unchecked, &sources, &module_sources)
+        .map_err(PipelineFailure::Validation)
+        .map_err(FileFailure::Pipeline)?;
+    let evaluation = evaluate(&validated)
+        .map_err(PipelineFailure::Runtime)
+        .map_err(FileFailure::Pipeline)?;
+    let (value, heap) = evaluation.into_observation_parts();
+    Ok(Observation {
+        value,
+        ty,
+        type_display: Some(type_display),
+        _heap: heap,
+    })
+}
+
+fn entry_failure(reason: EntryReason, primary: Span) -> FileFailure {
+    FileFailure::Pipeline(PipelineFailure::Entry(EntryFailure::new(reason, primary)))
+}
+
+fn internal_file_failure() -> FileFailure {
+    FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Internal(
+        crate::elaborate::ElaborationFailure::InvalidState,
+    )))
+}
+
+fn closed_entry_result(root: &Type) -> bool {
+    let mut work = vec![root];
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return false,
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => work.extend(elements),
+            Type::Function(domain, codomain) => {
+                work.push(codomain);
+                work.push(domain);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+        }
+    }
+    true
+}
+
+const fn projection_reason(error: ProjectionError) -> &'static str {
+    match error {
+        ProjectionError::ResourceLimit(ResourceFailure::StructuralDepth { .. }) => {
+            "internal.resource.structural-depth"
+        }
+        ProjectionError::ResourceLimit(ResourceFailure::SyntaxWork { .. }) => {
+            "internal.resource.syntax-work"
+        }
+        ProjectionError::RecoveryNodesPresent => "internal.projection.recovery-nodes",
+        ProjectionError::MalformedTree(_) => "internal.projection.malformed-tree",
+    }
 }
 
 #[cfg(test)]
@@ -268,6 +543,29 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+    use crate::types::{InferenceVariableId, TypeVariableId};
+
+    #[test]
+    fn entry_result_closure_walks_every_nested_type() {
+        let closed = Type::Tuple(
+            vec![
+                Type::Int,
+                Type::Function(Box::new(Type::Unit), Box::new(Type::Bool)),
+            ]
+            .into_boxed_slice(),
+        );
+        let rigid = Type::Tuple(
+            vec![Type::Int, Type::Variable(TypeVariableId::generated(0))].into_boxed_slice(),
+        );
+        let inference = Type::Function(
+            Box::new(Type::Unit),
+            Box::new(Type::Inference(InferenceVariableId::new(0))),
+        );
+
+        assert!(closed_entry_result(&closed));
+        assert!(!closed_entry_result(&rigid));
+        assert!(!closed_entry_result(&inference));
+    }
 
     #[test]
     fn injected_validation_failure_stops_before_evaluation() {
