@@ -815,7 +815,7 @@ fn overlap_occurs<'a>(
 pub enum InterfaceReason {
     /// An interface method omits its parameter or introduces another type variable.
     MethodParameter,
-    /// An interface method signature has no callable function shape.
+    /// An interface method signature contains no function arrow.
     MethodNotFunction,
     /// One constrained global repeats an identity-equal requirement.
     DuplicateRequirement,

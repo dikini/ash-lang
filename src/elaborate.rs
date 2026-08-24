@@ -5814,10 +5814,15 @@ fn check_interface_declarations(
                 ));
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
-            if !matches!(method.annotation.ty, Type::Function(_, _)) {
+            let contains_function = type_contains_function(&method.annotation.ty, budget)
+                .map_err(|()| constraint_resource())?;
+            if !contains_function {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::MethodNotFunction,
-                    SourceLabel::new(method.annotation.span, "this method type is not a function"),
+                    SourceLabel::new(
+                        method.annotation.span,
+                        "this method type contains no function arrow",
+                    ),
                 );
                 diagnostic.related.push(SourceLabel::new(
                     method.span,
@@ -6595,6 +6600,36 @@ fn type_contains_variable(
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<bool, ()> {
     visit_type_variables(root, budget, |variable, _| Ok(variable == needle))
+}
+
+fn type_contains_function(root: &Type, budget: &mut InterfaceConstraintBudget) -> Result<bool, ()> {
+    budget.charge(1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push(root);
+    while let Some(ty) = pending.pop() {
+        budget.charge(1)?;
+        match ty {
+            Type::Function(_, _) => return Ok(true),
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                budget.charge(elements.len())?;
+                pending.try_reserve(elements.len()).map_err(|_| ())?;
+                pending.extend(elements.iter().rev());
+            }
+            Type::Forall(parameters, body) => {
+                budget.charge(parameters.len().saturating_add(1))?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push(body);
+            }
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
+        }
+    }
+    Ok(false)
 }
 
 fn first_variable_absent_from_types(
@@ -8831,7 +8866,7 @@ mod tests {
         let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut constraint_work = InterfaceConstraintBudget::with_limit(37);
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(39);
 
         check_module_with_budget(
             first,
@@ -8870,7 +8905,7 @@ mod tests {
             resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(76);
+        let mut short = InterfaceConstraintBudget::with_limit(78);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -8882,11 +8917,29 @@ mod tests {
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut exact = InterfaceConstraintBudget::with_limit(77);
+        let mut exact = InterfaceConstraintBudget::with_limit(79);
         check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
             .expect("the exact budget should admit one implementation method");
 
-        assert_eq!(exact.used(), 77);
+        assert_eq!(exact.used(), 79);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn nested_method_arrow_traversal_has_an_exact_constraint_boundary() {
+        let method_type = Type::Tuple(
+            vec![
+                Type::Int,
+                Type::Function(Box::new(Type::Unit), Box::new(Type::Bool)),
+            ]
+            .into_boxed_slice(),
+        );
+        let mut short = InterfaceConstraintBudget::with_limit(5);
+        assert_eq!(type_contains_function(&method_type, &mut short), Err(()));
+
+        let mut exact = InterfaceConstraintBudget::with_limit(6);
+        assert_eq!(type_contains_function(&method_type, &mut exact), Ok(true));
+        assert_eq!(exact.used(), 6);
         assert_eq!(exact.charge(1), Err(()));
     }
 

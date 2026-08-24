@@ -132,10 +132,15 @@ fn rejects_duplicate_global_requirement_before_scheme_construction() {
 }
 
 #[test]
-fn rejects_interface_method_without_function_shape() {
+fn rejects_interface_method_without_function_arrow() {
     let error = check_error("interface Marker<A> {\nmarker : A\n}\n");
 
     assert_eq!(reason(&error), "interface.method-not-function");
+}
+
+#[test]
+fn accepts_interface_method_with_nested_function_arrow() {
+    check_valid("pub interface Callable<A> {\ncallable : (A, Int -> Int)\n}\n");
 }
 
 #[test]
