@@ -76,7 +76,7 @@ fn assert_exact_parser_diagnostics(
 fn modular_reserved_words_and_path_punctuation_are_closed_tokens() {
     let source = SourceFile::new(
         "tokens.ash",
-        "import @std.collections.list as List\npub opaque type T = T(Int)\n",
+        "import @std.collections.list as List\npub opaque type T = T(Int)\ninterface impl where\n",
     )
     .expect("token source should fit");
     let lexed = lex(&source).expect("token source should lex");
@@ -107,6 +107,24 @@ fn modular_reserved_words_and_path_punctuation_are_closed_tokens() {
             .tokens
             .iter()
             .any(|token| token.kind == TokenKind::Opaque)
+    );
+    assert!(
+        lexed
+            .tokens
+            .iter()
+            .any(|token| token.kind == TokenKind::Interface)
+    );
+    assert!(
+        lexed
+            .tokens
+            .iter()
+            .any(|token| token.kind == TokenKind::Impl)
+    );
+    assert!(
+        lexed
+            .tokens
+            .iter()
+            .any(|token| token.kind == TokenKind::Where)
     );
 }
 

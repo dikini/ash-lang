@@ -6,13 +6,15 @@ use crate::{
     surface::{
         ApplicationExpr, BinaryExpr, EquationalGlobal, FunctionExpr, FunctionType,
         InlineOperationalGlobal, SurfaceBinder, SurfaceBinding, SurfaceBlock,
-        SurfaceConstructorDeclaration, SurfaceDefinition, SurfaceDefinitionKind, SurfaceEquation,
-        SurfaceExpr, SurfaceExprKind, SurfaceExternalInterface, SurfaceImport, SurfaceImportItem,
-        SurfaceImportSelection, SurfaceInlineOperationalHeader, SurfaceLocalDeclaration,
-        SurfaceMatchArm, SurfaceMatchExpr, SurfaceModule, SurfaceModulePath, SurfaceName,
-        SurfacePattern, SurfacePatternKind, SurfaceQualifiedName, SurfaceRecursiveGroup,
-        SurfaceRecursiveMember, SurfaceReference, SurfaceType, SurfaceTypeDeclaration,
-        SurfaceTypeKind, SurfaceTypeVisibility, SurfaceTypedPattern,
+        SurfaceConstructorDeclaration, SurfaceDeclarationIndex, SurfaceDefinition,
+        SurfaceDefinitionKind, SurfaceEquation, SurfaceExpr, SurfaceExprKind,
+        SurfaceExternalInterface, SurfaceImplementation, SurfaceImport, SurfaceImportItem,
+        SurfaceImportSelection, SurfaceInlineOperationalHeader, SurfaceInterfaceDeclaration,
+        SurfaceInterfaceMethod, SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr,
+        SurfaceModule, SurfaceModulePath, SurfaceName, SurfacePattern, SurfacePatternKind,
+        SurfaceQualifiedName, SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference,
+        SurfaceRequirement, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
+        SurfaceTypeVisibility, SurfaceTypedPattern,
     },
 };
 
@@ -209,6 +211,8 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.token(&TokenKind::LineEnd)?;
             }
             while shape.peek_node_is(NodeKind::TypeDeclaration)
+                || shape.peek_node_is(NodeKind::InterfaceDeclaration)
+                || shape.peek_node_is(NodeKind::ImplementationDeclaration)
                 || shape.peek_node_is(NodeKind::EquationalGlobal)
                 || shape.peek_node_is(NodeKind::InlineOperationalGlobal)
             {
@@ -302,6 +306,75 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.token(&TokenKind::RightParen)?;
             }
         }
+        NodeKind::InterfaceDeclaration => {
+            shape.optional_token(&TokenKind::Pub)?;
+            shape.token(&TokenKind::Interface)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            shape.token(&TokenKind::Less)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            shape.token(&TokenKind::Greater)?;
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.token(&TokenKind::LineEnd)?;
+            shape.node(NodeKind::InterfaceMethod)?;
+            while shape.peek_token_is(&TokenKind::LineEnd) {
+                shape.token(&TokenKind::LineEnd)?;
+                if shape.peek_node_is(NodeKind::InterfaceMethod) {
+                    shape.node(NodeKind::InterfaceMethod)?;
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
+        NodeKind::InterfaceMethod => {
+            shape.node(NodeKind::Binder)?;
+            shape.token(&TokenKind::Colon)?;
+            shape.node(NodeKind::Type)?;
+        }
+        NodeKind::WhereClause => {
+            shape.token(&TokenKind::Where)?;
+            shape.node(NodeKind::InterfaceApplication)?;
+            while shape.peek_token_is(&TokenKind::Comma) {
+                shape.token(&TokenKind::Comma)?;
+                shape.node(NodeKind::InterfaceApplication)?;
+            }
+        }
+        NodeKind::InterfaceApplication => {
+            if shape.peek_node_is(NodeKind::QualifiedName) {
+                validate_qualified_interface_name(
+                    shape.peek_node().ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?,
+                    tokens,
+                )?;
+                shape.node(NodeKind::QualifiedName)?;
+            } else {
+                shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            }
+            shape.token(&TokenKind::Less)?;
+            shape.node(NodeKind::Type)?;
+            shape.token(&TokenKind::Greater)?;
+        }
+        NodeKind::ImplementationDeclaration => {
+            shape.optional_token(&TokenKind::Pub)?;
+            shape.token(&TokenKind::Impl)?;
+            shape.node(NodeKind::InterfaceApplication)?;
+            if shape.peek_node_is(NodeKind::WhereClause) {
+                shape.node(NodeKind::WhereClause)?;
+            }
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.token(&TokenKind::LineEnd)?;
+            if shape.peek_node_is(NodeKind::Equation) {
+                shape.node(NodeKind::Equation)?;
+                while shape.peek_token_is(&TokenKind::LineEnd) {
+                    shape.token(&TokenKind::LineEnd)?;
+                    if shape.peek_node_is(NodeKind::Equation) {
+                        shape.node(NodeKind::Equation)?;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
         NodeKind::EquationalGlobal => {
             shape.optional_token(&TokenKind::Pub)?;
             shape.node(NodeKind::ExternalInterface)?;
@@ -316,6 +389,9 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.node(NodeKind::Binder)?;
             shape.token(&TokenKind::Colon)?;
             shape.node(NodeKind::Type)?;
+            if shape.peek_node_is(NodeKind::WhereClause) {
+                shape.node(NodeKind::WhereClause)?;
+            }
         }
         NodeKind::Equation => {
             shape.node(NodeKind::Binder)?;
@@ -343,6 +419,9 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::RightParen)?;
             shape.token(&TokenKind::Arrow)?;
             shape.node(NodeKind::Type)?;
+            if shape.peek_node_is(NodeKind::WhereClause) {
+                shape.node(NodeKind::WhereClause)?;
+            }
         }
         NodeKind::Block => {
             shape.token(&TokenKind::LeftBrace)?;
@@ -588,6 +667,18 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
     shape.finish()
 }
 
+fn validate_qualified_interface_name(
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<(), ProjectionError> {
+    require_kind(node, NodeKind::QualifiedName)?;
+    let mut shape = ShapeCursor::new(node, tokens);
+    shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+    shape.token(&TokenKind::Dot)?;
+    shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+    shape.finish()
+}
+
 struct ShapeCursor<'a> {
     children: &'a [ConcreteElement],
     tokens: &'a [Token],
@@ -605,6 +696,18 @@ impl<'a> ShapeCursor<'a> {
 
     fn peek_node_is(&self, kind: NodeKind) -> bool {
         matches!(self.children.get(self.position), Some(ConcreteElement::Node(node)) if node.kind == kind)
+    }
+
+    fn peek_node(&self) -> Option<&ConcreteNode> {
+        match self.children.get(self.position) {
+            Some(ConcreteElement::Node(node)) => Some(node),
+            Some(
+                ConcreteElement::Token(_)
+                | ConcreteElement::Missing { .. }
+                | ConcreteElement::Error(_),
+            )
+            | None => None,
+        }
     }
 
     fn peek_token_is(&self, kind: &TokenKind) -> bool {
@@ -695,15 +798,30 @@ fn project_surface_module(
 ) -> Result<SurfaceModule, ProjectionError> {
     require_kind(node, NodeKind::Module)?;
     let mut imports = Vec::new();
+    let mut declaration_order = Vec::new();
     let mut type_declarations = Vec::new();
+    let mut interfaces = Vec::new();
+    let mut implementations = Vec::new();
     let mut definitions = Vec::new();
     for child in child_nodes(node) {
         match child.kind {
             NodeKind::ImportDeclaration => imports.push(project_import(source, child, tokens)?),
             NodeKind::TypeDeclaration => {
+                declaration_order.push(SurfaceDeclarationIndex::Type(type_declarations.len()));
                 type_declarations.push(project_type_declaration(source, child, tokens)?);
             }
+            NodeKind::InterfaceDeclaration => {
+                declaration_order.push(SurfaceDeclarationIndex::Interface(interfaces.len()));
+                interfaces.push(project_interface_declaration(source, child, tokens)?);
+            }
+            NodeKind::ImplementationDeclaration => {
+                declaration_order.push(SurfaceDeclarationIndex::Implementation(
+                    implementations.len(),
+                ));
+                implementations.push(project_implementation(source, child, tokens)?);
+            }
             NodeKind::EquationalGlobal | NodeKind::InlineOperationalGlobal => {
+                declaration_order.push(SurfaceDeclarationIndex::Global(definitions.len()));
                 definitions.push(project_definition(source, child, tokens)?);
             }
             _ => return malformed(InternalReason::UnexpectedShape),
@@ -711,8 +829,84 @@ fn project_surface_module(
     }
     Ok(SurfaceModule {
         imports,
+        declaration_order,
         type_declarations,
+        interfaces,
+        implementations,
         definitions,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_implementation(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceImplementation, ProjectionError> {
+    require_kind(node, NodeKind::ImplementationDeclaration)?;
+    let head = project_interface_application(
+        source,
+        only_child_of_kind(node, NodeKind::InterfaceApplication)?,
+        tokens,
+    )?;
+    let equations = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::Equation)
+        .map(|equation| project_equation(source, equation, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SurfaceImplementation {
+        public: direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub),
+        interface: head.interface,
+        argument: head.argument,
+        prerequisites: project_requirements(source, node, tokens)?,
+        equations,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_interface_declaration(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceInterfaceDeclaration, ProjectionError> {
+    require_kind(node, NodeKind::InterfaceDeclaration)?;
+    let public = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub);
+    let mut names = direct_tokens(node, tokens)
+        .filter(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)));
+    let name = surface_name(names.next().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?)?;
+    let parameter = surface_name(names.next().ok_or(ProjectionError::MalformedTree(
+        InternalReason::UnexpectedShape,
+    ))?)?;
+    if names.next().is_some() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    let methods = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::InterfaceMethod)
+        .map(|method| project_interface_method(source, method, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    if methods.is_empty() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(SurfaceInterfaceDeclaration {
+        public,
+        name,
+        parameter,
+        methods,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_interface_method(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceInterfaceMethod, ProjectionError> {
+    require_kind(node, NodeKind::InterfaceMethod)?;
+    let binder = only_child_of_kind(node, NodeKind::Binder)?;
+    Ok(SurfaceInterfaceMethod {
+        name: project_binder(binder, tokens)?.name,
+        annotation: project_type(source, only_child_of_kind(node, NodeKind::Type)?, tokens)?,
         span: node_span(source, node, tokens)?,
     })
 }
@@ -897,29 +1091,16 @@ fn project_definition(
                 only_child_of_kind(interface, NodeKind::Type)?,
                 tokens,
             )?;
+            let requirements = project_requirements(source, interface, tokens)?;
             let equations = child_nodes(node)
                 .filter(|child| child.kind == NodeKind::Equation)
-                .map(|equation| {
-                    let name =
-                        project_binder(only_child_of_kind(equation, NodeKind::Binder)?, tokens)?
-                            .name;
-                    let patterns = child_nodes(equation)
-                        .filter(|child| child.kind == NodeKind::Pattern)
-                        .map(|pattern| project_pattern(source, pattern, tokens))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let body = project_expression(source, expression_child(equation)?, tokens)?;
-                    Ok(SurfaceEquation {
-                        name,
-                        patterns,
-                        body,
-                        span: node_span(source, equation, tokens)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, ProjectionError>>()?;
+                .map(|equation| project_equation(source, equation, tokens))
+                .collect::<Result<Vec<_>, _>>()?;
             SurfaceDefinitionKind::Equational(EquationalGlobal {
                 interface: SurfaceExternalInterface {
                     name: interface_name,
                     annotation: interface_type,
+                    requirements,
                     span: node_span(source, interface, tokens)?,
                 },
                 equations,
@@ -934,12 +1115,14 @@ fn project_definition(
                 .collect::<Result<Vec<_>, _>>()?;
             let result_type =
                 project_type(source, only_child_of_kind(header, NodeKind::Type)?, tokens)?;
+            let requirements = project_requirements(source, header, tokens)?;
             let body = project_block(source, only_child_of_kind(node, NodeKind::Block)?, tokens)?;
             SurfaceDefinitionKind::InlineOperational(InlineOperationalGlobal {
                 header: SurfaceInlineOperationalHeader {
                     name,
                     parameters,
                     result_type,
+                    requirements,
                     span: node_span(source, header, tokens)?,
                 },
                 body,
@@ -950,6 +1133,64 @@ fn project_definition(
     Ok(SurfaceDefinition {
         public,
         kind,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_equation(
+    source: &SourceFile,
+    equation: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceEquation, ProjectionError> {
+    require_kind(equation, NodeKind::Equation)?;
+    let name = project_binder(only_child_of_kind(equation, NodeKind::Binder)?, tokens)?.name;
+    let patterns = child_nodes(equation)
+        .filter(|child| child.kind == NodeKind::Pattern)
+        .map(|pattern| project_pattern(source, pattern, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    let body = project_expression(source, expression_child(equation)?, tokens)?;
+    Ok(SurfaceEquation {
+        name,
+        patterns,
+        body,
+        span: node_span(source, equation, tokens)?,
+    })
+}
+
+fn project_requirements(
+    source: &SourceFile,
+    owner: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<Vec<SurfaceRequirement>, ProjectionError> {
+    let Some(clause) = optional_child_of_kind(owner, NodeKind::WhereClause)? else {
+        return Ok(Vec::new());
+    };
+    child_nodes(clause)
+        .filter(|child| child.kind == NodeKind::InterfaceApplication)
+        .map(|application| project_interface_application(source, application, tokens))
+        .collect()
+}
+
+fn project_interface_application(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceRequirement, ProjectionError> {
+    require_kind(node, NodeKind::InterfaceApplication)?;
+    let interface = if let Some(qualified) = optional_child_of_kind(node, NodeKind::QualifiedName)?
+    {
+        SurfaceReference::Qualified(project_qualified_name(source, qualified, tokens)?)
+    } else {
+        let name = direct_tokens(node, tokens)
+            .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        SurfaceReference::Unqualified(surface_name(name)?)
+    };
+    Ok(SurfaceRequirement {
+        interface,
+        argument: project_type(source, only_child_of_kind(node, NodeKind::Type)?, tokens)?,
         span: node_span(source, node, tokens)?,
     })
 }
@@ -2132,6 +2373,67 @@ mod tests {
             project_module(&source, &tree),
             Err(ProjectionError::MalformedTree(
                 InternalReason::DuplicateToken
+            ))
+        );
+    }
+
+    #[test]
+    fn implementation_shape_requires_logical_lines_between_equations() {
+        let source = SourceFile::new(
+            "shape.ash",
+            "impl Equal<Int> {\nequal left = left\nequal right = right\n}\n",
+        )
+        .expect("the implementation fixture should fit");
+        let mut tree = parse(lex(&source).expect("the implementation fixture should lex"));
+        let tokens = tree.tokens().to_vec();
+        let root = tree.root.as_mut().expect("the parser produced one root");
+        let implementation = find_node_mut(root, NodeKind::ImplementationDeclaration)
+            .expect("the fixture contains an implementation");
+        let separator = implementation
+            .children
+            .windows(3)
+            .position(|children| {
+                matches!(children[0], ConcreteElement::Node(ref node) if node.kind == NodeKind::Equation)
+                    && matches!(children[1], ConcreteElement::Token(index) if tokens[index].kind == TokenKind::LineEnd)
+                    && matches!(children[2], ConcreteElement::Node(ref node) if node.kind == NodeKind::Equation)
+            })
+            .map(|index| index + 1)
+            .expect("the method equations have a logical-line separator");
+        implementation.children.remove(separator);
+
+        assert_eq!(
+            validate_node_shape(implementation, &tokens),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        );
+    }
+
+    #[test]
+    fn interface_application_shape_requires_an_uppercase_qualified_member() {
+        let source = SourceFile::new("shape.ash", "impl Library.Equal<Int> {\n}\n")
+            .expect("the qualified implementation fixture should fit");
+        let mut tree = parse(lex(&source).expect("the qualified fixture should lex"));
+        let member_index = {
+            let root = tree.root.as_mut().expect("the parser produced one root");
+            let qualified = find_node_mut(root, NodeKind::QualifiedName)
+                .expect("the fixture contains a qualified interface reference");
+            qualified
+                .children
+                .iter()
+                .filter_map(|child| match child {
+                    ConcreteElement::Token(index) => Some(*index),
+                    _ => None,
+                })
+                .nth(2)
+                .expect("the qualified reference has a member token")
+        };
+        tree.tokens[member_index].kind = TokenKind::Identifier("equal".into());
+
+        assert_eq!(
+            project_module(&source, &tree),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
             ))
         );
     }

@@ -32,6 +32,32 @@ fn recognizes_recursion_reserved_words() {
 }
 
 #[test]
+fn recognizes_interface_reserved_words_without_stealing_identifier_boundaries() {
+    let source = SourceFile::new(
+        "interface-keywords.ash",
+        "interface impl where interface_ implement whereupon",
+    )
+    .expect("the keyword fixture should fit");
+    let lexed = lex(&source).expect("the keyword fixture should lex");
+    let expected = [
+        (TokenKind::Interface, 0, 9),
+        (TokenKind::Impl, 10, 14),
+        (TokenKind::Where, 15, 20),
+        (TokenKind::Identifier("interface_".into()), 21, 31),
+        (TokenKind::Identifier("implement".into()), 32, 41),
+        (TokenKind::Identifier("whereupon".into()), 42, 51),
+        (TokenKind::EndOfFile, 51, 51),
+    ];
+
+    assert!(lexed.diagnostics.is_empty());
+    assert_eq!(lexed.tokens.len(), expected.len());
+    for (token, (kind, start, end)) in lexed.tokens.iter().zip(expected) {
+        assert_eq!(token.kind, kind);
+        assert_range(token, start, end);
+    }
+}
+
+#[test]
 fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
     let source = SourceFile::new(
         "data-pattern-tokens.ash",

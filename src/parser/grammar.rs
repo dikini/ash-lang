@@ -301,12 +301,19 @@ fn expect_upper_identifier(parser: &mut Parser<'_>) {
 
 fn starts_module_declaration(parser: &Parser<'_>) -> bool {
     parser.at(&TokenKind::Type)
+        || parser.at(&TokenKind::Interface)
+        || parser.at(&TokenKind::Impl)
         || starts_global(parser)
         || parser.at(&TokenKind::Pub)
             && matches!(
                 parser.nth(1),
                 Some(
-                    TokenKind::Type | TokenKind::Opaque | TokenKind::Fn | TokenKind::Identifier(_)
+                    TokenKind::Type
+                        | TokenKind::Opaque
+                        | TokenKind::Interface
+                        | TokenKind::Impl
+                        | TokenKind::Fn
+                        | TokenKind::Identifier(_)
                 )
             )
 }
@@ -317,9 +324,515 @@ fn module_declaration(parser: &mut Parser<'_>) {
             && matches!(parser.nth(1), Some(TokenKind::Type | TokenKind::Opaque))
     {
         type_declaration(parser);
+    } else if parser.at(&TokenKind::Interface)
+        || parser.at(&TokenKind::Pub) && matches!(parser.nth(1), Some(TokenKind::Interface))
+    {
+        interface_declaration(parser);
+    } else if parser.at(&TokenKind::Impl)
+        || parser.at(&TokenKind::Pub) && matches!(parser.nth(1), Some(TokenKind::Impl))
+    {
+        implementation_declaration(parser);
     } else {
         global_definition(parser);
     }
+}
+
+#[derive(Clone, Copy)]
+enum HeaderRecoveryBoundary {
+    LineEnd,
+    OpeningBrace(SynchronizationBoundary),
+}
+
+fn report_pending_expected(parser: &mut Parser<'_>, expected: ExpectedForm) {
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) =
+            parser.report_at(ParseReason::ExpectedForm, expected, primary, None)
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+}
+
+fn at_header_boundary(parser: &Parser<'_>, boundary: HeaderRecoveryBoundary) -> bool {
+    match boundary {
+        HeaderRecoveryBoundary::LineEnd => parser.at(&TokenKind::LineEnd),
+        HeaderRecoveryBoundary::OpeningBrace(_) => parser.at(&TokenKind::LeftBrace),
+    }
+}
+
+fn recover_pending_header(
+    parser: &mut Parser<'_>,
+    recovery_start: usize,
+    boundary: HeaderRecoveryBoundary,
+) {
+    if parser.pending_recovery_count() == recovery_start {
+        return;
+    }
+    if !at_header_boundary(parser, boundary)
+        && !matches!(
+            parser.current(),
+            Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+        )
+    {
+        parser.start(NodeKind::Error);
+        while !at_header_boundary(parser, boundary)
+            && !matches!(
+                parser.current(),
+                Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+            )
+        {
+            let _ = parser.bump();
+        }
+        parser.finish();
+    }
+    if parser.at(&TokenKind::LineEnd) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
+    } else if parser.at(&TokenKind::EndOfFile) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
+    } else if at_header_boundary(parser, boundary)
+        && let HeaderRecoveryBoundary::OpeningBrace(synchronization) = boundary
+    {
+        parser.resolve_pending_at_current(recovery_start, synchronization);
+    }
+}
+
+fn header_boundary_expected(boundary: HeaderRecoveryBoundary) -> ExpectedForm {
+    match boundary {
+        HeaderRecoveryBoundary::LineEnd => ExpectedForm::LineEnd,
+        HeaderRecoveryBoundary::OpeningBrace(_) => ExpectedForm::LeftBrace,
+    }
+}
+
+fn declaration_body_starts(
+    parser: &mut Parser<'_>,
+    opening: SynchronizationBoundary,
+    closing: SynchronizationBoundary,
+) -> bool {
+    if parser.at(&TokenKind::LeftBrace) {
+        return true;
+    }
+
+    let recovery_start = parser.pending_recovery_count();
+    report_pending_expected(parser, ExpectedForm::LeftBrace);
+    if parser.at(&TokenKind::LineEnd) && parser.nth(1) == Some(&TokenKind::LeftBrace) {
+        consume_rejected_braced_body(parser, recovery_start, closing);
+        return false;
+    }
+
+    recover_pending_header(
+        parser,
+        recovery_start,
+        HeaderRecoveryBoundary::OpeningBrace(opening),
+    );
+    parser.at(&TokenKind::LeftBrace)
+}
+
+fn consume_rejected_braced_body(
+    parser: &mut Parser<'_>,
+    recovery_start: usize,
+    closing: SynchronizationBoundary,
+) {
+    parser.start(NodeKind::Error);
+    let _ = parser.bump();
+    let mut depth = 0_usize;
+    loop {
+        match parser.current() {
+            Some(TokenKind::LeftBrace) => {
+                depth = depth.saturating_add(1);
+                let _ = parser.bump();
+            }
+            Some(TokenKind::RightBrace) if depth == 1 => {
+                parser.resolve_pending_at_current(recovery_start, closing);
+                let _ = parser.bump();
+                break;
+            }
+            Some(TokenKind::RightBrace) if depth > 1 => {
+                depth -= 1;
+                let _ = parser.bump();
+            }
+            Some(TokenKind::EndOfFile) | None => {
+                parser
+                    .resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
+                break;
+            }
+            Some(_) => {
+                let _ = parser.bump();
+            }
+        }
+    }
+    parser.finish();
+}
+
+fn implementation_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ImplementationDeclaration);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::Impl, ExpectedForm::InterfaceApplication);
+    let head_recovery_start = parser.pending_recovery_count();
+    let _ = interface_application(parser);
+    if parser.pending_recovery_count() > head_recovery_start
+        && !matches!(
+            parser.current(),
+            Some(
+                TokenKind::Where | TokenKind::LeftBrace | TokenKind::LineEnd | TokenKind::EndOfFile
+            )
+        )
+    {
+        parser.start(NodeKind::Error);
+        while !matches!(
+            parser.current(),
+            Some(
+                TokenKind::Where | TokenKind::LeftBrace | TokenKind::LineEnd | TokenKind::EndOfFile
+            ) | None
+        ) {
+            let _ = parser.bump();
+        }
+        parser.finish();
+    }
+    if parser.at(&TokenKind::Where) {
+        where_clause(
+            parser,
+            HeaderRecoveryBoundary::OpeningBrace(
+                SynchronizationBoundary::ImplementationBodyOpeningBrace,
+            ),
+        );
+    }
+    recover_pending_header(
+        parser,
+        head_recovery_start,
+        HeaderRecoveryBoundary::OpeningBrace(
+            SynchronizationBoundary::ImplementationBodyOpeningBrace,
+        ),
+    );
+    if !declaration_body_starts(
+        parser,
+        SynchronizationBoundary::ImplementationBodyOpeningBrace,
+        SynchronizationBoundary::ImplementationClosingBrace,
+    ) {
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+
+    loop {
+        if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+            equation(parser, SynchronizationBoundary::ImplementationClosingBrace);
+        } else if matches!(
+            parser.current(),
+            Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+        ) {
+            break;
+        } else {
+            recover_implementation_method(parser);
+        }
+        if parser.at(&TokenKind::LineEnd) {
+            let _ = parser.bump();
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.finish();
+}
+
+fn recover_implementation_method(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::ImplementationMethod,
+            primary,
+            None,
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+
+    consume_to_line_or_brace(parser);
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::ImplementationClosingBrace,
+    );
+    parser.finish();
+}
+
+fn consume_to_line_or_brace(parser: &mut Parser<'_>) {
+    let mut nested_braces = 0_usize;
+    loop {
+        match parser.current() {
+            Some(TokenKind::LeftBrace) => {
+                nested_braces = nested_braces.saturating_add(1);
+                let _ = parser.bump();
+            }
+            Some(TokenKind::RightBrace) if nested_braces == 0 => break,
+            Some(TokenKind::RightBrace) => {
+                nested_braces = nested_braces.saturating_sub(1);
+                let _ = parser.bump();
+            }
+            Some(TokenKind::LineEnd) if nested_braces == 0 => break,
+            Some(TokenKind::EndOfFile) | None => break,
+            Some(_) => {
+                let _ = parser.bump();
+            }
+        }
+    }
+}
+
+fn interface_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::InterfaceDeclaration);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::Interface, ExpectedForm::Identifier);
+    let parameter_recovery_start = parser.pending_recovery_count();
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+        interface_parameter(parser);
+    } else {
+        report_pending_expected(parser, ExpectedForm::Identifier);
+    }
+    recover_pending_header(
+        parser,
+        parameter_recovery_start,
+        HeaderRecoveryBoundary::OpeningBrace(SynchronizationBoundary::InterfaceBodyOpeningBrace),
+    );
+    if !declaration_body_starts(
+        parser,
+        SynchronizationBoundary::InterfaceBodyOpeningBrace,
+        SynchronizationBoundary::InterfaceClosingBrace,
+    ) {
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+
+    let mut has_body_line = false;
+    loop {
+        if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+            has_body_line = true;
+            interface_method(parser);
+        } else if matches!(
+            parser.current(),
+            Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+        ) {
+            break;
+        } else {
+            has_body_line = true;
+            recover_interface_method(parser);
+        }
+        if parser.at(&TokenKind::LineEnd) {
+            let _ = parser.bump();
+        }
+    }
+    if !has_body_line {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::InterfaceMethod);
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.finish();
+}
+
+fn recover_interface_method(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::InterfaceMethod,
+            primary,
+            None,
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+    consume_to_line_or_brace(parser);
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::InterfaceClosingBrace,
+    );
+    parser.finish();
+}
+
+fn interface_parameter(parser: &mut Parser<'_>) {
+    if !parser.at(&TokenKind::Less) {
+        report_pending_expected(parser, ExpectedForm::InterfaceParameter);
+        return;
+    }
+    let _ = parser.bump();
+    let parameter_present = if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+        true
+    } else {
+        report_pending_expected(parser, ExpectedForm::InterfaceParameter);
+        false
+    };
+    if parser.at(&TokenKind::Greater) {
+        let _ = parser.bump();
+        return;
+    }
+    if parameter_present {
+        report_pending_expected(parser, ExpectedForm::InterfaceParameter);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::Greater | TokenKind::LeftBrace | TokenKind::LineEnd | TokenKind::EndOfFile)
+            | None
+    ) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::Greater) {
+        let _ = parser.bump();
+    }
+}
+
+fn interface_method(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::InterfaceMethod);
+    let recovery_start = parser.pending_recovery_count();
+    binder(parser);
+    if !parser.at(&TokenKind::Colon) {
+        report_pending_expected(parser, ExpectedForm::Colon);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(
+            parser,
+            recovery_start,
+            SynchronizationBoundary::InterfaceClosingBrace,
+        );
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    if !starts_type(parser) {
+        report_pending_expected(parser, ExpectedForm::Type);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(
+            parser,
+            recovery_start,
+            SynchronizationBoundary::InterfaceClosingBrace,
+        );
+        parser.finish();
+        return;
+    }
+    type_expression(parser);
+    if !matches!(
+        parser.current(),
+        Some(TokenKind::LineEnd | TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        parser.start(NodeKind::Error);
+        if let Some(primary) = parser.current_span()
+            && let Some(diagnostic) = parser.report_at(
+                ParseReason::ExpectedForm,
+                ExpectedForm::LineEnd,
+                primary,
+                None,
+            )
+        {
+            parser.mark_pending_recovery(diagnostic);
+        }
+        consume_to_line_or_brace(parser);
+        parser.finish();
+    }
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::InterfaceClosingBrace,
+    );
+    parser.finish();
+}
+
+fn where_clause(parser: &mut Parser<'_>, boundary: HeaderRecoveryBoundary) {
+    parser.start(NodeKind::WhereClause);
+    let recovery_start = parser.pending_recovery_count();
+    let _ = parser.bump();
+    let mut application_valid = interface_application(parser);
+    while application_valid {
+        if parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            application_valid = interface_application(parser);
+        } else if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+            report_pending_expected(parser, ExpectedForm::Comma);
+            application_valid = interface_application(parser);
+        } else {
+            break;
+        }
+    }
+    if parser.pending_recovery_count() == recovery_start
+        && !at_header_boundary(parser, boundary)
+        && !matches!(
+            parser.current(),
+            Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+        )
+    {
+        report_pending_expected(parser, header_boundary_expected(boundary));
+    }
+    recover_pending_header(parser, recovery_start, boundary);
+    parser.finish();
+}
+
+fn interface_application(parser: &mut Parser<'_>) -> bool {
+    parser.start(NodeKind::InterfaceApplication);
+    let recovery_start = parser.pending_recovery_count();
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        if parser
+            .nth(1)
+            .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+        {
+            parser.start(NodeKind::QualifiedName);
+            let _ = parser.bump();
+            let _ = parser.bump();
+            if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+                let _ = parser.bump();
+            } else {
+                report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+                parser.finish();
+                parser.finish();
+                return false;
+            }
+            parser.finish();
+        } else {
+            let _ = parser.bump();
+        }
+        if !parser.at(&TokenKind::Less) {
+            report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+            parser.finish();
+            return false;
+        }
+        let _ = parser.bump();
+        let argument_valid = if starts_type(parser) {
+            type_expression(parser);
+            true
+        } else {
+            report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+            false
+        };
+        if parser.at(&TokenKind::Greater) {
+            let _ = parser.bump();
+        } else {
+            if argument_valid {
+                report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+            }
+            while !matches!(
+                parser.current(),
+                Some(
+                    TokenKind::Greater
+                        | TokenKind::Where
+                        | TokenKind::LeftBrace
+                        | TokenKind::LineEnd
+                        | TokenKind::EndOfFile
+                ) | None
+            ) {
+                let _ = parser.bump();
+            }
+            if parser.at(&TokenKind::Greater) {
+                let _ = parser.bump();
+            }
+        }
+    } else {
+        report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+    }
+    parser.finish();
+    parser.pending_recovery_count() == recovery_start
 }
 
 fn type_declaration(parser: &mut Parser<'_>) {
@@ -438,17 +951,53 @@ fn equational_global(parser: &mut Parser<'_>) {
     binder(parser);
     let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
     type_expression(parser);
+    if parser.at(&TokenKind::Where) {
+        where_clause(parser, HeaderRecoveryBoundary::LineEnd);
+    }
     parser.finish();
-    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    expect_header_line_end(parser);
 
-    equation(parser);
+    equation(parser, SynchronizationBoundary::BlockClosingBrace);
     while parser.at(&TokenKind::LineEnd)
         && name
             .as_deref()
             .is_some_and(|name| looks_like_equation(parser, name))
     {
         let _ = parser.bump();
-        equation(parser);
+        equation(parser, SynchronizationBoundary::BlockClosingBrace);
+    }
+    parser.finish();
+}
+
+fn expect_header_line_end(parser: &mut Parser<'_>) {
+    if parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+        return;
+    }
+
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::LineEnd,
+            primary,
+            None,
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+    ) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::LineEnd) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
+        let _ = parser.bump();
+    } else {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
     }
     parser.finish();
 }
@@ -475,19 +1024,50 @@ fn looks_like_equation(parser: &Parser<'_>, expected: &str) -> bool {
     }
 }
 
-fn equation(parser: &mut Parser<'_>) {
+fn equation(parser: &mut Parser<'_>, closing_brace: SynchronizationBoundary) {
     parser.start(NodeKind::Equation);
+    let recovery_start = parser.pending_recovery_count();
     binder(parser);
     if !starts_pattern(parser) {
-        parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern);
+        report_pending_expected(parser, ExpectedForm::Pattern);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(parser, recovery_start, closing_brace);
+        parser.finish();
+        return;
     }
     while starts_pattern(parser) {
         pattern(parser);
     }
-    let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
-    let recovery_start = parser.pending_recovery_count();
+    if !parser.at(&TokenKind::Equal) {
+        report_pending_expected(parser, ExpectedForm::Equal);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(parser, recovery_start, closing_brace);
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    if !starts_expression(parser) {
+        report_pending_expected(parser, ExpectedForm::Expression);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(parser, recovery_start, closing_brace);
+        parser.finish();
+        return;
+    }
     expression(parser);
-    resolve_line_or_eof(parser, recovery_start);
+    if !matches!(
+        parser.current(),
+        Some(TokenKind::LineEnd | TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        if parser.at(&TokenKind::Semicolon) {
+            parser.error_at_current(ParseReason::Semicolon);
+        } else if parser.at(&TokenKind::And) {
+            parser.error_at_current(ParseReason::UnexpectedAnd);
+        } else {
+            report_pending_expected(parser, ExpectedForm::LineEnd);
+        }
+        consume_to_line_or_brace(parser);
+    }
+    resolve_line_eof_or_brace(parser, recovery_start, closing_brace);
     parser.finish();
 }
 
@@ -509,7 +1089,23 @@ fn inline_operational_global(parser: &mut Parser<'_>) {
     let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
     let _ = parser.expect(&TokenKind::Arrow, ExpectedForm::Arrow);
     type_expression(parser);
+    if parser.at(&TokenKind::Where) {
+        where_clause(
+            parser,
+            HeaderRecoveryBoundary::OpeningBrace(
+                SynchronizationBoundary::OperationalBodyOpeningBrace,
+            ),
+        );
+    }
     parser.finish();
+    if !declaration_body_starts(
+        parser,
+        SynchronizationBoundary::OperationalBodyOpeningBrace,
+        SynchronizationBoundary::BlockClosingBrace,
+    ) {
+        parser.finish();
+        return;
+    }
     block(parser);
     parser.finish();
 }
@@ -736,13 +1332,24 @@ fn local_binding(parser: &mut Parser<'_>) {
 }
 
 fn resolve_line_or_eof(parser: &mut Parser<'_>, recovery_start: usize) {
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::BlockClosingBrace,
+    );
+}
+
+fn resolve_line_eof_or_brace(
+    parser: &mut Parser<'_>,
+    recovery_start: usize,
+    closing_brace: SynchronizationBoundary,
+) {
     if parser.at(&TokenKind::LineEnd) {
         parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
     } else if parser.at(&TokenKind::EndOfFile) {
         parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
     } else if parser.at(&TokenKind::RightBrace) {
-        parser
-            .resolve_pending_at_current(recovery_start, SynchronizationBoundary::BlockClosingBrace);
+        parser.resolve_pending_at_current(recovery_start, closing_brace);
     }
 }
 
@@ -928,6 +1535,10 @@ fn type_expression(parser: &mut Parser<'_>) {
         }
     }
     parser.finish();
+}
+
+fn starts_type(parser: &Parser<'_>) -> bool {
+    atomic_type_form(parser).is_some() || starts_lowercase_qualification(parser)
 }
 
 fn atomic_type(parser: &mut Parser<'_>) {

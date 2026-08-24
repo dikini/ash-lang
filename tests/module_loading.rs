@@ -473,8 +473,25 @@ fn root_configuration_rejects_every_reserved_word() {
     let tree = TempTree::create();
 
     for spelling in [
-        "_", "true", "false", "fn", "let", "rec", "and", "type", "match", "import", "as", "pub",
-        "opaque", "Int", "Bool", "Unit",
+        "_",
+        "true",
+        "false",
+        "fn",
+        "let",
+        "rec",
+        "and",
+        "type",
+        "match",
+        "import",
+        "as",
+        "pub",
+        "opaque",
+        "interface",
+        "impl",
+        "where",
+        "Int",
+        "Bool",
+        "Unit",
     ] {
         let failure = ModuleRoots::new([(spelling, tree.0.clone())])
             .expect_err("reserved words cannot name a module root");

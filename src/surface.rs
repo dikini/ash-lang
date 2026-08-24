@@ -7,12 +7,31 @@ use crate::{integer::Integer, source::Span};
 pub struct SurfaceModule {
     /// Imports in source order.
     pub imports: Vec<SurfaceImport>,
+    /// Cross-family declaration order using category-local indices.
+    pub declaration_order: Vec<SurfaceDeclarationIndex>,
     /// Nominal type declarations in source order.
     pub type_declarations: Vec<SurfaceTypeDeclaration>,
+    /// Interface declarations in source order.
+    pub interfaces: Vec<SurfaceInterfaceDeclaration>,
+    /// Implementation declarations in source order.
+    pub implementations: Vec<SurfaceImplementation>,
     /// Global definitions in source order.
     pub definitions: Vec<SurfaceDefinition>,
     /// The complete accepted source span.
     pub span: Span,
+}
+
+/// One source declaration's category and category-local position.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceDeclarationIndex {
+    /// A nominal type declaration.
+    Type(usize),
+    /// An interface declaration.
+    Interface(usize),
+    /// A global definition.
+    Global(usize),
+    /// An implementation declaration.
+    Implementation(usize),
 }
 
 /// One source import declaration.
@@ -100,6 +119,49 @@ pub struct SurfaceConstructorDeclaration {
     pub span: Span,
 }
 
+/// One method-only interface declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceInterfaceDeclaration {
+    /// Whether the interface and its methods are exported.
+    pub public: bool,
+    /// The declared interface spelling.
+    pub name: SurfaceName,
+    /// The interface's single type parameter.
+    pub parameter: SurfaceName,
+    /// The nonempty ordered method signatures.
+    pub methods: Vec<SurfaceInterfaceMethod>,
+    /// The complete interface declaration span.
+    pub span: Span,
+}
+
+/// One signature-only interface method declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceInterfaceMethod {
+    /// The file-wide method spelling.
+    pub name: SurfaceName,
+    /// The declared source value type.
+    pub annotation: SurfaceType,
+    /// The complete method signature span.
+    pub span: Span,
+}
+
+/// One source implementation declaration with flat method equations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceImplementation {
+    /// Whether the anonymous implementation fact is exported.
+    pub public: bool,
+    /// The implemented interface reference.
+    pub interface: SurfaceReference,
+    /// The interface's single head type argument.
+    pub argument: SurfaceType,
+    /// Ordered implementation prerequisites.
+    pub prerequisites: Vec<SurfaceRequirement>,
+    /// Flat method equations in source order.
+    pub equations: Vec<SurfaceEquation>,
+    /// The complete implementation declaration span.
+    pub span: Span,
+}
+
 /// A source global definition and its presentation-specific payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceDefinition {
@@ -136,6 +198,8 @@ pub struct SurfaceExternalInterface {
     pub name: SurfaceName,
     /// The declared type.
     pub annotation: SurfaceType,
+    /// Ordered explicit interface requirements.
+    pub requirements: Vec<SurfaceRequirement>,
     /// The complete interface span.
     pub span: Span,
 }
@@ -171,7 +235,20 @@ pub struct SurfaceInlineOperationalHeader {
     pub parameters: Vec<SurfaceTypedPattern>,
     /// The declared result type.
     pub result_type: SurfaceType,
+    /// Ordered explicit interface requirements.
+    pub requirements: Vec<SurfaceRequirement>,
     /// The complete header span, excluding the body.
+    pub span: Span,
+}
+
+/// One explicit interface requirement outside the ordinary type algebra.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceRequirement {
+    /// The unqualified or module-qualified interface reference.
+    pub interface: SurfaceReference,
+    /// The interface's single type argument.
+    pub argument: SurfaceType,
+    /// The complete interface application span.
     pub span: Span,
 }
 

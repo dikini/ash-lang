@@ -1223,6 +1223,9 @@ fn is_reserved_word(name: &str) -> bool {
             | "as"
             | "pub"
             | "opaque"
+            | "interface"
+            | "impl"
+            | "where"
             | "_"
             | "Int"
             | "Bool"
@@ -1349,7 +1352,10 @@ mod tests {
             source,
             surface: SurfaceModule {
                 imports: Vec::new(),
+                declaration_order: Vec::new(),
                 type_declarations: Vec::new(),
+                interfaces: Vec::new(),
+                implementations: Vec::new(),
                 definitions: Vec::new(),
                 span,
             },

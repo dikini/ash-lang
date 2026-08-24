@@ -48,6 +48,16 @@ pub enum NodeKind {
     TypeDeclaration,
     /// One constructor declaration under a nominal type.
     ConstructorDeclaration,
+    /// A method-only interface declaration.
+    InterfaceDeclaration,
+    /// One signature-only method in an interface.
+    InterfaceMethod,
+    /// One trailing nonempty `where` clause.
+    WhereClause,
+    /// One interface reference applied to its single type argument.
+    InterfaceApplication,
+    /// One implementation declaration with flat method equations.
+    ImplementationDeclaration,
     /// An equational global definition.
     EquationalGlobal,
     /// An external name and type interface.
@@ -131,6 +141,16 @@ pub enum ExpectedForm {
     Type,
     /// A source pattern.
     Pattern,
+    /// A single interface parameter written as `<A>`.
+    InterfaceParameter,
+    /// A signature-only interface method.
+    InterfaceMethod,
+    /// An interface application in a constraint or impl head.
+    InterfaceApplication,
+    /// An implementation method equation.
+    ImplementationMethod,
+    /// `,`.
+    Comma,
     /// `(`.
     LeftParen,
     /// `)`.
@@ -193,8 +213,18 @@ pub enum ParseContext {
 pub enum SynchronizationBoundary {
     /// A logical line boundary owned by an equation or binding.
     LogicalLineEnd,
+    /// The opening brace owned by an interface declaration.
+    InterfaceBodyOpeningBrace,
+    /// The opening brace owned by an implementation declaration.
+    ImplementationBodyOpeningBrace,
+    /// The opening brace owned by an operational global.
+    OperationalBodyOpeningBrace,
     /// The closing brace owned by the current block.
     BlockClosingBrace,
+    /// The closing brace owned by the current interface declaration.
+    InterfaceClosingBrace,
+    /// The closing brace owned by the current implementation declaration.
+    ImplementationClosingBrace,
     /// The closing parenthesis owned by the current grouped expression.
     ParenthesisClosing,
     /// End of input owned by the current module or incomplete nested form.
@@ -590,7 +620,22 @@ impl Parser<'_> {
 const fn synchronization_message(boundary: SynchronizationBoundary) -> &'static str {
     match boundary {
         SynchronizationBoundary::LogicalLineEnd => "parsing resumes at this logical line boundary",
+        SynchronizationBoundary::InterfaceBodyOpeningBrace => {
+            "parsing resumes at this interface body opening brace"
+        }
+        SynchronizationBoundary::ImplementationBodyOpeningBrace => {
+            "parsing resumes at this implementation body opening brace"
+        }
+        SynchronizationBoundary::OperationalBodyOpeningBrace => {
+            "parsing resumes at this operational body opening brace"
+        }
         SynchronizationBoundary::BlockClosingBrace => "parsing resumes at this block closing brace",
+        SynchronizationBoundary::InterfaceClosingBrace => {
+            "parsing resumes at this interface closing brace"
+        }
+        SynchronizationBoundary::ImplementationClosingBrace => {
+            "parsing resumes at this implementation closing brace"
+        }
         SynchronizationBoundary::ParenthesisClosing => {
             "parsing resumes at this closing parenthesis"
         }
@@ -620,6 +665,9 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::As => "as",
         TokenKind::Pub => "pub",
         TokenKind::Opaque => "opaque",
+        TokenKind::Interface => "interface",
+        TokenKind::Impl => "impl",
+        TokenKind::Where => "where",
         TokenKind::IntType => "Int",
         TokenKind::BoolType => "Bool",
         TokenKind::UnitType => "Unit",
@@ -669,6 +717,11 @@ const fn expected_name(expected: ExpectedForm) -> &'static str {
         ExpectedForm::Identifier => "an identifier",
         ExpectedForm::Type => "a type",
         ExpectedForm::Pattern => "a pattern",
+        ExpectedForm::InterfaceParameter => "one interface parameter written as <A>",
+        ExpectedForm::InterfaceMethod => "an interface method signature",
+        ExpectedForm::InterfaceApplication => "an interface application",
+        ExpectedForm::ImplementationMethod => "an implementation method equation",
+        ExpectedForm::Comma => ",",
         ExpectedForm::LeftParen => "(",
         ExpectedForm::RightParen => ")",
         ExpectedForm::LeftBrace => "{",

@@ -46,6 +46,12 @@ pub enum TokenKind {
     Pub,
     /// The `opaque` reserved word.
     Opaque,
+    /// The `interface` reserved word.
+    Interface,
+    /// The `impl` reserved word.
+    Impl,
+    /// The `where` reserved word.
+    Where,
     /// The `Int` type name.
     IntType,
     /// The `Bool` type name.
