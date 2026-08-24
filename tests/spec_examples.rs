@@ -55,6 +55,98 @@ const HIDDEN_ENTRY_MODULE: &str = "import carrier as Carrier\n\nmain : Unit -> I
 const HIDDEN_CARRIER_MODULE: &str = "type Hidden = Hidden(Int)\n\npub make : Int -> Hidden\nmake value = Hidden(value)\n\npub step : Hidden -> Hidden\nstep (Hidden value) = Hidden(value + 1)\n\npub read : Hidden -> Int\nread (Hidden value) = value\n";
 const TRANSPARENT_ENTRY_MODULE: &str = "import choice as Choice\n\nmain : Unit -> Int\nmain () = match Choice.sample(()) {\n    Choice.First(value) => value\n    Choice.Second(value) => value + 1\n}\n";
 const TRANSPARENT_CHOICE_MODULE: &str = "pub type Choice =\n    First(Int)\n    | Second(Int)\n\npub sample : Unit -> Choice\nsample () = First(42)\n";
+const LOCAL_INTERFACE_EVIDENCE_MODULE: &str = concat!(
+    "interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "impl Equal<Int> {\n",
+    "    equal (left, right) = left == right\n",
+    "}\n\n",
+    "main : Unit -> Bool\n",
+    "main () = equal(1, 1)\n",
+);
+const CONSTRAINED_IMPORT_ENTRY_MODULE: &str = concat!(
+    "import equality as Equality\n\n",
+    "main : Unit -> Bool\n",
+    "main () = Equality.same((1, 1))\n",
+);
+const CONSTRAINED_IMPORT_LIBRARY_MODULE: &str = concat!(
+    "pub interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "pub impl Equal<Int> {\n",
+    "    equal (left, right) = left == right\n",
+    "}\n\n",
+    "pub same : (A, A) -> Bool where Equal<A>\n",
+    "same pair = equal pair\n",
+);
+const GENERIC_PREREQUISITE_EVIDENCE_MODULE: &str = concat!(
+    "type Option<A> =\n",
+    "    None\n",
+    "    | Some(A)\n\n",
+    "interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "impl Equal<Int> {\n",
+    "    equal (left, right) = left == right\n",
+    "}\n\n",
+    "impl Equal<Option<A>> where Equal<A> {\n",
+    "    equal (None, None) = true\n",
+    "    equal (Some(left), Some(right)) = equal(left, right)\n",
+    "    equal _ = false\n",
+    "}\n\n",
+    "main : Unit -> Bool\n",
+    "main () = equal(Some(1), Some(1))\n",
+);
+const INTERFACE_HIDDEN_ENTRY_MODULE: &str = concat!(
+    "import carrier as Carrier\n\n",
+    "main : Unit -> Int\n",
+    "main () = Carrier.read(Carrier.transform(Carrier.make(42)))\n",
+);
+const INTERFACE_HIDDEN_CARRIER_MODULE: &str = concat!(
+    "type Hidden = Hidden(Int)\n\n",
+    "pub interface Transform<A> {\n",
+    "    transform : A -> A\n",
+    "}\n\n",
+    "pub impl Transform<Hidden> {\n",
+    "    transform value = value\n",
+    "}\n\n",
+    "pub make : Int -> Hidden\n",
+    "make value = Hidden(value)\n\n",
+    "pub read : Hidden -> Int\n",
+    "read (Hidden value) = value\n",
+);
+const INTERFACE_OPAQUE_ENTRY_MODULE: &str = concat!(
+    "import token as Token\n\n",
+    "main : Unit -> Bool\n",
+    "main () = Token.equal(Token.make(42), Token.make(42))\n",
+);
+const INTERFACE_OPAQUE_TOKEN_MODULE: &str = concat!(
+    "pub opaque type Token = Token(Int)\n\n",
+    "pub interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "pub impl Equal<Token> {\n",
+    "    equal (Token(left), Token(right)) = left == right\n",
+    "}\n\n",
+    "pub make : Int -> Token\n",
+    "make value = Token(value)\n",
+);
+const CONSTRAINED_PRESENTATIONS_MODULE: &str = concat!(
+    "interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "impl Equal<Int> {\n",
+    "    equal (left, right) = left == right\n",
+    "}\n\n",
+    "same_equational : (A, A) -> Bool where Equal<A>\n",
+    "same_equational pair = equal pair\n\n",
+    "fn same_operational(pair : (A, A)) -> Bool where Equal<A> {\n",
+    "    equal pair\n",
+    "}\n\n",
+    "main : Unit -> (Bool, Bool)\n",
+    "main () = (same_equational (1, 1), same_operational (1, 1))\n",
+);
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -267,6 +359,81 @@ fn overview_transparent_matching_example_is_executable() {
     assert_eq!(observation.value_display(), "42");
     assert_documented("spec/README.md", TRANSPARENT_ENTRY_MODULE);
     assert_documented("spec/README.md", TRANSPARENT_CHOICE_MODULE);
+}
+
+#[test]
+fn overview_local_interface_evidence_example_is_executable() {
+    assert_observation(
+        "local-interface-evidence.ash",
+        LOCAL_INTERFACE_EVIDENCE_MODULE,
+        "true",
+        "Bool",
+    );
+    assert_documented("spec/README.md", LOCAL_INTERFACE_EVIDENCE_MODULE);
+}
+
+#[test]
+fn overview_cross_module_constrained_example_is_executable() {
+    let observation = assert_module_tree(
+        CONSTRAINED_IMPORT_ENTRY_MODULE,
+        &[("app/equality.ash", CONSTRAINED_IMPORT_LIBRARY_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "true");
+    assert_eq!(observation.type_display(), "Bool");
+    assert_documented("spec/README.md", CONSTRAINED_IMPORT_ENTRY_MODULE);
+    assert_documented("spec/README.md", CONSTRAINED_IMPORT_LIBRARY_MODULE);
+}
+
+#[test]
+fn static_semantics_generic_prerequisite_evidence_example_is_executable() {
+    assert_observation(
+        "generic-prerequisite-evidence.ash",
+        GENERIC_PREREQUISITE_EVIDENCE_MODULE,
+        "true",
+        "Bool",
+    );
+    assert_documented(
+        "spec/static-semantics.md",
+        GENERIC_PREREQUISITE_EVIDENCE_MODULE,
+    );
+}
+
+#[test]
+fn resolution_hidden_carrier_interface_example_uses_public_operations() {
+    let observation = assert_module_tree(
+        INTERFACE_HIDDEN_ENTRY_MODULE,
+        &[("app/carrier.ash", INTERFACE_HIDDEN_CARRIER_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+    assert_documented("spec/name-resolution.md", INTERFACE_HIDDEN_ENTRY_MODULE);
+    assert_documented("spec/name-resolution.md", INTERFACE_HIDDEN_CARRIER_MODULE);
+}
+
+#[test]
+fn resolution_opaque_carrier_interface_example_uses_public_operations() {
+    let observation = assert_module_tree(
+        INTERFACE_OPAQUE_ENTRY_MODULE,
+        &[("app/token.ash", INTERFACE_OPAQUE_TOKEN_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "true");
+    assert_eq!(observation.type_display(), "Bool");
+    assert_documented("spec/name-resolution.md", INTERFACE_OPAQUE_ENTRY_MODULE);
+    assert_documented("spec/name-resolution.md", INTERFACE_OPAQUE_TOKEN_MODULE);
+}
+
+#[test]
+fn syntax_constrained_global_presentations_are_executable() {
+    assert_observation(
+        "constrained-presentations.ash",
+        CONSTRAINED_PRESENTATIONS_MODULE,
+        "(true, true)",
+        "(Bool, Bool)",
+    );
+    assert_documented("spec/syntax.md", CONSTRAINED_PRESENTATIONS_MODULE);
 }
 
 #[test]

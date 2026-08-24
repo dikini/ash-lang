@@ -9,15 +9,16 @@ order mark is not part of the source language.
 An ordinary identifier starts with an ASCII lowercase letter or underscore and
 continues with ASCII letters, decimal digits, or underscores. Ordinary
 identifiers name term binders and module-path segments. A constructor, nominal
-type, type-variable, module-alias, or uppercase import identifier starts with an
-ASCII uppercase letter and has the same continuation characters. Resolution
-determines the meaning of an uppercase occurrence from its syntactic position
-and scope.
+type, interface, type-variable, module-alias, or uppercase import identifier
+starts with an ASCII uppercase letter and has the same continuation characters.
+Resolution determines the meaning of an uppercase occurrence from its
+syntactic position and scope.
 
-The reserved words `fn`, `let`, `rec`, `and`, `type`, `match`, `import`, `as`,
-`pub`, `opaque`, `Int`, `Bool`, `Unit`, `true`, and `false` cannot be
-identifiers. The single spelling `_` is the wildcard token rather than an
-ordinary identifier; spellings such as `_tail` remain ordinary identifiers.
+The reserved words `fn`, `let`, `rec`, `and`, `type`, `interface`, `impl`,
+`where`, `match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`,
+`true`, and `false` cannot be identifiers. The single spelling `_` is the
+wildcard token rather than an ordinary identifier; spellings such as `_tail`
+remain ordinary identifiers.
 
 An integer literal is either `0` or a nonzero decimal digit followed by zero or
 more decimal digits. Its value is the corresponding mathematical non-negative
@@ -28,10 +29,12 @@ The remaining punctuation admitted by Ash is `(`, `)`, `{`, `}`, `<`, `>`,
 `@`, `.`, `:`, `=`, `==`, `+`, `*`, `->`, `=>`, `|`, and comma. `@`
 introduces a named module root. A period separates module-path segments or a
 module alias from a qualified member; it does not begin a floating-point
-literal. Angle brackets occur only in parameterized type declarations and
-saturated nominal type applications. The longest token wins where one spelling
-prefixes another. Semicolon is recognized only to provide its specified source
-rejection; no grammar production admits it as source punctuation.
+literal. Angle brackets delimit nominal type parameters, the single parameter
+of an interface declaration, saturated nominal type applications, and the
+single type argument of an interface application. The longest token wins where
+one spelling prefixes another. Semicolon is recognized only to provide its
+specified source rejection; no grammar production admits it as source
+punctuation.
 
 Ash has no comments, string or character literals, escapes, Unicode
 identifiers, floating-point literals, or negative literals.

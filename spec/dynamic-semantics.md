@@ -59,6 +59,70 @@ family type-erasure-steps:
 The unchanged heap and environment make erasure observable only as progress in
 the machine. No source program can inspect a type parameter or type argument.
 
+## Generated interface evidence
+
+Linking preserves each checked interface selection. Linked interface-evidence
+validation authenticates it, and Core synthesis lowers it before evaluation.
+An abstract evidence method becomes an ordinary function parameter. A concrete
+evidence method becomes a binder occurrence for the implementation method in
+its defining module's recursive group. Looking up that recursive function
+binder materializes a lexical closure under the existing recursive-binding
+behavior. No interface identity or selection record reaches the machine.
+
+For a generic implementation method, lowering uses the recorded head
+substitution to form an ordinary Core type application. When evaluation enters
+that Core node, `E-Type-Application` erases it to its function without inspecting
+the type arguments. The recorded substitution itself does not reach the
+evaluator. The existing strict application transitions then evaluate and apply
+every recursively generated prerequisite method in declaration order. The
+result is the lexical method closure that accepts the source value argument. At
+a constrained-global call, the same transitions apply its evidence functions
+before the surrounding source arguments because elaboration nested the
+applications in that order. Abstract prerequisite evidence uses ordinary
+environment lookup; concrete prerequisite evidence uses ordinary recursive
+function lookup and closure materialization.
+
+There is no runtime interface value, dictionary, interface or implementation
+registry, implementation lookup, interface dispatch, registration step, or
+interface-specific failure mode. Evidence construction uses only type erasure,
+recursive binding, ordinary binder lookup and closure materialization, and the
+strict application transitions below. It adds no Core node and requires no new
+evaluation rule.
+
+The executable test
+`generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace`
+checks this program:
+
+```ash
+type Wrap<A> = Wrap(A)
+
+interface Read<A> {
+    read : A -> Int
+}
+
+impl Read<Int> {
+    read value = value
+}
+
+impl Read<Wrap<A>> where Read<A> {
+    read (Wrap(value)) = read value
+}
+
+main : Unit -> Int
+main () = read(Wrap(42))
+```
+
+The test trace enters the source application, its evidence application, the
+generic method's type application, and the variable occurrences for the
+generic implementation method and concrete prerequisite method in that order.
+A trace event enters an occurrence node, not a binder identity. The trace enters
+the prerequisite occurrence before the source `Wrap(42)` argument and produces
+`42`. It contains at most 32 node-entry events, and the machine reaches at most
+six continuation frames. These bounds describe this fixed program. They follow
+from the existing erasure, lookup, recursive-binding, and application
+transitions; they are not a new transition or a bound on arbitrary prerequisite
+chains.
+
 ## Bindings
 
 A binding evaluates its initializer before matching the resulting value and

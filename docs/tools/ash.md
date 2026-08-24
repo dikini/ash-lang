@@ -143,10 +143,17 @@ Its exact standard output is:
 (Some(42), false) : (Option<Int>, Bool)
 ```
 
-The global interface quantifies `A` implicitly. Each use of `id` and `Some`
+The global signature quantifies `A` implicitly. Each use of `id` and `Some`
 instantiates its outer scheme. The unannotated local anonymous function is the
 only local initializer form that generalizes. These type operations are erased
 before producing runtime values.
+
+Interfaces, implementations, and global requirements do not add invocation
+options or runtime configuration. The compiler selects method evidence during
+checking, validates it before Core construction, and lowers it to ordinary Core
+functions and applications. Successful programs therefore retain the same
+output contract; the executable performs no runtime implementation
+registration, lookup, or dispatch.
 
 The executable test `tool_function_result_uses_opaque_rendering` runs a module
 whose `main` result is a function:
@@ -194,9 +201,17 @@ labels.
 Source-caused loading failures include `module.unknown-root`,
 `module.not-found`, `module.path-escape`, and `module.import-cycle`. The primary
 label identifies the import that caused the failure. Syntax, resolution,
-access, type, coverage, and entry-contract rejections also use status `1`.
+access, interface, implementation, constraint, type, pattern, coverage, and
+entry-contract rejections also use status `1`. Interface-related source reasons
+include `interface.*`, `impl.*`, and `constraint.*`; the stable reason
+identifies the judgment that first established the rejection. Related labels
+may identify the interface, implementation, method, implementation method, and
+direct import occurrences that caused it. An unavailable private or transitive
+implementation is reported without exposing that declaration's metadata.
+
 Entry failures include `entry.missing-main`, `entry.main-polymorphic`,
-`entry.main-domain`, and `entry.main-open-result`.
+`entry.main-domain`, `entry.main-open-result`, and
+`entry.main-constrained`.
 
 The executable test `tool_source_rejection_uses_status_one_and_stderr` checks
 that this module reports `type.operator-operand` on standard error:
@@ -204,6 +219,21 @@ that this module reports `type.operator-operand` on standard error:
 ```ash
 main : Unit -> Int
 main () = true + 1
+```
+
+The executable test
+`cli_renders_the_structured_interface_diagnostic_without_reclassifying_it`
+checks that an unsatisfied method occurrence exits with status `1`, begins
+standard error with `constraint.unsatisfied`, and renders the same structured
+diagnostic returned by the programmatic driver:
+
+```ash
+interface Render<A> {
+render : A -> Int
+}
+
+main : Unit -> Int
+main () = render true
 ```
 
 Invocation, input, compiler-internal, resource, validation, and runtime-internal
@@ -219,6 +249,11 @@ Duplicate, invalid, or unavailable named roots instead report an
 source, and comparable non-source input failures report an `input.*` reason.
 An imported file can retain its causal import label even when the input failure
 uses status `2`.
+
+Exhausting the graph-wide interface-and-constraint work budget reports
+`internal.resource.constraint-work` with status `2`. Invalid retained evidence
+reports an `evidence.validation.*` internal failure. Both are compiler
+failures, not runtime selection failures.
 
 An output write or flush failure also exits with status `2` and attempts to
 report `internal.output-write` on standard error. Standard-output bytes accepted

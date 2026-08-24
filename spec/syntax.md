@@ -17,7 +17,11 @@ an EBNF production; it is not Ash source punctuation.
 
 ```ebnf
 module ::= { import_declaration line_end } { module_declaration line_end } ;
-module_declaration ::= type_declaration | global_definition ;
+module_declaration ::=
+    type_declaration
+  | interface_declaration
+  | implementation_declaration
+  | global_definition ;
 
 import_declaration ::=
   "import" module_path
@@ -37,14 +41,35 @@ type_parameters ::=
 constructor_declaration ::=
   upper_identifier [ "(" type { "," type } ")" ] ;
 
+interface_declaration ::=
+  [ "pub" ] "interface" upper_identifier interface_parameter
+  "{" line_end
+  interface_method { line_end interface_method } [ line_end ]
+  "}" ;
+interface_parameter ::= "<" upper_identifier ">" ;
+interface_method ::= identifier ":" type ;
+
+implementation_declaration ::=
+  [ "pub" ] "impl" interface_application [ where_clause ]
+  "{" line_end
+  [ impl_equation { line_end impl_equation } [ line_end ] ]
+  "}" ;
+impl_equation ::= identifier pattern { pattern } "=" expression ;
+
 global_definition ::= equational_global | inline_operational_global ;
 equational_global ::=
-  [ "pub" ] external_interface line_end equation { line_end equation } ;
-external_interface ::= identifier ":" type ;
+  [ "pub" ] global_signature line_end equation { line_end equation } ;
+global_signature ::= identifier ":" type [ where_clause ] ;
 equation ::= identifier pattern { pattern } "=" expression ;
 inline_operational_global ::=
   [ "pub" ] "fn" identifier "(" typed_pattern { "," typed_pattern } ")"
-  "->" type block ;
+  "->" type [ where_clause ] block ;
+
+where_clause ::= "where" constraint { "," constraint } ;
+constraint ::= interface_application ;
+interface_application ::= interface_reference "<" type ">" ;
+interface_reference ::=
+  upper_identifier | upper_identifier "." upper_identifier ;
 
 block ::=
   "{" line_end { local_declaration line_end } expression [ line_end ] "}" ;
@@ -143,12 +168,29 @@ spelling. Terms may have lowercase or uppercase member spellings, as in
 members, as in `List.Option` and `List.Some`. Qualification has exactly these
 two components; it does not repeat the dependency's path.
 
-An unmodified declaration is private. `pub` exports a global definition or a
-nominal declaration from its defining module. `pub opaque type` exports the
-nominal name without exporting its constructors. `opaque` is valid only between
-`pub` and `type`; constructors cannot carry individual modifiers. An
-equational global writes `pub` once before its external interface, not on its
+An unmodified declaration is private. `pub` marks a global, nominal type,
+interface, or implementation declaration as public. `pub opaque type` exports
+the nominal name without exporting its constructors. `opaque` is valid only
+between `pub` and `type`; constructors cannot carry individual modifiers. An
+equational global writes `pub` once before its global signature, not on its
 equation heads. An inline operational global writes `pub` before `fn`.
+
+An interface declaration has exactly one parameter and a nonempty body of
+method signatures. A method has no visibility modifier, type-parameter list,
+requirement, or body. An implementation has no source name. Its body contains
+only equations; an equation has no separate visibility modifier, signature, or
+requirement. Implementation equations use the same pattern and expression
+grammar as equational-global clauses, and the body may be empty. The grammar
+provides no associated declaration, default method, named implementation, or
+runtime dictionary form.
+
+A `where` clause contains one or more comma-separated interface applications
+and has no trailing comma. It remains on its declaration header's logical line.
+It follows the complete value type in either global presentation and the
+complete interface application in an implementation head. A constraint is
+therefore not part of a global's result type. Each interface application has
+one type argument and may use an unqualified interface name or one qualified by
+a module alias.
 
 Braces delimit blocks, and parentheses group expressions and types. A block
 contains ordered local declarations and one result expression. An ordinary
@@ -208,7 +250,7 @@ function as one argument.
 
 ## Global function presentations
 
-An equational global places its type interface before one or more contiguous
+An equational global places its global signature before one or more contiguous
 pattern clauses. The executable test
 `syntax_equational_global_example_v002_is_executable` checks this complete
 entry module:
@@ -233,6 +275,31 @@ fn increment(value : Int) -> Int {
 
 main : Unit -> Int
 main () = increment 41
+```
+
+Either global presentation may append a `where` clause to its header. The
+executable test
+`syntax_constrained_global_presentations_are_executable`
+checks that both presentations admit the same constraint syntax:
+
+```ash
+interface Equal<A> {
+    equal : (A, A) -> Bool
+}
+
+impl Equal<Int> {
+    equal (left, right) = left == right
+}
+
+same_equational : (A, A) -> Bool where Equal<A>
+same_equational pair = equal pair
+
+fn same_operational(pair : (A, A)) -> Bool where Equal<A> {
+    equal pair
+}
+
+main : Unit -> (Bool, Bool)
+main () = (same_equational (1, 1), same_operational (1, 1))
 ```
 
 An equational clause has a positive pattern count, and every contiguous clause

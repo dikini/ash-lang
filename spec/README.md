@@ -7,26 +7,42 @@ describes exactly the implemented language and runtime behavior.
 
 Ash is a pure, rank-1 language whose programs are acyclic graphs of passive
 source modules. Each `.ash` source file defines one unnamed module containing
-imports followed by nominal type declarations and global function definitions.
-A module has no result expression, runtime module value, or initialization.
+imports followed by nominal type declarations, method-only interface
+declarations, anonymous implementation declarations, and global function
+definitions. Global signatures may state explicit interface constraints, and
+implementation heads may state explicit prerequisite constraints. A module has
+no result expression, runtime module value, or initialization.
 
 Imports expose only declarations marked `pub`. A complete import places a
 dependency's public namespace under a module alias; a targeted import places
 selected public spellings in the importing module's file-wide namespaces.
-Private nominal identities may flow through public function schemes without
+Either form establishes a direct dependency and makes every public anonymous
+implementation fact defined by that dependency available for evidence
+selection. A module does not re-export imported implementation facts.
+Private nominal identities may flow through public global schemes without
 becoming nameable. A `pub opaque type` exports a name without constructors, and
 a `pub type` exports its name and complete constructor family.
 
+An interface declares one type parameter and an ordered set of method
+signatures. Its methods are constrained terms. An implementation supplies the
+complete method set for one interface argument but introduces no source name.
+Private implementations remain available only in their defining module;
+`pub impl` publishes a body-free fact to direct dependents.
+
 The source path selected for execution is the entry module. It declares exactly
-one local, monomorphic `main : Unit -> R`, where `R` is closed. After checking
-every dependency, Ash links the module definition groups and evaluates
-`main ()`.
+one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
+After checking every dependency, Ash links the module definition groups and
+evaluates `main ()`.
 Imports, exports, aliases, and opacity are static access rules and do not remain
-as runtime operations.
+as runtime operations. Interface identities, implementation identities, and
+their checking registries also erase. Selected evidence lowers to ordinary
+functions and applications; evaluation has no runtime module object,
+implementation registry, or interface lookup.
 
 Within a module, Ash provides global and explicit local recursion, rank-1
 polymorphism, nominal data, structural tuples, constructor values, typed
-patterns, exhaustive matches and equations, sequential bindings, and pure
+patterns, exhaustive matches and equations, sequential bindings, method-only
+interfaces, explicit constraints, anonymous implementations, and pure
 expressions.
 
 ## Module examples
@@ -57,6 +73,57 @@ import arithmetic (answer as imported_answer)
 main : Unit -> Int
 main () = imported_answer(())
 ```
+
+### Interfaces and selected evidence
+
+An interface method can use a local implementation without changing the entry
+contract. This complete module selects `Equal<Int>` at the call to `equal` and
+observes `true : Bool`:
+
+```ash
+interface Equal<A> {
+    equal : (A, A) -> Bool
+}
+
+impl Equal<Int> {
+    equal (left, right) = left == right
+}
+
+main : Unit -> Bool
+main () = equal(1, 1)
+```
+
+Constraints also cross module boundaries through checked public declarations.
+In the following sibling-file program, `main.ash` imports `./equality.ash`:
+
+```ash
+import equality as Equality
+
+main : Unit -> Bool
+main () = Equality.same((1, 1))
+```
+
+The sibling `equality.ash` exports a method-only interface, a constrained
+global, and an anonymous implementation fact:
+
+```ash
+pub interface Equal<A> {
+    equal : (A, A) -> Bool
+}
+
+pub impl Equal<Int> {
+    equal (left, right) = left == right
+}
+
+pub same : (A, A) -> Bool where Equal<A>
+same pair = equal pair
+```
+
+The body of `same` uses its declared requirement. At the imported call,
+ordinary typing fixes the argument to `Int`, and the direct dependency's public
+implementation supplies the evidence. The program observes `true : Bool`.
+Aliases and implementation identities do not become runtime values; the
+selected method evidence runs as ordinary function application.
 
 ### Opaque types and smart constructors
 
@@ -109,7 +176,7 @@ read (Hidden value) = value
 ```
 
 An importer can infer a local carrier and pass it among compatible operations.
-It cannot name that carrier in an annotation or global interface:
+It cannot name that carrier in an annotation or global signature:
 
 ```ash
 import carrier as Carrier
