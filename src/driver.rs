@@ -355,6 +355,34 @@ where
     ) -> Result<ValidatedProgram, ValidationError>,
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
 {
+    run_path_with_consumers_and_constraint_budget(
+        configuration,
+        &mut InterfaceConstraintBudget::default(),
+        interface_validator,
+        validator,
+        evaluator,
+    )
+}
+
+fn run_path_with_consumers_and_constraint_budget<I, V, E>(
+    configuration: RunConfiguration,
+    constraint_work: &mut InterfaceConstraintBudget,
+    interface_validator: I,
+    validator: V,
+    evaluator: E,
+) -> Result<Observation, FileFailure>
+where
+    I: FnOnce(
+        ResolvedModuleProgram,
+        &mut InterfaceConstraintBudget,
+    ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
+    V: FnOnce(
+        UnvalidatedProgram,
+        &[&SourceFile],
+        &[(ModuleId, SourceId)],
+    ) -> Result<ValidatedProgram, ValidationError>,
+    E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
+{
     let graph = load_module_graph(&configuration.entry, &configuration.roots)
         .map_err(FileFailure::Graph)?;
     let mut checked: Vec<crate::resolved::CheckedModule> =
@@ -364,7 +392,6 @@ where
     let mut resolution_type_work = TypeWorkBudget::default();
     let mut checking_type_work = TypeWorkBudget::default();
     let mut coverage_work = UsefulnessBudget::default();
-    let mut constraint_work = InterfaceConstraintBudget::default();
     for module in graph.modules() {
         let dependencies = module
             .dependencies()
@@ -388,7 +415,7 @@ where
             module,
             &dependencies,
             &mut resolution_type_work,
-            &mut constraint_work,
+            constraint_work,
         )
         .map_err(PipelineFailure::Resolution)
         .map_err(FileFailure::Pipeline)?;
@@ -397,7 +424,7 @@ where
             resolved,
             &mut checking_type_work,
             &mut coverage_work,
-            &mut constraint_work,
+            constraint_work,
         )
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
@@ -446,10 +473,10 @@ where
     if !main.scheme.requirements.is_empty() {
         return Err(entry_failure(EntryReason::MainConstrained, main_span));
     }
-    let linked = link_modules_with_budget(checked, graph.entry(), &mut constraint_work)
+    let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
-    let validated_interfaces = interface_validator(linked, &mut constraint_work)
+    let validated_interfaces = interface_validator(linked, constraint_work)
         .map_err(PipelineFailure::EvidenceValidation)
         .map_err(FileFailure::Pipeline)?;
     let registry = Arc::clone(validated_interfaces.registry());
@@ -552,23 +579,27 @@ mod tests {
         fn write(text: &str) -> Self {
             loop {
                 let id = TEST_SOURCE_IDS.fetch_add(1, Ordering::Relaxed);
-                let path = std::env::temp_dir()
-                    .join(format!("ash-driver-unit-{}-{id}.ash", std::process::id()));
-                match fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                {
-                    Ok(mut file) => {
-                        use std::io::Write as _;
-                        file.write_all(text.as_bytes())
-                            .expect("the modular fixture should be writable");
+                let directory = std::env::temp_dir()
+                    .join(format!("ash-driver-unit-{}-{id}", std::process::id()));
+                match fs::create_dir(&directory) {
+                    Ok(()) => {
+                        let path = directory.join("entry.ash");
+                        fs::write(&path, text).expect("the modular fixture should be writable");
                         return Self(path);
                     }
                     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                     Err(error) => panic!("the modular fixture should be creatable: {error}"),
                 }
             }
+        }
+
+        fn write_sibling(&self, name: &str, text: &str) {
+            let path = self
+                .0
+                .parent()
+                .expect("the modular fixture should have a parent")
+                .join(name);
+            fs::write(path, text).expect("the dependency fixture should be writable");
         }
 
         fn configuration(&self) -> RunConfiguration {
@@ -581,7 +612,9 @@ mod tests {
 
     impl Drop for TestSource {
         fn drop(&mut self) {
-            let _ = fs::remove_file(&self.0);
+            if let Some(directory) = self.0.parent() {
+                let _ = fs::remove_dir_all(directory);
+            }
         }
     }
 
@@ -676,6 +709,78 @@ mod tests {
         );
         assert!(!core_validation_called.get());
         assert!(!evaluation_called.get());
+    }
+
+    #[test]
+    fn exact_constraint_budget_persists_through_evidence_validation() {
+        let source = TestSource::write(concat!(
+            "import dependency as Dependency\n",
+            "main : Unit -> Int\n",
+            "main () = Dependency.equal(42)\n",
+        ));
+        source.write_sibling(
+            "dependency.ash",
+            concat!(
+                "pub interface Equal<A> {\n",
+                "equal : A -> A\n",
+                "}\n",
+                "pub impl Equal<Int> {\n",
+                "equal value = value\n",
+                "}\n",
+            ),
+        );
+
+        let validation_prefix = Cell::new(0);
+        let mut measured = InterfaceConstraintBudget::default();
+        let observation = run_path_with_consumers_and_constraint_budget(
+            source.configuration(),
+            &mut measured,
+            |linked, budget| {
+                validation_prefix.set(budget.used());
+                validate_interface_evidence_with_budget(linked, budget)
+            },
+            validate_modules,
+            evaluate,
+        )
+        .expect("the fixture should fit the default graph-wide constraint budget");
+        assert_eq!(observation.value_display(), "42");
+        let exact = measured.used();
+        assert!(validation_prefix.get() > 0);
+        assert!(validation_prefix.get() < exact);
+
+        let one_short_entered_validation = Cell::new(false);
+        let mut one_short = InterfaceConstraintBudget::with_limit(exact - 1);
+        let failure = run_path_with_consumers_and_constraint_budget(
+            source.configuration(),
+            &mut one_short,
+            |linked, budget| {
+                one_short_entered_validation.set(true);
+                validate_interface_evidence_with_budget(linked, budget)
+            },
+            validate_modules,
+            evaluate,
+        )
+        .expect_err("one less than the cumulative work must exhaust validation");
+        assert!(one_short_entered_validation.get());
+        let FileFailure::Pipeline(PipelineFailure::EvidenceValidation(error)) = failure else {
+            panic!("the one-short cumulative budget should fail in evidence validation");
+        };
+        assert_eq!(
+            error.reason(),
+            crate::evidence_validation::EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+
+        let mut exact_budget = InterfaceConstraintBudget::with_limit(exact);
+        let observation = run_path_with_consumers_and_constraint_budget(
+            source.configuration(),
+            &mut exact_budget,
+            validate_interface_evidence_with_budget,
+            validate_modules,
+            evaluate,
+        )
+        .expect("the measured cumulative work should fit exactly");
+        assert_eq!(observation.value_display(), "42");
+        assert_eq!(exact_budget.used(), exact);
     }
 
     #[test]
