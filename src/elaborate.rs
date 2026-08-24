@@ -5760,10 +5760,25 @@ pub fn link_modules(
     modules: Vec<CheckedModule>,
     entry: crate::module::ModuleId,
 ) -> Result<ResolvedModuleProgram, TypeError> {
+    link_modules_with_budget(modules, entry, &mut InterfaceConstraintBudget::default())
+}
+
+/// Links one checked graph while preserving its graph-wide constraint accounting.
+pub(crate) fn link_modules_with_budget(
+    modules: Vec<CheckedModule>,
+    entry: crate::module::ModuleId,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<ResolvedModuleProgram, TypeError> {
+    constraint_work
+        .charge(modules.len())
+        .map_err(|()| constraint_resource())?;
     let entry_module = modules
         .iter()
         .find(|module| module.module() == entry)
         .ok_or_else(invalid_state)?;
+    constraint_work
+        .charge(entry_module.schemes().len())
+        .map_err(|()| constraint_resource())?;
     let main = entry_module
         .schemes()
         .iter()
@@ -5778,6 +5793,17 @@ pub fn link_modules(
     {
         return Err(invalid_state());
     }
+    let retained = modules.iter().try_fold(modules.len(), |total, module| {
+        total
+            .checked_add(module.direct_dependencies().len())
+            .and_then(|total| total.checked_add(module.interface_facts().len()))
+            .and_then(|total| total.checked_add(module.implementation_facts().len()))
+            .and_then(|total| total.checked_add(module.available_implementations().len()))
+            .and_then(|total| total.checked_add(module.schemes().len()))
+    });
+    constraint_work
+        .charge(retained.ok_or_else(constraint_resource)?)
+        .map_err(|()| constraint_resource())?;
     let span = main.origin.primary_span();
     let result = ResolvedExpr {
         kind: ResolvedExprKind::Apply(crate::resolved::ResolvedApplicationExpr {
@@ -5801,12 +5827,17 @@ pub fn link_modules(
     let registry = Arc::new(
         ResolvedRegistry::combine_checked(&modules, &mut budget).map_err(resolved_build_error)?,
     );
-    let groups = modules
-        .into_iter()
-        .map(CheckedModule::into_group)
-        .collect::<Vec<_>>()
-        .into_boxed_slice();
-    Ok(ResolvedModuleProgram::new(registry, groups, entry, result))
+    let mut groups = Vec::new();
+    groups
+        .try_reserve(modules.len())
+        .map_err(|_| constraint_resource())?;
+    groups.extend(modules.into_iter().map(CheckedModule::into_group));
+    Ok(ResolvedModuleProgram::new(
+        registry,
+        groups.into_boxed_slice(),
+        entry,
+        result,
+    ))
 }
 
 impl Default for Elaborator {

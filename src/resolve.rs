@@ -17,8 +17,8 @@ use crate::{
     resolved::{
         Binder, BinderId, CandidateConstructor, CandidateGlobal, CandidateHiddenNominal,
         CandidateNominal, CheckedImplementationFact, CheckedInterfaceFact,
-        CheckedInterfaceMethodFact, ExportSummary, ExportedConstructor, ExportedGlobal,
-        ExportedType, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
+        CheckedInterfaceMethodFact, DirectDependencyRoute, ExportSummary, ExportedConstructor,
+        ExportedGlobal, ExportedType, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
         ImportedNominalFact, ImportedTypeAccess, ResolvedApplicationExpr, ResolvedBinaryExpr,
         ResolvedBinding, ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence,
         ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
@@ -253,6 +253,29 @@ pub(crate) fn resolve_module_with_budget(
         std::mem::take(constraint_work),
     );
     let result = (|| {
+        resolver
+            .constraint_work
+            .charge(dependencies.len())
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    surface.span,
+                    "direct dependency route retention exceeded its work budget",
+                )
+            })?;
+        let mut direct_dependencies = Vec::new();
+        direct_dependencies
+            .try_reserve(dependencies.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    surface.span,
+                    "direct dependency route retention exceeded its work budget",
+                )
+            })?;
+        direct_dependencies.extend(dependencies.iter().map(|dependency| {
+            DirectDependencyRoute::new(dependency.edge.target(), dependency.edge.import_span())
+        }));
         resolver.install_imports(surface, dependencies)?;
         resolver.validate_local_namespaces(surface)?;
         let ResolvedDeclarations {
@@ -286,6 +309,7 @@ pub(crate) fn resolve_module_with_budget(
             module,
             registry,
             imported,
+            direct_dependencies,
             declaration_order,
             interfaces,
             implementations,
@@ -4052,15 +4076,15 @@ mod tests {
     #[test]
     fn duplicate_impl_route_charges_lookup_without_retaining_a_second_fact() {
         let (one, one_used) =
-            resolve_import_fixture_with_limit("import dependency as Dependency\n", 21);
+            resolve_import_fixture_with_limit("import dependency as Dependency\n", 22);
         one.expect("one direct implementation route should resolve");
         let (two, two_used) = resolve_import_fixture_with_limit(
             "import dependency as First\nimport dependency as Second\n",
-            23,
+            25,
         );
         let two = two.expect("the duplicate implementation route should deduplicate");
-        assert_eq!(two_used, 23);
-        assert_eq!(one_used, 21);
+        assert_eq!(two_used, 25);
+        assert_eq!(one_used, 22);
         let implementation = two
             .imported_facts()
             .implementations()
@@ -4075,11 +4099,11 @@ mod tests {
 
         let (short, short_used) = resolve_import_fixture_with_limit(
             "import dependency as First\nimport dependency as Second\n",
-            22,
+            24,
         );
         let error = short.expect_err("one missing route unit should reject the duplicate edge");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
-        assert_eq!(short_used, 22);
+        assert_eq!(short_used, 24);
     }
 
     #[test]

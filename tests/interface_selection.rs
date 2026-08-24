@@ -92,7 +92,15 @@ fn imported_implementation_route_retains_its_exact_direct_dependency_identity() 
     let [available] = entry.available_implementations() else {
         panic!("the entry should retain exactly one available implementation");
     };
+    let [direct_dependency] = entry.direct_dependencies() else {
+        panic!("the checked entry should retain exactly one authenticated direct edge");
+    };
 
+    assert_eq!(direct_dependency.target(), dependency_edge.target());
+    assert_eq!(
+        direct_dependency.import_span(),
+        dependency_edge.import_span()
+    );
     assert_eq!(available.id(), ImplId::new(dependency_edge.target(), 0),);
     assert_eq!(
         available.route(),

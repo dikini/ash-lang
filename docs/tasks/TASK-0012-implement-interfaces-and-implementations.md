@@ -91,6 +91,23 @@ Execute the linked plan to:
   together with format, all-target checking, and Clippy. An independent
   high-reasoning review found no remaining goal-retention, budget, iterative-
   destruction, error-precedence, or route-provenance defect.
+- Task 6's second bounded checkpoint introduces a distinct pre-Core interface-
+  evidence validation result. Location-only indexes authenticate stable
+  interface, method, implementation, implementation-method, global, and hidden
+  binder identities without cloning fact graphs. Resolver-authenticated direct
+  dependency identity and import span survive into linked groups, so imported
+  implementation availability is checked independently of its claimed route.
+- One graph-wide constraint budget now continues through linking and evidence
+  validation. All width-dependent registry, availability, direct-edge,
+  declaration, expression, and evidence-plan visits charge before inspection;
+  validation traverses declarations and children in retained source order.
+  Fourteen focused validation unit tests, one public validation integration
+  test, and the 12 selection integrations pass with format, all-target checking,
+  and Clippy.
+- The seven end-to-end corpus cases and the focused Core-shape case are valid
+  witnessed RED tests at final `Internal(InvalidState)`. Substitution, complete
+  type/scope/provenance authentication, the closed validated-only synthesis
+  capability, and evidence lowering remain outside this bounded checkpoint.
 
 ## Verification
 
@@ -152,3 +169,9 @@ dispatch rule.
   import span cannot identify the dependency whose direct export admitted an
   implementation. Validation, evidence lowering, and the end-to-end corpus
   remain deliberately outside this checkpoint.
+- Task 6 uses `src/evidence_validation.rs` for the independent pre-Core stage
+  and `tests/interface_validation.rs` for its public capability witness. The
+  end-to-end observations live in the dedicated `tests/interface_corpus.rs`
+  target, while `tests/interfaces.rs` retains the exact resulting-Core shape
+  witness. These targets separate validation corruption evidence from ordinary
+  Core validation.

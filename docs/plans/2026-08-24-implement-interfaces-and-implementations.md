@@ -698,6 +698,22 @@ cargo test --locked --test core_validation --test module_elaboration
 
 Expected RED before linked registry/evidence validation and lowering exist.
 
+The recorded Task 6 RED run compiled all seven corpus fixtures and failed each
+at final synthesis with `Internal(InvalidState)`. The focused
+`cross_module_constraint_lowers_to_method_evidence` witness reached the same
+boundary. Parsing, resolution, interface checking, selection, and linking had
+therefore succeeded; the failures belonged to absent evidence lowering rather
+than fixture setup.
+
+The first bounded validation checkpoint now introduces the raw-linked to
+validated-interface type state, location-only linked indexes, exact direct-edge
+authentication, source-ordered occurrence worklists, and graph-budget
+continuity through linking and validation. Fourteen validator unit tests, the
+public validation integration test, and the twelve selection integration tests
+pass. The corpus and Core-shape witnesses intentionally remain RED until the
+validated wrapper becomes the only final-synthesis input and evidence lowers
+through ordinary Core.
+
 ### Task 6 — Step 3: Link, validate once, and synthesize
 
 Extend `ResolvedModuleProgram` with combined checked interface/impl registries

@@ -5,10 +5,11 @@ use std::{
 };
 
 use ash::{
-    elaborate::{TypeError, check_module},
+    core::{PureComputation, PureExprKind, PureValue, validate_modules},
+    elaborate::{Elaborator, TypeError, check_module, link_modules},
     interface::RequirementOwner,
-    module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
+    module::{ModuleGraph, ModuleRoots, load_module_graph},
+    resolve::{DependencyExports, resolve_module},
     resolved::CheckedModule,
     types::Type,
 };
@@ -64,6 +65,28 @@ fn checked_module(text: &str) -> CheckedModule {
         .expect("the entry module should remain admitted");
     let resolved = resolve_module(loaded, &[]).expect("the interface fixture should resolve");
     check_module(resolved).expect("the interface fixture should check")
+}
+
+fn checked_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("dependency order should check the target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("checked dependency exports should authenticate their edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the interface fixture graph should resolve");
+        checked.push(check_module(resolved).expect("the interface fixture graph should check"));
+    }
+    checked
 }
 
 fn check_valid(text: &str) {
@@ -166,4 +189,164 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
             Type::Variable(scheme.scheme.type_parameters[0])
         );
     }
+}
+
+#[test]
+fn cross_module_constraint_lowers_to_method_evidence() {
+    let fixture = InterfaceFixture::create(concat!(
+        "import library as Library\n",
+        "main : Unit -> Bool\n",
+        "main () = Library.same((1, 1))\n",
+    ));
+    fs::write(
+        fixture
+            .0
+            .parent()
+            .expect("entry fixture has a parent")
+            .join("library.ash"),
+        concat!(
+            "pub interface Equal<A> {\n",
+            "equal : (A, A) -> Bool\n",
+            "}\n",
+            "pub impl Equal<Int> {\n",
+            "equal (left, right) = left == right\n",
+            "}\n",
+            "pub same : (A, A) -> Bool where Equal<A>\n",
+            "same pair = equal pair\n",
+        ),
+    )
+    .expect("the dependency fixture should be writable");
+
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the interface fixture graph should load");
+    let checked = checked_graph(&graph);
+    let library = checked
+        .iter()
+        .find(|module| module.module() != graph.entry())
+        .expect("the dependency should remain checked");
+    let implementation_method = library.implementation_facts()[0].methods[0].binder;
+    let same = library
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "same")
+        .expect("the constrained dependency global should remain checked")
+        .binder;
+    let main = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .expect("the entry module should remain checked")
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "main")
+        .expect("the entry main should remain checked")
+        .binder;
+    let linked = link_modules(checked, graph.entry()).expect("the checked graph should link");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the graph namespace should reserve");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("validated interface evidence should lower through ordinary Core");
+    assert_eq!(typed.ty, Type::Bool);
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the final Core builder should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let core = validate_modules(unchecked, &sources, &module_sources)
+        .expect("ordinary Core emitted from evidence lowering should validate");
+
+    let PureExprKind::Computation(PureComputation::RecursiveBind(library_group)) =
+        &core.node(core.root()).expect("Core root should exist").kind
+    else {
+        panic!("the dependency should lower to its ordinary recursive group");
+    };
+    let same_initializer = library_group
+        .members()
+        .iter()
+        .find(|member| member.binder().id() == same)
+        .expect("the constrained global should remain a dependency group member")
+        .initializer();
+    let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) = &core
+        .node(same_initializer)
+        .expect("same initializer should exist")
+        .kind
+    else {
+        panic!("a constrained global must type-abstract before evidence binders");
+    };
+    let PureExprKind::Value(PureValue::Function(evidence_binder)) = &core
+        .node(abstraction.body())
+        .expect("type abstraction body should exist")
+        .kind
+    else {
+        panic!("a constrained global must bind its flattened evidence after type abstraction");
+    };
+    assert!(matches!(
+        core.node(evidence_binder.body())
+            .expect("evidence binder body should exist")
+            .kind,
+        PureExprKind::Value(PureValue::Function(_))
+    ));
+    assert!(
+        library_group
+            .members()
+            .iter()
+            .any(|member| member.binder().id() == implementation_method)
+    );
+
+    let PureExprKind::Computation(PureComputation::RecursiveBind(entry_group)) = &core
+        .node(library_group.body())
+        .expect("the entry group should follow its dependency group")
+        .kind
+    else {
+        panic!("the entry should lower to its ordinary recursive group");
+    };
+    let main_initializer = entry_group
+        .members()
+        .iter()
+        .find(|member| member.binder().id() == main)
+        .expect("main should remain an entry group member")
+        .initializer();
+    let PureExprKind::Value(PureValue::Function(main_function)) = &core
+        .node(main_initializer)
+        .expect("main initializer should exist")
+        .kind
+    else {
+        panic!("main should lower to a source function");
+    };
+    let PureExprKind::Computation(PureComputation::Apply(source_application)) = &core
+        .node(main_function.body())
+        .expect("main body should exist")
+        .kind
+    else {
+        panic!("the source argument should be applied after evidence");
+    };
+    let PureExprKind::Computation(PureComputation::Apply(evidence_application)) = &core
+        .node(source_application.function())
+        .expect("source application function should exist")
+        .kind
+    else {
+        panic!("selected evidence should be applied before the source argument");
+    };
+    assert!(matches!(
+        core.node(evidence_application.function())
+            .expect("evidence application function should exist")
+            .kind,
+        PureExprKind::Computation(PureComputation::TypeApplication(_))
+    ));
+    let PureExprKind::Variable(evidence_method) = core
+        .node(evidence_application.argument())
+        .expect("evidence argument should exist")
+        .kind
+    else {
+        panic!("concrete evidence should lower through its hidden implementation-method binder");
+    };
+    assert_eq!(evidence_method.binder(), implementation_method);
 }

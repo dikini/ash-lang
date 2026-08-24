@@ -58,6 +58,9 @@ pub fn pipeline_failure(failure: &PipelineFailure) -> String {
             format!("{}\n{error}", failure.reason_code())
         }
         PipelineFailure::Entry(error) => error.diagnostic.render_plain(),
+        PipelineFailure::EvidenceValidation(error) => {
+            format!("{}\n{:?}", error.reason(), error.primary())
+        }
         PipelineFailure::Validation(error) => match error.node() {
             Some(node) => format!("{}\nnode: {}", error.reason(), node.value()),
             None => error.reason().to_string(),

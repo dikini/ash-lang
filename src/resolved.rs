@@ -136,12 +136,41 @@ pub enum ResolvedDeclarationIndex {
     Implementation(usize),
 }
 
+/// One resolver-authenticated source edge to a direct dependency.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectDependencyRoute {
+    target: ModuleId,
+    import_span: Span,
+}
+
+impl DirectDependencyRoute {
+    pub(crate) const fn new(target: ModuleId, import_span: Span) -> Self {
+        Self {
+            target,
+            import_span,
+        }
+    }
+
+    /// Returns the canonical identity reached by this direct edge.
+    #[must_use]
+    pub const fn target(self) -> ModuleId {
+        self.target
+    }
+
+    /// Returns the exact source import occurrence that introduced this edge.
+    #[must_use]
+    pub const fn import_span(self) -> Span {
+        self.import_span
+    }
+}
+
 /// One declarations-only module after name resolution.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ResolvedModule {
     module: ModuleId,
     registry: Arc<ResolvedRegistry>,
     imported: ImportedFacts,
+    direct_dependencies: Box<[DirectDependencyRoute]>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
     implementations: Box<[ResolvedImplementation]>,
@@ -154,6 +183,7 @@ pub(crate) struct ResolvedModuleParts {
     pub module: ModuleId,
     pub registry: Arc<ResolvedRegistry>,
     pub imported: ImportedFacts,
+    pub direct_dependencies: Vec<DirectDependencyRoute>,
     pub declaration_order: Vec<ResolvedDeclarationIndex>,
     pub interfaces: Vec<ResolvedInterfaceDeclaration>,
     pub implementations: Vec<ResolvedImplementation>,
@@ -168,6 +198,7 @@ impl ResolvedModule {
             module: parts.module,
             registry: parts.registry,
             imported: parts.imported,
+            direct_dependencies: parts.direct_dependencies.into_boxed_slice(),
             declaration_order: parts.declaration_order.into_boxed_slice(),
             interfaces: parts.interfaces.into_boxed_slice(),
             implementations: parts.implementations.into_boxed_slice(),
@@ -193,6 +224,12 @@ impl ResolvedModule {
     #[must_use]
     pub const fn imported_facts(&self) -> &ImportedFacts {
         &self.imported
+    }
+
+    /// Returns the authenticated direct dependency edges in source order.
+    #[must_use]
+    pub const fn direct_dependencies(&self) -> &[DirectDependencyRoute] {
+        &self.direct_dependencies
     }
 
     /// Returns the explicit cross-family declaration order.
@@ -430,6 +467,7 @@ impl AvailableImplementation {
 pub struct CheckedModule {
     module: ModuleId,
     registry: Arc<ResolvedRegistry>,
+    direct_dependencies: Box<[DirectDependencyRoute]>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
     implementations: Box<[CheckedImplementationBody]>,
@@ -465,6 +503,7 @@ impl CheckedModule {
         Self {
             module: resolved.module,
             registry: Arc::clone(&resolved.registry),
+            direct_dependencies: std::mem::take(&mut resolved.direct_dependencies),
             declaration_order: std::mem::take(&mut resolved.declaration_order),
             interfaces: std::mem::take(&mut resolved.interfaces),
             implementations: parts.implementations,
@@ -490,6 +529,12 @@ impl CheckedModule {
     #[must_use]
     pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
         &self.registry
+    }
+
+    /// Returns the resolver-authenticated direct dependency edges in source order.
+    #[must_use]
+    pub const fn direct_dependencies(&self) -> &[DirectDependencyRoute] {
+        &self.direct_dependencies
     }
 
     /// Returns local definitions in source order.
@@ -561,6 +606,7 @@ impl CheckedModule {
     pub(crate) fn into_group(mut self) -> ResolvedModuleGroup {
         ResolvedModuleGroup {
             module: self.module,
+            direct_dependencies: std::mem::take(&mut self.direct_dependencies),
             declaration_order: std::mem::take(&mut self.declaration_order),
             interfaces: std::mem::take(&mut self.interfaces),
             implementations: std::mem::take(&mut self.implementations),
@@ -589,6 +635,7 @@ impl Drop for CheckedModule {
 #[derive(Debug)]
 pub struct ResolvedModuleGroup {
     module: ModuleId,
+    direct_dependencies: Box<[DirectDependencyRoute]>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
     implementations: Box<[CheckedImplementationBody]>,
@@ -607,6 +654,12 @@ impl ResolvedModuleGroup {
     #[must_use]
     pub const fn module(&self) -> ModuleId {
         self.module
+    }
+
+    /// Returns the resolver-authenticated direct dependency edges in source order.
+    #[must_use]
+    pub const fn direct_dependencies(&self) -> &[DirectDependencyRoute] {
+        &self.direct_dependencies
     }
 
     /// Returns the cross-family declaration order within this module.
@@ -731,6 +784,122 @@ impl ResolvedModuleProgram {
     #[must_use]
     pub const fn result(&self) -> &ResolvedExpr {
         &self.result
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn replace_available_route_for_test(
+        &mut self,
+        module: ModuleId,
+        implementation: ImplId,
+        route: ImplementationRoute,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some(available) = group
+            .available_implementations
+            .iter_mut()
+            .find(|available| available.id == implementation)
+        else {
+            return false;
+        };
+        available.route = route;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_implementation_method_binder_for_test(
+        &mut self,
+        module: ModuleId,
+        binder: BinderId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some(method) = group
+            .implementation_facts
+            .first_mut()
+            .and_then(|implementation| implementation.methods.first_mut())
+        else {
+            return false;
+        };
+        method.binder = binder;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_interface_fact_id_for_test(
+        &mut self,
+        module: ModuleId,
+        id: InterfaceId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some(interface) = group.interface_facts.first_mut() else {
+            return false;
+        };
+        interface.id = id;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_interface_method_id_for_test(
+        &mut self,
+        module: ModuleId,
+        id: MethodId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some(method) = group
+            .interface_facts
+            .first_mut()
+            .and_then(|interface| interface.methods.first_mut())
+        else {
+            return false;
+        };
+        method.id = id;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_implementation_fact_id_for_test(
+        &mut self,
+        module: ModuleId,
+        id: ImplId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some(implementation) = group.implementation_facts.first_mut() else {
+            return false;
+        };
+        implementation.id = id;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reuse_first_implementation_method_binder_for_test(
+        &mut self,
+        module: ModuleId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some(methods) = group
+            .implementation_facts
+            .first_mut()
+            .map(|implementation| implementation.methods.as_mut())
+        else {
+            return false;
+        };
+        let [first, second, ..] = methods else {
+            return false;
+        };
+        second.binder = first.binder;
+        true
     }
 }
 
@@ -3509,6 +3678,7 @@ mod tests {
             span,
         });
         let imported_id = ImplId::new(ModuleId::new(20), 0);
+        let authenticated_dependency = DirectDependencyRoute::new(ModuleId::new(19), span);
         let available = vec![
             AvailableImplementation::direct_import(imported_id, ModuleId::new(20), span),
             AvailableImplementation::local(implementation_id),
@@ -3518,6 +3688,7 @@ mod tests {
             module,
             registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
             imported: ImportedFacts::default(),
+            direct_dependencies: vec![authenticated_dependency],
             declaration_order: vec![
                 ResolvedDeclarationIndex::Global(0),
                 ResolvedDeclarationIndex::Implementation(0),
@@ -3564,6 +3735,17 @@ mod tests {
             checked.implementations()[0].source() as *const ResolvedImplementation;
 
         let group = checked.into_group();
+        assert_eq!(group.direct_dependencies(), &[authenticated_dependency]);
+        assert_ne!(
+            group.direct_dependencies()[0].target(),
+            match group.available_implementations()[0].route() {
+                ImplementationRoute::DirectImport {
+                    direct_dependency, ..
+                } => direct_dependency,
+                ImplementationRoute::Local => panic!("the test route should be imported"),
+            },
+            "the authenticated direct-edge input must remain independent of a forged available route",
+        );
         let checked_definition_view: &[CheckedDefinition] = group.definitions();
         let checked_implementation_view: &[CheckedImplementationBody] = group.implementations();
 
@@ -3637,6 +3819,7 @@ mod tests {
                     module,
                     registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
                     imported: ImportedFacts::default(),
+                    direct_dependencies: Vec::new(),
                     declaration_order: vec![ResolvedDeclarationIndex::Global(0)],
                     interfaces: Vec::new(),
                     implementations: Vec::new(),

@@ -5,8 +5,9 @@ use std::{collections::HashMap, error::Error, fmt, io, path::PathBuf, sync::Arc}
 use crate::{
     core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate_modules},
     diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
-    elaborate::{Elaborator, TypeError, check_module_with_budget, link_modules},
+    elaborate::{Elaborator, TypeError, check_module_with_budget, link_modules_with_budget},
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
+    evidence_validation::{EvidenceValidationFailure, validate_interface_evidence_with_budget},
     interface::InterfaceConstraintBudget,
     lexer::LexReason,
     module::{LoadGraphError, ModuleId, ModuleRoots, load_module_graph},
@@ -145,6 +146,8 @@ pub enum PipelineFailure {
     Typing(TypeError),
     /// The entry module violated the local `main` contract.
     Entry(EntryFailure),
+    /// Linked interface evidence failed authentication before Core synthesis.
+    EvidenceValidation(EvidenceValidationFailure),
     /// Independent Core validation rejected compiler output.
     Validation(ValidationError),
     /// The explicit evaluator reported a runtime invariant failure.
@@ -167,6 +170,7 @@ impl PipelineFailure {
             Self::Typing(TypeError::Mismatch(_)) => "type.mismatch".into(),
             Self::Typing(TypeError::Internal(failure)) => failure.reason_code().into(),
             Self::Entry(failure) => failure.reason().to_string(),
+            Self::EvidenceValidation(failure) => failure.reason().to_string(),
             Self::Validation(error) => error.reason().to_string(),
             Self::Runtime(error) => error.reason_code().to_owned(),
         }
@@ -194,6 +198,7 @@ impl PipelineFailure {
             Self::SourceModel(_)
             | Self::Projection(_)
             | Self::Typing(TypeError::Internal(_))
+            | Self::EvidenceValidation(_)
             | Self::Validation(_)
             | Self::Runtime(_) => false,
         }
@@ -209,6 +214,7 @@ impl fmt::Display for PipelineFailure {
             Self::Resolution(_) => "name-resolution failure",
             Self::Typing(_) => "typed-elaboration failure",
             Self::Entry(_) => "entry-contract failure",
+            Self::EvidenceValidation(_) => "interface-evidence validation failure",
             Self::Validation(_) => "Core validation failure",
             Self::Runtime(_) => "runtime failure",
         })
@@ -426,16 +432,21 @@ where
     if !main.scheme.requirements.is_empty() {
         return Err(entry_failure(EntryReason::MainConstrained, main_span));
     }
-    let linked = link_modules(checked, graph.entry())
+    let linked = link_modules_with_budget(checked, graph.entry(), &mut constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
-    let registry = Arc::clone(linked.registry());
-    let mut elaborator = Elaborator::for_module_program(&linked)
+    let validated_interfaces =
+        validate_interface_evidence_with_budget(linked, &mut constraint_work)
+            .map_err(PipelineFailure::EvidenceValidation)
+            .map_err(FileFailure::Pipeline)?;
+    let linked = validated_interfaces.source();
+    let registry = Arc::clone(validated_interfaces.registry());
+    let mut elaborator = Elaborator::for_module_program(linked)
         .map_err(TypeError::Internal)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_module_program(linked)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
     let ty = typed.ty;

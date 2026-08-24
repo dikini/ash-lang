@@ -16,6 +16,7 @@ pub mod elaborate;
 pub mod eval;
 mod evidence;
 mod evidence_audit;
+pub mod evidence_validation;
 pub mod integer;
 pub mod interface;
 pub mod lexer;
