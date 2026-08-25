@@ -38,9 +38,11 @@ accepted transition through the current corrective product work are:
   anywhere inside its type;
 - `f783271`, which replaces the normative interface specification;
 - `364c736`, whose corrective product work narrows the former rule to require
-  `Function` as the method type's outermost constructor; and
+  `Function` as the method type's outermost constructor;
 - `18c04fd`, which rebaselines the affected resource evidence and makes rejected
-  resolved interface payloads safe to destroy iteratively.
+  resolved interface payloads safe to destroy iteratively; and
+- `089c54e`, which updates the normative specification and retained evidence for
+  the outer-`Function` correction.
 
 All intermediate implementation checkpoints are unsigned. The work remains on
 the unmerged `feature/modular-ash` branch. The review and verification section

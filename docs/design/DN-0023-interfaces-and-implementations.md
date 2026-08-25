@@ -23,15 +23,17 @@ one-parameter interfaces, explicit requirements on global signatures, private
 and public implementations, direct-dependency implementation availability,
 typed selection retained on checked occurrences, linked evidence validation,
 and lowering through ordinary pure Core functions and applications. The
-normative replacement is present at unsigned checkpoint `f783271`.
+original interface increment's normative checkpoint is unsigned commit
+`f783271`. The [current specification](../../spec/README.md) includes the
+outer-`Function` correction retained by unsigned commit `089c54e`. After Task
+6, the [interface implementation evidence](modular-ash/interfaces-evidence.md)
+will record the final reviewed product checkpoint.
 
-The [interface implementation evidence](modular-ash/interfaces-evidence.md)
-records the implemented corpus, diagnostic and resource boundaries, Core and
-evaluator locality, and the unspecialized generic evidence trace. Current
-semantic details belong to the [specification](../../spec/README.md), not this
-retained design account. Associated types, specialization, first-class
-dictionaries, and runtime implementation lookup remain outside the implemented
-increment.
+The evidence report records the implemented corpus, diagnostic and resource
+boundaries, Core and evaluator locality, and the unspecialized generic evidence
+trace. Current semantic details belong to the specification, not this retained
+design account. Associated types, specialization, first-class dictionaries,
+and runtime implementation lookup remain outside the implemented increment.
 
 ## Original boundary
 

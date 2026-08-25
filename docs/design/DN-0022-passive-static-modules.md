@@ -58,9 +58,10 @@ modules are the first source boundary that can exercise that separation.
 pressure but does not require loading, providers, registration, or unloading in
 this increment.
 
-Ash `interface` and `impl` denote a future Rust-trait- or Haskell-type-class-like
-relationship. They are not module signatures. This increment adds modules only;
-interfaces and implementations are the next candidate Modular Ash increment.
+At the passive-module increment, Ash `interface` and `impl` still denoted a
+future Rust-trait- or Haskell-type-class-like relationship. They were not module
+signatures. That increment added modules only; interfaces and implementations
+were the next candidate Modular Ash increment. They are now implemented.
 
 ## Constraints
 
@@ -325,9 +326,10 @@ This increment does not add:
   runtime module values; or
 - dead-code elimination or a core-versus-library migration.
 
-Interfaces are the next candidate Modular Ash increment. The resulting module
-and interface boundary can then support the core-versus-library audit without
-requiring the current source tree to keep the Mini-Ash implementation dialect.
+At the passive-module checkpoint, interfaces remained the next candidate
+Modular Ash increment. They are now implemented. The resulting module and
+interface boundary can support the core-versus-library audit without requiring
+the current source tree to keep the Mini-Ash implementation dialect.
 
 ## Resolved implementation choices
 

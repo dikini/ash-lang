@@ -40,7 +40,8 @@ enforces the outer `Function` requirement and retains its positive, negative,
 precedence, and end-to-end tests. Unsigned commit `18c04fd` rebaselines exact
 resource boundaries and adds iterative `ResolvedModule` cleanup for rejected
 interface types. Unsigned commit `089c54e` updates the specification and
-retained evidence. Branch-wide review, root verification, the corrective
+retained evidence. Unsigned commit `5210beb` corrects checkpoint scope and
+progress reporting. Branch-wide review, root verification, the corrective
 product checkpoint report, and closure of the temporary proposal, task, and
 execution plan remain.
 
