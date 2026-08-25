@@ -6,7 +6,7 @@ use std::{
 
 use ash::{
     core::{PureComputation, PureExprKind, transform::identity_traversal, validate_modules},
-    elaborate::{Elaborator, TypeError, check_module, link_modules},
+    elaborate::{ElaborationFailure, Elaborator, TypeError, check_module, link_modules},
     eval::evaluate,
     evidence_validation::validate_interface_evidence,
     module::{ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
@@ -174,6 +174,79 @@ fn checked_modules_keep_their_stable_graph_identity() {
     let checked = check_graph(&graph).expect("the module should check");
 
     assert_eq!(checked[0].module(), expected);
+}
+
+#[test]
+fn linker_rejects_an_omitted_direct_dependency_even_when_the_import_is_unused() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency as Dependency\n\npub main : Unit -> Int\nmain () = 42\n",
+        &[("dependency.ash", "pub value : Unit -> Int\nvalue () = 1\n")],
+    );
+    let checked = check_graph(&graph).expect("the complete graph should check");
+    let entry = checked
+        .into_iter()
+        .find(|module| module.module() == graph.entry())
+        .expect("the entry module should be checked");
+
+    let error = link_modules(vec![entry], graph.entry())
+        .expect_err("linking should require every retained direct dependency");
+
+    assert_eq!(error, TypeError::Internal(ElaborationFailure::InvalidState));
+}
+
+#[test]
+fn linker_rejects_a_direct_dependency_after_its_importer() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency as Dependency\n\npub main : Unit -> Int\nmain () = 42\n",
+        &[("dependency.ash", "pub value : Unit -> Int\nvalue () = 1\n")],
+    );
+    let mut checked = check_graph(&graph).expect("the complete graph should check");
+    checked.reverse();
+
+    let error = link_modules(checked, graph.entry())
+        .expect_err("linking should require dependencies before their importers");
+
+    assert_eq!(error, TypeError::Internal(ElaborationFailure::InvalidState));
+}
+
+#[test]
+fn linker_rejects_an_unrelated_checked_module_from_another_graph() {
+    let entry_tree = TempTree::create();
+    let entry_graph = load(&entry_tree, "pub main : Unit -> Int\nmain () = 42\n", &[]);
+    let unrelated_tree = TempTree::create();
+    let unrelated_graph = load(
+        &unrelated_tree,
+        "pub value : Unit -> Int\nvalue () = 1\n",
+        &[],
+    );
+    let mut checked = check_graph(&unrelated_graph).expect("the unrelated graph should check");
+    checked.extend(check_graph(&entry_graph).expect("the entry graph should check"));
+
+    let error = link_modules(checked, entry_graph.entry())
+        .expect_err("linking should reject modules outside the entry dependency closure");
+
+    assert_eq!(error, TypeError::Internal(ElaborationFailure::InvalidState));
+}
+
+#[test]
+fn linker_rejects_a_surplus_module_that_depends_on_the_selected_entry() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency as Dependency\n\npub value : Unit -> Int\nvalue () = Dependency.main(())\n",
+        &[("dependency.ash", "pub main : Unit -> Int\nmain () = 42\n")],
+    );
+    let checked = check_graph(&graph).expect("the complete graph should check");
+    let selected_entry = checked_module(&graph, &checked, "dependency.ash").module();
+
+    let error = link_modules(checked, selected_entry)
+        .expect_err("linking should retain only the selected entry's dependency closure");
+
+    assert_eq!(error, TypeError::Internal(ElaborationFailure::InvalidState));
 }
 
 #[test]

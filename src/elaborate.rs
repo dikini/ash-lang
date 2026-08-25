@@ -6961,8 +6961,10 @@ fn checked_interface_facts(
 ///
 /// # Errors
 ///
-/// Returns an internal failure for duplicate module identities, a missing or
-/// malformed checked entry `main`, or conflicting full-registry identities.
+/// Returns an internal failure for duplicate module identities, modules outside
+/// the selected entry's complete dependency closure, misordered dependencies,
+/// a missing or malformed checked entry `main`, or conflicting full-registry
+/// identities.
 pub fn link_modules(
     modules: Vec<CheckedModule>,
     entry: crate::module::ModuleId,
@@ -7011,6 +7013,51 @@ pub(crate) fn link_modules_with_budget(
     constraint_work
         .charge(retained.ok_or_else(constraint_resource)?)
         .map_err(|()| constraint_resource())?;
+    let mut module_positions = HashMap::new();
+    module_positions
+        .try_reserve(modules.len())
+        .map_err(|_| constraint_resource())?;
+    for (index, module) in modules.iter().enumerate() {
+        if module_positions.insert(module.module(), index).is_some() {
+            return Err(invalid_state());
+        }
+    }
+    for (index, module) in modules.iter().enumerate() {
+        if module.direct_dependencies().iter().any(|dependency| {
+            module_positions
+                .get(&dependency.target())
+                .is_none_or(|dependency_index| *dependency_index >= index)
+        }) {
+            return Err(invalid_state());
+        }
+    }
+    let entry_index = *module_positions.get(&entry).ok_or_else(invalid_state)?;
+    let mut reachable = Vec::new();
+    reachable
+        .try_reserve(modules.len())
+        .map_err(|_| constraint_resource())?;
+    reachable.resize(modules.len(), false);
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(modules.len())
+        .map_err(|_| constraint_resource())?;
+    reachable[entry_index] = true;
+    pending.push(entry_index);
+    while let Some(index) = pending.pop() {
+        let module = modules.get(index).ok_or_else(invalid_state)?;
+        for dependency in module.direct_dependencies() {
+            let dependency_index = *module_positions
+                .get(&dependency.target())
+                .ok_or_else(invalid_state)?;
+            if !reachable[dependency_index] {
+                reachable[dependency_index] = true;
+                pending.push(dependency_index);
+            }
+        }
+    }
+    if reachable.iter().any(|reached| !reached) {
+        return Err(invalid_state());
+    }
     let span = main.origin.primary_span();
     let result = ResolvedExpr {
         kind: ResolvedExprKind::Apply(crate::resolved::ResolvedApplicationExpr {
