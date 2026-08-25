@@ -77,8 +77,10 @@ the closure commit, and the tag remain.
   and ownership authentication. The passive-module report's earlier no-reader
   observation was historical, so those fields remain.
 - An explicit post-synthesis drop closes the long checked-program lifetime
-  without introducing a separate consuming synthesis payload. The observation
-  heap remains necessary for rendering location-backed results.
+  without introducing a separate consuming synthesis payload. A returned
+  structural value owns its heap through `ObservedValue`; the separate
+  observation heap remains necessary when a returned closure captures an
+  environment containing raw heap locations.
 
 ## Deviations
 

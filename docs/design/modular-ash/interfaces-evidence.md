@@ -386,7 +386,9 @@ additional boundary cases beyond the ones named here.
 - [`tests/architecture.rs`](../../../tests/architecture.rs):
   `tests/architecture.rs::core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories`
   and
-  `tests/architecture.rs::authenticated_interface_state_ends_at_the_core_synthesis_boundary`.
+  `tests/architecture.rs::authenticated_interface_state_ends_at_the_core_synthesis_boundary`;
+  `tests/architecture.rs::interface_state_boundary_guard_ignores_prose_and_requires_code_sequences`
+  retains the source-guard precision.
 - [`src/driver.rs`](../../../src/driver.rs):
   `src/driver.rs::tests::injected_evidence_failure_stops_before_core_synthesis_consumers`.
 
@@ -543,7 +545,9 @@ borrows that capability. After synthesis finish succeeds, the driver explicitly
 drops the validated interface program before independent Core validation. The
 authenticated relationships have already become ordinary Core structure, so
 this boundary shortens the lifetime of checked bodies, evidence, routes, and
-validator metadata without changing Core or evaluation.
+remaining checked interface metadata without changing Core or evaluation. The
+linked validator's registry and indexes already ended locally after successful
+authentication.
 
 ## Locality and maintenance
 

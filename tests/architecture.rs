@@ -129,32 +129,97 @@ fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories()
 
 #[test]
 fn authenticated_interface_state_ends_at_the_core_synthesis_boundary() {
-    let validated_program = EVIDENCE_VALIDATION_SOURCE
-        .split_once("pub struct ValidatedInterfaceProgram {")
-        .and_then(|(_, remainder)| remainder.split_once("impl ValidatedInterfaceProgram"))
-        .map(|(definition, _)| definition)
-        .expect("the validated interface capability should retain a visible definition");
-    let retains_linked_registry = validated_program.contains("LinkedInterfaceRegistry");
-
-    let driver_pipeline = DRIVER_SOURCE
-        .split_once("fn run_path_with_consumers_and_constraint_budget")
-        .and_then(|(_, remainder)| remainder.split_once("fn entry_failure"))
-        .map(|(pipeline, _)| pipeline)
-        .expect("the driver should retain one ordered modular pipeline");
-    let synthesis_finish = driver_pipeline
-        .find(".finish(typed.node)")
-        .expect("the driver should finish Core synthesis");
-    let core_validation = driver_pipeline
-        .find("let validated = validator(")
-        .expect("the driver should independently validate synthesized Core");
-    let releases_before_core_validation = driver_pipeline
-        .find("drop(validated_interfaces);")
-        .is_some_and(|release| release > synthesis_finish && release < core_validation);
+    let retains_linked_registry =
+        validated_program_retains_linked_registry(EVIDENCE_VALIDATION_SOURCE);
+    let releases_before_core_validation = interface_state_release_is_ordered(DRIVER_SOURCE);
 
     assert!(
         !retains_linked_registry && releases_before_core_validation,
         "authenticated interface state must not retain the validator registry and the driver must release the validated interface program after synthesis finish but before Core validation; retains registry: {retains_linked_registry}, releases at boundary: {releases_before_core_validation}"
     );
+}
+
+fn validated_program_retains_linked_registry(source: &str) -> bool {
+    let identifiers = rust_code_identifiers(source);
+    let validated_program = identifiers_between(
+        &identifiers,
+        &["pub", "struct", "ValidatedInterfaceProgram"],
+        &["impl", "ValidatedInterfaceProgram"],
+    )
+    .expect("the validated interface capability should retain a visible definition");
+    validated_program.contains(&"LinkedInterfaceRegistry")
+}
+
+fn interface_state_release_is_ordered(source: &str) -> bool {
+    let identifiers = rust_code_identifiers(source);
+    let driver_pipeline = identifiers_between(
+        &identifiers,
+        &["fn", "run_path_with_consumers_and_constraint_budget"],
+        &["fn", "entry_failure"],
+    )
+    .expect("the driver should retain one ordered modular pipeline");
+    let synthesis_finish =
+        identifier_sequence_position(driver_pipeline, &["elaborator", "finish", "typed", "node"])
+            .expect("the driver should finish Core synthesis");
+    let core_validation = identifier_sequence_position(
+        driver_pipeline,
+        &[
+            "let",
+            "validated",
+            "validator",
+            "unchecked",
+            "sources",
+            "module_sources",
+        ],
+    )
+    .expect("the driver should independently validate synthesized Core");
+    identifier_sequence_position(driver_pipeline, &["drop", "validated_interfaces"])
+        .is_some_and(|release| release > synthesis_finish && release < core_validation)
+}
+
+#[test]
+fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
+    let registry_in_prose = r#"
+        pub struct ValidatedInterfaceProgram {
+            /// LinkedInterfaceRegistry is prose.
+            #[doc = "LinkedInterfaceRegistry is also prose"]
+            source: ResolvedModuleProgram,
+        }
+        impl ValidatedInterfaceProgram {}
+    "#;
+    assert!(!validated_program_retains_linked_registry(
+        registry_in_prose
+    ));
+
+    let registry_in_code = r#"
+        pub struct ValidatedInterfaceProgram {
+            source: ResolvedModuleProgram,
+            linked: LinkedInterfaceRegistry,
+        }
+        impl ValidatedInterfaceProgram {}
+    "#;
+    assert!(validated_program_retains_linked_registry(registry_in_code));
+
+    let commented_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            // drop(validated_interfaces);
+            let note = "drop(validated_interfaces);";
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    assert!(!interface_state_release_is_ordered(commented_drop));
+
+    let actual_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    assert!(interface_state_release_is_ordered(actual_drop));
 }
 
 fn is_forbidden_interface_identifier(identifier: &str) -> bool {
@@ -259,6 +324,25 @@ fn rust_code_identifiers(source: &str) -> Vec<&str> {
     }
 
     identifiers
+}
+
+fn identifier_sequence_position(identifiers: &[&str], sequence: &[&str]) -> Option<usize> {
+    if sequence.is_empty() {
+        return None;
+    }
+    identifiers
+        .windows(sequence.len())
+        .position(|window| window == sequence)
+}
+
+fn identifiers_between<'a>(
+    identifiers: &'a [&'a str],
+    start: &[&str],
+    end: &[&str],
+) -> Option<&'a [&'a str]> {
+    let body_start = identifier_sequence_position(identifiers, start)? + start.len();
+    let body_end = body_start + identifier_sequence_position(&identifiers[body_start..], end)?;
+    Some(&identifiers[body_start..body_end])
 }
 
 fn rust_literal_end(source: &[u8], cursor: usize) -> Option<usize> {

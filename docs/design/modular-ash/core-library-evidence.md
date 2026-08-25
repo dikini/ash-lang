@@ -235,15 +235,23 @@ source program, but does not retain the registry used by
 `validate_occurrences`. Core synthesis borrows the capability. After synthesis
 finish succeeds, the public driver explicitly drops it before independent Core
 validation, releasing checked bodies, structural evidence, implementation
-routes, and validator metadata. The resolved registry used to display the
-closed result type and the computed type display remain available without
-keeping the validated interface program alive. The focused architecture guard
-enforces both lifetime boundaries.
+routes, and remaining checked interface metadata. The linked validator's
+registry and indexes are already local to validation and have ended before this
+drop. The resolved registry used to display the closed result type and the
+computed type display remain available without keeping the validated interface
+program alive. The focused architecture guard enforces both lifetime
+boundaries.
 
 The manual structural witness intentionally keeps its independently validated
-Core for inspection. The public driver retains the evaluation heap in
-`Observation`; location-backed and cyclic results require that heap for stable
-structural rendering. The heap is therefore not an unused cleanup candidate.
+Core for inspection. A returned `Value::Data(ObservedValue)` already owns an
+`Arc` to the heap needed to render its structural or cyclic value. The public
+driver's [`Observation`](../../../src/driver.rs) separately retains the
+evaluation heap because a returned closure can capture an environment that
+contains raw heap locations. The direct
+`driver::tests::returned_closure_observation_retains_its_captured_structural_heap`
+test returns such a closure and checks that its observation retains the
+captured tuple's heap cell. `Observation._heap` is therefore not an unused
+cleanup candidate.
 
 ## Simplification decisions and exclusions
 
@@ -266,8 +274,9 @@ or a shipped library.
 The stale-state review also rejects three proposed cleanups.
 `ResolvedModuleProgram.entry` and each `ResolvedModuleGroup` module identity now
 have interface-era readers for entry-closure and group-ownership
-authentication. `Observation` must retain its heap for location-backed result
-rendering. A lean consuming synthesis payload remains deferred: the explicit
+authentication. `Observation` must separately retain the heap for raw locations
+captured by returned closures; returned structural `Value::Data` already owns
+its own heap. A lean consuming synthesis payload remains deferred: the explicit
 post-finish drop closes the proven long lifetime without adding another
 representation or API.
 
@@ -295,12 +304,12 @@ git diff --check
 Before the production cleanup, the exact architecture test failed with
 `retains registry: true, releases at boundary: false`. After the cleanup, the
 same command passed one test. Fresh post-change runs passed 4 paired audit
-tests; 52 architecture and interface tests; 19 interface-corpus and module-
+tests; 53 architecture and interface tests; 19 interface-corpus and module-
 elaboration tests; and all 298 library tests. Formatting, denied-warning
 all-target Clippy, changed-document Markdown lint, and whitespace checks
-reported no findings. The two documented maintenance searches returned the
-exact 15-file direct path, four equality-specific Core joins, and stable
-eight-file interface path recorded above.
+reported no findings. The three documented maintenance command/result sets
+returned the exact 15-file direct path, four equality-specific Core joins, and
+stable eight-file interface path recorded above.
 
 Manual review also checks every relative link in this report and confirms that
 semantic claims remain grounded in `spec/`.
