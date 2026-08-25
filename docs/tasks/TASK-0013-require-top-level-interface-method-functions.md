@@ -35,8 +35,14 @@ implemented Modular Ash.
 
 ## Progress
 
-The review findings and approved semantic direction are recorded. Implementation
-has not begun.
+Unsigned merge `78c6da9` reconciles current `main`. Unsigned commit `364c736`
+enforces the outer `Function` requirement and retains its positive, negative,
+precedence, and end-to-end tests. Unsigned commit `18c04fd` rebaselines exact
+resource boundaries and adds iterative `ResolvedModule` cleanup for rejected
+interface types. Unsigned commit `089c54e` updates the specification and
+retained evidence. Branch-wide review, root verification, the corrective
+product checkpoint report, and closure of the temporary proposal, task, and
+execution plan remain.
 
 ## Verification
 

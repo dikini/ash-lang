@@ -43,8 +43,10 @@ accepted transition through the current corrective product work are:
   resolved interface payloads safe to destroy iteratively.
 
 All intermediate implementation checkpoints are unsigned. The work remains on
-the unmerged `feature/modular-ash` branch. The final product review and
-verification boundary is witnessed below.
+the unmerged `feature/modular-ash` branch. The review and verification section
+below retains the original increment's product checkpoint; it does not cover
+the corrective work above. Task 6 will perform the corrective branch-wide
+review and root verification.
 
 ## Causal semantic model
 
@@ -201,9 +203,9 @@ rules, not a new evaluation rule or a specialization claim.
 
 ## Required evidence
 
-The accepted transition's required evidence is retained by the exact targets and
-named witnesses below. A target can contain additional boundary cases beyond
-the ones named here.
+The required evidence for the accepted transition and corrective work is
+retained by the exact targets and named witnesses below. A target can contain
+additional boundary cases beyond the ones named here.
 
 ### Lexing, parsing, projection, recovery, and malformed forms
 
