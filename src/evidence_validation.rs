@@ -1463,6 +1463,7 @@ fn validate_selection_in_scope(
         selection.root(),
         expected_interface,
         selection.argument(),
+        None,
         scope,
         &mut visited,
         &mut pending,
@@ -1478,6 +1479,7 @@ fn validate_selection_in_scope(
             goal.node,
             goal.interface,
             goal.argument(),
+            goal.mandated_requirement,
             scope,
             &mut visited,
             &mut pending,
@@ -1501,6 +1503,7 @@ fn validate_evidence_node(
     node: EvidenceNodeId,
     expected_interface: InterfaceId,
     expected_argument: &Type,
+    mandated_requirement: Option<RequirementId>,
     scope: EvidenceScope<'_>,
     visited: &mut HashSet<EvidenceNodeId>,
     pending: &mut PendingGoals,
@@ -1533,6 +1536,22 @@ fn validate_evidence_node(
             {
                 return Err(invalid_root(span));
             }
+            if let Some(mandated) = mandated_requirement {
+                if requirement != mandated {
+                    return Err(invalid_root(span));
+                }
+            } else if first_identity_equal_abstract_requirement(
+                program,
+                registry,
+                scope,
+                expected_interface,
+                expected_argument,
+                budget,
+                span,
+            )? != Some(requirement)
+            {
+                return Err(invalid_root(span));
+            }
         }
         EvidenceNode::Implementation {
             implementation,
@@ -1540,6 +1559,46 @@ fn validate_evidence_node(
             prerequisites,
             methods,
         } => {
+            if mandated_requirement.is_some() {
+                return Err(invalid_root(span));
+            }
+            if first_identity_equal_abstract_requirement(
+                program,
+                registry,
+                scope,
+                expected_interface,
+                expected_argument,
+                budget,
+                span,
+            )?
+            .is_some()
+            {
+                return Err(invalid_root(span));
+            }
+            let current = match scope.owner {
+                Some(RequirementOwner::Impl(current)) => {
+                    charge(budget, 1, span)?;
+                    Some(
+                        registry
+                            .implementation(program, current)
+                            .ok_or_else(|| unknown(span))?,
+                    )
+                }
+                Some(RequirementOwner::Global(_)) | None => None,
+            };
+            let exact_current = match current {
+                Some(current) if current.interface == expected_interface => {
+                    same_type_charged(&current.argument, expected_argument, budget, span)?
+                }
+                Some(_) | None => false,
+            };
+            if exact_current {
+                if current.is_none_or(|current| current.id != implementation) {
+                    return Err(invalid_root(span));
+                }
+            } else if current.is_some_and(|current| current.id == implementation) {
+                return Err(invalid_root(span));
+            }
             let fact = registry
                 .implementation(program, implementation)
                 .ok_or_else(|| unknown(span))?;
@@ -1567,17 +1626,33 @@ fn validate_evidence_node(
                     .iter()
                     .any(|method| registry.implementation_method(program, *method).is_none())
                 || prerequisites.len() != fact.prerequisites.len()
-                || !implementation_head_matches(
-                    fact,
-                    substitution,
-                    expected_argument,
-                    program.registry(),
-                    scope.variables,
-                    budget,
-                    span,
-                )?
             {
                 return Err(invalid_root(span));
+            }
+            if exact_current {
+                if !current_identity_substitution_matches(
+                    fact,
+                    substitution,
+                    scope.variables,
+                    program.registry(),
+                    budget,
+                    span,
+                )? {
+                    return Err(invalid_root(span));
+                }
+            } else if !implementation_head_matches(
+                fact,
+                substitution,
+                expected_argument,
+                program.registry(),
+                scope.variables,
+                budget,
+                span,
+            )? {
+                return Err(invalid_root(span));
+            }
+            if exact_current {
+                charge(budget, prerequisites.len(), span)?;
             }
             reserve_pending_goals(pending, prerequisites.len(), budget, span)?;
             for (prerequisite, requirement) in
@@ -1588,10 +1663,16 @@ fn validate_evidence_node(
                 }
                 let argument =
                     substitute_evidence_type(&requirement.argument, substitution, budget, span)?;
+                let mandated_requirement = if exact_current {
+                    Some(requirement.id)
+                } else {
+                    None
+                };
                 pending.0.push(PendingGoal::new(
                     prerequisite,
                     requirement.interface,
                     argument,
+                    mandated_requirement,
                 ));
             }
         }
@@ -1599,18 +1680,92 @@ fn validate_evidence_node(
     Ok(())
 }
 
+fn first_identity_equal_abstract_requirement(
+    program: &ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
+    scope: EvidenceScope<'_>,
+    expected_interface: InterfaceId,
+    expected_argument: &Type,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<Option<RequirementId>, EvidenceValidationFailure> {
+    let Some(owner) = scope.owner else {
+        return Ok(None);
+    };
+    charge(budget, 1, span)?;
+    let requirements = match owner {
+        RequirementOwner::Global(binder) => registry
+            .scheme(program, binder)
+            .map(|scheme| scheme.requirements.as_ref()),
+        RequirementOwner::Impl(implementation) => registry
+            .implementation(program, implementation)
+            .map(|fact| fact.prerequisites.as_ref()),
+    }
+    .ok_or_else(|| unknown(span))?;
+
+    for index in 0..requirements.len() {
+        charge(budget, 1, span)?;
+        let requirement = requirements.get(index).ok_or_else(|| unknown(span))?;
+        if requirement.interface == expected_interface
+            && same_type_charged(&requirement.argument, expected_argument, budget, span)?
+        {
+            return Ok(Some(requirement.id));
+        }
+    }
+    Ok(None)
+}
+
+fn current_identity_substitution_matches(
+    fact: &CheckedImplementationFact,
+    substitution: &[EvidenceSubstitution],
+    scope_variables: &[TypeVariableId],
+    registry: &ResolvedRegistry,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<bool, EvidenceValidationFailure> {
+    if fact.head_parameters.len() != scope_variables.len()
+        || fact.head_parameters.len() != substitution.len()
+    {
+        return Ok(false);
+    }
+    validate_type(&fact.argument, registry, scope_variables, budget, span)?;
+    for ((parameter, scope_variable), binding) in fact
+        .head_parameters
+        .iter()
+        .zip(scope_variables)
+        .zip(substitution)
+    {
+        charge(budget, 1, span)?;
+        let identity_argument = Type::Variable(parameter.id);
+        if *scope_variable != parameter.id
+            || binding.parameter() != parameter.id
+            || !same_type_charged(binding.argument(), &identity_argument, budget, span)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 struct PendingGoal {
     node: EvidenceNodeId,
     interface: InterfaceId,
     argument: Option<Type>,
+    mandated_requirement: Option<RequirementId>,
 }
 
 impl PendingGoal {
-    const fn new(node: EvidenceNodeId, interface: InterfaceId, argument: Type) -> Self {
+    const fn new(
+        node: EvidenceNodeId,
+        interface: InterfaceId,
+        argument: Type,
+        mandated_requirement: Option<RequirementId>,
+    ) -> Self {
         Self {
             node,
             interface,
             argument: Some(argument),
+            mandated_requirement,
         }
     }
 
@@ -2373,6 +2528,115 @@ mod tests {
         ))
     }
 
+    fn abstract_priority_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "type Wrap<A> = Wrap(A)\n",
+            "type Nest<A> = Nest(A)\n\n",
+            "interface Keep<A> {\nkeep : A -> A\n}\n\n",
+            "impl Keep<Wrap<A>> {\nkeep value = value\n}\n\n",
+            "impl Keep<Nest<Wrap<A>>> where Keep<Wrap<A>> {\n",
+            "keep value = keep(value)\n",
+            "}\n\n",
+            "shadowed : Wrap<A> -> Wrap<A> where Keep<Wrap<A>>\n",
+            "shadowed value = keep(value)\n\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ))
+    }
+
+    fn current_authenticity_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "type Wrap<A> = Wrap(A)\n",
+            "type Nest<A> = Nest(A)\n",
+            "type Shell<A> = Shell(A)\n\n",
+            "interface Keep<A> {\nkeep : A -> A\n}\n\n",
+            "impl Keep<Wrap<A>> {\nkeep value = value\n}\n\n",
+            "impl Keep<Nest<Wrap<A>>> where Keep<Wrap<A>> {\n",
+            "keep value = keep(value)\n",
+            "}\n\n",
+            "impl Keep<Shell<A>> where Keep<A> {\n",
+            "keep (Shell(value)) = Shell(keep(value))\n",
+            "}\n\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ))
+    }
+
+    fn repeated_abstract_priority_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "type Wrap<A> = Wrap(A)\n\n",
+            "interface Keep<A> {\nkeep : A -> A\n}\n\n",
+            "impl Keep<Wrap<A>> where Keep<A>, Keep<A> {\n",
+            "keep (Wrap(value)) = Wrap(keep(value))\n",
+            "}\n\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ))
+    }
+
+    fn repeated_exact_current_prerequisites_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "type Wrap<A> = Wrap(A)\n\n",
+            "interface Keep<A> {\nkeep : A -> A\n}\n\n",
+            "impl Keep<Wrap<A>> where Keep<A>, Keep<A> {\n",
+            "keep value = keep(value)\n",
+            "}\n\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ))
+    }
+
+    fn instantiate_single_parameter_head(
+        fact: &CheckedImplementationFact,
+        argument: &Type,
+    ) -> Type {
+        let [parameter] = fact.head_parameters.as_ref() else {
+            panic!("the fixture implementation should retain one head parameter");
+        };
+        substitute_evidence_type(
+            &fact.argument,
+            &single_substitution(parameter.id, argument),
+            &mut InterfaceConstraintBudget::default(),
+            fact.span,
+        )
+        .expect("the fixture head should instantiate within the default budget")
+    }
+
+    fn forged_fresh_current_node(
+        builder: &mut EvidenceSelectionBuilder,
+        leaf: &CheckedImplementationFact,
+        current: &CheckedImplementationFact,
+    ) -> EvidenceNodeId {
+        let [leaf_parameter] = leaf.head_parameters.as_ref() else {
+            panic!("the leaf implementation should retain one head parameter");
+        };
+        let [current_parameter] = current.head_parameters.as_ref() else {
+            panic!("the current implementation should retain one head parameter");
+        };
+        let prerequisite = builder
+            .push_implementation(
+                leaf.id,
+                single_substitution(leaf_parameter.id, &Type::Int),
+                &[],
+                &leaf
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the concrete prerequisite node should fit");
+        builder
+            .push_implementation(
+                current.id,
+                single_substitution(current_parameter.id, &Type::Int),
+                &[prerequisite],
+                &current
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the forged freshly instantiated current node should fit")
+    }
+
     fn two_parameter_program() -> ResolvedModuleProgram {
         entry_program(concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
@@ -2725,6 +2989,532 @@ mod tests {
             failure.reason(),
             EvidenceValidationReason::InvalidEvidenceRoot
         );
+    }
+
+    #[test]
+    fn rejects_later_identity_equal_abstract_requirement_selected_out_of_source_order() {
+        let program = repeated_abstract_priority_program();
+        let group = &program.groups()[0];
+        let implementation = &group.implementation_facts()[0];
+        let [first, later] = implementation.prerequisites.as_ref() else {
+            panic!("the accepted implementation should retain both repeated prerequisites");
+        };
+        let [body] = group.implementations() else {
+            panic!("the accepted implementation body should remain linked");
+        };
+        let [method] = body.method_groups() else {
+            panic!("the accepted implementation should retain its method group");
+        };
+        let [equation] = method.equations.as_ref() else {
+            panic!("the accepted implementation method should retain one equation");
+        };
+        let ResolvedExprKind::Apply(constructor_application) = &equation.body.kind else {
+            panic!("the implementation method should rebuild Wrap");
+        };
+        let ResolvedExprKind::Apply(method_application) = &constructor_application.argument.kind
+        else {
+            panic!("the Wrap argument should call the interface method");
+        };
+        let ResolvedExprKind::Occurrence(occurrence) = &method_application.function.kind else {
+            panic!("the nested call should retain its resolved method occurrence");
+        };
+        let [slot] = occurrence.evidence.as_ref() else {
+            panic!("the constrained method occurrence should retain one evidence slot");
+        };
+        let selected = slot
+            .selection()
+            .expect("checking should fill the constrained method occurrence");
+        assert!(matches!(
+            selected.node(selected.root()),
+            Some(EvidenceNode::Abstract { requirement, .. }) if requirement == first.id
+        ));
+
+        let interface = &group.interface_facts()[0];
+        let forged = abstract_selection(later.id, interface, later.argument.clone());
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the valid linked registry should authenticate");
+        let scope_variables = implementation
+            .head_parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<Vec<_>>();
+        let scope = EvidenceScope {
+            owner: Some(RequirementOwner::Impl(implementation.id)),
+            variables: &scope_variables,
+        };
+
+        assert_eq!(
+            validate_selection_in_scope(
+                &program,
+                &registry,
+                group,
+                &forged,
+                later.interface,
+                scope,
+                &mut InterfaceConstraintBudget::default(),
+                later.span,
+            )
+            .expect_err("only the first identity-equal abstract requirement is authentic")
+            .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
+    fn accepts_exact_current_implementation_when_no_abstract_requirement_matches_its_head() {
+        validate_interface_evidence(abstract_priority_program())
+            .expect("exact current evidence should retain its abstract prerequisite");
+    }
+
+    #[test]
+    fn accepts_exact_current_implementation_with_repeated_identity_equal_prerequisites() {
+        validate_interface_evidence(repeated_exact_current_prerequisites_program())
+            .expect("exact current evidence should retain every repeated prerequisite by identity");
+    }
+
+    #[test]
+    fn rejects_freshly_instantiated_current_implementation_at_the_selection_root() {
+        let program = current_authenticity_program();
+        let group = &program.groups()[0];
+        let leaf = &group.implementation_facts()[0];
+        let current = &group.implementation_facts()[1];
+        let mut builder = EvidenceSelectionBuilder::new();
+        let root = forged_fresh_current_node(&mut builder, leaf, current);
+        let forged = builder
+            .finish(
+                root,
+                current.interface,
+                instantiate_single_parameter_head(current, &Type::Int),
+            )
+            .expect("the forged direct selection should remain structurally valid");
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the valid linked registry should authenticate");
+        let scope = EvidenceScope {
+            owner: Some(RequirementOwner::Impl(current.id)),
+            variables: &current
+                .head_parameters
+                .iter()
+                .map(|parameter| parameter.id)
+                .collect::<Vec<_>>(),
+        };
+
+        assert_eq!(
+            validate_selection_in_scope(
+                &program,
+                &registry,
+                group,
+                &forged,
+                current.interface,
+                scope,
+                &mut InterfaceConstraintBudget::default(),
+                current.span,
+            )
+            .expect_err("current evidence cannot freshly instantiate its rigid head")
+            .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
+    fn rejects_freshly_instantiated_current_implementation_below_another_node() {
+        let program = current_authenticity_program();
+        let group = &program.groups()[0];
+        let leaf = &group.implementation_facts()[0];
+        let current = &group.implementation_facts()[1];
+        let enclosing = &group.implementation_facts()[2];
+        let non_rigid_current_goal = instantiate_single_parameter_head(current, &Type::Int);
+        let [enclosing_parameter] = enclosing.head_parameters.as_ref() else {
+            panic!("the enclosing implementation should retain one head parameter");
+        };
+        let mut builder = EvidenceSelectionBuilder::new();
+        let forged_current = forged_fresh_current_node(&mut builder, leaf, current);
+        let root = builder
+            .push_implementation(
+                enclosing.id,
+                single_substitution(enclosing_parameter.id, &non_rigid_current_goal),
+                &[forged_current],
+                &enclosing
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the enclosing implementation node should fit");
+        let forged = builder
+            .finish(
+                root,
+                enclosing.interface,
+                instantiate_single_parameter_head(enclosing, &non_rigid_current_goal),
+            )
+            .expect("the forged nested selection should remain structurally valid");
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the valid linked registry should authenticate");
+        let scope_variables = current
+            .head_parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<Vec<_>>();
+        let scope = EvidenceScope {
+            owner: Some(RequirementOwner::Impl(current.id)),
+            variables: &scope_variables,
+        };
+
+        assert_eq!(
+            validate_selection_in_scope(
+                &program,
+                &registry,
+                group,
+                &forged,
+                enclosing.interface,
+                scope,
+                &mut InterfaceConstraintBudget::default(),
+                enclosing.span,
+            )
+            .expect_err("nested current evidence cannot freshly instantiate its rigid head")
+            .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
+    fn rejects_concrete_evidence_when_lexical_abstract_requirement_matches_a_goal() {
+        let program = abstract_priority_program();
+        let group = &program.groups()[0];
+        let wrapped = &group.implementation_facts()[0];
+        let outer = &group.implementation_facts()[1];
+        let shadowed = &group.schemes()[0];
+        let [requirement] = shadowed.scheme.requirements.as_ref() else {
+            panic!("the constrained global should retain one abstract requirement");
+        };
+        let [scope_parameter] = shadowed.scheme.type_parameters.as_ref() else {
+            panic!("the constrained global should retain one type parameter");
+        };
+        let scope = EvidenceScope {
+            owner: Some(RequirementOwner::Global(shadowed.binder)),
+            variables: &shadowed.scheme.type_parameters,
+        };
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the valid linked registry should authenticate");
+
+        let mut direct_builder = EvidenceSelectionBuilder::new();
+        let direct_root = direct_builder
+            .push_implementation(
+                wrapped.id,
+                single_substitution(
+                    wrapped.head_parameters[0].id,
+                    &Type::Variable(*scope_parameter),
+                ),
+                &[],
+                &wrapped
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the forged direct implementation node should fit");
+        let direct = direct_builder
+            .finish(
+                direct_root,
+                requirement.interface,
+                requirement.argument.clone(),
+            )
+            .expect("the forged direct selection should remain structurally valid");
+
+        let mut nested_builder = EvidenceSelectionBuilder::new();
+        let nested_child = nested_builder
+            .push_implementation(
+                wrapped.id,
+                single_substitution(
+                    wrapped.head_parameters[0].id,
+                    &Type::Variable(*scope_parameter),
+                ),
+                &[],
+                &wrapped
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the forged prerequisite implementation node should fit");
+        let nested_root = nested_builder
+            .push_implementation(
+                outer.id,
+                single_substitution(
+                    outer.head_parameters[0].id,
+                    &Type::Variable(*scope_parameter),
+                ),
+                &[nested_child],
+                &outer
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the enclosing implementation node should fit");
+        let Type::AppliedNominal(outer_nominal, _) = &outer.argument else {
+            panic!("the enclosing implementation should retain a nominal head");
+        };
+        let nested = nested_builder
+            .finish(
+                nested_root,
+                outer.interface,
+                Type::AppliedNominal(
+                    *outer_nominal,
+                    vec![requirement.argument.clone()].into_boxed_slice(),
+                ),
+            )
+            .expect("the forged nested selection should remain structurally valid");
+
+        let [implementation_requirement] = outer.prerequisites.as_ref() else {
+            panic!("the generic implementation should retain one abstract prerequisite");
+        };
+        let [implementation_parameter] = outer.head_parameters.as_ref() else {
+            panic!("the generic implementation should retain one rigid parameter");
+        };
+        let implementation_scope = EvidenceScope {
+            owner: Some(RequirementOwner::Impl(outer.id)),
+            variables: std::slice::from_ref(&implementation_parameter.id),
+        };
+        let mut implementation_builder = EvidenceSelectionBuilder::new();
+        let implementation_root = implementation_builder
+            .push_implementation(
+                wrapped.id,
+                single_substitution(
+                    wrapped.head_parameters[0].id,
+                    &Type::Variable(implementation_parameter.id),
+                ),
+                &[],
+                &wrapped
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the forged implementation-scope node should fit");
+        let implementation_selection = implementation_builder
+            .finish(
+                implementation_root,
+                implementation_requirement.interface,
+                implementation_requirement.argument.clone(),
+            )
+            .expect("the forged implementation-scope selection should remain structurally valid");
+
+        let direct_result = validate_selection_in_scope(
+            &program,
+            &registry,
+            group,
+            &direct,
+            requirement.interface,
+            scope,
+            &mut InterfaceConstraintBudget::default(),
+            requirement.span,
+        );
+        let nested_result = validate_selection_in_scope(
+            &program,
+            &registry,
+            group,
+            &nested,
+            outer.interface,
+            scope,
+            &mut InterfaceConstraintBudget::default(),
+            requirement.span,
+        );
+        let implementation_result = validate_selection_in_scope(
+            &program,
+            &registry,
+            group,
+            &implementation_selection,
+            implementation_requirement.interface,
+            implementation_scope,
+            &mut InterfaceConstraintBudget::default(),
+            implementation_requirement.span,
+        );
+
+        assert_eq!(
+            [direct_result, nested_result, implementation_result]
+                .map(|result| result.err().map(EvidenceValidationFailure::reason)),
+            [
+                Some(EvidenceValidationReason::InvalidEvidenceRoot),
+                Some(EvidenceValidationReason::InvalidEvidenceRoot),
+                Some(EvidenceValidationReason::InvalidEvidenceRoot),
+            ],
+            "each current owner rejects concrete evidence shadowed at any tree depth",
+        );
+    }
+
+    #[test]
+    fn identity_equal_abstract_priority_scan_has_an_exact_constraint_limit() {
+        let program = abstract_priority_program();
+        let group = &program.groups()[0];
+        let shadowed = &group.schemes()[0];
+        let [requirement] = shadowed.scheme.requirements.as_ref() else {
+            panic!("the constrained global should retain one abstract requirement");
+        };
+        let scope = EvidenceScope {
+            owner: Some(RequirementOwner::Global(shadowed.binder)),
+            variables: &shadowed.scheme.type_parameters,
+        };
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the valid linked registry should authenticate");
+        let mut measured = InterfaceConstraintBudget::default();
+        assert_eq!(
+            first_identity_equal_abstract_requirement(
+                &program,
+                &registry,
+                scope,
+                requirement.interface,
+                &requirement.argument,
+                &mut measured,
+                requirement.span,
+            )
+            .expect("the exact requirement scan should fit the default budget"),
+            Some(requirement.id),
+        );
+        let exact = measured.used();
+        assert_eq!(
+            exact, 6,
+            "owner lookup, requirement visit, and exact Wrap<A> identity are charged"
+        );
+
+        assert_eq!(
+            first_identity_equal_abstract_requirement(
+                &program,
+                &registry,
+                scope,
+                requirement.interface,
+                &requirement.argument,
+                &mut InterfaceConstraintBudget::with_limit(exact - 1),
+                requirement.span,
+            )
+            .expect_err("one unit below the exact abstract-priority scan must fail")
+            .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(
+            first_identity_equal_abstract_requirement(
+                &program,
+                &registry,
+                scope,
+                requirement.interface,
+                &requirement.argument,
+                &mut InterfaceConstraintBudget::with_limit(exact),
+                requirement.span,
+            )
+            .expect("the exact abstract-priority scan budget should fit"),
+            Some(requirement.id),
+        );
+    }
+
+    #[test]
+    fn exact_current_implementation_authentication_has_an_exact_constraint_limit() {
+        let program = current_authenticity_program();
+        let group = &program.groups()[0];
+        let current = &group.implementation_facts()[1];
+        let [parameter] = current.head_parameters.as_ref() else {
+            panic!("the current implementation should retain one rigid parameter");
+        };
+        let [requirement] = current.prerequisites.as_ref() else {
+            panic!("the current implementation should retain one abstract prerequisite");
+        };
+        let interface = group
+            .interface_facts()
+            .iter()
+            .find(|interface| interface.id == requirement.interface)
+            .expect("the prerequisite interface should remain linked");
+        let mut builder = EvidenceSelectionBuilder::new();
+        let prerequisite = builder
+            .push_abstract(
+                requirement.id,
+                &interface
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the current abstract prerequisite should fit");
+        let root = builder
+            .push_implementation(
+                current.id,
+                single_substitution(parameter.id, &Type::Variable(parameter.id)),
+                &[prerequisite],
+                &current
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the exact current implementation node should fit");
+        let selection = builder
+            .finish(root, current.interface, current.argument.clone())
+            .expect("the exact current selection should remain structurally valid");
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the valid linked registry should authenticate");
+        let scope_variables = current
+            .head_parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<Vec<_>>();
+        let scope = EvidenceScope {
+            owner: Some(RequirementOwner::Impl(current.id)),
+            variables: &scope_variables,
+        };
+        let mut measured = InterfaceConstraintBudget::default();
+        validate_selection_in_scope(
+            &program,
+            &registry,
+            group,
+            &selection,
+            current.interface,
+            scope,
+            &mut measured,
+            current.span,
+        )
+        .expect("exact current authentication should fit the default budget");
+        let exact = measured.used();
+        assert_eq!(
+            exact, 67,
+            "exact-current relationships and the mandated abstract prerequisite are charged"
+        );
+
+        assert_eq!(
+            validate_selection_in_scope(
+                &program,
+                &registry,
+                group,
+                &selection,
+                current.interface,
+                scope,
+                &mut InterfaceConstraintBudget::with_limit(exact - 1),
+                current.span,
+            )
+            .expect_err("one unit below exact current authentication must fail")
+            .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        validate_selection_in_scope(
+            &program,
+            &registry,
+            group,
+            &selection,
+            current.interface,
+            scope,
+            &mut InterfaceConstraintBudget::with_limit(exact),
+            current.span,
+        )
+        .expect("the exact current-authentication budget should fit");
     }
 
     #[test]
