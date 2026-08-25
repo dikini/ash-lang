@@ -13,7 +13,6 @@ use crate::{
     },
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
-    surface::SurfaceTypeVisibility,
     types::{
         ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
         discard_type_iteratively,
@@ -1700,12 +1699,19 @@ pub struct ImportedConstructorFact {
     pub origin: Origin,
 }
 
-/// Public local declarations selected by resolution but not yet type-checked.
+/// Public local declarations and checked imported names staged by resolution.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResolvedExportCandidate {
     terms: HashMap<String, CandidateGlobal>,
+    term_order: Vec<String>,
     nominals: HashMap<String, CandidateNominal>,
+    nominal_order: Vec<String>,
     constructors: HashMap<String, CandidateConstructor>,
+    constructor_order: Vec<String>,
+    interfaces: HashMap<String, CandidateInterface>,
+    interface_order: Vec<String>,
+    methods: HashMap<String, CandidateMethod>,
+    method_order: Vec<String>,
     hidden_nominals: HashMap<NominalTypeId, CandidateHiddenNominal>,
     withheld: HashMap<(String, WithheldNamespace), WithheldExport>,
 }
@@ -1727,6 +1733,18 @@ impl ResolvedExportCandidate {
     #[must_use]
     pub fn constructor(&self, spelling: &str) -> Option<&CandidateConstructor> {
         self.constructors.get(spelling)
+    }
+
+    /// Looks up one public interface-name candidate.
+    #[must_use]
+    pub fn interface(&self, spelling: &str) -> Option<&CandidateInterface> {
+        self.interfaces.get(spelling)
+    }
+
+    /// Looks up one public method-name candidate.
+    #[must_use]
+    pub fn method(&self, spelling: &str) -> Option<&CandidateMethod> {
+        self.methods.get(spelling)
     }
 
     /// Looks up one private nominal retained only for checked public schemes.
@@ -1760,15 +1778,41 @@ impl ResolvedExportCandidate {
     }
 
     pub(crate) fn insert_term(&mut self, spelling: String, candidate: CandidateGlobal) {
-        self.terms.insert(spelling, candidate);
+        if self.terms.insert(spelling.clone(), candidate).is_none() {
+            self.term_order.push(spelling);
+        }
     }
 
     pub(crate) fn insert_nominal(&mut self, spelling: String, candidate: CandidateNominal) {
-        self.nominals.insert(spelling, candidate);
+        if self.nominals.insert(spelling.clone(), candidate).is_none() {
+            self.nominal_order.push(spelling);
+        }
     }
 
     pub(crate) fn insert_constructor(&mut self, spelling: String, candidate: CandidateConstructor) {
-        self.constructors.insert(spelling, candidate);
+        if self
+            .constructors
+            .insert(spelling.clone(), candidate)
+            .is_none()
+        {
+            self.constructor_order.push(spelling);
+        }
+    }
+
+    pub(crate) fn insert_interface(&mut self, spelling: String, candidate: CandidateInterface) {
+        if self
+            .interfaces
+            .insert(spelling.clone(), candidate)
+            .is_none()
+        {
+            self.interface_order.push(spelling);
+        }
+    }
+
+    pub(crate) fn insert_method(&mut self, spelling: String, candidate: CandidateMethod) {
+        if self.methods.insert(spelling.clone(), candidate).is_none() {
+            self.method_order.push(spelling);
+        }
     }
 
     pub(crate) fn insert_hidden_nominal(&mut self, candidate: CandidateHiddenNominal) {
@@ -1790,12 +1834,19 @@ impl Drop for ResolvedExportCandidate {
         for (_, candidate) in self.terms.drain() {
             discard_origin_iteratively(candidate.origin);
         }
+        self.term_order.clear();
         for (_, candidate) in self.nominals.drain() {
             discard_origin_iteratively(candidate.origin);
         }
+        self.nominal_order.clear();
         for (_, candidate) in self.constructors.drain() {
             discard_origin_iteratively(candidate.origin);
         }
+        self.constructor_order.clear();
+        self.interfaces.clear();
+        self.interface_order.clear();
+        self.methods.clear();
+        self.method_order.clear();
         for (_, candidate) in self.hidden_nominals.drain() {
             discard_origin_iteratively(candidate.origin);
         }
@@ -1807,33 +1858,58 @@ impl Drop for ResolvedExportCandidate {
     }
 }
 
-/// One unchecked public global selected by resolution.
+/// One local or imported public global selected by resolution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CandidateGlobal {
-    /// Stable local binder identity.
+    /// Stable defining binder identity.
     pub binder: BinderId,
+    pub(crate) source: CandidateFactSource,
     /// Declaration provenance.
     pub origin: Origin,
 }
 
-/// One unchecked public nominal selected by resolution.
+/// One local or imported public nominal selected by resolution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CandidateNominal {
     /// Stable nominal identity.
     pub id: NominalTypeId,
-    /// Opaque or transparent source access.
-    pub visibility: SurfaceTypeVisibility,
+    /// Opaque or transparent importer access.
+    pub access: ExportedTypeAccess,
+    pub(crate) source: CandidateFactSource,
     /// Declaration provenance.
     pub origin: Origin,
 }
 
-/// One unchecked constructor of a public transparent nominal.
+/// One local or imported constructor of a public transparent nominal.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CandidateConstructor {
     /// Stable constructor identity.
     pub id: ConstructorId,
+    pub(crate) source: CandidateFactSource,
     /// Declaration provenance.
     pub origin: Origin,
+}
+
+/// One checked interface identity selected for publication under a source spelling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateInterface {
+    /// Stable defining interface identity.
+    pub id: InterfaceId,
+    pub(crate) source: CandidateFactSource,
+}
+
+/// One checked method identity selected for publication under a source spelling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateMethod {
+    /// Stable defining method identity.
+    pub id: MethodId,
+    pub(crate) source: CandidateFactSource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CandidateFactSource {
+    Local,
+    Imported,
 }
 
 /// One private nominal identity available for checked public schemes only.
@@ -1962,6 +2038,7 @@ pub struct ExportSummary {
     nominal_names_by_id: HashMap<NominalTypeId, String>,
     constructors: HashMap<String, ExportedConstructor>,
     constructor_names_by_id: HashMap<ConstructorId, String>,
+    hidden_constructors: HashMap<ConstructorId, ExportedConstructor>,
     interface_names: HashMap<String, InterfaceId>,
     method_names: HashMap<String, MethodId>,
     interfaces: Vec<CheckedInterfaceFact>,
@@ -1989,6 +2066,10 @@ pub struct ExportedHiddenType {
     pub parameter_count: usize,
     /// Ordered declaration parameters, preserving defining identities.
     pub parameters: Box<[ResolvedTypeVariable]>,
+    /// Complete constructor family retained without source spellings.
+    pub constructors: Box<[ConstructorId]>,
+    /// Access metadata retained for a name-re-exported constructor family.
+    pub access: ImportedTypeAccess,
     /// Display-only declaration spelling.
     pub spelling: String,
     /// Whether the displayed declaration spelling is private at its definition.
@@ -1998,7 +2079,7 @@ pub struct ExportedHiddenType {
 }
 
 impl ExportSummary {
-    /// Returns the defining module identity.
+    /// Returns the publishing module identity.
     #[must_use]
     pub const fn module(&self) -> ModuleId {
         self.module
@@ -2032,6 +2113,7 @@ impl ExportSummary {
             nominal_names_by_id: HashMap::new(),
             constructors: HashMap::new(),
             constructor_names_by_id: HashMap::new(),
+            hidden_constructors: HashMap::new(),
             interface_names: HashMap::new(),
             method_names: HashMap::new(),
             interfaces: Vec::new(),
@@ -2040,23 +2122,82 @@ impl ExportSummary {
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
-            withheld: resolved.export_candidate.withheld.clone(),
+            withheld: HashMap::new(),
         };
-        for (spelling, candidate) in &resolved.export_candidate.terms {
-            let scheme = checked_by_binder
-                .get(&candidate.binder)
+        type_work
+            .charge(
+                resolved
+                    .export_candidate
+                    .terms
+                    .len()
+                    .saturating_add(resolved.export_candidate.nominals.len())
+                    .saturating_add(resolved.export_candidate.constructors.len())
+                    .saturating_add(resolved.export_candidate.interfaces.len())
+                    .saturating_add(resolved.export_candidate.methods.len())
+                    .saturating_add(resolved.export_candidate.withheld.len()),
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .withheld
+            .try_reserve(resolved.export_candidate.withheld.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for ((spelling, namespace), withheld) in &resolved.export_candidate.withheld {
+            if summary
+                .withheld
+                .insert((spelling.clone(), *namespace), withheld.clone())
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        summary
+            .terms
+            .try_reserve(resolved.export_candidate.terms.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for spelling in &resolved.export_candidate.term_order {
+            let candidate = resolved
+                .export_candidate
+                .terms
+                .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            summary.terms.insert(
-                spelling.clone(),
-                ExportedGlobal {
-                    binder: scheme.binder,
-                    scheme: scheme
-                        .scheme
-                        .clone_with_budget(type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                    origin: scheme.origin.clone(),
-                },
-            );
+            let (binder, scheme, origin) = match candidate.source {
+                CandidateFactSource::Local => {
+                    let checked = checked_by_binder
+                        .get(&candidate.binder)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if candidate.binder.module() != Some(resolved.module) {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    (checked.binder, &checked.scheme, &checked.origin)
+                }
+                CandidateFactSource::Imported => {
+                    let imported = resolved
+                        .imported
+                        .global(candidate.binder)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if candidate.binder.module() == Some(resolved.module) {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    (imported.binder, &imported.scheme, &imported.origin)
+                }
+            };
+            if binder != candidate.binder
+                || summary
+                    .terms
+                    .insert(
+                        spelling.clone(),
+                        ExportedGlobal {
+                            binder,
+                            scheme: scheme
+                                .clone_with_budget(type_work)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                            origin: origin.clone(),
+                        },
+                    )
+                    .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
 
         constraint_work
@@ -2072,16 +2213,8 @@ impl ExportSummary {
         {
             return Err(ResolvedBuildFailure::InvalidState);
         }
-        summary
-            .interfaces
-            .try_reserve(checked_interfaces.len())
-            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-        summary
-            .interface_positions
-            .try_reserve(checked_interfaces.len())
-            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-        summary
-            .interface_names
+        let mut checked_interfaces_by_id = HashMap::new();
+        checked_interfaces_by_id
             .try_reserve(checked_interfaces.len())
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         for (interface, checked) in resolved.interfaces.iter().zip(checked_interfaces) {
@@ -2091,56 +2224,100 @@ impl ExportSummary {
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            if !interface.public {
-                summary.withheld.insert(
-                    (interface.spelling.clone(), WithheldNamespace::Nominal),
-                    WithheldExport {
-                        kind: WithheldExportKind::Private,
-                        origin: Some(interface.origin.clone()),
-                    },
-                );
-                for method in &interface.methods {
-                    summary.withheld.insert(
-                        (method.spelling.clone(), WithheldNamespace::Term),
-                        WithheldExport {
-                            kind: WithheldExportKind::Private,
-                            origin: Some(method.origin.clone()),
-                        },
-                    );
-                }
-                continue;
-            }
-
-            summary
-                .method_names
-                .try_reserve(interface.methods.len())
-                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
             for (method, checked_method) in interface.methods.iter().zip(&checked.methods) {
                 if method.id != checked_method.id || method.spelling != checked_method.spelling {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                if summary
-                    .method_names
-                    .insert(method.spelling.clone(), method.id)
-                    .is_some()
-                {
-                    return Err(ResolvedBuildFailure::InvalidState);
-                }
             }
-            let fact = clone_checked_interface_fact(checked, type_work, constraint_work)?;
-            let position = summary.interfaces.len();
-            if summary
-                .interface_names
-                .insert(interface.spelling.clone(), interface.id)
+            if checked_interfaces_by_id
+                .insert(checked.id, checked)
                 .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+
+        summary
+            .interfaces
+            .try_reserve(resolved.export_candidate.interfaces.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        summary
+            .interface_positions
+            .try_reserve(resolved.export_candidate.interfaces.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        summary
+            .interface_names
+            .try_reserve(resolved.export_candidate.interfaces.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        summary
+            .method_names
+            .try_reserve(resolved.export_candidate.methods.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+
+        for spelling in &resolved.export_candidate.interface_order {
+            let candidate = resolved
+                .export_candidate
+                .interfaces
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let checked = match candidate.source {
+                CandidateFactSource::Local => checked_interfaces_by_id.get(&candidate.id).copied(),
+                CandidateFactSource::Imported => resolved.imported.interface(candidate.id),
+            }
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let owner_is_publisher = candidate.id.module() == resolved.module;
+            if checked.id != candidate.id
+                || owner_is_publisher != (candidate.source == CandidateFactSource::Local)
                 || summary
-                    .interface_positions
-                    .insert(interface.id, position)
+                    .interface_names
+                    .insert(spelling.clone(), candidate.id)
                     .is_some()
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            summary.interfaces.push(fact);
+            if summary.interface_positions.contains_key(&candidate.id) {
+                continue;
+            }
+            let position = summary.interfaces.len();
+            summary.interfaces.push(clone_checked_interface_fact(
+                checked,
+                type_work,
+                constraint_work,
+            )?);
+            if summary
+                .interface_positions
+                .insert(candidate.id, position)
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+
+        for spelling in &resolved.export_candidate.method_order {
+            let candidate = resolved
+                .export_candidate
+                .methods
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let interface = match candidate.source {
+                CandidateFactSource::Local => checked_interfaces_by_id
+                    .get(&candidate.id.interface())
+                    .copied(),
+                CandidateFactSource::Imported => {
+                    resolved.imported.interface(candidate.id.interface())
+                }
+            }
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let owner_is_publisher = candidate.id.interface().module() == resolved.module;
+            if owner_is_publisher != (candidate.source == CandidateFactSource::Local)
+                || interface.method(candidate.id).is_none()
+                || summary
+                    .method_names
+                    .insert(spelling.clone(), candidate.id)
+                    .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
 
         summary
@@ -2197,20 +2374,16 @@ impl ExportSummary {
                     .iter()
                     .map(|implementation| implementation.prerequisites.len().saturating_add(1)),
             )
-            .fold(0usize, usize::saturating_add);
+            .fold(0usize, usize::saturating_add)
+            .saturating_add(resolved.export_candidate.methods.len());
         if interface_reference_count > 0 {
             constraint_work
                 .charge(
                     interface_reference_count
                         .saturating_add(summary.terms.len())
-                        .saturating_add(checked_globals.len()),
+                        .saturating_add(summary.terms.len()),
                 )
                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-            let mut exported_binders = HashSet::new();
-            exported_binders
-                .try_reserve(summary.terms.len())
-                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-            exported_binders.extend(summary.terms.values().map(|exported| exported.binder));
             let mut referenced_interfaces = HashSet::new();
             referenced_interfaces
                 .try_reserve(interface_reference_count)
@@ -2219,14 +2392,24 @@ impl ExportSummary {
             referenced_interface_order
                 .try_reserve(interface_reference_count)
                 .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-            for checked in checked_globals {
-                if !exported_binders.contains(&checked.binder) {
-                    continue;
-                }
-                for requirement in &checked.scheme.requirements {
+            for spelling in &resolved.export_candidate.term_order {
+                let exported = summary
+                    .terms
+                    .get(spelling)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                for requirement in &exported.scheme.requirements {
                     if referenced_interfaces.insert(requirement.interface) {
                         referenced_interface_order.push(requirement.interface);
                     }
+                }
+            }
+            for spelling in &resolved.export_candidate.method_order {
+                let method = summary
+                    .method_names
+                    .get(spelling)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if referenced_interfaces.insert(method.interface()) {
+                    referenced_interface_order.push(method.interface());
                 }
             }
             for implementation in &summary.implementations {
@@ -2265,66 +2448,300 @@ impl ExportSummary {
             }
         }
 
-        for (spelling, candidate) in &resolved.export_candidate.nominals {
-            let parameters = resolved
-                .registry
-                .nominal_parameters(candidate.id)
+        summary
+            .nominals
+            .try_reserve(resolved.export_candidate.nominals.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .nominal_names_by_id
+            .try_reserve(resolved.export_candidate.nominals.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for spelling in &resolved.export_candidate.nominal_order {
+            let candidate = resolved
+                .export_candidate
+                .nominals
+                .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let parameter_count = parameters.len();
-            let access = match candidate.visibility {
-                SurfaceTypeVisibility::PublicOpaque => ExportedTypeAccess::Opaque,
-                SurfaceTypeVisibility::PublicTransparent => ExportedTypeAccess::Transparent,
-                SurfaceTypeVisibility::Private => {
-                    return Err(ResolvedBuildFailure::InvalidState);
+            let (parameters, constructors, origin) = match candidate.source {
+                CandidateFactSource::Local => {
+                    let nominal = resolved
+                        .registry
+                        .nominal(candidate.id)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    let parameters = resolved
+                        .registry
+                        .nominal_parameters(candidate.id)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if candidate.id.module() != resolved.module {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    (
+                        parameters,
+                        if candidate.access == ExportedTypeAccess::Transparent {
+                            nominal.constructors.as_ref()
+                        } else {
+                            &[]
+                        },
+                        &nominal.origin,
+                    )
+                }
+                CandidateFactSource::Imported => {
+                    let imported = resolved
+                        .imported
+                        .nominal(candidate.id)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    let expected_access = match imported.access {
+                        ImportedTypeAccess::Opaque => ExportedTypeAccess::Opaque,
+                        ImportedTypeAccess::Transparent => ExportedTypeAccess::Transparent,
+                        ImportedTypeAccess::Hidden => {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    };
+                    if candidate.id.module() == resolved.module
+                        || candidate.access != expected_access
+                    {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    (
+                        imported.parameters.as_ref(),
+                        imported.constructors.as_ref(),
+                        &imported.origin,
+                    )
+                }
+            };
+            type_work
+                .charge(parameters.len().saturating_add(constructors.len()))
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let mut cloned_parameters = Vec::new();
+            cloned_parameters
+                .try_reserve(parameters.len())
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            cloned_parameters.extend(parameters.iter().cloned());
+            let mut cloned_constructors = Vec::new();
+            cloned_constructors
+                .try_reserve(constructors.len())
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            cloned_constructors.extend_from_slice(constructors);
+            summary
+                .nominal_names_by_id
+                .entry(candidate.id)
+                .or_insert_with(|| spelling.clone());
+            if summary
+                .nominals
+                .insert(
+                    spelling.clone(),
+                    ExportedType {
+                        id: candidate.id,
+                        parameter_count: parameters.len(),
+                        parameters: cloned_parameters.into_boxed_slice(),
+                        constructors: cloned_constructors.into_boxed_slice(),
+                        access: candidate.access,
+                        origin: origin.clone(),
+                    },
+                )
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+
+        summary
+            .constructors
+            .try_reserve(resolved.export_candidate.constructors.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .constructor_names_by_id
+            .try_reserve(resolved.export_candidate.constructors.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for spelling in &resolved.export_candidate.constructor_order {
+            let candidate = resolved
+                .export_candidate
+                .constructors
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let (defining_spelling, payload, origin) = match candidate.source {
+                CandidateFactSource::Local => {
+                    let constructor = resolved
+                        .registry
+                        .constructor(candidate.id)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if candidate.id.owner().module() != resolved.module {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    (
+                        constructor.spelling.as_str(),
+                        constructor.payload.as_ref(),
+                        &constructor.origin,
+                    )
+                }
+                CandidateFactSource::Imported => {
+                    let constructor = resolved
+                        .imported
+                        .constructor(candidate.id)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if candidate.id.owner().module() == resolved.module {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    (
+                        constructor.spelling.as_str(),
+                        constructor.payload.as_ref(),
+                        &constructor.origin,
+                    )
                 }
             };
             summary
-                .nominal_names_by_id
-                .insert(candidate.id, spelling.clone());
-            summary.nominals.insert(
-                spelling.clone(),
-                ExportedType {
-                    id: candidate.id,
-                    parameter_count,
-                    parameters: parameters.to_vec().into_boxed_slice(),
-                    constructors: if access == ExportedTypeAccess::Transparent {
-                        resolved
-                            .registry
-                            .nominal(candidate.id)
-                            .ok_or(ResolvedBuildFailure::InvalidState)?
-                            .constructors
-                            .clone()
-                    } else {
-                        Vec::new().into_boxed_slice()
+                .constructor_names_by_id
+                .entry(candidate.id)
+                .or_insert_with(|| spelling.clone());
+            if summary
+                .constructors
+                .insert(
+                    spelling.clone(),
+                    ExportedConstructor {
+                        id: candidate.id,
+                        spelling: defining_spelling.to_owned(),
+                        payload: payload
+                            .map(|payload| clone_type_with_budget(payload, type_work))
+                            .transpose()
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                        origin: origin.clone(),
                     },
-                    access,
-                    origin: candidate.origin.clone(),
-                },
-            );
+                )
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
 
-        for (spelling, candidate) in &resolved.export_candidate.constructors {
-            let constructor = resolved
-                .registry
-                .constructor(candidate.id)
+        let mut constructor_family_capacity = 0usize;
+        for spelling in &resolved.export_candidate.nominal_order {
+            let exported = summary
+                .nominals
+                .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            summary
+            constructor_family_capacity =
+                constructor_family_capacity.saturating_add(exported.constructors.len());
+        }
+        for spelling in &resolved.export_candidate.constructor_order {
+            let exported = summary
+                .constructors
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let owner = if exported.id.owner().module() == resolved.module {
+                resolved
+                    .registry
+                    .nominal(exported.id.owner())
+                    .map(|nominal| nominal.constructors.len())
+            } else {
+                resolved
+                    .imported
+                    .nominal(exported.id.owner())
+                    .filter(|nominal| nominal.access == ImportedTypeAccess::Transparent)
+                    .map(|nominal| nominal.constructors.len())
+            }
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+            constructor_family_capacity = constructor_family_capacity.saturating_add(owner);
+        }
+        let mut constructor_family_ids = HashSet::new();
+        constructor_family_ids
+            .try_reserve(constructor_family_capacity)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        let mut constructor_family_order = Vec::new();
+        constructor_family_order
+            .try_reserve(constructor_family_capacity)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for spelling in &resolved.export_candidate.nominal_order {
+            let exported = summary
+                .nominals
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            for constructor in &exported.constructors {
+                if constructor_family_ids.insert(*constructor) {
+                    constructor_family_order.push(*constructor);
+                }
+            }
+        }
+        for spelling in &resolved.export_candidate.constructor_order {
+            let exported = summary
+                .constructors
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let owner = if exported.id.owner().module() == resolved.module {
+                resolved
+                    .registry
+                    .nominal(exported.id.owner())
+                    .map(|nominal| nominal.constructors.as_ref())
+            } else {
+                resolved
+                    .imported
+                    .nominal(exported.id.owner())
+                    .filter(|nominal| nominal.access == ImportedTypeAccess::Transparent)
+                    .map(|nominal| nominal.constructors.as_ref())
+            }
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if !owner.contains(&exported.id) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            for constructor in owner {
+                if constructor_family_ids.insert(*constructor) {
+                    constructor_family_order.push(*constructor);
+                }
+            }
+        }
+        summary
+            .hidden_constructors
+            .try_reserve(constructor_family_order.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for constructor_id in constructor_family_order {
+            if summary
                 .constructor_names_by_id
-                .insert(candidate.id, spelling.clone());
-            summary.constructors.insert(
-                spelling.clone(),
-                ExportedConstructor {
-                    id: candidate.id,
-                    spelling: constructor.spelling.clone(),
-                    payload: constructor
-                        .payload
-                        .as_ref()
-                        .map(|payload| clone_type_with_budget(payload, type_work))
-                        .transpose()
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                    origin: candidate.origin.clone(),
-                },
-            );
+                .contains_key(&constructor_id)
+            {
+                continue;
+            }
+            type_work
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let (spelling, payload, origin) = if constructor_id.owner().module() == resolved.module
+            {
+                let constructor = resolved
+                    .registry
+                    .constructor(constructor_id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                (
+                    constructor.spelling.as_str(),
+                    constructor.payload.as_ref(),
+                    &constructor.origin,
+                )
+            } else {
+                let constructor = resolved
+                    .imported
+                    .constructor(constructor_id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                (
+                    constructor.spelling.as_str(),
+                    constructor.payload.as_ref(),
+                    &constructor.origin,
+                )
+            };
+            if summary
+                .hidden_constructors
+                .insert(
+                    constructor_id,
+                    ExportedConstructor {
+                        id: constructor_id,
+                        spelling: spelling.to_owned(),
+                        payload: payload
+                            .map(|payload| clone_type_with_budget(payload, type_work))
+                            .transpose()
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                        origin: origin.clone(),
+                    },
+                )
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
 
         let mut referenced_nominals = HashSet::new();
@@ -2337,6 +2754,14 @@ impl ExportSummary {
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         }
         for exported in summary.constructors.values() {
+            referenced_nominals.insert(exported.id.owner());
+            if let Some(payload) = &exported.payload {
+                collect_nominal_identities(payload, &mut referenced_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+        }
+        for exported in summary.hidden_constructors.values() {
+            referenced_nominals.insert(exported.id.owner());
             if let Some(payload) = &exported.payload {
                 collect_nominal_identities(payload, &mut referenced_nominals, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -2379,49 +2804,112 @@ impl ExportSummary {
             }
         }
 
-        for candidate in resolved.export_candidate.hidden_nominals.values() {
+        summary
+            .hidden_nominals
+            .try_reserve(referenced_nominals.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        type_work
+            .charge(resolved.export_candidate.hidden_nominals.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut local_hidden_nominals = Vec::new();
+        local_hidden_nominals
+            .try_reserve(resolved.export_candidate.hidden_nominals.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        local_hidden_nominals.extend(resolved.export_candidate.hidden_nominals.values());
+        local_hidden_nominals.sort_unstable_by_key(|candidate| candidate.id);
+        for candidate in local_hidden_nominals {
             if !referenced_nominals.contains(&candidate.id) {
                 continue;
             }
-            let parameters = resolved
+            let source_parameters = resolved
                 .registry
                 .nominal_parameters(candidate.id)
-                .ok_or(ResolvedBuildFailure::InvalidState)?
-                .to_vec()
-                .into_boxed_slice();
-            summary.hidden_nominals.insert(
-                candidate.id,
-                ExportedHiddenType {
-                    id: candidate.id,
-                    parameter_count: candidate.parameter_count,
-                    parameters,
-                    spelling: candidate.spelling.clone(),
-                    display_is_private: true,
-                    origin: candidate.origin.clone(),
-                },
-            );
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            type_work
+                .charge(source_parameters.len().saturating_add(1))
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let mut parameters = Vec::new();
+            parameters
+                .try_reserve(source_parameters.len())
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            parameters.extend(source_parameters.iter().cloned());
+            if summary
+                .hidden_nominals
+                .insert(
+                    candidate.id,
+                    ExportedHiddenType {
+                        id: candidate.id,
+                        parameter_count: candidate.parameter_count,
+                        parameters: parameters.into_boxed_slice(),
+                        constructors: Box::new([]),
+                        access: ImportedTypeAccess::Hidden,
+                        spelling: candidate.spelling.clone(),
+                        display_is_private: true,
+                        origin: candidate.origin.clone(),
+                    },
+                )
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
-        for imported in resolved.imported.nominals.values() {
+        type_work
+            .charge(resolved.imported.nominals.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut imported_nominals = Vec::new();
+        imported_nominals
+            .try_reserve(resolved.imported.nominals.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        imported_nominals.extend(resolved.imported.nominals.values());
+        imported_nominals.sort_unstable_by_key(|imported| imported.id);
+        for imported in imported_nominals {
             if !referenced_nominals.contains(&imported.id)
                 || summary.nominal_names_by_id.contains_key(&imported.id)
                 || summary.hidden_nominals.contains_key(&imported.id)
             {
                 continue;
             }
-            summary.hidden_nominals.insert(
-                imported.id,
-                ExportedHiddenType {
-                    id: imported.id,
-                    parameter_count: imported.parameter_count,
-                    parameters: imported.parameters.to_vec().into_boxed_slice(),
-                    spelling: imported
-                        .display_spelling
-                        .clone()
-                        .unwrap_or_else(|| "hidden".to_owned()),
-                    display_is_private: imported.display_is_private,
-                    origin: imported.origin.clone(),
-                },
-            );
+            type_work
+                .charge(
+                    imported
+                        .parameters
+                        .len()
+                        .saturating_add(imported.constructors.len())
+                        .saturating_add(1),
+                )
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let mut parameters = Vec::new();
+            parameters
+                .try_reserve(imported.parameters.len())
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            parameters.extend(imported.parameters.iter().cloned());
+            let mut constructors = Vec::new();
+            constructors
+                .try_reserve(imported.constructors.len())
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            constructors.extend_from_slice(&imported.constructors);
+            if summary
+                .hidden_nominals
+                .insert(
+                    imported.id,
+                    ExportedHiddenType {
+                        id: imported.id,
+                        parameter_count: imported.parameter_count,
+                        parameters: parameters.into_boxed_slice(),
+                        constructors: constructors.into_boxed_slice(),
+                        access: imported.access,
+                        spelling: imported
+                            .display_spelling
+                            .clone()
+                            .unwrap_or_else(|| "hidden".to_owned()),
+                        display_is_private: imported.display_is_private,
+                        origin: imported.origin.clone(),
+                    },
+                )
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
 
         Ok(summary)
@@ -2543,8 +3031,8 @@ impl ExportSummary {
                 id,
                 parameter_count: exported.parameter_count,
                 parameters: &exported.parameters,
-                constructors: &[],
-                access: ImportedTypeAccess::Hidden,
+                constructors: &exported.constructors,
+                access: exported.access,
                 display_spelling: Some(&exported.spelling),
                 display_is_private: exported.display_is_private,
                 origin: &exported.origin,
@@ -2552,8 +3040,10 @@ impl ExportSummary {
     }
 
     pub(crate) fn constructor_by_id(&self, id: ConstructorId) -> Option<&ExportedConstructor> {
-        self.constructors
-            .get(self.constructor_names_by_id.get(&id)?)
+        if let Some(spelling) = self.constructor_names_by_id.get(&id) {
+            return self.constructors.get(spelling);
+        }
+        self.hidden_constructors.get(&id)
     }
 
     #[cfg(test)]
@@ -2619,6 +3109,7 @@ impl ExportSummary {
                 })
                 .collect(),
             constructor_names_by_id,
+            hidden_constructors: HashMap::new(),
             interface_names: HashMap::new(),
             method_names: HashMap::new(),
             interfaces: Vec::new(),
@@ -2690,6 +3181,8 @@ impl ExportSummary {
                             id,
                             parameter_count,
                             parameters: Vec::new().into_boxed_slice(),
+                            constructors: Box::new([]),
+                            access: ImportedTypeAccess::Hidden,
                             spelling: spelling.to_owned(),
                             display_is_private,
                             origin,
@@ -2772,6 +3265,12 @@ impl Drop for ExportSummary {
             discard_origin_iteratively(exported.origin);
         }
         self.constructor_names_by_id.clear();
+        for (_, exported) in self.hidden_constructors.drain() {
+            if let Some(payload) = exported.payload {
+                discard_type_iteratively(payload);
+            }
+            discard_origin_iteratively(exported.origin);
+        }
         self.interface_names.clear();
         self.method_names.clear();
         for fact in self.interfaces.drain(..) {
@@ -4075,6 +4574,7 @@ mod tests {
             nominal_names_by_id: HashMap::new(),
             constructors: HashMap::new(),
             constructor_names_by_id: HashMap::new(),
+            hidden_constructors: HashMap::new(),
             interface_names: HashMap::new(),
             method_names: HashMap::new(),
             interfaces: Vec::new(),
@@ -4420,6 +4920,7 @@ mod tests {
             "apply".into(),
             CandidateGlobal {
                 binder,
+                source: CandidateFactSource::Local,
                 origin: Origin::Source(global_span),
             },
         );

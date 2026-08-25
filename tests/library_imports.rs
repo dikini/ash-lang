@@ -11,7 +11,7 @@ use ash::{
     interface::InterfaceReason,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveReason, resolve_module},
-    resolved::{ResolvedDefinitionKind, ResolvedExprKind, ResolvedTermName},
+    resolved::{ImportedTypeAccess, ResolvedDefinitionKind, ResolvedExprKind, ResolvedTermName},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -92,6 +92,34 @@ fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
             check_module(resolved.expect("a dependency fixture should resolve"))
                 .expect("a dependency fixture should check"),
         );
+    }
+    panic!("the graph should contain its entry module");
+}
+
+fn resolve_entry(graph: &ModuleGraph) -> ash::resolved::ResolvedModule {
+    let entry = module_named(graph, "entry.ash");
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|dependency: &&ash::resolved::CheckedModule| {
+                        dependency.module() == edge.target()
+                    })
+                    .expect("dependencies should check before their importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the dependency summary should authenticate its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the successful entry fixture should resolve");
+        if module.id() == entry.id() {
+            return resolved;
+        }
+        checked.push(check_module(resolved).expect("a dependency fixture should check"));
     }
     panic!("the graph should contain its entry module");
 }
@@ -292,4 +320,576 @@ fn implementation_selector_rejects_a_public_nominal() {
 
     assert_eq!(error.reason, ResolveReason::InterfaceKind);
     assert_eq!(error.reason.to_string(), "resolve.interface-kind");
+}
+
+#[test]
+fn public_targeted_import_reexports_each_selected_name_namespace() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import facade (facade_answer, FacadeChoice, FacadeFirst, FacadeSecond, ",
+            "FacadeToken, FacadeComparable, facade_compare, impl FacadeComparable)\n\n",
+            "use_choice : Unit -> FacadeChoice\n",
+            "use_choice () = FacadeFirst(1)\n\n",
+            "keep_token : FacadeToken -> FacadeToken\n",
+            "keep_token token = token\n\n",
+            "compare : (Int, Int) -> Bool\n",
+            "compare pair = facade_compare pair\n\n",
+            "main : Unit -> Int\n",
+            "main () = facade_answer(())\n",
+        ),
+        &[
+            (
+                "base.ash",
+                concat!(
+                    "pub type Choice =\n",
+                    "First(Int)\n",
+                    "| Second(Int)\n\n",
+                    "pub opaque type Token = Token(Int)\n\n",
+                    "pub interface Comparable<A> {\n",
+                    "compare : (A, A) -> Bool\n",
+                    "}\n\n",
+                    "pub impl Comparable<Int> {\n",
+                    "compare (left, right) = left == right\n",
+                    "}\n\n",
+                    "pub answer : Unit -> Int\n",
+                    "answer () = 42\n",
+                ),
+            ),
+            (
+                "facade.ash",
+                concat!(
+                    "pub import base (answer as facade_answer, Choice as FacadeChoice, ",
+                    "First as FacadeFirst, Second as FacadeSecond, Token as FacadeToken, ",
+                    "Comparable as FacadeComparable, compare as facade_compare, ",
+                    "impl Comparable)\n",
+                ),
+            ),
+        ],
+    );
+
+    let base = module_named(&graph, "base.ash");
+    let base_checked =
+        check_module(resolve_module(base, &[]).expect("the defining module should resolve"))
+            .expect("the defining module should check");
+    let expected_global = base_checked.schemes()[0].binder;
+    let [choice, token] = base_checked.registry().nominals() else {
+        panic!("the defining module should retain both nominal declarations");
+    };
+    let expected_choice = choice.id;
+    let [expected_first, expected_second] = choice.constructors.as_ref() else {
+        panic!("the transparent nominal should retain both constructors");
+    };
+    let expected_token = token.id;
+    let [interface] = base_checked.interface_facts() else {
+        panic!("the defining module should retain one interface fact");
+    };
+    let expected_interface = interface.id;
+    let [method] = interface.methods.as_ref() else {
+        panic!("the defining interface should retain one method fact");
+    };
+    let expected_method = method.id;
+    let [implementation] = base_checked.implementation_facts() else {
+        panic!("the defining module should retain one implementation fact");
+    };
+    let expected_implementation = implementation.id;
+
+    let facade = module_named(&graph, "facade.ash");
+    let [facade_edge] = facade.dependencies() else {
+        panic!("the facade should have one dependency");
+    };
+    let facade_dependency = DependencyExports::new(facade_edge, base_checked.exports())
+        .expect("the facade edge should authenticate the base summary");
+    let facade_resolved =
+        resolve_module(facade, &[facade_dependency]).expect("the public import should resolve");
+    let candidate = facade_resolved.export_candidate();
+    assert_eq!(
+        candidate.term("facade_answer").map(|term| term.binder),
+        Some(expected_global),
+    );
+    assert_eq!(
+        candidate.nominal("FacadeChoice").map(|nominal| nominal.id),
+        Some(expected_choice),
+    );
+    assert_eq!(
+        candidate
+            .constructor("FacadeFirst")
+            .map(|constructor| constructor.id),
+        Some(*expected_first),
+    );
+    assert_eq!(
+        candidate
+            .constructor("FacadeSecond")
+            .map(|constructor| constructor.id),
+        Some(*expected_second),
+    );
+    assert_eq!(
+        candidate.nominal("FacadeToken").map(|nominal| nominal.id),
+        Some(expected_token),
+    );
+    assert_eq!(
+        candidate
+            .interface("FacadeComparable")
+            .map(|interface| interface.id),
+        Some(expected_interface),
+    );
+    assert_eq!(
+        candidate.method("facade_compare").map(|method| method.id),
+        Some(expected_method),
+    );
+    assert_eq!(
+        facade_resolved
+            .imported_facts()
+            .implementation(expected_implementation)
+            .map(|fact| fact.id),
+        Some(expected_implementation),
+        "the public implementation selector should remain locally effective",
+    );
+    let facade_checked =
+        check_module(facade_resolved).expect("the name-only facade should check without bodies");
+    assert_eq!(
+        facade_checked.available_implementations()[0].id(),
+        expected_implementation,
+        "Task 4 should retain the selected implementation only in the facade environment",
+    );
+
+    let entry = module_named(&graph, "entry.ash");
+    let [entry_edge] = entry.dependencies() else {
+        panic!("the entry should have one dependency");
+    };
+    let entry_dependency = DependencyExports::new(entry_edge, facade_checked.exports())
+        .expect("the entry edge should authenticate the facade summary");
+    let entry_resolved = resolve_module(entry, &[entry_dependency])
+        .expect("the facade's selected public spellings should resolve");
+
+    assert_eq!(
+        entry_resolved
+            .imported_facts()
+            .global(expected_global)
+            .map(|fact| fact.binder),
+        Some(expected_global),
+    );
+    assert_eq!(
+        entry_resolved
+            .imported_facts()
+            .nominal(expected_choice)
+            .map(|fact| fact.id),
+        Some(expected_choice),
+    );
+    assert_eq!(
+        entry_resolved
+            .imported_facts()
+            .constructor(*expected_first)
+            .map(|fact| fact.id),
+        Some(*expected_first),
+    );
+    assert_eq!(
+        entry_resolved
+            .imported_facts()
+            .constructor(*expected_second)
+            .map(|fact| fact.id),
+        Some(*expected_second),
+    );
+    assert_eq!(
+        entry_resolved
+            .imported_facts()
+            .nominal(expected_token)
+            .map(|fact| fact.id),
+        Some(expected_token),
+    );
+    let imported_interface = entry_resolved
+        .imported_facts()
+        .interface(expected_interface)
+        .expect("the facade should retain the original interface identity");
+    assert_eq!(imported_interface.id, expected_interface);
+    assert_eq!(imported_interface.methods[0].id, expected_method);
+    assert!(
+        entry_resolved
+            .imported_facts()
+            .implementation(expected_implementation)
+            .is_none(),
+        "Task 4 must not publish the facade's imported implementation fact",
+    );
+}
+
+#[test]
+fn name_reexports_preserve_privacy_opacity_and_identity() {
+    for (entry, dependency, reason) in [
+        (
+            "pub import base (private_value)\n",
+            concat!("private_value : Unit -> Int\n", "private_value () = 0\n",),
+            ResolveReason::UnavailableExport,
+        ),
+        (
+            "pub import base (Seal)\n",
+            "pub opaque type Token = Seal(Int)\n",
+            ResolveReason::OpaqueConstructor,
+        ),
+    ] {
+        let tree = ModuleTree::create();
+        let graph = load(&tree, entry, &[("base.ash", dependency)]);
+        let error = resolve_entry_error(&graph);
+
+        assert_eq!(error.reason, reason);
+        assert_eq!(
+            error.diagnostic().primary.span().source(),
+            module_named(&graph, "entry.ash").source().id(),
+        );
+    }
+
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import outer (PublicToken)\n\n",
+            "keep : PublicToken -> PublicToken\n",
+            "keep token = token\n",
+        ),
+        &[
+            ("base.ash", "pub opaque type Token = Token(Int)\n"),
+            ("inner.ash", "pub import base (Token as WrappedToken)\n"),
+            (
+                "outer.ash",
+                "pub import inner (WrappedToken as PublicToken)\n",
+            ),
+        ],
+    );
+    let base = module_named(&graph, "base.ash");
+    let token = resolve_module(base, &[])
+        .expect("the opaque base should resolve")
+        .registry()
+        .nominals()[0]
+        .id;
+    let mut checked = Vec::new();
+    let mut entry_resolved = None;
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|dependency: &&ash::resolved::CheckedModule| {
+                        dependency.module() == edge.target()
+                    })
+                    .expect("each facade dependency should check first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("each facade summary should authenticate its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("both opaque facades should resolve");
+        if module.id() == graph.entry() {
+            entry_resolved = Some(resolved);
+            break;
+        }
+        checked.push(check_module(resolved).expect("each opaque dependency should check"));
+    }
+    let entry_resolved = entry_resolved.expect("the graph should retain its entry");
+    let imported_token = entry_resolved
+        .imported_facts()
+        .nominal(token)
+        .expect("the opaque identity should cross both facades");
+    assert_eq!(imported_token.id, token);
+    assert_eq!(imported_token.access, ImportedTypeAccess::Opaque);
+    assert!(imported_token.constructors.is_empty());
+
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import outer (PublicToken)\n\n",
+            "main : Unit -> PublicToken\n",
+            "main () = PublicToken(1)\n",
+        ),
+        &[
+            ("base.ash", "pub opaque type Token = Token(Int)\n"),
+            ("inner.ash", "pub import base (Token as WrappedToken)\n"),
+            (
+                "outer.ash",
+                "pub import inner (WrappedToken as PublicToken)\n",
+            ),
+        ],
+    );
+    let error = resolve_entry_error(&graph);
+    assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+    assert_eq!(error.diagnostic().found.as_deref(), Some("PublicToken"));
+
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import facade as Facade\n\n",
+            "name_hidden : Facade.Hidden -> Facade.Hidden\n",
+            "name_hidden value = value\n",
+        ),
+        &[
+            (
+                "base.ash",
+                concat!(
+                    "type Hidden = Hidden(Int)\n\n",
+                    "pub make : Int -> Hidden\n",
+                    "make value = Hidden(value)\n\n",
+                    "pub read : Hidden -> Int\n",
+                    "read (Hidden value) = value\n",
+                ),
+            ),
+            (
+                "facade.ash",
+                "pub import base (make as facade_make, read as facade_read)\n",
+            ),
+        ],
+    );
+    let error = resolve_entry_error(&graph);
+    assert_eq!(error.reason, ResolveReason::UnavailableExport);
+    assert_eq!(error.diagnostic().found.as_deref(), Some("Hidden"));
+
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import facade (first_answer, second_answer)\n\n",
+            "first : Unit -> Int\n",
+            "first () = first_answer(())\n\n",
+            "second : Unit -> Int\n",
+            "second () = second_answer(())\n",
+        ),
+        &[
+            ("base.ash", "pub answer : Unit -> Int\nanswer () = 42\n"),
+            (
+                "facade.ash",
+                concat!(
+                    "pub import base (answer as first_answer, ",
+                    "answer as second_answer)\n",
+                ),
+            ),
+        ],
+    );
+    let base = module_named(&graph, "base.ash");
+    let base_checked = check_module(resolve_module(base, &[]).expect("the base should resolve"))
+        .expect("the base should check");
+    let expected_binder = base_checked.schemes()[0].binder;
+    let facade = module_named(&graph, "facade.ash");
+    let [facade_edge] = facade.dependencies() else {
+        panic!("the alias facade should have one dependency");
+    };
+    let facade_dependency = DependencyExports::new(facade_edge, base_checked.exports())
+        .expect("the alias facade edge should authenticate its summary");
+    let facade_checked = check_module(
+        resolve_module(facade, &[facade_dependency]).expect("both aliases should resolve"),
+    )
+    .expect("the alias facade should check");
+    assert!(
+        facade_checked.schemes().is_empty(),
+        "re-export aliases must not synthesize facade declarations",
+    );
+    let entry = module_named(&graph, "entry.ash");
+    let [entry_edge] = entry.dependencies() else {
+        panic!("the alias entry should have one dependency");
+    };
+    let entry_dependency = DependencyExports::new(entry_edge, facade_checked.exports())
+        .expect("the alias entry edge should authenticate its summary");
+    let entry_resolved =
+        resolve_module(entry, &[entry_dependency]).expect("both facade aliases should resolve");
+    assert_eq!(
+        entry_resolved
+            .imported_facts()
+            .global(expected_binder)
+            .map(|fact| fact.binder),
+        Some(expected_binder),
+    );
+    for definition in entry_resolved.definitions() {
+        let ResolvedDefinitionKind::Equational(global) = &definition.kind else {
+            panic!("the alias fixture should retain equational definitions");
+        };
+        let ResolvedExprKind::Apply(application) = &global.equations[0].body.kind else {
+            panic!("each alias fixture body should apply its imported global");
+        };
+        let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+            panic!("each alias should resolve to an occurrence");
+        };
+        assert_eq!(occurrence.term, ResolvedTermName::Global(expected_binder),);
+    }
+
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import facade (private_answer)\n",
+        &[
+            ("base.ash", "pub answer : Unit -> Int\nanswer () = 42\n"),
+            ("facade.ash", "import base (answer as private_answer)\n"),
+        ],
+    );
+    let error = resolve_entry_error(&graph);
+    assert_eq!(error.reason, ResolveReason::UnavailableExport);
+    assert_eq!(error.diagnostic().found.as_deref(), Some("private_answer"));
+}
+
+#[test]
+fn method_only_reexport_and_imported_scheme_retain_hidden_interface_closure() {
+    for (facade_selection, entry_name, exported_global) in [
+        ("equal as facade_equal", "facade_equal", false),
+        ("same as facade_same", "facade_same", true),
+    ] {
+        let tree = ModuleTree::create();
+        let graph = load(
+            &tree,
+            &format!(
+                concat!(
+                    "import facade ({})\n",
+                    "import base (impl Equal)\n\n",
+                    "main : Unit -> Bool\n",
+                    "main () = {}(1, 1)\n",
+                ),
+                entry_name, entry_name,
+            ),
+            &[
+                (
+                    "base.ash",
+                    concat!(
+                        "pub interface Equal<A> {\n",
+                        "equal : (A, A) -> Bool\n",
+                        "}\n\n",
+                        "pub impl Equal<Int> {\n",
+                        "equal (left, right) = left == right\n",
+                        "}\n\n",
+                        "pub same : (A, A) -> Bool where Equal<A>\n",
+                        "same pair = equal pair\n",
+                    ),
+                ),
+                (
+                    "facade.ash",
+                    &format!("pub import base ({facade_selection})\n"),
+                ),
+            ],
+        );
+        let mut checked = Vec::new();
+        let mut base_interface = None;
+        let mut base_global = None;
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let dependency = checked
+                        .iter()
+                        .find(|dependency: &&ash::resolved::CheckedModule| {
+                            dependency.module() == edge.target()
+                        })
+                        .expect("hidden-closure dependencies should check first");
+                    DependencyExports::new(edge, dependency.exports())
+                        .expect("hidden-closure summaries should authenticate their edges")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies)
+                .expect("the hidden-closure fixture should resolve");
+            if Path::new(module.source().display_path()).file_name() == Some("entry.ash".as_ref()) {
+                let expected_interface = base_interface.expect("base should check before entry");
+                assert!(
+                    resolved
+                        .imported_facts()
+                        .interface(expected_interface)
+                        .is_some()
+                );
+                if exported_global {
+                    assert!(
+                        resolved
+                            .imported_facts()
+                            .global(base_global.expect("base should retain the constrained global"))
+                            .is_some(),
+                    );
+                }
+            }
+            let module_checked = check_module(resolved)
+                .expect("method-only and constrained-global closure should both check");
+            if Path::new(module.source().display_path()).file_name() == Some("base.ash".as_ref()) {
+                base_interface = Some(module_checked.interface_facts()[0].id);
+                base_global = Some(module_checked.schemes()[0].binder);
+            }
+            checked.push(module_checked);
+        }
+    }
+}
+
+#[test]
+fn partial_transparent_name_reexports_retain_hidden_constructor_family() {
+    for (entry, inner, outer) in [
+        (
+            "import outer (PublicChoice)\n",
+            "pub import base (Choice as InnerChoice)\n",
+            "pub import inner (InnerChoice as PublicChoice)\n",
+        ),
+        (
+            "import outer (PublicFirst)\n",
+            "pub import base (First as InnerFirst)\n",
+            "pub import inner (InnerFirst as PublicFirst)\n",
+        ),
+    ] {
+        let tree = ModuleTree::create();
+        let graph = load(
+            &tree,
+            entry,
+            &[
+                (
+                    "base.ash",
+                    "pub type Choice =\nFirst(Int)\n| Second(Bool)\n",
+                ),
+                ("inner.ash", inner),
+                ("outer.ash", outer),
+            ],
+        );
+        let base = module_named(&graph, "base.ash");
+        let base_resolved = resolve_module(base, &[]).expect("the family base should resolve");
+        let [choice] = base_resolved.registry().nominals() else {
+            panic!("the family base should retain one nominal");
+        };
+        let expected_choice = choice.id;
+        let [expected_first, expected_second] = choice.constructors.as_ref() else {
+            panic!("the family base should retain both constructors");
+        };
+
+        let resolved = resolve_entry(&graph);
+        let imported_choice = resolved
+            .imported_facts()
+            .nominal(expected_choice)
+            .expect("the selected name should retain its defining owner metadata");
+        assert_eq!(imported_choice.id, expected_choice);
+        assert_eq!(imported_choice.access, ImportedTypeAccess::Transparent);
+        assert_eq!(
+            imported_choice.constructors.as_ref(),
+            [*expected_first, *expected_second]
+        );
+        assert_eq!(
+            resolved
+                .imported_facts()
+                .constructor(*expected_first)
+                .map(|constructor| constructor.id),
+            Some(*expected_first),
+        );
+        assert_eq!(
+            resolved
+                .imported_facts()
+                .constructor(*expected_second)
+                .map(|constructor| constructor.id),
+            Some(*expected_second),
+        );
+
+        let hidden_tree = ModuleTree::create();
+        let hidden_graph = load(
+            &hidden_tree,
+            "import outer (Second)\n",
+            &[
+                (
+                    "base.ash",
+                    "pub type Choice =\nFirst(Int)\n| Second(Bool)\n",
+                ),
+                ("inner.ash", inner),
+                ("outer.ash", outer),
+            ],
+        );
+        let error = resolve_entry_error(&hidden_graph);
+        assert_eq!(error.reason, ResolveReason::UnavailableExport);
+        assert_eq!(error.diagnostic().found.as_deref(), Some("Second"));
+    }
 }

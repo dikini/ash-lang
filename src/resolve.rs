@@ -15,10 +15,11 @@ use crate::{
     },
     module::{LoadedModule, ModuleDependency, ModuleId},
     resolved::{
-        Binder, BinderId, CandidateConstructor, CandidateGlobal, CandidateHiddenNominal,
-        CandidateNominal, CheckedImplementationFact, CheckedInterfaceFact,
-        CheckedInterfaceMethodFact, DirectDependencyRoute, ExportSummary, ExportedConstructor,
-        ExportedGlobal, ExportedType, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
+        Binder, BinderId, CandidateConstructor, CandidateFactSource, CandidateGlobal,
+        CandidateHiddenNominal, CandidateInterface, CandidateMethod, CandidateNominal,
+        CheckedImplementationFact, CheckedInterfaceFact, CheckedInterfaceMethodFact,
+        DirectDependencyRoute, ExportSummary, ExportedConstructor, ExportedGlobal, ExportedType,
+        ExportedTypeAccess, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
         ImportedNominalFact, ImportedTypeAccess, ResolvedApplicationExpr, ResolvedBinaryExpr,
         ResolvedBinding, ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence,
         ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
@@ -285,7 +286,13 @@ pub(crate) fn resolve_module_with_budget(
             definitions,
         } = resolver.resolve_declarations(surface)?;
         let imported = std::mem::take(&mut resolver.imported);
-        let export_candidate = build_export_candidate(surface, &registry, &definitions)?;
+        let export_candidate = build_export_candidate(
+            surface,
+            &registry,
+            &interfaces,
+            &definitions,
+            std::mem::take(&mut resolver.public_import_candidate),
+        )?;
         let declaration_order = surface
             .declaration_order
             .iter()
@@ -347,9 +354,10 @@ fn reject_duplicate_module_aliases(surface: &SurfaceModule) -> Result<(), Resolv
 fn build_export_candidate(
     surface: &SurfaceModule,
     registry: &ResolvedRegistry,
+    interfaces: &[ResolvedInterfaceDeclaration],
     definitions: &[ResolvedDefinition],
+    mut candidate: ResolvedExportCandidate,
 ) -> Result<ResolvedExportCandidate, ResolveError> {
-    let mut candidate = ResolvedExportCandidate::default();
     for (source, resolved) in surface.definitions.iter().zip(definitions) {
         if !source.public {
             let binder = definition_binder(resolved);
@@ -368,6 +376,7 @@ fn build_export_candidate(
             binder.spelling.clone(),
             CandidateGlobal {
                 binder: binder.id,
+                source: CandidateFactSource::Local,
                 origin: binder.origin.clone(),
             },
         );
@@ -408,11 +417,23 @@ fn build_export_candidate(
             }
             continue;
         }
+        let access = match source.visibility {
+            SurfaceTypeVisibility::PublicOpaque => ExportedTypeAccess::Opaque,
+            SurfaceTypeVisibility::PublicTransparent => ExportedTypeAccess::Transparent,
+            SurfaceTypeVisibility::Private => {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    source.name.span,
+                    "a private nominal reached public export candidate construction",
+                ));
+            }
+        };
         candidate.insert_nominal(
             source.name.text.clone(),
             CandidateNominal {
                 id: resolved.id,
-                visibility: source.visibility,
+                access,
+                source: CandidateFactSource::Local,
                 origin: resolved.origin.clone(),
             },
         );
@@ -448,7 +469,48 @@ fn build_export_candidate(
                 constructor.name.text.clone(),
                 CandidateConstructor {
                     id: *id,
+                    source: CandidateFactSource::Local,
                     origin: resolved_constructor.origin.clone(),
+                },
+            );
+        }
+    }
+
+    for interface in interfaces {
+        if !interface.public {
+            candidate.insert_withheld(
+                WithheldNamespace::Nominal,
+                interface.spelling.clone(),
+                WithheldExport {
+                    kind: WithheldExportKind::Private,
+                    origin: Some(interface.origin.clone()),
+                },
+            );
+            for method in &interface.methods {
+                candidate.insert_withheld(
+                    WithheldNamespace::Term,
+                    method.spelling.clone(),
+                    WithheldExport {
+                        kind: WithheldExportKind::Private,
+                        origin: Some(method.origin.clone()),
+                    },
+                );
+            }
+            continue;
+        }
+        candidate.insert_interface(
+            interface.spelling.clone(),
+            CandidateInterface {
+                id: interface.id,
+                source: CandidateFactSource::Local,
+            },
+        );
+        for method in &interface.methods {
+            candidate.insert_method(
+                method.spelling.clone(),
+                CandidateMethod {
+                    id: method.id,
+                    source: CandidateFactSource::Local,
                 },
             );
         }
@@ -483,6 +545,7 @@ struct Resolver {
     constructor_names: HashMap<String, ConstructorId>,
     module_aliases: HashMap<String, ImportedNamespaces>,
     targeted_withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
+    public_import_candidate: ResolvedExportCandidate,
     imported: ImportedFacts,
     type_scopes: Vec<HashMap<String, ResolvedTypeVariable>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
@@ -604,6 +667,7 @@ impl Resolver {
             constructor_names: HashMap::new(),
             module_aliases: HashMap::new(),
             targeted_withheld: HashMap::new(),
+            public_import_candidate: ResolvedExportCandidate::default(),
             imported: ImportedFacts::default(),
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
@@ -1003,6 +1067,16 @@ impl Resolver {
                                 ),
                             );
                             self.retain_imported_global(exported, dependency.summary, *span)?;
+                            if import.public {
+                                self.public_import_candidate.insert_term(
+                                    local.text.clone(),
+                                    CandidateGlobal {
+                                        binder: exported.binder,
+                                        source: CandidateFactSource::Imported,
+                                        origin: exported.origin.clone(),
+                                    },
+                                );
+                            }
                         }
                         if let Some(method) = dependency.summary.method(&name.text) {
                             selected = true;
@@ -1022,6 +1096,15 @@ impl Resolver {
                                     *span,
                                 ),
                             );
+                            if import.public {
+                                self.public_import_candidate.insert_method(
+                                    local.text.clone(),
+                                    CandidateMethod {
+                                        id: method,
+                                        source: CandidateFactSource::Imported,
+                                    },
+                                );
+                            }
                         }
                         if let Some(exported) = dependency.summary.nominal(&name.text) {
                             selected = true;
@@ -1039,6 +1122,17 @@ impl Resolver {
                                 Some(&name.text),
                                 *span,
                             )?;
+                            if import.public {
+                                self.public_import_candidate.insert_nominal(
+                                    local.text.clone(),
+                                    CandidateNominal {
+                                        id: exported.id,
+                                        access: exported.access,
+                                        source: CandidateFactSource::Imported,
+                                        origin: exported.origin.clone(),
+                                    },
+                                );
+                            }
                         }
                         if let Some(exported) = dependency.summary.interface(&name.text) {
                             selected = true;
@@ -1048,6 +1142,15 @@ impl Resolver {
                                 return Err(import_conflict(local.span, &local.text));
                             }
                             self.interface_names.insert(local.text.clone(), exported.id);
+                            if import.public {
+                                self.public_import_candidate.insert_interface(
+                                    local.text.clone(),
+                                    CandidateInterface {
+                                        id: exported.id,
+                                        source: CandidateFactSource::Imported,
+                                    },
+                                );
+                            }
                         }
                         if let Some(exported) = dependency.summary.constructor(&name.text) {
                             selected = true;
@@ -1063,6 +1166,16 @@ impl Resolver {
                             self.constructor_names
                                 .insert(local.text.clone(), exported.id);
                             self.retain_imported_constructor(exported, dependency.summary, *span)?;
+                            if import.public {
+                                self.public_import_candidate.insert_constructor(
+                                    local.text.clone(),
+                                    CandidateConstructor {
+                                        id: exported.id,
+                                        source: CandidateFactSource::Imported,
+                                        origin: exported.origin.clone(),
+                                    },
+                                );
+                            }
                         }
                         if !selected {
                             let withheld = [
@@ -1109,6 +1222,16 @@ impl Resolver {
                                         .map(crate::source::Origin::primary_span),
                                 },
                             );
+                            if import.public {
+                                self.public_import_candidate.insert_withheld(
+                                    namespace,
+                                    local.text.clone(),
+                                    WithheldExport {
+                                        kind: withheld.kind,
+                                        origin: withheld.origin.clone(),
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -1389,9 +1512,7 @@ impl Resolver {
             )
         })?;
         let owner_is_summary = exported.id.module() == summary.module();
-        if (access == ImportedInterfaceAccess::PublicExport && !owner_is_summary)
-            || (access == ImportedInterfaceAccess::HiddenSummaryClosure && owner_is_summary)
-        {
+        if access == ImportedInterfaceAccess::HiddenSummaryClosure && owner_is_summary {
             return Err(error(
                 ResolveReason::InternalState,
                 span,
