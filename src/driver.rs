@@ -495,7 +495,7 @@ where
         .map_err(TypeError::Internal)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
-    drop(validated_interfaces);
+    ::std::mem::drop(validated_interfaces);
     let sources = graph
         .modules()
         .iter()

@@ -181,7 +181,21 @@ fn interface_state_release_is_ordered(source: &str) -> bool {
     .expect("the driver should independently validate synthesized Core");
     code_token_sequence_position(
         driver_pipeline,
-        &["drop", "(", "validated_interfaces", ")", ";"],
+        &[
+            ":",
+            ":",
+            "std",
+            ":",
+            ":",
+            "mem",
+            ":",
+            ":",
+            "drop",
+            "(",
+            "validated_interfaces",
+            ")",
+            ";",
+        ],
     )
     .is_some_and(|release| release > synthesis_finish && release < core_validation)
 }
@@ -231,10 +245,23 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
     "#;
     assert!(!interface_state_release_is_ordered(deferred_tuple_drop));
 
+    let no_op_drop_macro = r#"
+        macro_rules! drop {
+            ($value:expr) => {};
+        }
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            drop!(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    assert!(!interface_state_release_is_ordered(no_op_drop_macro));
+
     let actual_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
             let unchecked = elaborator.finish(typed.node)?;
-            drop(validated_interfaces);
+            ::std::mem::drop(validated_interfaces);
             let validated = validator(unchecked, &sources, &module_sources)?;
         }
         fn entry_failure() {}
@@ -352,7 +379,10 @@ fn rust_code_tokens(source: &str) -> Vec<&str> {
             tokens.push(&source[start..cursor]);
             continue;
         }
-        if matches!(bytes[cursor], b'.' | b'(' | b')' | b';' | b',' | b'&') {
+        if matches!(
+            bytes[cursor],
+            b'.' | b'(' | b')' | b';' | b',' | b'&' | b':' | b'!'
+        ) {
             tokens.push(&source[cursor..cursor + 1]);
         }
         cursor += 1;
