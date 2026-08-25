@@ -243,11 +243,13 @@ and validation limits additionally have graph-wide witnesses.
 | Linking to Core validation | qualified semantic identities, combined registry, source provenance, dependency-ordered recursive groups, generated entry application | module paths, aliases, summaries, visibility, and opacity |
 | Validation to evaluation | one authenticated pure program | validator indexes and all remaining module-policy facts |
 
-Two linked-intermediate fields have no current-tree reader after construction:
-`ResolvedModuleProgram.entry` and the `module` field of each
-`ResolvedModuleGroup`. They are possible later cleanup targets, subject to a
-bounded API review and interface-era pressure. This report does not remove them
-because cleanup is not needed to establish passive-module semantics.
+At the passive-module checkpoint, `ResolvedModuleProgram.entry` and the
+`module` field of each `ResolvedModuleGroup` had no current reader after
+construction. Interface-era linking and linked evidence validation now consume
+the entry identity to authenticate the selected entry's exact module closure
+and consume group module identities to authenticate group ownership, local and
+imported implementation routes, binders, and declarations. Both fields are
+therefore retained facts, not current cleanup candidates.
 
 ## Diagnostics, resources, and ownership
 

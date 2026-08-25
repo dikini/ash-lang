@@ -21,6 +21,7 @@ use ash::{
 };
 
 const DRIVER_SOURCE: &str = include_str!("../src/driver.rs");
+const EVIDENCE_VALIDATION_SOURCE: &str = include_str!("../src/evidence_validation.rs");
 const PARSER_EXPORTS: &str = include_str!("../src/parser/mod.rs");
 const PARSER_GRAMMAR: &str = include_str!("../src/parser/grammar.rs");
 const PARSER_PROJECTION: &str = include_str!("../src/parser/project.rs");
@@ -124,6 +125,36 @@ fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories()
             );
         }
     }
+}
+
+#[test]
+fn authenticated_interface_state_ends_at_the_core_synthesis_boundary() {
+    let validated_program = EVIDENCE_VALIDATION_SOURCE
+        .split_once("pub struct ValidatedInterfaceProgram {")
+        .and_then(|(_, remainder)| remainder.split_once("impl ValidatedInterfaceProgram"))
+        .map(|(definition, _)| definition)
+        .expect("the validated interface capability should retain a visible definition");
+    let retains_linked_registry = validated_program.contains("LinkedInterfaceRegistry");
+
+    let driver_pipeline = DRIVER_SOURCE
+        .split_once("fn run_path_with_consumers_and_constraint_budget")
+        .and_then(|(_, remainder)| remainder.split_once("fn entry_failure"))
+        .map(|(pipeline, _)| pipeline)
+        .expect("the driver should retain one ordered modular pipeline");
+    let synthesis_finish = driver_pipeline
+        .find(".finish(typed.node)")
+        .expect("the driver should finish Core synthesis");
+    let core_validation = driver_pipeline
+        .find("let validated = validator(")
+        .expect("the driver should independently validate synthesized Core");
+    let releases_before_core_validation = driver_pipeline
+        .find("drop(validated_interfaces);")
+        .is_some_and(|release| release > synthesis_finish && release < core_validation);
+
+    assert!(
+        !retains_linked_registry && releases_before_core_validation,
+        "authenticated interface state must not retain the validator registry and the driver must release the validated interface program after synthesis finish but before Core validation; retains registry: {retains_linked_registry}, releases at boundary: {releases_before_core_validation}"
+    );
 }
 
 fn is_forbidden_interface_identifier(identifier: &str) -> bool {

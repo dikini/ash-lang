@@ -384,7 +384,9 @@ additional boundary cases beyond the ones named here.
 - [`tests/recursion.rs`](../../../tests/recursion.rs):
   `tests/recursion.rs::implementation_methods_share_mutual_recursive_scope`.
 - [`tests/architecture.rs`](../../../tests/architecture.rs):
-  `tests/architecture.rs::core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories`.
+  `tests/architecture.rs::core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories`
+  and
+  `tests/architecture.rs::authenticated_interface_state_ends_at_the_core_synthesis_boundary`.
 - [`src/driver.rs`](../../../src/driver.rs):
   `src/driver.rs::tests::injected_evidence_failure_stops_before_core_synthesis_consumers`.
 
@@ -528,14 +530,20 @@ destroyed through recursive Rust calls.
 | Checking to dependency summaries | public interface and method facts, public implementation heads, checked schemes, ordered prerequisites and mappings, hidden nominal/interface closure, provenance | bodies, private scope, private implementations, and implementations imported by the publisher |
 | Checking to linking | complete checked groups and bodies, defining registries, filled structural occurrences, per-module availability and dependency edges | selection search work and inference state after obligation closure |
 | Linking to interface-evidence validation | combined checked groups and registries, structural plans, occurrence module and import route, stable identities, scope/type/provenance facts | module-local assembly state |
-| Validated evidence to Core synthesis | authenticated checked definitions and evidence capability | interface search, summary transport, availability policy, and interface, implementation, method, and requirement identities after synthesis uses them |
+| Validated evidence to Core synthesis | authenticated checked definitions and evidence capability | the validator-local linked-interface registry and validation indexes after successful authentication |
+| Core synthesis to Core validation | synthesized ordinary Core, source provenance, and the resolved registry used for type display | the validated interface program, checked bodies, structural evidence, routes, and remaining interface identities immediately after successful synthesis finish |
 | Core validation to evaluation | one validated ordinary pure Core program | Core validator indexes and all remaining static evidence facts |
 
 Source syntax erases separately from semantic identity. Import spellings and
 interface declarations cease to be source operations after resolution, while
 their stable identities remain through checking and linked evidence validation.
-Only after validation do Core synthesis and ordinary Core validation release
-those identities from executable structure.
+Linked evidence validation builds its registry locally, uses it to authenticate
+occurrences, and does not store it in the validated capability. Core synthesis
+borrows that capability. After synthesis finish succeeds, the driver explicitly
+drops the validated interface program before independent Core validation. The
+authenticated relationships have already become ordinary Core structure, so
+this boundary shortens the lifetime of checked bodies, evidence, routes, and
+validator metadata without changing Core or evaluation.
 
 ## Locality and maintenance
 

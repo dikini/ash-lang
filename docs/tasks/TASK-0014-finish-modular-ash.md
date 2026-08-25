@@ -39,8 +39,13 @@ packages, caches, or object linking; and interface extensions.
 
 ## Progress
 
-Authorization checkpoint created. The audit, witnesses, retained reports,
-review, verification, cleanup, commits, and tag remain.
+The paired integer-equality witness and complete core-versus-library comparison
+are retained. A focused architecture guard proved and now enforces two
+post-authentication lifetime boundaries: the linked-interface registry remains
+local to validation, and the driver releases the validated interface program
+after Core synthesis finish and before independent Core validation. Modular Ash
+closure reporting, independent reviews, full verification, lifecycle cleanup,
+the closure commit, and the tag remain.
 
 ## Verification
 
@@ -67,7 +72,13 @@ review, verification, cleanup, commits, and tag remain.
 
 ## Discoveries
 
-None yet.
+- Interface-era linking and evidence validation consume
+  `ResolvedModuleProgram.entry` and each group module identity for entry-closure
+  and ownership authentication. The passive-module report's earlier no-reader
+  observation was historical, so those fields remain.
+- An explicit post-synthesis drop closes the long checked-program lifetime
+  without introducing a separate consuming synthesis payload. The observation
+  heap remains necessary for rendering location-backed results.
 
 ## Deviations
 

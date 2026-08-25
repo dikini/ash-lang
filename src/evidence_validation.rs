@@ -1053,7 +1053,6 @@ fn same_type_after_single_substitution(
 #[derive(Debug)]
 pub struct ValidatedInterfaceProgram {
     source: ResolvedModuleProgram,
-    _linked_interfaces: LinkedInterfaceRegistry,
 }
 
 impl ValidatedInterfaceProgram {
@@ -1100,10 +1099,7 @@ pub(crate) fn validate_interface_evidence_with_budget(
 ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure> {
     let linked_interfaces = LinkedInterfaceRegistry::build(&program, budget)?;
     validate_occurrences(&program, &linked_interfaces, budget)?;
-    Ok(ValidatedInterfaceProgram {
-        source: program,
-        _linked_interfaces: linked_interfaces,
-    })
+    Ok(ValidatedInterfaceProgram { source: program })
 }
 
 fn validate_occurrences(
