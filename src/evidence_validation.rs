@@ -2721,6 +2721,15 @@ mod tests {
     }
 
     #[test]
+    fn validated_interface_capability_has_exact_resolved_program_payload() {
+        let ValidatedInterfaceProgram { source } = validate_interface_evidence(local_program())
+            .expect("the local fixture should validate");
+        let source: ResolvedModuleProgram = source;
+
+        drop(source);
+    }
+
+    #[test]
     fn validates_generic_prerequisites_and_lexical_abstract_evidence_before_core() {
         validate_interface_evidence(generic_program())
             .expect("generic prerequisite evidence should authenticate");

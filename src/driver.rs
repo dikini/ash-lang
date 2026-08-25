@@ -476,26 +476,29 @@ where
     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
-    let validated_interfaces = interface_validator(linked, constraint_work)
-        .map_err(PipelineFailure::EvidenceValidation)
-        .map_err(FileFailure::Pipeline)?;
-    let registry = Arc::clone(validated_interfaces.registry());
-    let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
-        .map_err(TypeError::Internal)
-        .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::Pipeline)?;
-    let typed = elaborator
-        .synthesize_module_program(&validated_interfaces)
-        .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::Pipeline)?;
-    let ty = typed.ty;
-    let type_display = registry.display_type(&ty);
-    let unchecked = elaborator
-        .finish(typed.node)
-        .map_err(TypeError::Internal)
-        .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::Pipeline)?;
-    ::std::mem::drop(validated_interfaces);
+    let (ty, type_display, unchecked): (Type, String, UnvalidatedProgram) = {
+        let validated_interfaces = interface_validator(linked, constraint_work)
+            .map_err(PipelineFailure::EvidenceValidation)
+            .map_err(FileFailure::Pipeline)?;
+        let registry = Arc::clone(validated_interfaces.registry());
+        let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
+            .map_err(TypeError::Internal)
+            .map_err(PipelineFailure::Typing)
+            .map_err(FileFailure::Pipeline)?;
+        let typed = elaborator
+            .synthesize_module_program(&validated_interfaces)
+            .map_err(PipelineFailure::Typing)
+            .map_err(FileFailure::Pipeline)?;
+        let ty = typed.ty;
+        let type_display = registry.display_type(&ty);
+        let unchecked = elaborator
+            .finish(typed.node)
+            .map_err(TypeError::Internal)
+            .map_err(PipelineFailure::Typing)
+            .map_err(FileFailure::Pipeline)?;
+        ::std::mem::drop(validated_interfaces);
+        (ty, type_display, unchecked)
+    };
     let sources = graph
         .modules()
         .iter()
@@ -563,7 +566,7 @@ const fn projection_reason(error: ProjectionError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::{
-        cell::Cell,
+        cell::{Cell, RefCell},
         fs,
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
@@ -710,6 +713,39 @@ mod tests {
         );
         assert!(!core_validation_called.get());
         assert!(!evaluation_called.get());
+    }
+
+    #[test]
+    fn independent_core_validation_starts_with_only_the_core_registry_owner() {
+        let source = TestSource::write("main : Unit -> Int\nmain () = 42\n");
+        let registry_lifetime = RefCell::new(None);
+
+        let observation = run_path_with_consumers(
+            source.configuration(),
+            |linked, budget| {
+                let validated = validate_interface_evidence_with_budget(linked, budget)?;
+                registry_lifetime
+                    .borrow_mut()
+                    .replace(Arc::downgrade(validated.registry()));
+                Ok(validated)
+            },
+            |unchecked, sources, module_sources| {
+                let registry_lifetime = registry_lifetime.borrow();
+                let registry = registry_lifetime
+                    .as_ref()
+                    .expect("interface validation should record the resolved registry");
+                assert_eq!(
+                    registry.strong_count(),
+                    1,
+                    "only the unchecked Core program may own the registry when Core validation begins"
+                );
+                validate_modules(unchecked, sources, module_sources)
+            },
+            evaluate,
+        )
+        .expect("the ownership witness should complete the real pipeline");
+
+        assert_eq!(observation.value_display(), "42");
     }
 
     #[test]

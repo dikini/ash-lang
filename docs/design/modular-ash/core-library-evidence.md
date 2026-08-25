@@ -232,15 +232,17 @@ does not infer a general cost ratio from the fixed witness.
 The linked-interface registry is local to linked evidence validation. Successful
 validation returns the `ValidatedInterfaceProgram` capability with its checked
 source program, but does not retain the registry used by
-`validate_occurrences`. Core synthesis borrows the capability. After synthesis
-finish succeeds, the public driver explicitly drops it before independent Core
-validation, releasing checked bodies, structural evidence, implementation
-routes, and remaining checked interface metadata. The linked validator's
-registry and indexes are already local to validation and have ended before this
-drop. The resolved registry used to display the closed result type and the
-computed type display remain available without keeping the validated interface
-program alive. The focused architecture guard enforces both lifetime
-boundaries.
+`validate_occurrences`. Compiler-exhaustive destructuring checks that the
+capability contains exactly one `ResolvedModuleProgram`. Core synthesis borrows
+the capability inside an explicitly typed driver block that also owns the
+display-registry clone, type-display computation, synthesis finish, and the
+eager capability drop. The drop records the last intentional wrapper use, while
+block exit is the ownership boundary before independent Core validation. Only
+the result `Type`, computed `String`, and `UnvalidatedProgram` cross it; checked
+bodies, structural evidence, implementation routes, remaining checked
+interface metadata, and the display clone do not. A driver witness records a
+weak registry reference during interface validation and observes exactly one
+strong owner, the unchecked Core program, when Core validation begins.
 
 The manual structural witness intentionally keeps its independently validated
 Core for inspection. A returned `Value::Data(ObservedValue)` already owns an
@@ -262,8 +264,8 @@ The audit accepts three bounded conclusions:
 - use existing passive modules and method-only interfaces when source chooses
   an explicit equality capability; adding the tested implementation needs no
   new compiler representation or production dispatch site; and
-- release the validator-local linked registry after authentication and the
-  validated interface program after successful Core synthesis finish.
+- release the validator-local linked registry after authentication and confine
+  validated interface state to the typed Core-synthesis scope.
 
 The audit rejects operator rewriting, an implicit import or prelude, an
 interface-specific Core or runtime node, runtime lookup or registration,
@@ -277,8 +279,9 @@ have interface-era readers for entry-closure and group-ownership
 authentication. `Observation` must separately retain the heap for raw locations
 captured by returned closures; returned structural `Value::Data` already owns
 its own heap. A lean consuming synthesis payload remains deferred: the explicit
-post-finish drop closes the proven long lifetime without adding another
-representation or API.
+typed scope closes the proven long lifetime without adding another
+representation or API, while retaining the eager post-finish drop as the last
+documented wrapper use.
 
 ## Evidence and verification
 
@@ -290,7 +293,9 @@ The completed comparison retains the four paired tests and the architecture
 boundary test. This increment uses these focused verification commands:
 
 ```text
-cargo test --locked --test architecture authenticated_interface_state_ends_at_the_core_synthesis_boundary -- --exact
+cargo test --locked --lib driver::tests::independent_core_validation_starts_with_only_the_core_registry_owner -- --exact
+cargo test --locked --lib evidence_validation::tests::validated_interface_capability_has_exact_resolved_program_payload -- --exact
+cargo test --locked --test architecture synthesis_block_exit_releases_original_state_after_macro_shadow_drop -- --exact
 cargo fmt --check
 cargo test --locked --test modular_closure
 cargo test --locked --test architecture --test interfaces --test interface_modules --test interface_validation
@@ -301,15 +306,22 @@ markdownlint --disable MD013 -- README.md spec docs
 git diff --check
 ```
 
-Before the production cleanup, the exact architecture test failed with
-`retains registry: true, releases at boundary: false`. After the cleanup, the
-same command passed one test. Fresh post-change runs passed 4 paired audit
-tests; 53 architecture and interface tests; 19 interface-corpus and module-
-elaboration tests; and all 298 library tests. Formatting, denied-warning
-all-target Clippy, changed-document Markdown lint, and whitespace checks
-reported no findings. The three documented maintenance command/result sets
-returned the exact 15-file direct path, four equality-specific Core joins, and
-stable eight-file interface path recorded above.
+In the prior cleanup workflow, the source-shape architecture test first failed
+with `retains registry: true, releases at boundary: false`, then passed after an
+explicit drop was added. That lexical guard is no longer current evidence. The
+production ownership witness introduced by the later maintenance review failed
+against the flat driver with two strong registry owners where one was expected,
+then passed after the typed synthesis scope removed the display clone before
+Core validation. The compiler shape witness and macro-shadow scope witness
+provide the complementary structural and mechanism evidence.
+
+At the original audit checkpoint, fresh runs passed 4 paired audit tests; 53
+architecture and interface tests; 19 interface-corpus and module-elaboration
+tests; and all 298 library tests. Formatting, denied-warning all-target Clippy,
+changed-document Markdown lint, and whitespace checks reported no findings.
+The three documented maintenance command/result sets returned the exact 15-file
+direct path, four equality-specific Core joins, and stable eight-file interface
+path recorded above.
 
 Manual review also checks every relative link in this report and confirms that
 semantic claims remain grounded in `spec/`.

@@ -40,7 +40,7 @@ does not add features to that inventory.
 | Checking to summaries and linking | closed public schemes, public and hidden summary closure, complete checked definition groups, structural evidence, module ownership, and dependency order | dependency bodies from dependent checking, private dependency scopes, selection search state, and inference substitutions after obligation closure |
 | Linking to evidence validation | exact entry closure, group ownership, combined registries, retained selections, availability routes, types, and provenance | module-local assembly state and already-authenticated import syntax |
 | Evidence validation to Core synthesis | authenticated checked definitions and one capability to synthesize their selected evidence | the validator-local linked-interface registry and its indexes |
-| Core synthesis to Core validation | ordinary typed Core, combined nominal and constructor registry, source provenance, and the registry used to display the result type | checked bodies, structural evidence, implementation routes, and remaining interface metadata after the explicit post-synthesis wrapper drop |
+| Core synthesis to Core validation | ordinary typed Core with its combined nominal and constructor registry, source provenance, the result type, and its computed source-facing display | checked bodies, structural evidence, implementation routes, the display-registry clone, and remaining interface metadata when the explicit typed synthesis scope exits; an eager wrapper drop remains inside that scope |
 | Core validation to evaluation | one authenticated pure Core program | validator indexes and remaining static module and evidence policy |
 | Evaluation to observation | result value, closed result type, and completed shared heap | control, continuations, and transient environments not reachable from the result |
 
@@ -119,10 +119,16 @@ not create host ownership cycles.
 
 Linked evidence validation builds its interface registry locally and does not
 retain it in `ValidatedInterfaceProgram`. Core synthesis borrows that validated
-wrapper. After synthesis finish succeeds, the driver explicitly drops the
-wrapper before independent Core validation, releasing checked bodies,
-structural evidence, routes, and remaining interface facts after their last
-consumer.
+wrapper. The wrapper's exact `ResolvedModuleProgram` payload is checked by
+compiler-exhaustive destructuring. The driver confines interface validation,
+the display-registry clone, Core synthesis and finish, type-display
+computation, and the eager wrapper drop to one explicitly typed block. That
+drop records the last intentional wrapper use; block exit is the ownership
+boundary. The block returns only `Type`, `String`, and `UnvalidatedProgram`, so
+checked bodies, structural evidence, routes, the display clone, and remaining
+interface facts cannot reach independent Core validation. A driver test records
+a weak registry reference at interface validation and proves that only the
+unchecked Core program owns it when Core validation begins.
 
 An observed structural or cyclic data value owns the heap needed to render its
 locations. The public observation separately keeps the completed evaluation
@@ -142,18 +148,21 @@ equality-specific Core joins remain the primitive definition, transformation,
 elaboration, and evaluator.
 
 The closure audit removed actual stale retention rather than adding a parallel
-representation. `ValidatedInterfaceProgram` no longer stores the linked
-validator registry, and the driver now performs an explicit post-synthesis
-drop. It retained the entry identity, group module identities, and observation
-heap after proving their interface-era or closure-observation readers. Earlier
-released alternatives remain absent: a Mini-Ash compiler path, source
-dictionaries, span-keyed evidence maps, lowering-time reselection, summary
-bodies and private scopes, route-specific implementation identities, runtime
-registries, and module or interface Core nodes.
+representation. `ValidatedInterfaceProgram` does not store the linked
+validator registry, and the driver now uses an explicit typed synthesis scope
+while retaining the eager post-finish drop. It retained the entry identity,
+group module identities, and observation heap after proving their interface-era
+or closure-observation readers. Earlier released alternatives remain absent: a
+Mini-Ash compiler path, source dictionaries, span-keyed evidence maps,
+lowering-time reselection, summary bodies and private scopes, route-specific
+implementation identities, runtime registries, and module or interface Core
+nodes.
 
-The architecture guard checks the single current Modular source pipeline, the
-post-synthesis interface-state lifetime, and the closed Core and evaluator
-inventories. These are maintenance witnesses, not language authority.
+The architecture target checks the single current Modular source pipeline, a
+macro-shadow lexical-scope mechanism witness, and the closed Core and evaluator
+inventories. Compiler-exhaustive wrapper destructuring and the driver's weak
+ownership witness check the production boundary. These are maintenance
+witnesses, not language authority.
 
 ## Retained evidence
 
@@ -221,15 +230,15 @@ wording. The retained maintenance searches returned the exact 15-file direct
 equality path, four equality-specific Core joins, eight-file interface path,
 and no interface-family identifier in `src/core` or `src/eval`.
 
-The final cross-cutting whole-branch review found that the lifetime guard could
-accept aliased or additional wrapper state and could count nested-control-flow
-or macro-contained drop tokens as an executed release. Adversarial tests first
-required the wrapper guard to accept only the exact immediate retained shape,
-then required delimiter-aware matching of the synthesis, top-level drop
-statement, and Core-validation sequence. The corrected guards rejected
-aliases, extra fields, nested or unreachable drops, macro-contained tokens, and
-mismatched delimiters. The same whole-branch reviewer approved the corrected
-branch after these two Minor findings.
+The prior workflow's final cross-cutting whole-branch review found that its
+lifetime guard could accept aliased or additional wrapper state and could count
+nested-control-flow or macro-contained drop tokens as an executed release.
+Adversarial tests first required the wrapper guard to accept only the exact
+immediate retained shape, then required delimiter-aware matching of the
+synthesis, top-level drop statement, and Core-validation sequence. Those
+source-token guards rejected aliases, extra fields, nested or unreachable
+drops, macro-contained tokens, and mismatched delimiters. The same whole-branch
+reviewer approved that prior state after these two Minor findings.
 
 After every review approved the exact state, a fresh final `cargo xtask verify`
 passed. It ran formatting, locked metadata and build checks, denied-warning
@@ -242,6 +251,19 @@ tests, and one `xtask` test: 936 tests. The focused architecture target ran all
 uncommitted review; after this final verification, the closure commit recorded
 the exact reviewed state and the annotated unsigned tag was applied to that
 commit. This ordering kept the marker from claiming an unreviewed state.
+
+A later maintenance review showed that a macro could introduce a caller-scope
+shadow binding that the prior source-token guard could not see. The same guard's
+attribute scanner also accepted malformed nested delimiters. The current change
+replaces that parser with the typed synthesis scope, compiler-exhaustive payload
+destructuring, the driver ownership witness, and one macro-shadow scope witness.
+The driver test first observed two strong registry owners at Core-validation
+entry in the flat implementation, then observed the required one owner after
+the scope change. The current locked all-target inventory lists 300 library
+tests, 10 `ash` binary tests, 624 integration tests, and one `xtask` test: 935
+tests. The library gained two structural tests; the architecture target removed
+four parser tests and added one scope test, leaving seven architecture tests
+and a net reduction of one test.
 
 ## Intentional exclusions and later pressure
 

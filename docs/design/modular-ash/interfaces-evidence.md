@@ -386,11 +386,14 @@ additional boundary cases beyond the ones named here.
 - [`tests/architecture.rs`](../../../tests/architecture.rs):
   `tests/architecture.rs::core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories`
   and
-  `tests/architecture.rs::authenticated_interface_state_ends_at_the_core_synthesis_boundary`;
-  `tests/architecture.rs::interface_state_boundary_guard_ignores_prose_and_requires_code_sequences`
-  retains the source-guard precision.
+  `tests/architecture.rs::synthesis_block_exit_releases_original_state_after_macro_shadow_drop`.
+- [`src/evidence_validation.rs`](../../../src/evidence_validation.rs):
+  `src/evidence_validation.rs::tests::validated_interface_capability_has_exact_resolved_program_payload`
+  compiler-checks the capability's exhaustive payload shape.
 - [`src/driver.rs`](../../../src/driver.rs):
-  `src/driver.rs::tests::injected_evidence_failure_stops_before_core_synthesis_consumers`.
+  `src/driver.rs::tests::injected_evidence_failure_stops_before_core_synthesis_consumers`
+  and
+  `src/driver.rs::tests::independent_core_validation_starts_with_only_the_core_registry_owner`.
 
 ### Exact end-to-end observations
 
@@ -533,7 +536,7 @@ destroyed through recursive Rust calls.
 | Checking to linking | complete checked groups and bodies, defining registries, filled structural occurrences, per-module availability and dependency edges | selection search work and inference state after obligation closure |
 | Linking to interface-evidence validation | combined checked groups and registries, structural plans, occurrence module and import route, stable identities, scope/type/provenance facts | module-local assembly state |
 | Validated evidence to Core synthesis | authenticated checked definitions and evidence capability | the validator-local linked-interface registry and validation indexes after successful authentication |
-| Core synthesis to Core validation | synthesized ordinary Core, source provenance, and the resolved registry used for type display | the validated interface program, checked bodies, structural evidence, routes, and remaining interface identities immediately after successful synthesis finish |
+| Core synthesis to Core validation | synthesized ordinary Core with its resolved registry, source provenance, the result type, and its computed source-facing display | the validated interface program, checked bodies, structural evidence, routes, the display-registry clone, and remaining interface identities when the explicit typed synthesis scope exits; an eager wrapper drop remains inside that scope |
 | Core validation to evaluation | one validated ordinary pure Core program | Core validator indexes and all remaining static evidence facts |
 
 Source syntax erases separately from semantic identity. Import spellings and
@@ -541,12 +544,18 @@ interface declarations cease to be source operations after resolution, while
 their stable identities remain through checking and linked evidence validation.
 Linked evidence validation builds its registry locally, uses it to authenticate
 occurrences, and does not store it in the validated capability. Core synthesis
-borrows that capability. After synthesis finish succeeds, the driver explicitly
-drops the validated interface program before independent Core validation. The
-authenticated relationships have already become ordinary Core structure, so
-this boundary shortens the lifetime of checked bodies, evidence, routes, and
-remaining checked interface metadata without changing Core or evaluation. The
-linked validator's registry and indexes already ended locally after successful
+borrows that capability inside an explicitly typed driver block. The block also
+owns the display-registry clone, type-display computation, synthesis finish,
+and the eager wrapper drop. The drop records the last intentional capability
+use; block exit is the ownership boundary before independent Core validation.
+Only `Type`, `String`, and `UnvalidatedProgram` cross it. Compiler-exhaustive
+destructuring checks the capability's exact `ResolvedModuleProgram` payload,
+and a driver weak-reference witness proves that only the unchecked Core program
+owns the resolved registry when Core validation begins. The authenticated
+relationships have already become ordinary Core structure, so this boundary
+releases checked bodies, evidence, routes, the display clone, and remaining
+checked interface metadata without changing Core or evaluation. The linked
+validator's registry and indexes already ended locally after successful
 authentication.
 
 ## Locality and maintenance
