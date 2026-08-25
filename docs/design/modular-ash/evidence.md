@@ -37,7 +37,7 @@ The measurements used:
 | Cargo | `cargo 1.97.1 (c980f4866 2026-06-30)` |
 | Host | Linux `x86_64` |
 
-Intermediate commits are unsigned. The work remains isolated on
+Intermediate commit signatures are mixed. The work remains isolated on
 `feature/modular-ash`; this report does not record a merge.
 
 ## Causal semantic model
@@ -308,17 +308,18 @@ module initialization or dynamic lifetime management.
 
 ## Downstream pressure and exclusions
 
-The next Modular Ash increment is [interface and `impl`
-design](../DN-0023-interfaces-and-implementations.md) against real module
-boundaries. Ash interfaces are Rust-trait- or Haskell-type-class-like typed
-relationships, not module signatures. DN-0023 recommends method-only
+At this passive-module checkpoint, the next planned increment was [interface
+and `impl` design](../DN-0023-interfaces-and-implementations.md) against real
+module boundaries. Ash interfaces are Rust-trait- or Haskell-type-class-like
+typed relationships, not module signatures. DN-0023 later selected method-only
 interfaces, scoped coherence, implicit source evidence, and explicit flattened
-Core evidence while retaining associated types and specialization as later
-pressure. It does not reinterpret compiler-generated export summaries as
-source declarations.
+Core evidence. That increment is now implemented and specified; associated
+types and specialization remain later pressure. It did not reinterpret
+compiler-generated export summaries as source declarations.
 
-This increment intentionally excludes individual constructor exports, import
-re-exports, parent traversal, module cycles, cross-module recursive groups,
+The passive-module increment documented here intentionally excludes individual
+constructor exports, import re-exports, parent traversal, module cycles,
+cross-module recursive groups,
 package manifests or acquisition, persistent compiled modules, separate object
 linking, initialization, runtime module values, dynamic loading, providers,
 registration, effects, dead-code elimination, a core-versus-library migration,
