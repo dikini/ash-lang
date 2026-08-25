@@ -2,6 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    hash::Hash,
     sync::Arc,
 };
 
@@ -1713,7 +1714,8 @@ pub struct ResolvedExportCandidate {
     methods: HashMap<String, CandidateMethod>,
     method_order: Vec<String>,
     hidden_nominals: HashMap<NominalTypeId, CandidateHiddenNominal>,
-    withheld: HashMap<(String, WithheldNamespace), WithheldExport>,
+    withheld: HashMap<String, WithheldExports>,
+    withheld_order: Vec<(String, WithheldNamespace)>,
 }
 
 impl ResolvedExportCandidate {
@@ -1756,16 +1758,10 @@ impl ResolvedExportCandidate {
     /// Reports whether one source spelling is withheld because it is private.
     #[must_use]
     pub fn is_private(&self, spelling: &str) -> bool {
-        [
-            WithheldNamespace::Term,
-            WithheldNamespace::Nominal,
-            WithheldNamespace::Constructor,
-        ]
-        .into_iter()
-        .any(|namespace| {
-            self.withheld
-                .get(&(spelling.to_owned(), namespace))
-                .is_some_and(|withheld| withheld.kind == WithheldExportKind::Private)
+        self.withheld.get(spelling).is_some_and(|withheld| {
+            withheld
+                .iter()
+                .any(|withheld| withheld.kind == WithheldExportKind::Private)
         })
     }
 
@@ -1773,60 +1769,148 @@ impl ResolvedExportCandidate {
     #[must_use]
     pub fn is_opaque_constructor(&self, spelling: &str) -> bool {
         self.withheld
-            .get(&(spelling.to_owned(), WithheldNamespace::Constructor))
+            .get(spelling)
+            .and_then(|withheld| withheld.get(WithheldNamespace::Constructor))
             .is_some_and(|withheld| withheld.kind == WithheldExportKind::OpaqueConstructor)
     }
 
-    pub(crate) fn insert_term(&mut self, spelling: String, candidate: CandidateGlobal) {
-        if self.terms.insert(spelling.clone(), candidate).is_none() {
-            self.term_order.push(spelling);
-        }
+    pub(crate) fn try_insert_term(
+        &mut self,
+        spelling: String,
+        candidate: CandidateGlobal,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        try_insert_ordered(
+            &mut self.terms,
+            &mut self.term_order,
+            spelling,
+            candidate,
+            budget,
+        )
     }
 
-    pub(crate) fn insert_nominal(&mut self, spelling: String, candidate: CandidateNominal) {
-        if self.nominals.insert(spelling.clone(), candidate).is_none() {
-            self.nominal_order.push(spelling);
-        }
+    pub(crate) fn try_insert_nominal(
+        &mut self,
+        spelling: String,
+        candidate: CandidateNominal,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        try_insert_ordered(
+            &mut self.nominals,
+            &mut self.nominal_order,
+            spelling,
+            candidate,
+            budget,
+        )
     }
 
-    pub(crate) fn insert_constructor(&mut self, spelling: String, candidate: CandidateConstructor) {
-        if self
-            .constructors
-            .insert(spelling.clone(), candidate)
-            .is_none()
-        {
-            self.constructor_order.push(spelling);
-        }
+    pub(crate) fn try_insert_constructor(
+        &mut self,
+        spelling: String,
+        candidate: CandidateConstructor,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        try_insert_ordered(
+            &mut self.constructors,
+            &mut self.constructor_order,
+            spelling,
+            candidate,
+            budget,
+        )
     }
 
-    pub(crate) fn insert_interface(&mut self, spelling: String, candidate: CandidateInterface) {
-        if self
-            .interfaces
-            .insert(spelling.clone(), candidate)
-            .is_none()
-        {
-            self.interface_order.push(spelling);
-        }
+    pub(crate) fn try_insert_interface(
+        &mut self,
+        spelling: String,
+        candidate: CandidateInterface,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        try_insert_ordered(
+            &mut self.interfaces,
+            &mut self.interface_order,
+            spelling,
+            candidate,
+            budget,
+        )
     }
 
-    pub(crate) fn insert_method(&mut self, spelling: String, candidate: CandidateMethod) {
-        if self.methods.insert(spelling.clone(), candidate).is_none() {
-            self.method_order.push(spelling);
-        }
+    pub(crate) fn try_insert_method(
+        &mut self,
+        spelling: String,
+        candidate: CandidateMethod,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        try_insert_ordered(
+            &mut self.methods,
+            &mut self.method_order,
+            spelling,
+            candidate,
+            budget,
+        )
     }
 
-    pub(crate) fn insert_hidden_nominal(&mut self, candidate: CandidateHiddenNominal) {
+    pub(crate) fn try_insert_hidden_nominal(
+        &mut self,
+        candidate: CandidateHiddenNominal,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        if let Some(existing) = self.hidden_nominals.get_mut(&candidate.id) {
+            *existing = candidate;
+            return Ok(());
+        }
+        budget.charge(1)?;
+        self.hidden_nominals.try_reserve(1).map_err(|_| ())?;
         self.hidden_nominals.insert(candidate.id, candidate);
+        Ok(())
     }
 
-    pub(crate) fn insert_withheld(
+    pub(crate) fn try_insert_withheld(
         &mut self,
         namespace: WithheldNamespace,
         spelling: String,
         withheld: WithheldExport,
-    ) {
-        self.withheld.insert((spelling, namespace), withheld);
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        if let Some(existing) = self.withheld.get_mut(&spelling)
+            && existing.get(namespace).is_some()
+        {
+            existing.insert(namespace, withheld);
+            return Ok(());
+        }
+        budget.charge(2)?;
+        if !self.withheld.contains_key(&spelling) {
+            self.withheld.try_reserve(1).map_err(|_| ())?;
+        }
+        self.withheld_order.try_reserve(1).map_err(|_| ())?;
+        self.withheld
+            .entry(spelling.clone())
+            .or_default()
+            .insert(namespace, withheld);
+        self.withheld_order.push((spelling, namespace));
+        Ok(())
     }
+}
+
+fn try_insert_ordered<K, V>(
+    entries: &mut HashMap<K, V>,
+    order: &mut Vec<K>,
+    key: K,
+    value: V,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()>
+where
+    K: Clone + Eq + Hash,
+{
+    if let Some(existing) = entries.get_mut(&key) {
+        *existing = value;
+        return Ok(());
+    }
+    budget.charge(2)?;
+    entries.try_reserve(1).map_err(|_| ())?;
+    order.try_reserve(1).map_err(|_| ())?;
+    order.push(key.clone());
+    entries.insert(key, value);
+    Ok(())
 }
 
 impl Drop for ResolvedExportCandidate {
@@ -1851,10 +1935,13 @@ impl Drop for ResolvedExportCandidate {
             discard_origin_iteratively(candidate.origin);
         }
         for (_, withheld) in self.withheld.drain() {
-            if let Some(origin) = withheld.origin {
-                discard_origin_iteratively(origin);
+            for withheld in withheld.into_values() {
+                if let Some(origin) = withheld.origin {
+                    discard_origin_iteratively(origin);
+                }
             }
         }
+        self.withheld_order.clear();
     }
 }
 
@@ -1946,7 +2033,53 @@ pub(crate) enum WithheldNamespace {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WithheldExport {
     pub(crate) kind: WithheldExportKind,
+    pub(crate) owner: Option<NominalTypeId>,
     pub(crate) origin: Option<Origin>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct WithheldExports {
+    term: Option<WithheldExport>,
+    nominal: Option<WithheldExport>,
+    constructor: Option<WithheldExport>,
+}
+
+impl WithheldExports {
+    fn get(&self, namespace: WithheldNamespace) -> Option<&WithheldExport> {
+        match namespace {
+            WithheldNamespace::Term => self.term.as_ref(),
+            WithheldNamespace::Nominal => self.nominal.as_ref(),
+            WithheldNamespace::Constructor => self.constructor.as_ref(),
+        }
+    }
+
+    fn insert(
+        &mut self,
+        namespace: WithheldNamespace,
+        withheld: WithheldExport,
+    ) -> Option<WithheldExport> {
+        match namespace {
+            WithheldNamespace::Term => self.term.replace(withheld),
+            WithheldNamespace::Nominal => self.nominal.replace(withheld),
+            WithheldNamespace::Constructor => self.constructor.replace(withheld),
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &WithheldExport> {
+        [
+            self.term.as_ref(),
+            self.nominal.as_ref(),
+            self.constructor.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    fn into_values(self) -> impl Iterator<Item = WithheldExport> {
+        [self.term, self.nominal, self.constructor]
+            .into_iter()
+            .flatten()
+    }
 }
 
 /// Source access for one exported nominal type.
@@ -2047,7 +2180,8 @@ pub struct ExportSummary {
     implementations: Vec<CheckedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
-    withheld: HashMap<(String, WithheldNamespace), WithheldExport>,
+    withheld: HashMap<String, WithheldExports>,
+    withheld_order: Vec<(String, WithheldNamespace)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2123,6 +2257,7 @@ impl ExportSummary {
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
             withheld: HashMap::new(),
+            withheld_order: Vec::new(),
         };
         type_work
             .charge(
@@ -2134,21 +2269,39 @@ impl ExportSummary {
                     .saturating_add(resolved.export_candidate.constructors.len())
                     .saturating_add(resolved.export_candidate.interfaces.len())
                     .saturating_add(resolved.export_candidate.methods.len())
-                    .saturating_add(resolved.export_candidate.withheld.len()),
+                    .saturating_add(
+                        resolved
+                            .export_candidate
+                            .withheld_order
+                            .len()
+                            .saturating_mul(2),
+                    ),
             )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         summary
             .withheld
             .try_reserve(resolved.export_candidate.withheld.len())
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        for ((spelling, namespace), withheld) in &resolved.export_candidate.withheld {
-            if summary
+        summary
+            .withheld_order
+            .try_reserve(resolved.export_candidate.withheld_order.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (spelling, namespace) in &resolved.export_candidate.withheld_order {
+            let withheld = resolved
+                .export_candidate
                 .withheld
-                .insert((spelling.clone(), *namespace), withheld.clone())
-                .is_some()
-            {
+                .get(spelling)
+                .and_then(|withheld| withheld.get(*namespace))
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let replaced = summary
+                .withheld
+                .entry(spelling.clone())
+                .or_default()
+                .insert(*namespace, withheld.clone());
+            if replaced.is_some() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
+            summary.withheld_order.push((spelling.clone(), *namespace));
         }
         summary
             .terms
@@ -2973,11 +3126,11 @@ impl ExportSummary {
             .saturating_add(self.constructors.len())
             .saturating_add(self.interface_names.len())
             .saturating_add(self.method_names.len())
-            .saturating_add(self.withheld.len())
+            .saturating_add(self.withheld_order.len())
     }
 
     pub(crate) fn withheld_count(&self) -> usize {
-        self.withheld.len()
+        self.withheld_order.len()
     }
 
     pub(crate) fn nominals(&self) -> impl Iterator<Item = (&str, &ExportedType)> {
@@ -2997,15 +3150,42 @@ impl ExportSummary {
         namespace: WithheldNamespace,
         spelling: &str,
     ) -> Option<&WithheldExport> {
-        self.withheld.get(&(spelling.to_owned(), namespace))
+        self.withheld
+            .get(spelling)
+            .and_then(|withheld| withheld.get(namespace))
     }
 
     pub(crate) fn withheld(
         &self,
     ) -> impl Iterator<Item = (WithheldNamespace, &str, &WithheldExport)> {
-        self.withheld
+        self.withheld_order
             .iter()
-            .map(|((spelling, namespace), withheld)| (*namespace, spelling.as_str(), withheld))
+            .filter_map(|(spelling, namespace)| {
+                self.withheld
+                    .get(spelling)
+                    .and_then(|withheld| withheld.get(*namespace))
+                    .map(|withheld| (*namespace, spelling.as_str(), withheld))
+            })
+    }
+
+    pub(crate) fn opaque_constructors(
+        &self,
+        owner: NominalTypeId,
+    ) -> impl Iterator<Item = (&str, &WithheldExport)> {
+        self.withheld_order
+            .iter()
+            .filter_map(move |(spelling, namespace)| {
+                if *namespace != WithheldNamespace::Constructor {
+                    return None;
+                }
+                let withheld = self
+                    .withheld
+                    .get(spelling)
+                    .and_then(|withheld| withheld.get(*namespace))?;
+                (withheld.kind == WithheldExportKind::OpaqueConstructor
+                    && withheld.owner == Some(owner))
+                .then_some((spelling.as_str(), withheld))
+            })
     }
 
     pub(crate) fn nominal_fact(&self, id: NominalTypeId) -> Option<ImportedNominalFactRef<'_>> {
@@ -3062,6 +3242,36 @@ impl ExportSummary {
             .iter()
             .map(|(spelling, id, _, _)| (*id, (*spelling).to_owned()))
             .collect();
+        let withheld_order = unavailable
+            .iter()
+            .flat_map(|spelling| {
+                [
+                    WithheldNamespace::Term,
+                    WithheldNamespace::Nominal,
+                    WithheldNamespace::Constructor,
+                ]
+                .into_iter()
+                .map(move |namespace| ((*spelling).to_owned(), namespace))
+            })
+            .collect();
+        let mut withheld = HashMap::<String, WithheldExports>::new();
+        for spelling in unavailable {
+            let entries = withheld.entry(spelling.to_owned()).or_default();
+            for namespace in [
+                WithheldNamespace::Term,
+                WithheldNamespace::Nominal,
+                WithheldNamespace::Constructor,
+            ] {
+                entries.insert(
+                    namespace,
+                    WithheldExport {
+                        kind: WithheldExportKind::Private,
+                        owner: None,
+                        origin: None,
+                    },
+                );
+            }
+        }
         Self {
             module,
             terms: terms
@@ -3118,26 +3328,8 @@ impl ExportSummary {
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
-            withheld: unavailable
-                .into_iter()
-                .flat_map(|spelling| {
-                    [
-                        WithheldNamespace::Term,
-                        WithheldNamespace::Nominal,
-                        WithheldNamespace::Constructor,
-                    ]
-                    .into_iter()
-                    .map(move |namespace| {
-                        (
-                            (spelling.to_owned(), namespace),
-                            WithheldExport {
-                                kind: WithheldExportKind::Private,
-                                origin: None,
-                            },
-                        )
-                    })
-                })
-                .collect(),
+            withheld,
+            withheld_order,
         }
     }
 
@@ -3153,24 +3345,37 @@ impl ExportSummary {
     ) -> Self {
         let mut summary = Self::test_fixture(module, terms, nominals, constructors, unavailable);
         for (spelling, _) in &opaque_constructors {
+            if let Some(withheld) = summary.withheld.get_mut(*spelling) {
+                withheld.term = None;
+                withheld.constructor = None;
+            }
             summary
-                .withheld
-                .remove(&(spelling.to_string(), WithheldNamespace::Term));
-            summary
-                .withheld
-                .remove(&(spelling.to_string(), WithheldNamespace::Constructor));
+                .withheld_order
+                .retain(|(retained_spelling, namespace)| {
+                    retained_spelling != spelling
+                        || !matches!(
+                            namespace,
+                            WithheldNamespace::Term | WithheldNamespace::Constructor
+                        )
+                });
         }
-        summary
-            .withheld
-            .extend(opaque_constructors.into_iter().map(|(spelling, origin)| {
-                (
-                    (spelling.to_owned(), WithheldNamespace::Constructor),
+        for (spelling, origin) in opaque_constructors {
+            summary
+                .withheld_order
+                .push((spelling.to_owned(), WithheldNamespace::Constructor));
+            summary
+                .withheld
+                .entry(spelling.to_owned())
+                .or_default()
+                .insert(
+                    WithheldNamespace::Constructor,
                     WithheldExport {
                         kind: WithheldExportKind::OpaqueConstructor,
+                        owner: None,
                         origin: Some(origin),
                     },
-                )
-            }));
+                );
+        }
         summary
             .hidden_nominals
             .extend(hidden_nominals.into_iter().map(
@@ -3291,10 +3496,13 @@ impl Drop for ExportSummary {
             discard_origin_iteratively(exported.origin);
         }
         for (_, withheld) in self.withheld.drain() {
-            if let Some(origin) = withheld.origin {
-                discard_origin_iteratively(origin);
+            for withheld in withheld.into_values() {
+                if let Some(origin) = withheld.origin {
+                    discard_origin_iteratively(origin);
+                }
             }
         }
+        self.withheld_order.clear();
     }
 }
 
@@ -4584,6 +4792,7 @@ mod tests {
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
             withheld: HashMap::new(),
+            withheld_order: Vec::new(),
         };
         let checked = CheckedModule::new(
             resolved,
@@ -4916,14 +5125,17 @@ mod tests {
             true,
         );
         let mut export_candidate = ResolvedExportCandidate::default();
-        export_candidate.insert_term(
-            "apply".into(),
-            CandidateGlobal {
-                binder,
-                source: CandidateFactSource::Local,
-                origin: Origin::Source(global_span),
-            },
-        );
+        export_candidate
+            .try_insert_term(
+                "apply".into(),
+                CandidateGlobal {
+                    binder,
+                    source: CandidateFactSource::Local,
+                    origin: Origin::Source(global_span),
+                },
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the export candidate fixture has an unbounded budget");
         let resolved = ResolvedModule::new(ResolvedModuleParts {
             module: middle,
             registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),

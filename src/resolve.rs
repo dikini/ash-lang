@@ -292,6 +292,7 @@ pub(crate) fn resolve_module_with_budget(
             &interfaces,
             &definitions,
             std::mem::take(&mut resolver.public_import_candidate),
+            &mut resolver.type_work,
         )?;
         let declaration_order = surface
             .declaration_order
@@ -357,47 +358,84 @@ fn build_export_candidate(
     interfaces: &[ResolvedInterfaceDeclaration],
     definitions: &[ResolvedDefinition],
     mut candidate: ResolvedExportCandidate,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<ResolvedExportCandidate, ResolveError> {
     for (source, resolved) in surface.definitions.iter().zip(definitions) {
         if !source.public {
             let binder = definition_binder(resolved);
-            candidate.insert_withheld(
-                WithheldNamespace::Term,
-                binder.spelling.clone(),
-                WithheldExport {
-                    kind: WithheldExportKind::Private,
-                    origin: Some(binder.origin.clone()),
-                },
-            );
+            candidate
+                .try_insert_withheld(
+                    WithheldNamespace::Term,
+                    binder.spelling.clone(),
+                    WithheldExport {
+                        kind: WithheldExportKind::Private,
+                        owner: None,
+                        origin: Some(binder.origin.clone()),
+                    },
+                    type_work,
+                )
+                .map_err(|()| {
+                    export_candidate_resource_error(
+                        surface_definition_name(source).span,
+                        "local export candidate retention exceeded its type-work budget",
+                    )
+                })?;
             continue;
         }
         let binder = definition_binder(resolved);
-        candidate.insert_term(
-            binder.spelling.clone(),
-            CandidateGlobal {
-                binder: binder.id,
-                source: CandidateFactSource::Local,
-                origin: binder.origin.clone(),
-            },
-        );
+        candidate
+            .try_insert_term(
+                binder.spelling.clone(),
+                CandidateGlobal {
+                    binder: binder.id,
+                    source: CandidateFactSource::Local,
+                    origin: binder.origin.clone(),
+                },
+                type_work,
+            )
+            .map_err(|()| {
+                export_candidate_resource_error(
+                    surface_definition_name(source).span,
+                    "local export candidate retention exceeded its type-work budget",
+                )
+            })?;
     }
 
     for (source, resolved) in surface.type_declarations.iter().zip(registry.nominals()) {
         if source.visibility == SurfaceTypeVisibility::Private {
-            candidate.insert_hidden_nominal(CandidateHiddenNominal {
-                id: resolved.id,
-                parameter_count: source.parameters.len(),
-                spelling: source.name.text.clone(),
-                origin: resolved.origin.clone(),
-            });
-            candidate.insert_withheld(
-                WithheldNamespace::Nominal,
-                source.name.text.clone(),
-                WithheldExport {
-                    kind: WithheldExportKind::Private,
-                    origin: Some(resolved.origin.clone()),
-                },
-            );
+            candidate
+                .try_insert_hidden_nominal(
+                    CandidateHiddenNominal {
+                        id: resolved.id,
+                        parameter_count: source.parameters.len(),
+                        spelling: source.name.text.clone(),
+                        origin: resolved.origin.clone(),
+                    },
+                    type_work,
+                )
+                .map_err(|()| {
+                    export_candidate_resource_error(
+                        source.name.span,
+                        "local export candidate retention exceeded its type-work budget",
+                    )
+                })?;
+            candidate
+                .try_insert_withheld(
+                    WithheldNamespace::Nominal,
+                    source.name.text.clone(),
+                    WithheldExport {
+                        kind: WithheldExportKind::Private,
+                        owner: None,
+                        origin: Some(resolved.origin.clone()),
+                    },
+                    type_work,
+                )
+                .map_err(|()| {
+                    export_candidate_resource_error(
+                        source.name.span,
+                        "local export candidate retention exceeded its type-work budget",
+                    )
+                })?;
             for (constructor, id) in source.constructors.iter().zip(&resolved.constructors) {
                 let resolved_constructor = registry.constructor(*id).ok_or_else(|| {
                     error(
@@ -406,14 +444,23 @@ fn build_export_candidate(
                         "the resolver lost a private constructor",
                     )
                 })?;
-                candidate.insert_withheld(
-                    WithheldNamespace::Constructor,
-                    constructor.name.text.clone(),
-                    WithheldExport {
-                        kind: WithheldExportKind::Private,
-                        origin: Some(resolved_constructor.origin.clone()),
-                    },
-                );
+                candidate
+                    .try_insert_withheld(
+                        WithheldNamespace::Constructor,
+                        constructor.name.text.clone(),
+                        WithheldExport {
+                            kind: WithheldExportKind::Private,
+                            owner: Some(resolved.id),
+                            origin: Some(resolved_constructor.origin.clone()),
+                        },
+                        type_work,
+                    )
+                    .map_err(|()| {
+                        export_candidate_resource_error(
+                            constructor.name.span,
+                            "local export candidate retention exceeded its type-work budget",
+                        )
+                    })?;
             }
             continue;
         }
@@ -428,15 +475,23 @@ fn build_export_candidate(
                 ));
             }
         };
-        candidate.insert_nominal(
-            source.name.text.clone(),
-            CandidateNominal {
-                id: resolved.id,
-                access,
-                source: CandidateFactSource::Local,
-                origin: resolved.origin.clone(),
-            },
-        );
+        candidate
+            .try_insert_nominal(
+                source.name.text.clone(),
+                CandidateNominal {
+                    id: resolved.id,
+                    access,
+                    source: CandidateFactSource::Local,
+                    origin: resolved.origin.clone(),
+                },
+                type_work,
+            )
+            .map_err(|()| {
+                export_candidate_resource_error(
+                    source.name.span,
+                    "local export candidate retention exceeded its type-work budget",
+                )
+            })?;
         if source.visibility != SurfaceTypeVisibility::PublicTransparent {
             for (constructor, id) in source.constructors.iter().zip(&resolved.constructors) {
                 let resolved_constructor = registry.constructor(*id).ok_or_else(|| {
@@ -446,14 +501,23 @@ fn build_export_candidate(
                         "the resolver lost an opaque constructor",
                     )
                 })?;
-                candidate.insert_withheld(
-                    WithheldNamespace::Constructor,
-                    constructor.name.text.clone(),
-                    WithheldExport {
-                        kind: WithheldExportKind::OpaqueConstructor,
-                        origin: Some(resolved_constructor.origin.clone()),
-                    },
-                );
+                candidate
+                    .try_insert_withheld(
+                        WithheldNamespace::Constructor,
+                        constructor.name.text.clone(),
+                        WithheldExport {
+                            kind: WithheldExportKind::OpaqueConstructor,
+                            owner: Some(resolved.id),
+                            origin: Some(resolved_constructor.origin.clone()),
+                        },
+                        type_work,
+                    )
+                    .map_err(|()| {
+                        export_candidate_resource_error(
+                            constructor.name.span,
+                            "local export candidate retention exceeded its type-work budget",
+                        )
+                    })?;
             }
             continue;
         }
@@ -465,57 +529,103 @@ fn build_export_candidate(
                     "the resolver lost a public constructor",
                 )
             })?;
-            candidate.insert_constructor(
-                constructor.name.text.clone(),
-                CandidateConstructor {
-                    id: *id,
-                    source: CandidateFactSource::Local,
-                    origin: resolved_constructor.origin.clone(),
-                },
-            );
+            candidate
+                .try_insert_constructor(
+                    constructor.name.text.clone(),
+                    CandidateConstructor {
+                        id: *id,
+                        source: CandidateFactSource::Local,
+                        origin: resolved_constructor.origin.clone(),
+                    },
+                    type_work,
+                )
+                .map_err(|()| {
+                    export_candidate_resource_error(
+                        constructor.name.span,
+                        "local export candidate retention exceeded its type-work budget",
+                    )
+                })?;
         }
     }
 
     for interface in interfaces {
         if !interface.public {
-            candidate.insert_withheld(
-                WithheldNamespace::Nominal,
-                interface.spelling.clone(),
-                WithheldExport {
-                    kind: WithheldExportKind::Private,
-                    origin: Some(interface.origin.clone()),
-                },
-            );
-            for method in &interface.methods {
-                candidate.insert_withheld(
-                    WithheldNamespace::Term,
-                    method.spelling.clone(),
+            candidate
+                .try_insert_withheld(
+                    WithheldNamespace::Nominal,
+                    interface.spelling.clone(),
                     WithheldExport {
                         kind: WithheldExportKind::Private,
-                        origin: Some(method.origin.clone()),
+                        owner: None,
+                        origin: Some(interface.origin.clone()),
                     },
-                );
+                    type_work,
+                )
+                .map_err(|()| {
+                    export_candidate_resource_error(
+                        interface.span,
+                        "local export candidate retention exceeded its type-work budget",
+                    )
+                })?;
+            for method in &interface.methods {
+                candidate
+                    .try_insert_withheld(
+                        WithheldNamespace::Term,
+                        method.spelling.clone(),
+                        WithheldExport {
+                            kind: WithheldExportKind::Private,
+                            owner: None,
+                            origin: Some(method.origin.clone()),
+                        },
+                        type_work,
+                    )
+                    .map_err(|()| {
+                        export_candidate_resource_error(
+                            method.span,
+                            "local export candidate retention exceeded its type-work budget",
+                        )
+                    })?;
             }
             continue;
         }
-        candidate.insert_interface(
-            interface.spelling.clone(),
-            CandidateInterface {
-                id: interface.id,
-                source: CandidateFactSource::Local,
-            },
-        );
-        for method in &interface.methods {
-            candidate.insert_method(
-                method.spelling.clone(),
-                CandidateMethod {
-                    id: method.id,
+        candidate
+            .try_insert_interface(
+                interface.spelling.clone(),
+                CandidateInterface {
+                    id: interface.id,
                     source: CandidateFactSource::Local,
                 },
-            );
+                type_work,
+            )
+            .map_err(|()| {
+                export_candidate_resource_error(
+                    interface.span,
+                    "local export candidate retention exceeded its type-work budget",
+                )
+            })?;
+        for method in &interface.methods {
+            candidate
+                .try_insert_method(
+                    method.spelling.clone(),
+                    CandidateMethod {
+                        id: method.id,
+                        source: CandidateFactSource::Local,
+                    },
+                    type_work,
+                )
+                .map_err(|()| {
+                    export_candidate_resource_error(
+                        method.span,
+                        "local export candidate retention exceeded its type-work budget",
+                    )
+                })?;
         }
     }
     Ok(candidate)
+}
+
+fn export_candidate_resource_error(span: crate::source::Span, message: &str) -> ResolveError {
+    error(ResolveReason::TypeResourceExhausted, span, message)
 }
 
 fn definition_binder(definition: &ResolvedDefinition) -> &Binder {
@@ -1068,14 +1178,18 @@ impl Resolver {
                             );
                             self.retain_imported_global(exported, dependency.summary, *span)?;
                             if import.public {
-                                self.public_import_candidate.insert_term(
+                                self.public_import_candidate.try_insert_term(
                                     local.text.clone(),
                                     CandidateGlobal {
                                         binder: exported.binder,
                                         source: CandidateFactSource::Imported,
                                         origin: exported.origin.clone(),
                                     },
-                                );
+                                    &mut self.type_work,
+                                ).map_err(|()| export_candidate_resource_error(
+                                    *span,
+                                    "public import candidate retention exceeded its type-work budget",
+                                ))?;
                             }
                         }
                         if let Some(method) = dependency.summary.method(&name.text) {
@@ -1097,13 +1211,17 @@ impl Resolver {
                                 ),
                             );
                             if import.public {
-                                self.public_import_candidate.insert_method(
+                                self.public_import_candidate.try_insert_method(
                                     local.text.clone(),
                                     CandidateMethod {
                                         id: method,
                                         source: CandidateFactSource::Imported,
                                     },
-                                );
+                                    &mut self.type_work,
+                                ).map_err(|()| export_candidate_resource_error(
+                                    *span,
+                                    "public import candidate retention exceeded its type-work budget",
+                                ))?;
                             }
                         }
                         if let Some(exported) = dependency.summary.nominal(&name.text) {
@@ -1123,7 +1241,7 @@ impl Resolver {
                                 *span,
                             )?;
                             if import.public {
-                                self.public_import_candidate.insert_nominal(
+                                self.public_import_candidate.try_insert_nominal(
                                     local.text.clone(),
                                     CandidateNominal {
                                         id: exported.id,
@@ -1131,7 +1249,26 @@ impl Resolver {
                                         source: CandidateFactSource::Imported,
                                         origin: exported.origin.clone(),
                                     },
-                                );
+                                    &mut self.type_work,
+                                ).map_err(|()| export_candidate_resource_error(
+                                    *span,
+                                    "public import candidate retention exceeded its type-work budget",
+                                ))?;
+                                if exported.access == ExportedTypeAccess::Opaque {
+                                    for (spelling, withheld) in
+                                        dependency.summary.opaque_constructors(exported.id)
+                                    {
+                                        self.public_import_candidate.try_insert_withheld(
+                                            WithheldNamespace::Constructor,
+                                            spelling.to_owned(),
+                                            withheld.clone(),
+                                            &mut self.type_work,
+                                        ).map_err(|()| export_candidate_resource_error(
+                                            *span,
+                                            "public import candidate retention exceeded its type-work budget",
+                                        ))?;
+                                    }
+                                }
                             }
                         }
                         if let Some(exported) = dependency.summary.interface(&name.text) {
@@ -1143,13 +1280,17 @@ impl Resolver {
                             }
                             self.interface_names.insert(local.text.clone(), exported.id);
                             if import.public {
-                                self.public_import_candidate.insert_interface(
+                                self.public_import_candidate.try_insert_interface(
                                     local.text.clone(),
                                     CandidateInterface {
                                         id: exported.id,
                                         source: CandidateFactSource::Imported,
                                     },
-                                );
+                                    &mut self.type_work,
+                                ).map_err(|()| export_candidate_resource_error(
+                                    *span,
+                                    "public import candidate retention exceeded its type-work budget",
+                                ))?;
                             }
                         }
                         if let Some(exported) = dependency.summary.constructor(&name.text) {
@@ -1167,14 +1308,18 @@ impl Resolver {
                                 .insert(local.text.clone(), exported.id);
                             self.retain_imported_constructor(exported, dependency.summary, *span)?;
                             if import.public {
-                                self.public_import_candidate.insert_constructor(
+                                self.public_import_candidate.try_insert_constructor(
                                     local.text.clone(),
                                     CandidateConstructor {
                                         id: exported.id,
                                         source: CandidateFactSource::Imported,
                                         origin: exported.origin.clone(),
                                     },
-                                );
+                                    &mut self.type_work,
+                                ).map_err(|()| export_candidate_resource_error(
+                                    *span,
+                                    "public import candidate retention exceeded its type-work budget",
+                                ))?;
                             }
                         }
                         if !selected {
@@ -1223,14 +1368,19 @@ impl Resolver {
                                 },
                             );
                             if import.public {
-                                self.public_import_candidate.insert_withheld(
+                                self.public_import_candidate.try_insert_withheld(
                                     namespace,
                                     local.text.clone(),
                                     WithheldExport {
                                         kind: withheld.kind,
+                                        owner: withheld.owner,
                                         origin: withheld.origin.clone(),
                                     },
-                                );
+                                    &mut self.type_work,
+                                ).map_err(|()| export_candidate_resource_error(
+                                    *span,
+                                    "public import candidate retention exceeded its type-work budget",
+                                ))?;
                             }
                         }
                     }
@@ -4459,6 +4609,40 @@ mod tests {
         (result, constraint_work.used())
     }
 
+    fn resolve_import_fixture_with_type_limit(
+        entry: &str,
+        dependency: &str,
+        limit: usize,
+    ) -> (Result<ResolvedModule, ResolveError>, usize) {
+        let fixture = ImportBudgetFixture::create(entry, dependency);
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the import budget graph should load");
+        let dependency = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name()
+                    == Some("dependency.ash".as_ref())
+            })
+            .expect("the import budget dependency should load");
+        let dependency =
+            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
+                .expect("the dependency should check");
+        let entry = graph
+            .module(graph.entry())
+            .expect("the import budget entry should load");
+        let dependencies = entry
+            .dependencies()
+            .iter()
+            .map(|edge| DependencyExports::new(edge, dependency.exports()).unwrap())
+            .collect::<Vec<_>>();
+        let mut type_work = TypeWorkBudget::with_limit(limit);
+        let mut constraint_work = InterfaceConstraintBudget::default();
+        let result =
+            resolve_module_with_budget(entry, &dependencies, &mut type_work, &mut constraint_work);
+        (result, type_work.used())
+    }
+
     fn resolve_local_fixture_with_constraint_limit(
         text: &str,
         limit: usize,
@@ -4554,6 +4738,120 @@ mod tests {
         let error = short.expect_err("one missing route unit should reject the duplicate edge");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(short_used, 30);
+    }
+
+    #[test]
+    fn public_import_candidate_staging_uses_exact_graph_type_work_before_freeze() {
+        const DEPENDENCY: &str = "pub answer : Unit -> Int\nanswer () = 42\n";
+        const PRIVATE: &str = "import dependency (answer as facade_answer)\n";
+        const PUBLIC: &str = "pub import dependency (answer as facade_answer)\n";
+
+        let (private, private_used) =
+            resolve_import_fixture_with_type_limit(PRIVATE, DEPENDENCY, TYPE_WORK_LIMIT);
+        private.expect("the private name import should establish the staging baseline");
+
+        let exact_limit = private_used + 2;
+        let (short, short_used) =
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+        let error = short.expect_err(
+            "one missing candidate-order unit should reject resolution before summary freeze",
+        );
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.primary.span().range().start(), 23);
+        assert_eq!(short_used, private_used);
+
+        let (exact, exact_used) =
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit);
+        let exact = exact.expect("the exact candidate map-and-order budget should resolve");
+        assert_eq!(exact_used, exact_limit);
+        assert!(exact.export_candidate().term("facade_answer").is_some());
+
+        const OPAQUE_DEPENDENCY: &str = "pub opaque type Token = Token(Int)\n";
+        const PRIVATE_OPAQUE: &str = "import dependency (Token)\n";
+        const PUBLIC_OPAQUE: &str = "pub import dependency (Token)\n";
+        let (private_opaque, private_opaque_used) = resolve_import_fixture_with_type_limit(
+            PRIVATE_OPAQUE,
+            OPAQUE_DEPENDENCY,
+            TYPE_WORK_LIMIT,
+        );
+        private_opaque.expect("the private opaque import should establish its staging baseline");
+
+        let opaque_exact_limit = private_opaque_used + 4;
+        let (opaque_short, opaque_short_used) = resolve_import_fixture_with_type_limit(
+            PUBLIC_OPAQUE,
+            OPAQUE_DEPENDENCY,
+            opaque_exact_limit - 1,
+        );
+        let error = opaque_short
+            .expect_err("the opaque-family withheld entry should exhaust candidate staging");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.primary.span().range().start(), 23);
+        assert_eq!(opaque_short_used, private_opaque_used + 2);
+
+        let (opaque_exact, opaque_exact_used) = resolve_import_fixture_with_type_limit(
+            PUBLIC_OPAQUE,
+            OPAQUE_DEPENDENCY,
+            opaque_exact_limit,
+        );
+        let opaque_exact =
+            opaque_exact.expect("the exact nominal-and-withheld candidate budget should resolve");
+        assert_eq!(opaque_exact_used, opaque_exact_limit);
+        assert!(opaque_exact.export_candidate().nominal("Token").is_some());
+        assert!(
+            opaque_exact
+                .export_candidate()
+                .is_opaque_constructor("Token")
+        );
+    }
+
+    #[test]
+    fn wide_public_import_candidate_staging_fails_structurally_during_resolution() {
+        const ALIAS_COUNT: usize = 1_024;
+        const DEPENDENCY: &str = "pub answer : Unit -> Int\nanswer () = 42\n";
+        let targeted = |public: bool| {
+            let mut source = if public {
+                "pub import dependency (".to_owned()
+            } else {
+                "import dependency (".to_owned()
+            };
+            for index in 0..ALIAS_COUNT {
+                if index > 0 {
+                    source.push_str(", ");
+                }
+                source.push_str(&format!("answer as Alias{index}"));
+            }
+            source.push_str(")\n");
+            source
+        };
+        let private = targeted(false);
+        let public = targeted(true);
+        let (private_result, private_used) =
+            resolve_import_fixture_with_type_limit(&private, DEPENDENCY, TYPE_WORK_LIMIT);
+        private_result.expect("the private wide import should establish the staging baseline");
+
+        let exact_limit = private_used + ALIAS_COUNT * 2;
+        let (short, _) =
+            resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit - 1);
+        let error = short.expect_err("the final public alias should exhaust candidate staging");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            usize::try_from(error.primary.span().range().start())
+                .expect("the selector offset should fit"),
+            public
+                .rfind("answer")
+                .expect("the last selector should exist"),
+        );
+
+        let (exact, exact_used) =
+            resolve_import_fixture_with_type_limit(&public, DEPENDENCY, exact_limit);
+        let exact = exact.expect("the exact wide public staging budget should resolve");
+        assert_eq!(exact_used, exact_limit);
+        assert!(
+            exact
+                .export_candidate()
+                .term(&format!("Alias{}", ALIAS_COUNT - 1))
+                .is_some()
+        );
     }
 
     #[test]
