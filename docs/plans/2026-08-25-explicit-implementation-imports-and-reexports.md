@@ -280,6 +280,8 @@ tests/interfaces.rs
 tests/modular_closure.rs
 tests/module_visibility.rs
 tests/spec_examples.rs
+src/resolve/module_tests.rs
+src/resolved.rs unit tests
 ```
 
 Use this inventory check and inspect every match rather than applying a blind
@@ -331,6 +333,9 @@ module exports a global, transparent nominal and constructors, opaque nominal,
 interface, and method. The facade uses aliases in one `pub import`. The entry
 imports the facade's selected spellings and asserts the original `BinderId`,
 `NominalTypeId`, `ConstructorId`, `InterfaceId`, and `MethodId` values.
+Also assert that a parsed public implementation selector is only a staged
+candidate at this boundary: Task 4 must not publish it without Task 5's checked
+authorization-route representation.
 
 Run:
 
@@ -853,7 +858,9 @@ git commit --no-gpg-sign -m "docs: retain explicit library import evidence"
 After the implementation, tests, specification, evidence, reviews, and final
 verification are retained in one product checkpoint, remove CP-0008,
 TASK-0015, and this temporary plan. Update proposal and task indexes so they
-again report no active entries. Git retains the transition history.
+again report no active entries. Remove or replace every intermediate link to
+those artifacts from DN-0025, the trajectory, and the retained evidence report;
+historical unlinked IDs may remain. Git retains the transition history.
 
 Run:
 

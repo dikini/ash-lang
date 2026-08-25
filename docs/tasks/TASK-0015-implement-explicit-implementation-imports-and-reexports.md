@@ -100,6 +100,11 @@ retain defining identities independently from source aliases. Public name
 re-exports can extend the generated summary boundary rather than introduce
 facade declarations or Core forwarding functions.
 
+The migration surface includes resolver and resolved-summary unit tests in
+addition to integration fixtures. Final transition-artifact cleanup must remove
+or replace intermediate CP-0008, TASK-0015, and execution-plan links from the
+retained design, trajectory, and evidence documents.
+
 ## Deviations
 
 None.
