@@ -10,9 +10,9 @@
 
 ## Dependencies
 
-The current specification defines Modular Ash. DN-0020 defines the comparison
-and closure criteria, and DN-0025 records descendant pressure and exclusions
-for later library and package milestones. The user's explicit request
+The current specification defines Modular Ash. DN-0020 records the comparison
+and closure planning criteria, and DN-0025 records descendant pressure and
+exclusions for later library and package milestones. The user's explicit request
 authorizes this task to finish the Modular Ash milestone. The temporary
 [execution plan](../plans/2026-08-25-finish-modular-ash.md) owns the ordered
 work and leaves the current tree when this task finishes.
@@ -24,7 +24,9 @@ work and leaves the current tree when this task finishes.
 - Compare their admission, typing, diagnostics, Core, evaluation, maintenance
   sites, and resource and ownership consequences.
 - Simplify or reconcile only machinery or evidence proven unused or stale; do
-  not infer a semantic change from that cleanup.
+  not change admitted behavior, diagnostic ownership, Core validity or shape
+  obligations, or evaluation. A finding that would change any of those returns
+  to new authorization.
 - Retain core-versus-library and Modular Ash closure reports, then obtain fresh
   review and full verification.
 - Remove this task and its temporary plan after the retained closure checkpoint,
@@ -43,8 +45,11 @@ review, verification, cleanup, commits, and tag remain.
 ## Verification
 
 - Establish that the focused target or case for each new audit witness was
-  absent, then run the retained witness against current behavior. Use RED only
-  before a cleanup that changes behavior.
+  absent, then run the retained witness against current behavior.
+- Before stale-or-unused reconciliation, establish an architecture or invariant
+  witness that detects the unwanted retained state. Recheck that the cleanup
+  preserves admitted behavior, diagnostic ownership, Core validity and shape
+  obligations, and evaluation.
 - For each increment, perform focused checks, then an independent specification
   review followed by an independent code-quality review.
 - Before closure, review the retained reports and run the full required
@@ -52,6 +57,9 @@ review, verification, cleanup, commits, and tag remain.
 - Correct review findings only when they are within this task's bounded audit
   and proven stale-or-unused reconciliation scope. Return semantic or broader
   findings to design, proposal, or new authorization.
+- After lifecycle cleanup, perform an independent specification-and-authority
+  review followed by a code-quality review. Re-review after each in-scope
+  correction, then repeat final verification before the closure commit and tag.
 - Check changed Markdown with the available Markdown linter, inspect every
   changed relative link manually, and run `git diff --check`.
 - Confirm the closure commit and annotated `modular-ash` tag are unsigned and
