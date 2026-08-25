@@ -756,6 +756,44 @@ struct ImplementationImportSelection {
     route_rank: ImplementationRouteRank,
 }
 
+fn effective_implementation_route_precedes(
+    candidate: &ImplementationAuthorization,
+    candidate_rank: ImplementationRouteRank,
+    existing: &ImplementationAuthorization,
+    existing_rank: ImplementationRouteRank,
+    span: crate::source::Span,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<bool, ResolveError> {
+    candidate
+        .candidate_precedes(candidate_rank, existing, existing_rank, constraint_work)
+        .map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "effective implementation route comparison exceeded its work budget",
+            )
+        })
+}
+
+fn public_implementation_route_precedes(
+    candidate: &ImplementationAuthorization,
+    candidate_rank: ImplementationRouteRank,
+    existing: &ImplementationAuthorization,
+    existing_rank: ImplementationRouteRank,
+    span: crate::source::Span,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<bool, ResolveError> {
+    candidate
+        .candidate_precedes(candidate_rank, existing, existing_rank, constraint_work)
+        .map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "public implementation route comparison exceeded its work budget",
+            )
+        })
+}
+
 impl Resolver {
     #[cfg(test)]
     fn new(module: ModuleId) -> Self {
@@ -1839,7 +1877,7 @@ impl Resolver {
                 "imported implementation route retention exceeded its work budget",
             )
         })?;
-        let public_authorization = selection
+        let mut public_authorization = selection
             .public
             .then(|| {
                 ImplementationAuthorization::prepend(
@@ -2130,8 +2168,6 @@ impl Resolver {
                 .public_implementation_route_ranks
                 .get(&fact.id)
                 .copied();
-            let mut replace_effective_rank = false;
-            let mut replace_public_rank = false;
             let existing = self
                 .imported
                 .implementation_import_mut(fact.id)
@@ -2176,14 +2212,14 @@ impl Resolver {
                     "alternate implementation routes disagree on the checked fact",
                 ));
             }
-            if authorization.candidate_precedes(
+            let replace_effective_rank = effective_implementation_route_precedes(
+                &authorization,
                 selection.route_rank,
                 &existing.authorization,
                 existing_rank,
-            ) {
-                existing.authorization = authorization;
-                replace_effective_rank = true;
-            }
+                span,
+                &mut self.constraint_work,
+            )?;
             if existing.public_authorization.is_some() != existing_public_rank.is_some() {
                 return Err(error(
                     ResolveReason::InternalState,
@@ -2191,23 +2227,17 @@ impl Resolver {
                     "a public implementation route lost its transient ordering rank",
                 ));
             }
-            if let Some(candidate) = public_authorization {
-                match (&mut existing.public_authorization, existing_public_rank) {
-                    (Some(selected), Some(selected_rank))
-                        if candidate.candidate_precedes(
-                            selection.route_rank,
-                            selected,
-                            selected_rank,
-                        ) =>
-                    {
-                        *selected = candidate;
-                        replace_public_rank = true;
-                    }
-                    (None, None) => {
-                        existing.public_authorization = Some(candidate);
-                        replace_public_rank = true;
-                    }
-                    (Some(_), Some(_)) => {}
+            let replace_public_rank = if let Some(candidate) = &public_authorization {
+                match (&existing.public_authorization, existing_public_rank) {
+                    (Some(selected), Some(selected_rank)) => public_implementation_route_precedes(
+                        candidate,
+                        selection.route_rank,
+                        selected,
+                        selected_rank,
+                        span,
+                        &mut self.constraint_work,
+                    )?,
+                    (None, None) => true,
                     (Some(_), None) | (None, Some(_)) => {
                         return Err(error(
                             ResolveReason::InternalState,
@@ -2216,6 +2246,14 @@ impl Resolver {
                         ));
                     }
                 }
+            } else {
+                false
+            };
+            if replace_effective_rank {
+                existing.authorization = authorization;
+            }
+            if replace_public_rank {
+                existing.public_authorization = public_authorization.take();
             }
             drop(cloned_fact);
             if replace_effective_rank {
@@ -5023,6 +5061,126 @@ mod tests {
         let error = short.expect_err("one missing route unit should reject the duplicate edge");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert!(short_used < two_used);
+    }
+
+    #[test]
+    fn duplicate_impl_route_comparisons_map_effective_and_public_budgets_independently() {
+        const HOPS: usize = 3;
+        const BOTH_EXACT: usize = HOPS * 2;
+        let source = SourceFile::new("duplicate-route-comparison.ash", "abcdefghijkl")
+            .expect("the duplicate route source should fit");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the route range should be ordered"))
+                .expect("the route range should fit")
+        };
+        let diagnostic_span = span(0, 11);
+        let rank = ImplementationRouteRank::new(0, 0, 0);
+        let route = |last_start, last_end| {
+            ImplementationAuthorization::from_hops(vec![
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(1),
+                    to: ModuleId::new(2),
+                    import_span: span(0, 2),
+                },
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(2),
+                    to: ModuleId::new(3),
+                    import_span: span(3, 5),
+                },
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(3),
+                    to: ModuleId::new(4),
+                    import_span: span(last_start, last_end),
+                },
+            ])
+        };
+        let candidate = route(6, 8);
+        let existing = route(9, 11);
+
+        let mut effective_short = InterfaceConstraintBudget::with_limit(HOPS - 1);
+        let error = effective_implementation_route_precedes(
+            &candidate,
+            rank,
+            &existing,
+            rank,
+            diagnostic_span,
+            &mut effective_short,
+        )
+        .expect_err("the effective comparison should reject one missing hop unit");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "effective implementation route comparison exceeded its work budget",
+        );
+        assert_eq!(effective_short.used(), HOPS - 1);
+
+        let mut public_short = InterfaceConstraintBudget::with_limit(HOPS - 1);
+        let error = public_implementation_route_precedes(
+            &candidate,
+            rank,
+            &existing,
+            rank,
+            diagnostic_span,
+            &mut public_short,
+        )
+        .expect_err("the public comparison should reject one missing hop unit");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "public implementation route comparison exceeded its work budget",
+        );
+        assert_eq!(public_short.used(), HOPS - 1);
+
+        let mut both_short = InterfaceConstraintBudget::with_limit(BOTH_EXACT - 1);
+        assert!(
+            effective_implementation_route_precedes(
+                &candidate,
+                rank,
+                &existing,
+                rank,
+                diagnostic_span,
+                &mut both_short,
+            )
+            .expect("the exact effective comparison should fit"),
+        );
+        let error = public_implementation_route_precedes(
+            &candidate,
+            rank,
+            &existing,
+            rank,
+            diagnostic_span,
+            &mut both_short,
+        )
+        .expect_err("the independently charged public comparison should be one unit short");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(both_short.used(), BOTH_EXACT - 1);
+
+        let mut both_exact = InterfaceConstraintBudget::with_limit(BOTH_EXACT);
+        assert!(
+            effective_implementation_route_precedes(
+                &candidate,
+                rank,
+                &existing,
+                rank,
+                diagnostic_span,
+                &mut both_exact,
+            )
+            .expect("the exact effective comparison should fit"),
+        );
+        assert!(
+            public_implementation_route_precedes(
+                &candidate,
+                rank,
+                &existing,
+                rank,
+                diagnostic_span,
+                &mut both_exact,
+            )
+            .expect("the exact public comparison should fit"),
+        );
+        assert_eq!(both_exact.used(), BOTH_EXACT);
+        assert_eq!(both_exact.charge(1), Err(()));
     }
 
     #[test]

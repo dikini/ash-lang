@@ -437,7 +437,14 @@ pub struct ImplementationRouteHop {
 }
 
 /// Flat authorization route for one implementation fact.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// Allocation-owning routes require an explicitly budgeted copy.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<ash::resolved::ImplementationAuthorization>();
+/// ```
+#[derive(Debug, Eq, PartialEq)]
 pub struct ImplementationAuthorization {
     hops: Box<[ImplementationRouteHop]>,
 }
@@ -534,18 +541,19 @@ impl ImplementationAuthorization {
         candidate_rank: ImplementationRouteRank,
         existing: &Self,
         existing_rank: ImplementationRouteRank,
-    ) -> bool {
+        budget: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<bool, ()> {
         match self.hops.len().cmp(&existing.hops.len()) {
-            Ordering::Less => return true,
-            Ordering::Greater => return false,
+            Ordering::Less => return Ok(true),
+            Ordering::Greater => return Ok(false),
             Ordering::Equal => {}
         }
         match candidate_rank.cmp(&existing_rank) {
-            Ordering::Less => return true,
-            Ordering::Greater => return false,
+            Ordering::Less => return Ok(true),
+            Ordering::Greater => return Ok(false),
             Ordering::Equal => {}
         }
-        compare_hop_sequences(&self.hops, &existing.hops) == Ordering::Less
+        Ok(compare_hop_sequences(&self.hops, &existing.hops, budget)? == Ordering::Less)
     }
 
     /// Returns the ordered route from the selecting module to the defining module.
@@ -573,8 +581,16 @@ fn hop_key(hop: &ImplementationRouteHop) -> (ModuleId, ModuleId, u32, u32) {
 fn compare_hop_sequences(
     left: &[ImplementationRouteHop],
     right: &[ImplementationRouteHop],
-) -> Ordering {
-    left.iter().map(hop_key).cmp(right.iter().map(hop_key))
+    budget: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<Ordering, ()> {
+    for (left_hop, right_hop) in left.iter().zip(right) {
+        budget.charge(1)?;
+        match hop_key(left_hop).cmp(&hop_key(right_hop)) {
+            Ordering::Equal => {}
+            ordering => return Ok(ordering),
+        }
+    }
+    Ok(left.len().cmp(&right.len()))
 }
 
 /// Compatibility view of how one implementation entered a checked module.
@@ -595,7 +611,14 @@ pub enum ImplementationRoute {
 }
 
 /// One implementation in deterministic effective-environment order.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// The allocation-owning authorization route prevents implicit copies.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<ash::resolved::AvailableImplementation>();
+/// ```
+#[derive(Debug, Eq, PartialEq)]
 pub struct AvailableImplementation {
     id: ImplId,
     authorization: ImplementationAuthorization,
@@ -6193,6 +6216,19 @@ mod tests {
         let middle = ModuleId::new(2);
         let owner = ModuleId::new(4);
         let rank = ImplementationRouteRank::new(0, 0, 0);
+        let precedes = |candidate: &ImplementationAuthorization,
+                        candidate_rank,
+                        existing: &ImplementationAuthorization,
+                        existing_rank| {
+            candidate
+                .candidate_precedes(
+                    candidate_rank,
+                    existing,
+                    existing_rank,
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                )
+                .expect("the unbounded route comparison should fit")
+        };
         let first = ImplementationAuthorization::from_hops(vec![
             ImplementationRouteHop {
                 from: publisher,
@@ -6217,8 +6253,8 @@ mod tests {
                 import_span: span(&second_source, 3, 5),
             },
         ]);
-        assert!(!first.candidate_precedes(rank, &source_distinct_same_key, rank));
-        assert!(!source_distinct_same_key.candidate_precedes(rank, &first, rank));
+        assert!(!precedes(&first, rank, &source_distinct_same_key, rank));
+        assert!(!precedes(&source_distinct_same_key, rank, &first, rank));
 
         let lexicographically_later = ImplementationAuthorization::from_hops(vec![
             ImplementationRouteHop {
@@ -6232,18 +6268,21 @@ mod tests {
                 import_span: span(&first_source, 3, 5),
             },
         ]);
-        assert!(first.candidate_precedes(rank, &lexicographically_later, rank));
-        assert!(lexicographically_later.candidate_precedes(
+        assert!(precedes(&first, rank, &lexicographically_later, rank));
+        assert!(precedes(
+            &lexicographically_later,
             ImplementationRouteRank::new(0, 0, 0),
             &first,
             ImplementationRouteRank::new(1, 0, 0),
         ));
-        assert!(!lexicographically_later.candidate_precedes(
+        assert!(!precedes(
+            &lexicographically_later,
             ImplementationRouteRank::new(0, 1, 0),
             &first,
             ImplementationRouteRank::new(0, 0, 0),
         ));
-        assert!(lexicographically_later.candidate_precedes(
+        assert!(precedes(
+            &lexicographically_later,
             ImplementationRouteRank::new(0, 0, 0),
             &first,
             ImplementationRouteRank::new(0, 0, 1),
@@ -6251,30 +6290,127 @@ mod tests {
     }
 
     #[test]
-    fn implementation_authorization_drops_on_a_small_stack() {
+    fn implementation_authorization_comparison_charges_each_visited_hop_pair() {
+        const HOPS: usize = 3;
+        let source = SourceFile::new("route-comparison.ash", "abcdefghijkl")
+            .expect("the comparison source should fit");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the route range should be ordered"))
+                .expect("the route range should fit")
+        };
+        let rank = ImplementationRouteRank::new(0, 0, 0);
+        let candidate = ImplementationAuthorization::from_hops(vec![
+            ImplementationRouteHop {
+                from: ModuleId::new(1),
+                to: ModuleId::new(2),
+                import_span: span(0, 2),
+            },
+            ImplementationRouteHop {
+                from: ModuleId::new(2),
+                to: ModuleId::new(3),
+                import_span: span(3, 5),
+            },
+            ImplementationRouteHop {
+                from: ModuleId::new(3),
+                to: ModuleId::new(4),
+                import_span: span(6, 8),
+            },
+        ]);
+        let existing = ImplementationAuthorization::from_hops(vec![
+            ImplementationRouteHop {
+                from: ModuleId::new(1),
+                to: ModuleId::new(2),
+                import_span: span(0, 2),
+            },
+            ImplementationRouteHop {
+                from: ModuleId::new(2),
+                to: ModuleId::new(3),
+                import_span: span(3, 5),
+            },
+            ImplementationRouteHop {
+                from: ModuleId::new(3),
+                to: ModuleId::new(4),
+                import_span: span(9, 11),
+            },
+        ]);
+
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(HOPS - 1);
+        assert_eq!(
+            candidate.candidate_precedes(rank, &existing, rank, &mut short),
+            Err(())
+        );
+        assert_eq!(short.used(), HOPS - 1);
+
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(HOPS);
+        assert_eq!(
+            candidate.candidate_precedes(rank, &existing, rank, &mut exact),
+            Ok(true)
+        );
+        assert_eq!(exact.used(), HOPS);
+        assert_eq!(exact.charge(1), Err(()));
+
+        let shorter = ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+            from: ModuleId::new(1),
+            to: ModuleId::new(4),
+            import_span: span(0, 2),
+        }]);
+        let mut fast = crate::interface::InterfaceConstraintBudget::with_limit(0);
+        assert_eq!(
+            shorter.candidate_precedes(rank, &existing, rank, &mut fast),
+            Ok(true)
+        );
+        assert_eq!(
+            existing.candidate_precedes(
+                ImplementationRouteRank::new(0, 0, 0),
+                &candidate,
+                ImplementationRouteRank::new(1, 0, 0),
+                &mut fast,
+            ),
+            Ok(true)
+        );
+        assert_eq!(fast.used(), 0);
+    }
+
+    #[test]
+    fn implementation_authorization_clone_has_an_exact_flat_small_stack_boundary() {
         std::thread::Builder::new()
             .stack_size(64 * 1024)
             .spawn(|| {
+                const HOPS: usize = 20_000;
                 let source = SourceFile::new("long-route.ash", "import")
                     .expect("the route source should fit");
                 let span = source
                     .span(ByteRange::new(0, 6).expect("the route range should be ordered"))
                     .expect("the route range should fit");
                 let mut hops = Vec::new();
-                hops.try_reserve(20_000)
+                hops.try_reserve(HOPS)
                     .expect("the flat route should reserve");
-                for index in 0..20_000u32 {
+                for index in 0..u32::try_from(HOPS).expect("the route width should fit") {
                     hops.push(ImplementationRouteHop {
                         from: ModuleId::new(index),
                         to: ModuleId::new(index + 1),
                         import_span: span,
                     });
                 }
-                drop(ImplementationAuthorization::from_hops(hops));
+                let authorization = ImplementationAuthorization::from_hops(hops);
+
+                let mut short = crate::interface::InterfaceConstraintBudget::with_limit(HOPS - 1);
+                assert_eq!(authorization.clone_with_budget(&mut short), Err(()));
+                assert_eq!(short.used(), 0);
+
+                let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(HOPS);
+                let copied = authorization
+                    .clone_with_budget(&mut exact)
+                    .expect("the exact budget should copy every route hop");
+                assert_eq!(exact.used(), HOPS);
+                assert_eq!(copied.hops(), authorization.hops());
+                drop(copied);
+                drop(authorization);
             })
             .expect("the small-stack authorization thread should start")
             .join()
-            .expect("flat authorization destruction should fit the small stack");
+            .expect("flat authorization copying and destruction should fit the small stack");
     }
 
     #[test]
