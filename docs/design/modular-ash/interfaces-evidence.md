@@ -39,10 +39,11 @@ them are:
 - `f783271`, which replaces the normative interface specification.
 
 All intermediate implementation checkpoints are unsigned. The work remains on
-the unmerged `feature/modular-ash` branch. This draft does not claim completion
-of the final review or verification boundary in the
+the unmerged `feature/modular-ash` branch. The final product review and
+verification boundary is witnessed below. The
 [active task](../../tasks/TASK-0012-implement-interfaces-and-implementations.md)
-and [execution plan](../../plans/2026-08-24-implement-interfaces-and-implementations.md).
+and [execution plan](../../plans/2026-08-24-implement-interfaces-and-implementations.md)
+remain only for transition cleanup.
 
 ## Causal semantic model
 
@@ -576,24 +577,72 @@ an existing Core behavior with a library interface after this increment is
 complete and specified. This work does not begin the audit, choose a migration,
 or authorize specialization.
 
-## Pending Task 11 completion
+## Task 11 review and verification checkpoint
 
-This draft records implemented witnesses but deliberately leaves the completion
-boundary open. Task 11 still owns:
+The final reviewed product checkpoint is unsigned commit `37ef9f8`. It includes
+the unsigned namespace fix `5398808` and evidence-validator fix `37ef9f8`. The
+four independent review tracks covering syntax and namespaces; checking and
+evidence; Core, validation, and resources; and specification and retained
+evidence are clear.
 
-- four independent final review tracks covering syntax and namespaces,
-  checking and evidence, Core and resources, and specification and retained
-  evidence;
-- complete-branch review against `main` and the final implementation-locality
-  inspection;
-- `cargo fmt --check`, locked all-target check, test, and denied-warning Clippy,
-  `cargo xtask verify`, repository-wide Markdown lint, and final diff hygiene;
-- exact final test counts, resolved-review findings, and witnessed clean
-  worktree status;
-- a final update of this report after those commands pass; and
-- removal of the completed proposal, task, plan, index entries, and live
-  transition links before the final unmerged checkpoint.
+Review found that targeted interface and method maps were absent from four
+local conflict gates. This allowed a targeted interface to conflict with a
+same-spelled local interface or nominal, and a targeted method to conflict with
+a same-spelled local method or renamed constructor. Commit `5398808` adds the
+four missing checks. Four focused TDD integration tests witnessed RED before
+the fix and GREEN after it.
 
-The active task records checkpoint-local results at the normative replacement,
-but those results are not final Task 11 totals or a claim that the current
-worktree has passed the complete verification boundary.
+Review also found that linked evidence validation authenticated a selected
+node's individual facts without authenticating selection order. It accepted a
+concrete implementation over an identity-equal lexical abstract requirement,
+a freshly instantiated current implementation at the root or below another
+node, and a later duplicate abstract requirement out of source order. The
+validator also rejected a valid exact-current selection with repeated
+identity-equal prerequisites. Commit `37ef9f8` reconstructs the required order
+with ordered
+`RequirementId` lookup, exact rigid current-identity substitution, exclusion of
+the current implementation when it is not exact, and mandated prerequisite
+`RequirementId`s below an exact-current node. Six focused selection-order
+behavior tests captured the RED findings and valid guards, then passed GREEN
+after the fix. Exact resource tests place the abstract-priority scan at 6
+constraint-work units and exact-current authentication with its mandated
+abstract prerequisite at 67 units; one unit less fails and the exact limit
+passes. The final checking-and-evidence review found no remaining defect.
+
+The complete root verification boundary passes at `37ef9f8`:
+
+```text
+cargo fmt --check
+cargo check --locked --all-targets
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+cargo xtask verify
+markdownlint --disable MD013 -- README.md spec docs
+git diff --check
+```
+
+The locked all-target test run passes 917 tests: 297 library tests, 10 binary
+tests, and 610 integration tests. A manual relative-link audit also passes.
+
+Complete-branch inspection from `main` to `37ef9f8` covers 130 files, 47,573
+insertions, 5,838 deletions, and 40 commits; the branch is 40 commits ahead and
+0 behind. Interface-increment inspection from `ca79328` to `37ef9f8`
+covers 66 files, 31,214 insertions, and 2,806 deletions. The search
+
+```text
+rg -n '\b(Interface|Impl|Requirement|EvidenceSelection)\b' src/core src/eval
+```
+
+returns no matches. The stable maintenance search still returns exactly the
+eight production files listed above, and the Core and runtime enum inventories
+remain unchanged from `ca79328`. The worktree was clean at the reviewed product
+checkpoint.
+
+The retained unspecialized trace remains the baseline for a later separately
+authorized comparison. Product review and verification are complete. Only
+transition cleanup remains: remove the completed proposal, task, execution
+plan, index entries, and their live transition links. The
+[active task](../../tasks/TASK-0012-implement-interfaces-and-implementations.md),
+[accepted proposal](../../proposals/CP-0006-interfaces-and-implementations.md),
+and [execution plan](../../plans/2026-08-24-implement-interfaces-and-implementations.md)
+remain linked here until that next checkpoint removes them together.
