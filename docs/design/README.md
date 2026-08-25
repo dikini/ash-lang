@@ -32,6 +32,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   — retained exploration for the completed method-only type-class-like
   interfaces, scoped implementations, constrained rank-1 schemes, and explicit
   Core evidence.
+- [DN-0024: Executable Learning and Evidence Stream](DN-0024-executable-learning-and-evidence-stream.md)
+  — a version-pinned external learning corpus, forward migration, and
+  cooperative design-evidence flow.
 - [Passive-module evidence](modular-ash/evidence.md) — implementation,
   resource, locality, historical-comparison, and verification evidence for the
   first Modular Ash increment.
