@@ -7,8 +7,9 @@ use ash::{
     },
     source::SourceFile,
     surface::{
-        SurfaceDefinitionKind, SurfaceExprKind, SurfaceImportSelection, SurfaceModulePath,
-        SurfacePatternKind, SurfaceReference, SurfaceTypeKind, SurfaceTypeVisibility,
+        SurfaceDefinitionKind, SurfaceExprKind, SurfaceImportItem, SurfaceImportSelection,
+        SurfaceModulePath, SurfacePatternKind, SurfaceReference, SurfaceTypeKind,
+        SurfaceTypeVisibility,
     },
 };
 
@@ -277,13 +278,15 @@ fn projects_imports_visibility_and_a_declarations_only_root() {
         panic!("expected a targeted import");
     };
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0].name.text, "sum");
-    assert!(items[0].alias.is_none());
-    assert_eq!(items[1].name.text, "Number");
-    assert_eq!(
-        items[1].alias.as_ref().map(|alias| alias.text.as_str()),
-        Some("ImportedNumber")
-    );
+    assert!(matches!(
+        &items[0],
+        SurfaceImportItem::Name { name, alias: None, .. } if name.text == "sum"
+    ));
+    assert!(matches!(
+        &items[1],
+        SurfaceImportItem::Name { name, alias: Some(alias), .. }
+            if name.text == "Number" && alias.text == "ImportedNumber"
+    ));
     assert_eq!(module.type_declarations.len(), 1);
     assert_eq!(
         module.type_declarations[0].visibility,
@@ -291,6 +294,47 @@ fn projects_imports_visibility_and_a_declarations_only_root() {
     );
     assert_eq!(module.definitions.len(), 1);
     assert!(module.definitions[0].public);
+}
+
+#[test]
+fn projects_public_imports_and_independent_selector_channels() {
+    let text = "pub import equality (Equal as Equality, equal, impl Equal)\n";
+    let source = SourceFile::new("public-import.ash", text).expect("module source should fit");
+    let module = parse_valid(text);
+
+    let [import] = module.imports.as_slice() else {
+        panic!("expected exactly one import");
+    };
+    assert!(import.public);
+    let SurfaceImportSelection::Targeted(items) = &import.selection else {
+        panic!("expected a targeted import");
+    };
+    let [first, second, third] = items.as_slice() else {
+        panic!("expected three import selectors");
+    };
+    assert!(matches!(
+        first,
+        SurfaceImportItem::Name { name, alias: Some(alias), span }
+            if name.text == "Equal"
+                && spanned_text(&source, name.span) == "Equal"
+                && alias.text == "Equality"
+                && spanned_text(&source, alias.span) == "Equality"
+                && spanned_text(&source, *span) == "Equal as Equality"
+    ));
+    assert!(matches!(
+        second,
+        SurfaceImportItem::Name { name, alias: None, span }
+            if name.text == "equal"
+                && spanned_text(&source, name.span) == "equal"
+                && spanned_text(&source, *span) == "equal"
+    ));
+    assert!(matches!(
+        third,
+        SurfaceImportItem::Implementation { interface, span }
+            if interface.text == "Equal"
+                && spanned_text(&source, interface.span) == "Equal"
+                && spanned_text(&source, *span) == "impl Equal"
+    ));
 }
 
 #[test]
@@ -394,6 +438,10 @@ fn rejects_imports_after_module_declarations() {
     assert_parser_rejected(
         "import after declaration",
         "type T = T(Int)\nimport math as Math\n",
+    );
+    assert_parser_rejected(
+        "public import after declaration",
+        "type T = T(Int)\npub import math (Value)\n",
     );
 }
 

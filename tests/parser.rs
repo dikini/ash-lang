@@ -159,6 +159,101 @@ fn public_parse_reasons_describe_only_retained_diagnostics() {
 }
 
 #[test]
+fn malformed_public_imports_and_implementation_selectors_recover_at_the_line_end() {
+    let cases = [
+        (
+            "public qualified import",
+            "pub import equality as Equality\nmain : Unit -> Int\nmain () = 0\n",
+            "(",
+            "as",
+            "as",
+            20,
+            22,
+        ),
+        (
+            "lowercase implementation interface",
+            "import equality (impl equal)\nmain : Unit -> Int\nmain () = 0\n",
+            "an identifier",
+            "identifier",
+            "equal",
+            22,
+            27,
+        ),
+        (
+            "renamed implementation selector",
+            "import equality (impl Equal as Renamed)\nmain : Unit -> Int\nmain () = 0\n",
+            ")",
+            "as",
+            "as",
+            28,
+            30,
+        ),
+        (
+            "missing implementation interface",
+            "import equality (impl)\nmain : Unit -> Int\nmain () = 0\n",
+            "an identifier",
+            ")",
+            ")",
+            21,
+            22,
+        ),
+    ];
+
+    for (case, text, expected, found, offending, start, end) in cases {
+        let source = SourceFile::new("malformed-import.ash", text).expect("source should fit");
+        let tree = parse(lex(&source).expect("source should lex"));
+
+        let [diagnostic] = tree.parse_diagnostics() else {
+            panic!(
+                "{case} should have exactly one parser diagnostic: {:?}",
+                tree.parse_diagnostics()
+            );
+        };
+        assert_eq!(diagnostic.reason, ParseReason::ExpectedForm, "{case}");
+        assert_eq!(diagnostic.expected.as_deref(), Some(expected), "{case}");
+        assert_eq!(diagnostic.found.as_deref(), Some(found), "{case}");
+        assert_eq!(diagnostic.primary.span().range().start(), start, "{case}");
+        assert_eq!(diagnostic.primary.span().range().end(), end, "{case}");
+        assert_eq!(
+            &source.text()[start as usize..end as usize],
+            offending,
+            "{case}"
+        );
+        assert!(diagnostic.related.len() == 1, "{case}");
+        assert!(matches!(
+            diagnostic.context.as_slice(),
+            [ParseContext::Synchronization {
+                boundary: SynchronizationBoundary::LogicalLineEnd,
+                ..
+            }]
+        ));
+        assert!(
+            tree.events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::EquationalGlobal))),
+            "{case} should parse the declaration after the rejected import"
+        );
+        assert_eq!(
+            project(&source, &tree),
+            Err(ProjectionError::RecoveryNodesPresent),
+            "{case} should not project"
+        );
+        let mut depth = 0_u32;
+        for event in tree.events() {
+            match event {
+                Event::Start(_) => depth += 1,
+                Event::Finish => {
+                    assert!(depth > 0, "{case} has an unmatched finish");
+                    depth -= 1;
+                }
+                Event::Token(_) | Event::Missing { .. } | Event::Error(_) => {}
+            }
+        }
+        assert_eq!(depth, 0, "{case} should retain balanced events");
+    }
+}
+
+#[test]
 fn data_and_pattern_forms_build_one_token_complete_concrete_tree() {
     let source = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\ntype Choice =\n    Choice((Bool, Tree))\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn choose(flag : Bool, tree : Tree) -> Int {\n    match (flag, tree) {\n        (true, Tip(value)) => value\n        (_, Fork(left, right)) => size left + size right\n        (_, Tip(value)) => value\n    }\n}\n\nchoose(true, Tip(42))\n";
     let (_source, tree) = parse_tree(source);

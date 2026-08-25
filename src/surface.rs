@@ -37,6 +37,8 @@ pub enum SurfaceDeclarationIndex {
 /// One source import declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceImport {
+    /// Whether this targeted import re-exports its selected channels.
+    pub public: bool,
     /// The relative or named-root module path.
     pub path: SurfaceModulePath,
     /// The names made visible by the import.
@@ -71,15 +73,25 @@ pub enum SurfaceImportSelection {
     Targeted(Vec<SurfaceImportItem>),
 }
 
-/// One selected public spelling and its optional local alias.
+/// One selected import channel.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SurfaceImportItem {
-    /// The spelling selected from the dependency's public namespaces.
-    pub name: SurfaceName,
-    /// The replacement local spelling, when present.
-    pub alias: Option<SurfaceName>,
-    /// The complete selector item span.
-    pub span: Span,
+pub enum SurfaceImportItem {
+    /// A spelling selected from the dependency's public namespaces.
+    Name {
+        /// The selected dependency spelling.
+        name: SurfaceName,
+        /// The replacement local spelling, when present.
+        alias: Option<SurfaceName>,
+        /// The complete selector item span.
+        span: Span,
+    },
+    /// Public implementations selected by one dependency interface spelling.
+    Implementation {
+        /// The dependency interface spelling.
+        interface: SurfaceName,
+        /// The complete selector item span.
+        span: Span,
+    },
 }
 
 /// Source visibility for one nominal type declaration.

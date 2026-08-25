@@ -37,10 +37,10 @@ use crate::{
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDeclarationIndex, SurfaceDefinition,
         SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceImplementation,
-        SurfaceImportSelection, SurfaceInterfaceDeclaration, SurfaceLocalDeclaration,
-        SurfaceModule, SurfacePattern, SurfacePatternKind, SurfaceRecursiveGroup, SurfaceReference,
-        SurfaceRequirement, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
-        SurfaceTypeVisibility,
+        SurfaceImportItem, SurfaceImportSelection, SurfaceInterfaceDeclaration,
+        SurfaceLocalDeclaration, SurfaceModule, SurfacePattern, SurfacePatternKind,
+        SurfaceRecursiveGroup, SurfaceReference, SurfaceRequirement, SurfaceType,
+        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeVisibility,
     },
     types::{
         ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, charge_type_cells,
@@ -960,12 +960,15 @@ impl Resolver {
                 }
                 SurfaceImportSelection::Targeted(items) => {
                     for item in items {
-                        let local = item.alias.as_ref().unwrap_or(&item.name);
+                        let SurfaceImportItem::Name { name, alias, span } = item else {
+                            continue;
+                        };
+                        let local = alias.as_ref().unwrap_or(name);
                         if self.module_aliases.contains_key(&local.text) {
                             return Err(import_conflict(local.span, &local.text));
                         }
                         let mut selected = false;
-                        if let Some(exported) = dependency.summary.term(&item.name.text) {
+                        if let Some(exported) = dependency.summary.term(&name.text) {
                             selected = true;
                             if self.constructor_names.contains_key(&local.text)
                                 || self.method_names.contains_key(&local.text)
@@ -975,7 +978,7 @@ impl Resolver {
                             let scope = self.scopes.first_mut().ok_or_else(|| {
                                 error(
                                     ResolveReason::InternalState,
-                                    item.span,
+                                    *span,
                                     "the resolver lost the file scope",
                                 )
                             })?;
@@ -986,12 +989,12 @@ impl Resolver {
                                 local.text.clone(),
                                 ResolvedTermBinding::imported(
                                     ResolvedTermName::Global(exported.binder),
-                                    item.span,
+                                    *span,
                                 ),
                             );
-                            self.retain_imported_global(exported, dependency.summary, item.span)?;
+                            self.retain_imported_global(exported, dependency.summary, *span)?;
                         }
-                        if let Some(method) = dependency.summary.method(&item.name.text) {
+                        if let Some(method) = dependency.summary.method(&name.text) {
                             selected = true;
                             if self.constructor_names.contains_key(&local.text)
                                 || self.method_names.contains_key(&local.text)
@@ -1006,11 +1009,11 @@ impl Resolver {
                                 local.text.clone(),
                                 ResolvedTermBinding::imported(
                                     ResolvedTermName::Method(method),
-                                    item.span,
+                                    *span,
                                 ),
                             );
                         }
-                        if let Some(exported) = dependency.summary.nominal(&item.name.text) {
+                        if let Some(exported) = dependency.summary.nominal(&name.text) {
                             selected = true;
                             if self.type_names.contains_key(&local.text)
                                 || self.interface_names.contains_key(&local.text)
@@ -1023,11 +1026,11 @@ impl Resolver {
                             self.retain_imported_nominal(
                                 exported,
                                 dependency.summary,
-                                Some(&item.name.text),
-                                item.span,
+                                Some(&name.text),
+                                *span,
                             )?;
                         }
-                        if let Some(exported) = dependency.summary.interface(&item.name.text) {
+                        if let Some(exported) = dependency.summary.interface(&name.text) {
                             selected = true;
                             if self.type_names.contains_key(&local.text)
                                 || self.interface_names.contains_key(&local.text)
@@ -1036,7 +1039,7 @@ impl Resolver {
                             }
                             self.interface_names.insert(local.text.clone(), exported.id);
                         }
-                        if let Some(exported) = dependency.summary.constructor(&item.name.text) {
+                        if let Some(exported) = dependency.summary.constructor(&name.text) {
                             selected = true;
                             if self.constructor_names.contains_key(&local.text)
                                 || self.method_names.contains_key(&local.text)
@@ -1049,11 +1052,7 @@ impl Resolver {
                             }
                             self.constructor_names
                                 .insert(local.text.clone(), exported.id);
-                            self.retain_imported_constructor(
-                                exported,
-                                dependency.summary,
-                                item.span,
-                            )?;
+                            self.retain_imported_constructor(exported, dependency.summary, *span)?;
                         }
                         if !selected {
                             let withheld = [
@@ -1063,9 +1062,7 @@ impl Resolver {
                             ]
                             .into_iter()
                             .filter_map(|namespace| {
-                                dependency
-                                    .summary
-                                    .withheld_export(namespace, &item.name.text)
+                                dependency.summary.withheld_export(namespace, &name.text)
                             })
                             .map(|withheld| WithheldImport {
                                 kind: withheld.kind,
@@ -1080,20 +1077,15 @@ impl Resolver {
                                     WithheldExportKind::OpaqueConstructor => 1,
                                 }
                             });
-                            return Err(withheld_export_error(
-                                item.name.span,
-                                &item.name.text,
-                                withheld,
-                            ));
+                            return Err(withheld_export_error(name.span, &name.text, withheld));
                         }
                         for namespace in [
                             WithheldNamespace::Term,
                             WithheldNamespace::Nominal,
                             WithheldNamespace::Constructor,
                         ] {
-                            let Some(withheld) = dependency
-                                .summary
-                                .withheld_export(namespace, &item.name.text)
+                            let Some(withheld) =
+                                dependency.summary.withheld_export(namespace, &name.text)
                             else {
                                 continue;
                             };

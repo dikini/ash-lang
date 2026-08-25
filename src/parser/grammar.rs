@@ -187,7 +187,9 @@ pub(super) const fn selected_dialect() -> &'static ParserDialect {
 
 pub(super) fn module(parser: &mut Parser<'_>) {
     parser.start(NodeKind::Module);
-    while parser.at(&TokenKind::Import) {
+    while parser.at(&TokenKind::Import)
+        || (parser.at(&TokenKind::Pub) && parser.nth(1) == Some(&TokenKind::Import))
+    {
         import_declaration(parser);
         if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
             break;
@@ -225,21 +227,40 @@ fn expect_declaration_line_end(parser: &mut Parser<'_>) -> bool {
 
 fn import_declaration(parser: &mut Parser<'_>) {
     parser.start(NodeKind::ImportDeclaration);
-    let _ = parser.bump();
+    let public = parser.at(&TokenKind::Pub);
+    if public {
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::Import, ExpectedForm::Identifier);
     module_path(parser);
     if parser.at(&TokenKind::As) {
-        let _ = parser.bump();
-        expect_upper_identifier(parser);
+        if public {
+            reject_import_line(parser, ExpectedForm::LeftParen);
+        } else {
+            let _ = parser.bump();
+            expect_upper_identifier(parser);
+        }
     } else if parser.at(&TokenKind::LeftParen) {
         let _ = parser.bump();
-        import_item(parser);
-        while parser.at(&TokenKind::Comma) {
+        let mut complete = import_item(parser);
+        while complete && parser.at(&TokenKind::Comma) {
             let _ = parser.bump();
-            import_item(parser);
+            complete = import_item(parser);
         }
-        let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+        if complete {
+            let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+        }
     } else {
-        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+        let expected = if public {
+            ExpectedForm::LeftParen
+        } else {
+            ExpectedForm::Identifier
+        };
+        if public {
+            reject_import_line(parser, expected);
+        } else {
+            parser.report(ParseReason::ExpectedForm, expected);
+        }
     }
     parser.finish();
 }
@@ -262,12 +283,51 @@ fn module_path(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
-fn import_item(parser: &mut Parser<'_>) {
+fn import_item(parser: &mut Parser<'_>) -> bool {
     parser.start(NodeKind::ImportItem);
-    expect_import_name(parser);
-    if parser.at(&TokenKind::As) {
+    if parser.at(&TokenKind::Impl) {
         let _ = parser.bump();
+        if !matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+            reject_import_line(parser, ExpectedForm::Identifier);
+            parser.finish();
+            return false;
+        }
+        let _ = parser.bump();
+        if parser.at(&TokenKind::As) {
+            reject_import_line(parser, ExpectedForm::RightParen);
+            parser.finish();
+            return false;
+        }
+    } else {
         expect_import_name(parser);
+        if parser.at(&TokenKind::As) {
+            let _ = parser.bump();
+            expect_import_name(parser);
+        }
+    }
+    parser.finish();
+    true
+}
+
+fn reject_import_line(parser: &mut Parser<'_>, expected: ExpectedForm) {
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) =
+            parser.report_at(ParseReason::ExpectedForm, expected, primary, None)
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+    ) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::LineEnd) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
+    } else {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
     }
     parser.finish();
 }

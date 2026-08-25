@@ -222,6 +222,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::EndOfFile)?;
         }
         NodeKind::ImportDeclaration => {
+            shape.optional_token(&TokenKind::Pub)?;
             shape.token(&TokenKind::Import)?;
             shape.node(NodeKind::ModulePath)?;
             if shape.peek_token_is(&TokenKind::As) {
@@ -253,20 +254,25 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             }
         }
         NodeKind::ImportItem => {
-            shape.token_matching(|kind| {
-                matches!(
-                    kind,
-                    TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
-                )
-            })?;
-            if shape.peek_token_is(&TokenKind::As) {
-                shape.token(&TokenKind::As)?;
+            if shape.peek_token_is(&TokenKind::Impl) {
+                shape.token(&TokenKind::Impl)?;
+                shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            } else {
                 shape.token_matching(|kind| {
                     matches!(
                         kind,
                         TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
                     )
                 })?;
+                if shape.peek_token_is(&TokenKind::As) {
+                    shape.token(&TokenKind::As)?;
+                    shape.token_matching(|kind| {
+                        matches!(
+                            kind,
+                            TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_)
+                        )
+                    })?;
+                }
             }
         }
         NodeKind::TypeDeclaration => {
@@ -948,7 +954,9 @@ fn project_import(
         .filter(|child| child.kind == NodeKind::ImportItem)
         .map(|item| project_import_item(source, item, tokens))
         .collect::<Result<Vec<_>, _>>()?;
-    let selection = if items.is_empty() {
+    let selection = if direct_tokens(node, tokens).any(|token| token.kind == TokenKind::LeftParen) {
+        SurfaceImportSelection::Targeted(items)
+    } else {
         let alias_token = direct_tokens(node, tokens)
             .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
             .ok_or(ProjectionError::MalformedTree(
@@ -957,10 +965,9 @@ fn project_import(
         SurfaceImportSelection::Qualified {
             alias: surface_name(alias_token)?,
         }
-    } else {
-        SurfaceImportSelection::Targeted(items)
     };
     Ok(SurfaceImport {
+        public: direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub),
         path,
         selection,
         span: node_span(source, node, tokens)?,
@@ -973,6 +980,17 @@ fn project_import_item(
     tokens: &[Token],
 ) -> Result<SurfaceImportItem, ProjectionError> {
     require_kind(node, NodeKind::ImportItem)?;
+    if direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Impl) {
+        let interface = direct_tokens(node, tokens)
+            .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        return Ok(SurfaceImportItem::Implementation {
+            interface: surface_name(interface)?,
+            span: node_span(source, node, tokens)?,
+        });
+    }
     let mut names = direct_tokens(node, tokens).filter(|token| {
         matches!(
             token.kind,
@@ -986,7 +1004,7 @@ fn project_import_item(
     if names.next().is_some() {
         return malformed(InternalReason::UnexpectedShape);
     }
-    Ok(SurfaceImportItem {
+    Ok(SurfaceImportItem::Name {
         name,
         alias,
         span: node_span(source, node, tokens)?,
