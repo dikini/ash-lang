@@ -4398,8 +4398,9 @@ mod tests {
     fn duplicate_impl_route_charges_lookup_without_retaining_a_second_fact() {
         let (one_short, one_short_used) =
             resolve_import_fixture_with_limit("import dependency (impl Equal)\n", 24);
-        let error =
-            one_short.expect_err("one missing interface-index probe should reject the selector");
+        let error = one_short.expect_err(
+            "one unit short of the selector's cumulative work should reject resolution",
+        );
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(one_short_used, 24);
 
