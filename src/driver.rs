@@ -622,6 +622,55 @@ mod tests {
         }
     }
 
+    fn public_route_declarations(width: usize) -> String {
+        let mut source = String::new();
+        for index in 0..width {
+            source.push_str(&format!(
+                "pub interface Marker{index}<A> {{\nmark{index} : A -> A\n}}\n\n\
+                 pub impl Marker{index}<Int> {{\nmark{index} value = value\n}}\n\n"
+            ));
+        }
+        source
+    }
+
+    fn public_route_reexports(module: &str, width: usize) -> String {
+        let mut selected = Vec::with_capacity(width * 3);
+        let mut repeated_implementations = Vec::with_capacity(width);
+        for index in 0..width {
+            selected.push(format!("Marker{index}"));
+            selected.push(format!("mark{index}"));
+            selected.push(format!("impl Marker{index}"));
+            repeated_implementations.push(format!("impl Marker{index}"));
+        }
+        format!(
+            "pub import {module} ({})\npub import {module} ({})\n",
+            selected.join(", "),
+            repeated_implementations.join(", ")
+        )
+    }
+
+    fn deep_wide_public_route_source(depth: usize, width: usize) -> TestSource {
+        assert!(depth > 0);
+        assert!(width > 0);
+        let last_layer = format!("layer{}", depth - 1);
+        let entry = format!(
+            "{}main : Unit -> Int\nmain () = mark0(42)\n",
+            public_route_reexports(&last_layer, width)
+        );
+        let source = TestSource::write(&entry);
+        source.write_sibling("base.ash", &public_route_declarations(width));
+        let mut dependency = String::from("base");
+        for layer in 0..depth {
+            let module = format!("layer{layer}");
+            source.write_sibling(
+                &format!("{module}.ash"),
+                &public_route_reexports(&dependency, width),
+            );
+            dependency = module;
+        }
+        source
+    }
+
     #[test]
     fn entry_result_closure_walks_every_nested_type() {
         let closed = Type::Tuple(
@@ -819,6 +868,73 @@ mod tests {
         .expect("the measured cumulative work should fit exactly");
         assert_eq!(observation.value_display(), "42");
         assert_eq!(exact_budget.used(), exact);
+    }
+
+    #[test]
+    fn deep_wide_public_routes_admit_and_reject_on_a_small_stack() {
+        const DEPTH: usize = 48;
+        const WIDTH: usize = 4;
+        const STACK_SIZE: usize = 256 * 1024;
+
+        std::thread::Builder::new()
+            .name(String::from("deep-public-route-budget"))
+            .stack_size(STACK_SIZE)
+            .spawn(|| {
+                let source = deep_wide_public_route_source(DEPTH, WIDTH);
+                let mut measured = InterfaceConstraintBudget::default();
+                let observation = run_path_with_consumers_and_constraint_budget(
+                    source.configuration(),
+                    &mut measured,
+                    validate_interface_evidence_with_budget,
+                    validate_modules,
+                    evaluate,
+                )
+                .expect("the deep public routes should fit the default constraint budget");
+                assert_eq!(observation.value_display(), "42");
+                drop(observation);
+                let exact = measured.used();
+                assert!(exact > 0);
+
+                let mut exact_budget = InterfaceConstraintBudget::with_limit(exact);
+                let observation = run_path_with_consumers_and_constraint_budget(
+                    source.configuration(),
+                    &mut exact_budget,
+                    validate_interface_evidence_with_budget,
+                    validate_modules,
+                    evaluate,
+                )
+                .expect("the measured deep-route constraint work should fit exactly");
+                assert_eq!(observation.value_display(), "42");
+                assert_eq!(exact_budget.used(), exact);
+                drop(observation);
+
+                let validation_entered = Cell::new(false);
+                let mut one_short = InterfaceConstraintBudget::with_limit(exact - 1);
+                let failure = run_path_with_consumers_and_constraint_budget(
+                    source.configuration(),
+                    &mut one_short,
+                    |linked, budget| {
+                        validation_entered.set(true);
+                        validate_interface_evidence_with_budget(linked, budget)
+                    },
+                    validate_modules,
+                    evaluate,
+                )
+                .expect_err("one less than the measured deep-route work must fail");
+                assert!(validation_entered.get());
+                let FileFailure::Pipeline(PipelineFailure::EvidenceValidation(error)) = &failure
+                else {
+                    panic!("the one-short deep-route budget should fail in evidence validation");
+                };
+                assert_eq!(
+                    error.reason(),
+                    crate::evidence_validation::EvidenceValidationReason::ConstraintResourceExhausted,
+                );
+                drop(failure);
+            })
+            .expect("the small-stack route witness thread should spawn")
+            .join()
+            .expect("the deep public routes should admit and dispose on a small stack");
     }
 
     #[test]

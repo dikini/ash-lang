@@ -4274,7 +4274,9 @@ mod tests {
             &mut InterfaceConstraintBudget::default(),
             entry.span(),
         )
-        .expect_err("a transitive implementation should be unavailable in the entry module");
+        .expect_err(
+            "an implementation without an explicit selector should be unavailable in the entry module",
+        );
 
         assert_eq!(
             failure.reason(),
@@ -4701,6 +4703,79 @@ mod tests {
         );
         LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::with_limit(limit))
             .expect("the exact linked-registry budget should fit");
+    }
+
+    #[test]
+    fn deep_authorization_suffix_comparison_has_an_exact_limit() {
+        const HOPS: usize = 20_000;
+
+        let program = local_program();
+        let span = program.result().span;
+        let dependency_hops = (0..HOPS)
+            .map(|index| ImplementationRouteHop {
+                from: ModuleId::new(
+                    u32::try_from(index + 1).expect("the route fixture ordinal should fit"),
+                ),
+                to: ModuleId::new(
+                    u32::try_from(index + 2).expect("the route fixture ordinal should fit"),
+                ),
+                import_span: span,
+            })
+            .collect::<Vec<_>>();
+        let dependency = ImplementationAuthorization::from_hops(dependency_hops.clone());
+        let mut authorization_hops = Vec::with_capacity(HOPS + 1);
+        authorization_hops.push(ImplementationRouteHop {
+            from: ModuleId::new(0),
+            to: ModuleId::new(1),
+            import_span: span,
+        });
+        authorization_hops.extend_from_slice(&dependency_hops);
+        let authorization = ImplementationAuthorization::from_hops(authorization_hops);
+
+        let mut measured = InterfaceConstraintBudget::default();
+        assert!(
+            authorization_suffix_matches(&authorization, &dependency, &mut measured, span)
+                .expect("the matching deep suffix should fit the default budget")
+        );
+        assert_eq!(
+            measured.used(),
+            HOPS + 1,
+            "one length check and every suffix hop comparison are charged"
+        );
+
+        assert_eq!(
+            authorization_suffix_matches(
+                &authorization,
+                &dependency,
+                &mut InterfaceConstraintBudget::with_limit(HOPS),
+                span,
+            )
+            .expect_err("one unit below the exact suffix work must exhaust the budget")
+            .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert!(
+            authorization_suffix_matches(
+                &authorization,
+                &dependency,
+                &mut InterfaceConstraintBudget::with_limit(HOPS + 1),
+                span,
+            )
+            .expect("the exact suffix comparison budget should fit")
+        );
+
+        let mut mismatched_hops = dependency_hops;
+        mismatched_hops
+            .last_mut()
+            .expect("the deep suffix should contain a final hop")
+            .to = ModuleId::new(u32::MAX);
+        let mismatch = ImplementationAuthorization::from_hops(mismatched_hops);
+        let mut exact_mismatch = InterfaceConstraintBudget::with_limit(HOPS + 1);
+        assert!(
+            !authorization_suffix_matches(&authorization, &mismatch, &mut exact_mismatch, span,)
+                .expect("the exact mismatch comparison budget should fit")
+        );
+        assert_eq!(exact_mismatch.used(), HOPS + 1);
     }
 
     #[test]

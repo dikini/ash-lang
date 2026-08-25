@@ -74,6 +74,55 @@ fn public_interfaces(width: usize) -> String {
     source
 }
 
+fn public_interface_implementations(width: usize) -> String {
+    let mut source = String::new();
+    for index in 0..width {
+        source.push_str(&format!(
+            "pub interface Marker{index}<A> {{\nmark{index} : A -> A\n}}\n\n\
+             pub impl Marker{index}<Int> {{\nmark{index} value = value\n}}\n\n"
+        ));
+    }
+    source
+}
+
+fn public_route_reexports(module: &str, width: usize) -> String {
+    let mut selected = Vec::with_capacity(width * 3);
+    let mut repeated_implementations = Vec::with_capacity(width);
+    for index in 0..width {
+        selected.push(format!("Marker{index}"));
+        selected.push(format!("mark{index}"));
+        selected.push(format!("impl Marker{index}"));
+        repeated_implementations.push(format!("impl Marker{index}"));
+    }
+    format!(
+        "pub import {module} ({})\npub import {module} ({})\n",
+        selected.join(", "),
+        repeated_implementations.join(", ")
+    )
+}
+
+fn deep_public_route_fixture(depth: usize, width: usize) -> ResourceFixture {
+    assert!(depth > 0);
+    assert!(width > 0);
+    let last_layer = format!("layer{}", depth - 1);
+    let entry = format!(
+        "{}main : Unit -> Int\nmain () = mark0(42)\n",
+        public_route_reexports(&last_layer, width)
+    );
+    let fixture = ResourceFixture::create(&entry);
+    fixture.write("base.ash", &public_interface_implementations(width));
+    let mut dependency = String::from("base");
+    for layer in 0..depth {
+        let module = format!("layer{layer}");
+        fixture.write(
+            &format!("{module}.ash"),
+            &public_route_reexports(&dependency, width),
+        );
+        dependency = module;
+    }
+    fixture
+}
+
 fn check_graph_with_fresh_stage_budgets(graph: &ModuleGraph) -> Vec<CheckedModule> {
     let mut checked = Vec::new();
     for module in graph.modules() {
@@ -153,4 +202,26 @@ fn cycle_precedes_constraint_resource_exhaustion_after_import_admission() {
     let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(_))) = failure else {
         panic!("the cycle should remain owned by interface checking");
     };
+}
+
+#[test]
+fn public_run_admits_and_drops_deep_public_routes_on_a_small_stack() {
+    const DEPTH: usize = 48;
+    const WIDTH: usize = 4;
+    const STACK_SIZE: usize = 256 * 1024;
+
+    std::thread::Builder::new()
+        .name(String::from("public-deep-route"))
+        .stack_size(STACK_SIZE)
+        .spawn(|| {
+            let fixture = deep_public_route_fixture(DEPTH, WIDTH);
+            let observation = fixture
+                .run()
+                .expect("the public runner should admit the deep public route fixture");
+            assert_eq!(observation.value_display(), "42");
+            drop(observation);
+        })
+        .expect("the public small-stack witness thread should spawn")
+        .join()
+        .expect("the public runner should admit and dispose deep routes on a small stack");
 }
