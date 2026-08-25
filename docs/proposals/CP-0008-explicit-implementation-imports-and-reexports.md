@@ -2,7 +2,7 @@
 
 - ID: `CP-0008`
 - Status: accepted
-- Related: [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), [DN-0022: Passive Static Modules](../design/DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](../design/DN-0023-interfaces-and-implementations.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), and [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md)
+- Related: [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), [DN-0022: Passive Static Modules](../design/DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](../design/DN-0023-interfaces-and-implementations.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), and [TASK-0015: Implement Explicit Implementation Imports and Re-exports](../tasks/TASK-0015-implement-explicit-implementation-imports-and-reexports.md)
 
 > This proposal is not current Ash until the complete change is integrated into
 > `main`.
