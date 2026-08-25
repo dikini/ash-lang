@@ -222,10 +222,16 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::EndOfFile)?;
         }
         NodeKind::ImportDeclaration => {
-            shape.optional_token(&TokenKind::Pub)?;
+            let public = shape.peek_token_is(&TokenKind::Pub);
+            if public {
+                shape.token(&TokenKind::Pub)?;
+            }
             shape.token(&TokenKind::Import)?;
             shape.node(NodeKind::ModulePath)?;
             if shape.peek_token_is(&TokenKind::As) {
+                if public {
+                    return malformed(InternalReason::UnexpectedShape);
+                }
                 shape.token(&TokenKind::As)?;
                 shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
             } else {
@@ -954,9 +960,13 @@ fn project_import(
         .filter(|child| child.kind == NodeKind::ImportItem)
         .map(|item| project_import_item(source, item, tokens))
         .collect::<Result<Vec<_>, _>>()?;
+    let public = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub);
     let selection = if direct_tokens(node, tokens).any(|token| token.kind == TokenKind::LeftParen) {
         SurfaceImportSelection::Targeted(items)
     } else {
+        if public {
+            return malformed(InternalReason::UnexpectedShape);
+        }
         let alias_token = direct_tokens(node, tokens)
             .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
             .ok_or(ProjectionError::MalformedTree(
@@ -967,7 +977,7 @@ fn project_import(
         }
     };
     Ok(SurfaceImport {
-        public: direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub),
+        public,
         path,
         selection,
         span: node_span(source, node, tokens)?,
@@ -2358,6 +2368,37 @@ mod tests {
             kind: NodeKind::AtomicType,
             children: Vec::new(),
         }));
+
+        assert_eq!(
+            project_module(&source, &tree),
+            Err(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape
+            ))
+        );
+    }
+
+    #[test]
+    fn projection_rejects_a_recovery_free_public_qualified_import_shape() {
+        let source = SourceFile::new("shape.ash", "pub import equality as Equality\n")
+            .expect("the public qualified import fixture should fit");
+        let mut tree = parse(lex(&source).expect("the fixture should lex"));
+        let root = tree.root.as_mut().expect("the parser produced one root");
+        let import = find_node_mut(root, NodeKind::ImportDeclaration)
+            .expect("the fixture contains one import declaration");
+        let recovery = import
+            .children
+            .iter()
+            .position(|child| matches!(child, ConcreteElement::Node(node) if node.kind == NodeKind::Error))
+            .expect("the parser rejects the public qualified form");
+        let ConcreteElement::Node(mut recovery) = import.children.remove(recovery) else {
+            panic!("the rejected suffix is retained as one error node");
+        };
+        import.children.extend(
+            std::mem::take(&mut recovery.children)
+                .into_iter()
+                .filter(|child| matches!(child, ConcreteElement::Token(_))),
+        );
+        tree.parse_diagnostics.clear();
 
         assert_eq!(
             project_module(&source, &tree),

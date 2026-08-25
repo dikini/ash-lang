@@ -169,6 +169,8 @@ fn malformed_public_imports_and_implementation_selectors_recover_at_the_line_end
             "as",
             20,
             22,
+            31,
+            32,
         ),
         (
             "lowercase implementation interface",
@@ -178,6 +180,8 @@ fn malformed_public_imports_and_implementation_selectors_recover_at_the_line_end
             "equal",
             22,
             27,
+            28,
+            29,
         ),
         (
             "renamed implementation selector",
@@ -187,6 +191,8 @@ fn malformed_public_imports_and_implementation_selectors_recover_at_the_line_end
             "as",
             28,
             30,
+            39,
+            40,
         ),
         (
             "missing implementation interface",
@@ -196,10 +202,12 @@ fn malformed_public_imports_and_implementation_selectors_recover_at_the_line_end
             ")",
             21,
             22,
+            22,
+            23,
         ),
     ];
 
-    for (case, text, expected, found, offending, start, end) in cases {
+    for (case, text, expected, found, offending, start, end, sync_start, sync_end) in cases {
         let source = SourceFile::new("malformed-import.ash", text).expect("source should fit");
         let tree = parse(lex(&source).expect("source should lex"));
 
@@ -219,14 +227,26 @@ fn malformed_public_imports_and_implementation_selectors_recover_at_the_line_end
             offending,
             "{case}"
         );
-        assert!(diagnostic.related.len() == 1, "{case}");
-        assert!(matches!(
-            diagnostic.context.as_slice(),
-            [ParseContext::Synchronization {
-                boundary: SynchronizationBoundary::LogicalLineEnd,
-                ..
-            }]
-        ));
+        let [related] = diagnostic.related.as_slice() else {
+            panic!("{case} should retain one synchronization label");
+        };
+        assert_eq!(related.span().source(), source.id(), "{case}");
+        assert_eq!(
+            related.span().range(),
+            ByteRange::new(sync_start, sync_end).expect("the synchronization range is ordered"),
+            "{case}"
+        );
+        let [ParseContext::Synchronization { boundary, span }] = diagnostic.context.as_slice()
+        else {
+            panic!("{case} should retain one synchronization context");
+        };
+        assert_eq!(*boundary, SynchronizationBoundary::LogicalLineEnd, "{case}");
+        assert_eq!(span.source(), source.id(), "{case}");
+        assert_eq!(
+            span.range(),
+            ByteRange::new(sync_start, sync_end).expect("the synchronization range is ordered"),
+            "{case}"
+        );
         assert!(
             tree.events()
                 .iter()

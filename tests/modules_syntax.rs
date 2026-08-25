@@ -5,7 +5,7 @@ use ash::{
         ConcreteElement, Event, ExpectedForm, NodeKind, ParseReason, ProjectionError, parse,
         project_module,
     },
-    source::SourceFile,
+    source::{ByteRange, SourceFile},
     surface::{
         SurfaceDefinitionKind, SurfaceExprKind, SurfaceImportItem, SurfaceImportSelection,
         SurfaceModulePath, SurfacePatternKind, SurfaceReference, SurfaceTypeKind,
@@ -17,7 +17,11 @@ type ExpectedParserDiagnostic<'a> = (ParseReason, Option<&'a str>, Option<&'a st
 
 fn parse_valid(text: &str) -> ash::surface::SurfaceModule {
     let source = SourceFile::new("module.ash", text).expect("module source should fit");
-    let lexed = lex(&source).expect("module source should lex");
+    parse_valid_source(&source)
+}
+
+fn parse_valid_source(source: &SourceFile) -> ash::surface::SurfaceModule {
+    let lexed = lex(source).expect("module source should lex");
     assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
     let tree = parse(lexed);
     assert!(
@@ -26,7 +30,7 @@ fn parse_valid(text: &str) -> ash::surface::SurfaceModule {
         tree.parse_diagnostics()
     );
     assert_eq!(tree.root().map(|root| root.kind), Some(NodeKind::Module));
-    project_module(&source, &tree).expect("module source should project")
+    project_module(source, &tree).expect("module source should project")
 }
 
 fn spanned_text(source: &SourceFile, span: ash::source::Span) -> &str {
@@ -300,7 +304,7 @@ fn projects_imports_visibility_and_a_declarations_only_root() {
 fn projects_public_imports_and_independent_selector_channels() {
     let text = "pub import equality (Equal as Equality, equal, impl Equal)\n";
     let source = SourceFile::new("public-import.ash", text).expect("module source should fit");
-    let module = parse_valid(text);
+    let module = parse_valid_source(&source);
 
     let [import] = module.imports.as_slice() else {
         panic!("expected exactly one import");
@@ -312,29 +316,70 @@ fn projects_public_imports_and_independent_selector_channels() {
     let [first, second, third] = items.as_slice() else {
         panic!("expected three import selectors");
     };
-    assert!(matches!(
-        first,
-        SurfaceImportItem::Name { name, alias: Some(alias), span }
-            if name.text == "Equal"
-                && spanned_text(&source, name.span) == "Equal"
-                && alias.text == "Equality"
-                && spanned_text(&source, alias.span) == "Equality"
-                && spanned_text(&source, *span) == "Equal as Equality"
-    ));
-    assert!(matches!(
-        second,
-        SurfaceImportItem::Name { name, alias: None, span }
-            if name.text == "equal"
-                && spanned_text(&source, name.span) == "equal"
-                && spanned_text(&source, *span) == "equal"
-    ));
-    assert!(matches!(
-        third,
-        SurfaceImportItem::Implementation { interface, span }
-            if interface.text == "Equal"
-                && spanned_text(&source, interface.span) == "Equal"
-                && spanned_text(&source, *span) == "impl Equal"
-    ));
+    let SurfaceImportItem::Name {
+        name: first_name,
+        alias: Some(first_alias),
+        span: first_span,
+    } = first
+    else {
+        panic!("expected the first selector to rename Equal");
+    };
+    assert_eq!(first_name.text, "Equal");
+    assert_eq!(first_name.span.source(), source.id());
+    assert_eq!(
+        first_name.span.range(),
+        ByteRange::new(21, 26).expect("the Equal range is ordered")
+    );
+    assert_eq!(first_alias.text, "Equality");
+    assert_eq!(first_alias.span.source(), source.id());
+    assert_eq!(
+        first_alias.span.range(),
+        ByteRange::new(30, 38).expect("the Equality range is ordered")
+    );
+    assert_eq!(first_span.source(), source.id());
+    assert_eq!(
+        first_span.range(),
+        ByteRange::new(21, 38).expect("the renamed selector range is ordered")
+    );
+
+    let SurfaceImportItem::Name {
+        name: second_name,
+        alias: None,
+        span: second_span,
+    } = second
+    else {
+        panic!("expected the second selector to name equal");
+    };
+    assert_eq!(second_name.text, "equal");
+    assert_eq!(second_name.span.source(), source.id());
+    assert_eq!(
+        second_name.span.range(),
+        ByteRange::new(40, 45).expect("the equal range is ordered")
+    );
+    assert_eq!(second_span.source(), source.id());
+    assert_eq!(
+        second_span.range(),
+        ByteRange::new(40, 45).expect("the selector range is ordered")
+    );
+
+    let SurfaceImportItem::Implementation {
+        interface,
+        span: implementation_span,
+    } = third
+    else {
+        panic!("expected the third selector to select Equal implementations");
+    };
+    assert_eq!(interface.text, "Equal");
+    assert_eq!(interface.span.source(), source.id());
+    assert_eq!(
+        interface.span.range(),
+        ByteRange::new(52, 57).expect("the implementation Equal range is ordered")
+    );
+    assert_eq!(implementation_span.source(), source.id());
+    assert_eq!(
+        implementation_span.range(),
+        ByteRange::new(47, 57).expect("the implementation selector range is ordered")
+    );
 }
 
 #[test]
