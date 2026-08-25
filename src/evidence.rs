@@ -134,7 +134,7 @@ struct ImplementationEntry {
     methods: Box<[ImplMethodId]>,
     span: Span,
     method_spans: Vec<Span>,
-    import_span: Option<Span>,
+    import_spans: Box<[Span]>,
 }
 
 impl Drop for ImplementationEntry {
@@ -437,7 +437,8 @@ impl EvidenceSelector {
                     .len()
                     .saturating_add(fact.prerequisites.len())
                     .saturating_add(fact.methods.len().saturating_mul(2))
-                    .saturating_add(2),
+                    .saturating_add(imported.authorization().hops().len())
+                    .saturating_add(1),
             )
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         constraint_work
@@ -447,6 +448,7 @@ impl EvidenceSelector {
         let mut prerequisites = Vec::new();
         let mut methods = Vec::new();
         let mut method_spans = Vec::new();
+        let mut import_spans = Vec::new();
         parameters
             .try_reserve(fact.head_parameters.len())
             .map_err(|_| SelectionFailure::ConstraintResource)?;
@@ -458,6 +460,9 @@ impl EvidenceSelector {
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         method_spans
             .try_reserve(fact.methods.len())
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        import_spans
+            .try_reserve_exact(imported.authorization().hops().len())
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         parameters.extend(fact.head_parameters.iter().map(|parameter| parameter.id));
         for prerequisite in &fact.prerequisites {
@@ -473,6 +478,13 @@ impl EvidenceSelector {
         }
         methods.extend(fact.methods.iter().map(|method| method.id));
         method_spans.extend(fact.methods.iter().map(|method| method.span));
+        import_spans.extend(
+            imported
+                .authorization()
+                .hops()
+                .iter()
+                .map(|hop| hop.import_span),
+        );
         let argument = clone_type_with_budget(&fact.argument, type_work)
             .map_err(|()| SelectionFailure::TypeResource)?;
         self.implementations
@@ -510,11 +522,7 @@ impl EvidenceSelector {
             methods: methods.into_boxed_slice(),
             span: fact.span,
             method_spans,
-            import_span: imported
-                .authorization()
-                .hops()
-                .first()
-                .map(|hop| hop.import_span),
+            import_spans: import_spans.into_boxed_slice(),
         });
         Ok(())
     }
@@ -635,7 +643,7 @@ impl EvidenceSelector {
             methods: methods.into_boxed_slice(),
             span: resolved.span,
             method_spans,
-            import_span: None,
+            import_spans: Box::new([]),
         });
         Ok(())
     }
@@ -1135,7 +1143,7 @@ impl EvidenceSelector {
                         return Err(SelectionFailure::Reason(InterfaceReason::Unsatisfied));
                     };
                     let implementation = &self.implementations[candidate_index];
-                    if let Some(import_span) = implementation.import_span {
+                    for &import_span in &implementation.import_spans {
                         retain_selection_cause(
                             causes,
                             SelectionCauseKind::ImplementationImport,
@@ -1597,8 +1605,11 @@ mod tests {
     use crate::{
         interface::{EvidenceNode, EvidenceSlot, RequirementOwner},
         module::ModuleId,
-        resolved::BinderId,
-        source::{ByteRange, SourceFile},
+        resolved::{
+            BinderId, CheckedImplementationFact, ImplementationAuthorization,
+            ImplementationRouteHop,
+        },
+        source::{ByteRange, Origin, SourceFile},
     };
 
     fn ids() -> (InterfaceId, MethodId, RequirementId) {
@@ -1640,7 +1651,7 @@ mod tests {
             methods: methods.into_boxed_slice(),
             span,
             method_spans,
-            import_span: None,
+            import_spans: Box::new([]),
         }
     }
 
@@ -2337,6 +2348,145 @@ mod tests {
                 &mut TypeWorkBudget::with_limit(type_limit),
             )
             .expect("exact budgets");
+    }
+
+    #[test]
+    fn transitive_import_causes_have_proportional_exact_boundaries() {
+        let source = SourceFile::new("transitive-selection.ash", "abcdefghijklmnop")
+            .expect("the transitive selection source should fit");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the span should be ordered"))
+                .expect("the span should belong to the fixture")
+        };
+        let first_hop = span(0, 2);
+        let second_hop = span(3, 5);
+        let definition = span(6, 8);
+        let interface = InterfaceId::new(ModuleId::new(11), 0);
+        let implementation_id = ImplId::new(ModuleId::new(11), 0);
+        let imported = |hops| ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: implementation_id,
+                interface,
+                head_parameters: Box::new([]),
+                argument: Type::Int,
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(definition),
+                span: definition,
+            },
+            authorization: ImplementationAuthorization::from_hops(hops),
+            public_authorization: None,
+        };
+        let one_hop = imported(vec![ImplementationRouteHop {
+            from: ModuleId::new(1),
+            to: ModuleId::new(11),
+            import_span: first_hop,
+        }]);
+        let two_hops = imported(vec![
+            ImplementationRouteHop {
+                from: ModuleId::new(1),
+                to: ModuleId::new(10),
+                import_span: first_hop,
+            },
+            ImplementationRouteHop {
+                from: ModuleId::new(10),
+                to: ModuleId::new(11),
+                import_span: second_hop,
+            },
+        ]);
+
+        let mut one_selector = EvidenceSelector::new();
+        one_selector.add_interface_raw(interface, TypeVariableId::new(0), Vec::new());
+        let mut one_retention = InterfaceConstraintBudget::default();
+        one_selector
+            .add_implementation_fact(&one_hop, &mut one_retention, &mut TypeWorkBudget::default())
+            .expect("one imported hop should be retained");
+
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_raw(interface, TypeVariableId::new(0), Vec::new());
+        let mut retention = InterfaceConstraintBudget::default();
+        let mut retention_types = TypeWorkBudget::default();
+        selector
+            .add_implementation_fact(&two_hops, &mut retention, &mut retention_types)
+            .expect("both imported hops should be retained");
+        assert_eq!(retention.used(), one_retention.used() + 1);
+        let mut short_selector = EvidenceSelector::new();
+        short_selector.add_interface_raw(interface, TypeVariableId::new(0), Vec::new());
+        assert_eq!(
+            short_selector.add_implementation_fact(
+                &two_hops,
+                &mut InterfaceConstraintBudget::with_limit(retention.used() - 1),
+                &mut TypeWorkBudget::with_limit(retention_types.used()),
+            ),
+            Err(SelectionFailure::ConstraintResource)
+        );
+        let mut exact_selector = EvidenceSelector::new();
+        exact_selector.add_interface_raw(interface, TypeVariableId::new(0), Vec::new());
+        exact_selector
+            .add_implementation_fact(
+                &two_hops,
+                &mut InterfaceConstraintBudget::with_limit(retention.used()),
+                &mut TypeWorkBudget::with_limit(retention_types.used()),
+            )
+            .expect("the exact two-hop retention budget should admit the implementation");
+
+        let mut one_causes = Vec::new();
+        let mut one_selection_work = InterfaceConstraintBudget::default();
+        let mut one_selection_types = TypeWorkBudget::default();
+        let (checked_argument, _) = one_selector
+            .select_owned(
+                interface,
+                Type::Int,
+                &mut one_causes,
+                &mut one_selection_work,
+                &mut one_selection_types,
+            )
+            .expect("the one-hop implementation should select");
+        discard_type_iteratively(checked_argument);
+
+        let mut causes = Vec::new();
+        let mut selection_work = InterfaceConstraintBudget::default();
+        let mut selection_types = TypeWorkBudget::default();
+        let (checked_argument, _) = selector
+            .select_owned(
+                interface,
+                Type::Int,
+                &mut causes,
+                &mut selection_work,
+                &mut selection_types,
+            )
+            .expect("the transitive imported implementation should select");
+        discard_type_iteratively(checked_argument);
+        assert_eq!(selection_work.used(), one_selection_work.used() + 1);
+        assert_eq!(selection_types.used(), one_selection_types.used());
+        let import_causes = causes
+            .iter()
+            .filter(|cause| cause.kind() == SelectionCauseKind::ImplementationImport)
+            .map(|cause| cause.span())
+            .collect::<Vec<_>>();
+        assert_eq!(import_causes, vec![first_hop, second_hop]);
+
+        assert_eq!(
+            selector.select_owned(
+                interface,
+                Type::Int,
+                &mut Vec::new(),
+                &mut InterfaceConstraintBudget::with_limit(selection_work.used() - 1),
+                &mut TypeWorkBudget::with_limit(selection_types.used()),
+            ),
+            Err(SelectionFailure::ConstraintResource)
+        );
+        let (checked_argument, _) = selector
+            .select_owned(
+                interface,
+                Type::Int,
+                &mut Vec::new(),
+                &mut InterfaceConstraintBudget::with_limit(selection_work.used()),
+                &mut TypeWorkBudget::with_limit(selection_types.used()),
+            )
+            .expect("the exact cause-retention budget should select");
+        discard_type_iteratively(checked_argument);
     }
 
     #[test]

@@ -2543,6 +2543,26 @@ pub(crate) enum ResolvedBuildFailure {
     ConstraintResource,
 }
 
+fn reserve_summary_implementation_storage(
+    implementations: &mut Vec<AuthorizedImplementationFact>,
+    positions: &mut HashMap<ImplId, usize>,
+    retained_count: usize,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    let storage_work = retained_count
+        .checked_mul(2)
+        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+    constraint_work
+        .charge(storage_work)
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    implementations
+        .try_reserve_exact(retained_count)
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    positions
+        .try_reserve(retained_count)
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)
+}
+
 /// One hidden nominal fact retained by identity without a source name binding.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ExportedHiddenType {
@@ -2837,18 +2857,20 @@ impl ExportSummary {
         }
 
         let selected_public_implementations = resolved.imported.public_implementation_ids().len();
-        let implementation_capacity = checked_implementations
-            .len()
+        let selected_local_implementations = resolved
+            .implementations
+            .iter()
+            .filter(|implementation| implementation.public)
+            .count();
+        let implementation_capacity = selected_local_implementations
             .checked_add(selected_public_implementations)
             .ok_or(ResolvedBuildFailure::ConstraintResource)?;
-        summary
-            .implementations
-            .try_reserve(implementation_capacity)
-            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-        summary
-            .implementation_positions
-            .try_reserve(implementation_capacity)
-            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        reserve_summary_implementation_storage(
+            &mut summary.implementations,
+            &mut summary.implementation_positions,
+            implementation_capacity,
+            constraint_work,
+        )?;
         for (admitted, checked) in admitted_implementations.iter().zip(checked_implementations) {
             let implementation = resolved
                 .implementations
@@ -2917,12 +2939,7 @@ impl ExportSummary {
         }
 
         constraint_work
-            .charge(
-                summary
-                    .terms
-                    .len()
-                    .saturating_add(summary.implementations.len()),
-            )
+            .charge(summary.terms.len())
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         let interface_reference_count =
             summary
@@ -5525,6 +5542,43 @@ mod tests {
             .expect("the exact summary budget should clone the checked fact");
         assert_eq!(cloned, fact);
         assert_eq!(exact.used(), 11);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn implementation_summary_storage_charges_before_both_reserves() {
+        const RETAINED: usize = 4;
+        const EXACT: usize = RETAINED * 2;
+
+        let mut short_facts = Vec::new();
+        let mut short_positions = HashMap::new();
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT - 1);
+        assert_eq!(
+            reserve_summary_implementation_storage(
+                &mut short_facts,
+                &mut short_positions,
+                RETAINED,
+                &mut short,
+            ),
+            Err(ResolvedBuildFailure::ConstraintResource)
+        );
+        assert_eq!(short.used(), 0);
+        assert_eq!(short_facts.capacity(), 0);
+        assert_eq!(short_positions.capacity(), 0);
+
+        let mut exact_facts = Vec::new();
+        let mut exact_positions = HashMap::new();
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT);
+        reserve_summary_implementation_storage(
+            &mut exact_facts,
+            &mut exact_positions,
+            RETAINED,
+            &mut exact,
+        )
+        .expect("the exact wrapper-and-index budget should reserve both stores");
+        assert_eq!(exact.used(), EXACT);
+        assert!(exact_facts.capacity() >= RETAINED);
+        assert!(exact_positions.capacity() >= RETAINED);
         assert_eq!(exact.charge(1), Err(()));
     }
 

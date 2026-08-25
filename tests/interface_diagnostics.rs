@@ -306,11 +306,12 @@ fn targeted_global_failure_relates_the_import_binding_used_by_the_occurrence() {
 fn nested_unsatisfied_failure_retains_the_selected_implementation_chain() {
     let tree = ModuleTree::create();
     let entry_text = concat!(
-        "import dependency as Dependency\n",
-        "import dependency (impl First)\n\n",
+        "import facade as Facade\n",
+        "import facade (impl First)\n\n",
         "main : Unit -> Int\n",
-        "main () = Dependency.first(1)\n",
+        "main () = Facade.first(1)\n",
     );
+    let facade_text = "pub import dependency (First, first, impl First)\n";
     let dependency_text = concat!(
         "pub interface First<A> {\n",
         "first : A -> A\n",
@@ -323,6 +324,7 @@ fn nested_unsatisfied_failure_retains_the_selected_implementation_chain() {
         "}\n",
     );
     let entry = tree.write("entry.ash", entry_text);
+    tree.write("facade.ash", facade_text);
     tree.write("dependency.ash", dependency_text);
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("the nested-unsatisfied fixture should load");
@@ -331,13 +333,14 @@ fn nested_unsatisfied_failure_retains_the_selected_implementation_chain() {
         check_graph(&graph).expect_err("the selected implementation prerequisite is unsatisfied"),
     );
     let entry = module_named(&graph, "entry.ash").source();
+    let facade = module_named(&graph, "facade.ash").source();
     let dependency = module_named(&graph, "dependency.ash").source();
 
     assert_eq!(diagnostic.reason, InterfaceReason::Unsatisfied);
     assert!(span_matches(
         diagnostic.primary.span(),
         entry,
-        "Dependency.first"
+        "Facade.first"
     ));
     let first_interface = label_index(
         &diagnostic.related,
@@ -348,10 +351,21 @@ fn nested_unsatisfied_failure_retains_the_selected_implementation_chain() {
         .related
         .iter()
         .position(|label| {
-            span_matches(label.span(), entry, "import dependency (impl First)")
+            span_matches(label.span(), entry, "import facade (impl First)")
                 && label.message() == "this import made the selected implementation available"
         })
-        .expect("the direct import should authenticate the selected public implementation");
+        .expect("the entry import should start the selected implementation route");
+    let facade_implementation_import = diagnostic
+        .related
+        .iter()
+        .position(|label| {
+            span_matches(
+                label.span(),
+                facade,
+                "pub import dependency (First, first, impl First)",
+            ) && label.message() == "this import made the selected implementation available"
+        })
+        .expect("the facade import should complete the selected implementation route");
     let first_implementation = label_index(
         &diagnostic.related,
         dependency,
@@ -364,7 +378,8 @@ fn nested_unsatisfied_failure_retains_the_selected_implementation_chain() {
         "pub interface Second<A> {\nsecond : A -> A\n}",
     );
     assert!(first_interface < implementation_import);
-    assert!(implementation_import < first_implementation);
+    assert!(implementation_import < facade_implementation_import);
+    assert!(facade_implementation_import < first_implementation);
     assert!(first_implementation < first_method);
     assert!(first_method < second_interface);
 }

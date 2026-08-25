@@ -6042,15 +6042,27 @@ impl<'a> ImplementationHeadRef<'a> {
         }
     }
 
-    const fn import_span(self) -> Option<Span> {
+    const fn import_route(self) -> &'a [crate::resolved::ImplementationRouteHop] {
         match self {
-            Self::Imported(implementation) => match implementation.authorization().hops().first() {
-                Some(hop) => Some(hop.import_span),
-                None => None,
-            },
-            Self::Local(_) => None,
+            Self::Imported(implementation) => implementation.authorization().hops(),
+            Self::Local(_) => &[],
         }
     }
+}
+
+fn retain_overlap_label(
+    diagnostic: &mut Diagnostic<InterfaceReason>,
+    span: Span,
+    message: &'static str,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    budget.charge(1).map_err(|()| constraint_resource())?;
+    diagnostic
+        .related
+        .try_reserve(1)
+        .map_err(|_| constraint_resource())?;
+    diagnostic.related.push(SourceLabel::new(span, message));
+    Ok(())
 }
 
 fn check_effective_implementation_overlap(
@@ -6124,21 +6136,36 @@ fn check_effective_implementation_heads(
                         "this implementation overlaps an earlier available implementation",
                     ),
                 );
-                diagnostic.related.push(SourceLabel::new(
+                retain_overlap_label(
+                    &mut diagnostic,
                     previous.definition_span(),
                     "the earlier overlapping implementation head is here",
-                ));
-                if let Some(span) = previous.import_span() {
-                    diagnostic.related.push(SourceLabel::new(
-                        span,
+                    budget,
+                )?;
+                for hop in previous.import_route() {
+                    retain_overlap_label(
+                        &mut diagnostic,
+                        hop.import_span,
                         "the earlier implementation became available through this import",
-                    ));
+                        budget,
+                    )?;
                 }
-                if implementation.import_span().is_some() {
-                    diagnostic.related.push(SourceLabel::new(
+                let later_route = implementation.import_route();
+                if !later_route.is_empty() {
+                    retain_overlap_label(
+                        &mut diagnostic,
                         implementation.definition_span(),
                         "the later implementation is defined here",
-                    ));
+                        budget,
+                    )?;
+                    for hop in &later_route[1..] {
+                        retain_overlap_label(
+                            &mut diagnostic,
+                            hop.import_span,
+                            "the later implementation became available through this import",
+                            budget,
+                        )?;
+                    }
                 }
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
@@ -9068,7 +9095,7 @@ mod tests {
 
     #[test]
     fn distinct_reexported_implementations_conflict_at_the_first_combined_closure() {
-        let source = SourceFile::new("import-overlap.ash", "abcdefghijklmnop")
+        let source = SourceFile::new("import-overlap.ash", "abcdefghijklmnopqrstuvwx")
             .expect("the overlap span fixture should fit");
         let span = |start, end| {
             source
@@ -9077,8 +9104,10 @@ mod tests {
         };
         let first_definition = span(0, 2);
         let first_route = span(3, 5);
-        let second_definition = span(6, 8);
-        let second_route = span(9, 11);
+        let first_route_suffix = span(6, 8);
+        let second_definition = span(9, 11);
+        let second_route = span(12, 14);
+        let second_route_suffix = span(15, 17);
         let interface = crate::interface::InterfaceId::new(ModuleId::new(40), 0);
         let first = crate::resolved::ImportedImplementationFact {
             fact: CheckedImplementationFact {
@@ -9100,7 +9129,7 @@ mod tests {
                 crate::resolved::ImplementationRouteHop {
                     from: ModuleId::new(80),
                     to: ModuleId::new(90),
-                    import_span: first_definition,
+                    import_span: first_route_suffix,
                 },
             ]),
             public_authorization: None,
@@ -9125,7 +9154,7 @@ mod tests {
                 crate::resolved::ImplementationRouteHop {
                     from: ModuleId::new(20),
                     to: ModuleId::new(10),
-                    import_span: second_definition,
+                    import_span: second_route_suffix,
                 },
             ]),
             public_authorization: None,
@@ -9135,15 +9164,16 @@ mod tests {
             ImplementationHeadRef::Imported(&second),
         ];
 
-        let mut short = InterfaceConstraintBudget::with_limit(6);
+        let mut short = InterfaceConstraintBudget::with_limit(11);
         assert_eq!(
             check_effective_implementation_heads(&effective, &mut short),
             Err(TypeError::Internal(
                 ElaborationFailure::ConstraintResourceExhausted
             ))
         );
+        assert_eq!(short.used(), 11);
 
-        let mut exact = InterfaceConstraintBudget::with_limit(7);
+        let mut exact = InterfaceConstraintBudget::with_limit(12);
         let error = check_effective_implementation_heads(&effective, &mut exact)
             .expect_err("the later retained route should expose the overlap");
         let TypeError::Interface(diagnostic) = error else {
@@ -9156,9 +9186,15 @@ mod tests {
                 .iter()
                 .map(SourceLabel::span)
                 .collect::<Vec<_>>(),
-            vec![first_definition, first_route, second_definition]
+            vec![
+                first_definition,
+                first_route,
+                first_route_suffix,
+                second_definition,
+                second_route_suffix,
+            ]
         );
-        assert_eq!(exact.used(), 7);
+        assert_eq!(exact.used(), 12);
         assert_eq!(exact.charge(1), Err(()));
     }
 
