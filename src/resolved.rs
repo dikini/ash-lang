@@ -2939,7 +2939,12 @@ impl ExportSummary {
         }
 
         constraint_work
-            .charge(summary.terms.len())
+            .charge(
+                summary
+                    .terms
+                    .len()
+                    .saturating_add(summary.implementations.len()),
+            )
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         let interface_reference_count =
             summary
@@ -5580,6 +5585,121 @@ mod tests {
         assert!(exact_facts.capacity() >= RETAINED);
         assert!(exact_positions.capacity() >= RETAINED);
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    fn freeze_public_implementation_summary_with_limit(
+        retain_public_implementation: bool,
+        limit: usize,
+    ) -> (Result<ExportSummary, ResolvedBuildFailure>, usize) {
+        let source = SourceFile::new("public-implementation-summary.ash", "interface impl")
+            .expect("the public implementation summary fixture should fit");
+        let interface_span = source
+            .span(ByteRange::new(0, 9).expect("the interface span should be ordered"))
+            .expect("the interface span should belong to the fixture");
+        let implementation_span = source
+            .span(ByteRange::new(10, 14).expect("the implementation span should be ordered"))
+            .expect("the implementation span should belong to the fixture");
+        let defining = ModuleId::new(76);
+        let facade = ModuleId::new(77);
+        let interface = InterfaceId::new(defining, 0);
+        let implementation = ImplId::new(defining, 0);
+        let mut imported = ImportedFacts::default();
+        imported
+            .reserve_interface()
+            .expect("one hidden interface slot should reserve");
+        imported.insert_interface(
+            CheckedInterfaceFact {
+                id: interface,
+                spelling: "Render".into(),
+                parameter: ResolvedTypeVariable {
+                    id: TypeVariableId::new(0),
+                    spelling: "A".into(),
+                    origin: Origin::Source(interface_span),
+                },
+                methods: Box::new([]),
+                origin: Origin::Source(interface_span),
+                span: interface_span,
+            },
+            defining,
+            interface_span,
+            true,
+        );
+        if retain_public_implementation {
+            let authorization = || {
+                ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+                    from: facade,
+                    to: defining,
+                    import_span: implementation_span,
+                }])
+            };
+            imported
+                .reserve_implementation()
+                .expect("one imported implementation slot should reserve");
+            imported
+                .reserve_public_implementation()
+                .expect("one public implementation slot should reserve");
+            imported.insert_implementation(
+                CheckedImplementationFact {
+                    id: implementation,
+                    interface,
+                    head_parameters: Box::new([]),
+                    argument: Type::Int,
+                    prerequisites: Box::new([]),
+                    methods: Box::new([]),
+                    origin: Origin::Source(implementation_span),
+                    span: implementation_span,
+                },
+                authorization(),
+                Some(authorization()),
+            );
+            imported
+                .mark_implementation_public(implementation)
+                .expect("the imported implementation should become public");
+        }
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module: facade,
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported,
+            direct_dependencies: vec![DirectDependencyRoute::new(defining, implementation_span)],
+            declaration_order: Vec::new(),
+            interfaces: Vec::new(),
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate: ResolvedExportCandidate::default(),
+            span: implementation_span,
+        });
+        let mut type_work = TypeWorkBudget::default();
+        let mut constraint_work = crate::interface::InterfaceConstraintBudget::with_limit(limit);
+        let result = ExportSummary::freeze(
+            &resolved,
+            &[],
+            &[],
+            &[],
+            &[],
+            &mut type_work,
+            &mut constraint_work,
+        );
+        (result, constraint_work.used())
+    }
+
+    #[test]
+    fn public_implementation_summary_charges_storage_and_closure_inspection() {
+        let (empty, empty_used) = freeze_public_implementation_summary_with_limit(false, 0);
+        let empty = empty.expect("an unused imported interface should require no constraint work");
+        assert_eq!(empty_used, 0);
+        assert!(empty.implementations().next().is_none());
+        assert!(empty.hidden_interfaces().next().is_none());
+
+        let (short, short_used) = freeze_public_implementation_summary_with_limit(true, 11);
+        assert_eq!(short, Err(ResolvedBuildFailure::ConstraintResource));
+        assert_eq!(short_used, 11);
+
+        let (exact, exact_used) = freeze_public_implementation_summary_with_limit(true, 12);
+        let summary = exact
+            .expect("the exact storage-and-closure budget should retain one public implementation");
+        assert_eq!(exact_used, 12);
+        assert_eq!(summary.implementations().count(), 1);
+        assert_eq!(summary.hidden_interfaces().count(), 1);
     }
 
     fn freeze_transparent_constructor_aliases_with_limit(
