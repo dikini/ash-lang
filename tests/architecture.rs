@@ -161,6 +161,11 @@ fn interface_state_release_is_ordered(source: &str) -> bool {
     ) else {
         return false;
     };
+    let Some(driver_pipeline_without_attributes) = code_tokens_without_attributes(driver_pipeline)
+    else {
+        return false;
+    };
+    let driver_pipeline = driver_pipeline_without_attributes.as_slice();
     let Some(validated_interface_bindings) =
         top_level_let_binding_positions(driver_pipeline, "validated_interfaces")
     else {
@@ -351,14 +356,49 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
         }
         fn entry_failure() {}
     "#;
+    let attributed_tuple_shadowed_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            let unchecked = elaborator.finish(typed.node)?;
+            #[allow(unused_variables)]
+            let (validated_interfaces,) = (String::new(),);
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
     let nested_shadow_then_actual_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
             let validated_interfaces = interface_validator(linked, constraint_work)?;
             let nested_shadow = || {
-                let validated_interfaces = String::new();
+                #[allow(unused_variables)]
+                let (validated_interfaces,) = (String::new(),);
                 ::std::mem::drop(validated_interfaces);
             };
             let unchecked = elaborator.finish(typed.node)?;
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let if_let_binding_then_actual_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            if let Some(validated_interfaces) = optional_interfaces {
+                ::std::mem::drop(validated_interfaces);
+            }
+            let unchecked = elaborator.finish(typed.node)?;
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let malformed_statement_attribute = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            let unchecked = elaborator.finish(typed.node)?;
+            #[allow(unused_variables)
+            let (validated_interfaces,) = (String::new(),);
             ::std::mem::drop(validated_interfaces);
             let validated = validator(unchecked, &sources, &module_sources)?;
         }
@@ -374,8 +414,13 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
         interface_state_release_is_ordered(mutable_pattern_shadowed_drop);
     let struct_shadowed_drop_looks_ordered =
         interface_state_release_is_ordered(struct_pattern_shadowed_drop);
+    let attributed_shadowed_drop_looks_ordered =
+        interface_state_release_is_ordered(attributed_tuple_shadowed_drop);
     let nested_shadow_looks_ordered =
         interface_state_release_is_ordered(nested_shadow_then_actual_drop);
+    let if_let_looks_ordered = interface_state_release_is_ordered(if_let_binding_then_actual_drop);
+    let malformed_attribute_looks_ordered =
+        interface_state_release_is_ordered(malformed_statement_attribute);
     assert!(
         !shadowed_drop_looks_ordered
             && !moved_drop_looks_ordered
@@ -383,8 +428,11 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
             && !ref_shadowed_drop_looks_ordered
             && !mutable_shadowed_drop_looks_ordered
             && !struct_shadowed_drop_looks_ordered
-            && nested_shadow_looks_ordered,
-        "the release guard must reject top-level shadowing or moves across binding patterns without counting nested bindings; direct: {shadowed_drop_looks_ordered}, moved: {moved_drop_looks_ordered}, tuple moved: {tuple_moved_drop_looks_ordered}, ref: {ref_shadowed_drop_looks_ordered}, mut: {mutable_shadowed_drop_looks_ordered}, struct: {struct_shadowed_drop_looks_ordered}, nested: {nested_shadow_looks_ordered}"
+            && !attributed_shadowed_drop_looks_ordered
+            && nested_shadow_looks_ordered
+            && if_let_looks_ordered
+            && !malformed_attribute_looks_ordered,
+        "the release guard must reject top-level shadowing or moves across binding patterns without counting nested or conditional bindings; direct: {shadowed_drop_looks_ordered}, moved: {moved_drop_looks_ordered}, tuple moved: {tuple_moved_drop_looks_ordered}, ref: {ref_shadowed_drop_looks_ordered}, mut: {mutable_shadowed_drop_looks_ordered}, struct: {struct_shadowed_drop_looks_ordered}, attributed: {attributed_shadowed_drop_looks_ordered}, nested: {nested_shadow_looks_ordered}, if let: {if_let_looks_ordered}, malformed attribute: {malformed_attribute_looks_ordered}"
     );
 }
 
