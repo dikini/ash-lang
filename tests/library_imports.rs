@@ -737,10 +737,19 @@ fn name_reexports_preserve_privacy_opacity_and_identity() {
 
 #[test]
 fn opaque_constructor_family_withholding_crosses_nominal_only_facades() {
-    for (facades, entry) in [
+    const BASE: &str = concat!(
+        "pub opaque type Token =\n",
+        "Seal(Int)\n",
+        "| Stamp(Int)\n\n",
+        "pub opaque type Other =\n",
+        "Noise(Int)\n",
+        "| Echo(Int)\n",
+    );
+    let facade_cases = [
         (
             &[("facade.ash", "pub import base (Token as PublicToken)\n")][..],
-            "import facade (Seal)\n",
+            "facade",
+            "Facade",
         ),
         (
             &[
@@ -750,73 +759,106 @@ fn opaque_constructor_family_withholding_crosses_nominal_only_facades() {
                     "pub import inner (WrappedToken as PublicToken)\n",
                 ),
             ][..],
-            "import outer (Seal)\n",
+            "outer",
+            "Outer",
         ),
-        (
-            &[("facade.ash", "pub import base (Token as PublicToken)\n")][..],
-            concat!(
-                "import facade as Facade\n\n",
-                "main : Unit -> Facade.PublicToken\n",
-                "main () = Facade.Seal(1)\n",
-            ),
-        ),
-        (
-            &[
-                ("inner.ash", "pub import base (Token as WrappedToken)\n"),
-                (
-                    "outer.ash",
-                    "pub import inner (WrappedToken as PublicToken)\n",
-                ),
-            ][..],
-            concat!(
-                "import outer as Outer\n\n",
-                "main : Unit -> Outer.PublicToken\n",
-                "main () = Outer.Seal(1)\n",
-            ),
-        ),
-    ] {
-        let tree = ModuleTree::create();
-        let mut dependencies = vec![("base.ash", "pub opaque type Token = Seal(Int)\n")];
-        dependencies.extend_from_slice(facades);
-        let graph = load(&tree, entry, &dependencies);
+    ];
 
-        let error = resolve_entry_error(&graph);
-        let diagnostic = error.diagnostic();
-        let base = module_named(&graph, "base.ash");
-        let seal_start = base
-            .source()
-            .text()
-            .find("Seal")
-            .expect("the defining constructor spelling should exist");
+    for (facades, visible_module, qualifier) in facade_cases {
+        for constructor in ["Seal", "Stamp"] {
+            for qualified in [false, true] {
+                let entry = if qualified {
+                    format!(
+                        "import {visible_module} as {qualifier}\n\n\
+                         main : Unit -> {qualifier}.PublicToken\n\
+                         main () = {qualifier}.{constructor}(1)\n"
+                    )
+                } else {
+                    format!("import {visible_module} ({constructor})\n")
+                };
+                let tree = ModuleTree::create();
+                let mut dependencies = vec![("base.ash", BASE)];
+                dependencies.extend_from_slice(facades);
+                let graph = load(&tree, &entry, &dependencies);
 
-        assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
-        assert_eq!(diagnostic.found.as_deref(), Some("Seal"));
-        assert_eq!(
-            diagnostic.primary.message(),
-            "this constructor belongs to an opaque type",
-        );
-        assert_eq!(
-            diagnostic.primary.span().source(),
-            module_named(&graph, "entry.ash").source().id(),
-        );
-        assert_eq!(
-            usize::try_from(diagnostic.primary.span().range().start())
-                .expect("the selected constructor offset should fit"),
-            entry
-                .rfind("Seal")
-                .expect("the selected constructor spelling should exist"),
-        );
-        assert_eq!(diagnostic.related.len(), 1);
-        assert_eq!(
-            diagnostic.related[0].message(),
-            "the inaccessible declaration is here",
-        );
-        assert_eq!(diagnostic.related[0].span().source(), base.source().id());
-        assert_eq!(
-            usize::try_from(diagnostic.related[0].span().range().start())
-                .expect("the constructor offset should fit"),
-            seal_start,
-        );
+                let error = resolve_entry_error(&graph);
+                let diagnostic = error.diagnostic();
+                let base = module_named(&graph, "base.ash");
+                let constructor_start = base
+                    .source()
+                    .text()
+                    .find(constructor)
+                    .expect("the defining constructor spelling should exist");
+
+                assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+                assert_eq!(diagnostic.found.as_deref(), Some(constructor));
+                assert_eq!(
+                    diagnostic.primary.message(),
+                    "this constructor belongs to an opaque type",
+                );
+                assert_eq!(
+                    diagnostic.primary.span().source(),
+                    module_named(&graph, "entry.ash").source().id(),
+                );
+                assert_eq!(
+                    usize::try_from(diagnostic.primary.span().range().start())
+                        .expect("the selected constructor offset should fit"),
+                    entry
+                        .rfind(constructor)
+                        .expect("the selected constructor spelling should exist"),
+                );
+                assert_eq!(diagnostic.related.len(), 1);
+                assert_eq!(
+                    diagnostic.related[0].message(),
+                    "the inaccessible declaration is here",
+                );
+                assert_eq!(diagnostic.related[0].span().source(), base.source().id());
+                assert_eq!(
+                    usize::try_from(diagnostic.related[0].span().range().start())
+                        .expect("the constructor offset should fit"),
+                    constructor_start,
+                );
+            }
+        }
+
+        for constructor in ["Noise", "Echo"] {
+            for qualified in [false, true] {
+                let entry = if qualified {
+                    format!(
+                        "import {visible_module} as {qualifier}\n\n\
+                         main : Unit -> {qualifier}.PublicToken\n\
+                         main () = {qualifier}.{constructor}(1)\n"
+                    )
+                } else {
+                    format!("import {visible_module} ({constructor})\n")
+                };
+                let tree = ModuleTree::create();
+                let mut dependencies = vec![("base.ash", BASE)];
+                dependencies.extend_from_slice(facades);
+                let graph = load(&tree, &entry, &dependencies);
+
+                let error = resolve_entry_error(&graph);
+                let diagnostic = error.diagnostic();
+                assert_eq!(error.reason, ResolveReason::UnavailableExport);
+                assert_eq!(diagnostic.found.as_deref(), Some(constructor));
+                assert_eq!(
+                    diagnostic.primary.message(),
+                    "the dependency exports no declaration with this spelling",
+                );
+                assert_eq!(
+                    diagnostic.primary.span().source(),
+                    module_named(&graph, "entry.ash").source().id(),
+                );
+                assert_eq!(
+                    usize::try_from(diagnostic.primary.span().range().start())
+                        .expect("the selected constructor offset should fit"),
+                    entry
+                        .rfind(constructor)
+                        .expect("the selected constructor spelling should exist"),
+                );
+                assert!(diagnostic.related.is_empty());
+            }
+        }
     }
 }
 

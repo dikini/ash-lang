@@ -1255,6 +1255,14 @@ impl Resolver {
                                     "public import candidate retention exceeded its type-work budget",
                                 ))?;
                                 if exported.access == ExportedTypeAccess::Opaque {
+                                    self.type_work
+                                        .charge(dependency.summary.withheld_count())
+                                        .map_err(|()| {
+                                            export_candidate_resource_error(
+                                                *span,
+                                                "opaque constructor-family scan exceeded its type-work budget",
+                                            )
+                                        })?;
                                     for (spelling, withheld) in
                                         dependency.summary.opaque_constructors(exported.id)
                                     {
@@ -4776,7 +4784,7 @@ mod tests {
         );
         private_opaque.expect("the private opaque import should establish its staging baseline");
 
-        let opaque_exact_limit = private_opaque_used + 4;
+        let opaque_exact_limit = private_opaque_used + 5;
         let (opaque_short, opaque_short_used) = resolve_import_fixture_with_type_limit(
             PUBLIC_OPAQUE,
             OPAQUE_DEPENDENCY,
@@ -4786,7 +4794,7 @@ mod tests {
             .expect_err("the opaque-family withheld entry should exhaust candidate staging");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range().start(), 23);
-        assert_eq!(opaque_short_used, private_opaque_used + 2);
+        assert_eq!(opaque_short_used, private_opaque_used + 3);
 
         let (opaque_exact, opaque_exact_used) = resolve_import_fixture_with_type_limit(
             PUBLIC_OPAQUE,
@@ -4852,6 +4860,58 @@ mod tests {
                 .term(&format!("Alias{}", ALIAS_COUNT - 1))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn opaque_family_scan_charges_every_withheld_entry_for_each_public_alias() {
+        const DEPENDENCY: &str = concat!(
+            "hidden : Unit -> Unit\n",
+            "hidden value = value\n\n",
+            "pub opaque type Token =\n",
+            "Seal(Int)\n",
+            "| Stamp(Int)\n\n",
+            "pub opaque type Other =\n",
+            "Noise(Int)\n",
+            "| Echo(Int)\n",
+        );
+        const PRIVATE: &str = "import dependency (Token as FirstToken, Token as SecondToken)\n";
+        const PUBLIC: &str = "pub import dependency (Token as FirstToken, Token as SecondToken)\n";
+        const WITHHELD_ENTRY_COUNT: usize = 5;
+        const RETAINED_CANDIDATE_WORK: usize = 8;
+
+        let (private, private_used) =
+            resolve_import_fixture_with_type_limit(PRIVATE, DEPENDENCY, TYPE_WORK_LIMIT);
+        private.expect("the private repeated aliases should establish the scan baseline");
+
+        let exact_limit = private_used + RETAINED_CANDIDATE_WORK + 2 * WITHHELD_ENTRY_COUNT;
+        let (short, short_used) =
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
+        let error =
+            short.expect_err("the second complete withheld-order scan should fail atomically");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(
+            error.primary.message(),
+            "opaque constructor-family scan exceeded its type-work budget",
+        );
+        assert_eq!(
+            usize::try_from(error.primary.span().range().start())
+                .expect("the selector offset should fit"),
+            PUBLIC
+                .find("Token as SecondToken")
+                .expect("the repeated selector should exist"),
+        );
+        assert_eq!(short_used, private_used + 2 + WITHHELD_ENTRY_COUNT + 4 + 2,);
+
+        let (exact, exact_used) =
+            resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit);
+        let exact = exact.expect("the exact repeated opaque-family scan budget should resolve");
+        assert_eq!(exact_used, exact_limit);
+        assert!(exact.export_candidate().nominal("FirstToken").is_some());
+        assert!(exact.export_candidate().nominal("SecondToken").is_some());
+        assert!(exact.export_candidate().is_opaque_constructor("Seal"));
+        assert!(exact.export_candidate().is_opaque_constructor("Stamp"));
+        assert!(!exact.export_candidate().is_opaque_constructor("Noise"));
+        assert!(!exact.export_candidate().is_opaque_constructor("Echo"));
     }
 
     #[test]
