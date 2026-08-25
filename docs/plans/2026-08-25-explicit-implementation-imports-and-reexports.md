@@ -463,6 +463,10 @@ Wrap each summary implementation fact with its authorization path. Let
 `ImportedImplementationFact` and `AvailableImplementation` retain the selected
 path instead of assuming `ImplId.module() == direct_dependency`. Provide
 borrowed accessors rather than restoring `Copy` through handles or globals.
+Retain separate canonical winners for effective availability and public
+authorization. All explicit selectors compete for the effective winner; only
+public selectors compete for the public winner. An empty public path is valid
+only for a public local implementation.
 
 Rerun the primary facade test. Expected: GREEN through checking; linked
 validation remains pending in Task 6 if it rejects the new route.
@@ -474,8 +478,10 @@ different lengths and another graph with equal lengths. Assert:
 
 1. shortest hop count wins;
 2. equal lengths preserve dependency order, then import source order; and
-3. a stable path identity breaks any remaining equality without hash-map
-   iteration affecting output.
+3. a lexicographic graph-local sequence of `(from ModuleId, to ModuleId,
+   import byte range)` breaks any remaining equality without process-global
+   source allocation or hash-map iteration affecting output; and
+4. a shorter private selector never becomes the public re-export route.
 
 Process summaries and selectors in stable source order. On duplicate `ImplId`,
 compare the candidate route before discarding its charged fact and provenance.
@@ -581,6 +587,9 @@ Before validating occurrence selections, validate every public authorization:
    suffix;
 4. the final group owns the implementation fact and public source body; and
 5. no malformed, disconnected, repeated, or over-budget path reaches Core.
+
+Authenticate every group's local facts and complete public-authorization table
+before trusting any table as an occurrence-availability suffix.
 
 Then validate each `AvailableImplementation` by matching its path to the first
 dependency's public authorization and use the same predicate in

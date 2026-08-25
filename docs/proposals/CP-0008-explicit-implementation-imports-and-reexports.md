@@ -111,7 +111,17 @@ Each imported or re-exported fact records an authorization route from the
 current module through its immediate dependency. A route preserves the original
 declaration identity and every summary edge that authorized it. Multiple routes
 to one identity select a shortest route; equal-length routes use dependency
-order, import source order, and then stable route identity.
+order, then import source order. When those orders converge on alternate
+suffixes, stable route identity is the lexicographic sequence of graph-local
+`(from ModuleId, to ModuleId, import byte range)` hop keys. It excludes
+process-global source allocation and hash-map iteration.
+
+Effective availability and public authorization choose routes independently.
+The effective winner may come from any explicit selector. The public winner may
+come only from a public selector, so a shorter private import cannot authorize a
+re-export. An empty public authorization denotes only a public implementation
+declared by the publishing module; a private local implementation never enters
+a public summary.
 
 ### Checking, validation, and lowering
 
@@ -124,6 +134,9 @@ Linked-evidence validation authenticates an imported implementation against
 the complete recorded route through the immediate dependency's checked
 summary. A valid `ImplId` without that authorization is an internal
 `evidence.validation.*` failure. Validation does not select another candidate.
+It authenticates every module's local implementation inventory and public
+authorization table before validating occurrence availability through those
+tables.
 
 After validation, existing evidence lowering erases interface,
 implementation, and authorization-route metadata. The result uses the original

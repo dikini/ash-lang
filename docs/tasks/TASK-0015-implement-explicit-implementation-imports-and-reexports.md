@@ -105,6 +105,12 @@ addition to integration fixtures. Final transition-artifact cleanup must remove
 or replace intermediate CP-0008, TASK-0015, and execution-plan links from the
 retained design, trajectory, and evidence documents.
 
+Effective availability and public re-export authorization require independent
+route winners. Equal-length suffixes use the graph-local hop-key sequence
+defined by CP-0008; process-global source allocation and hash-map order do not
+participate. Linked validation authenticates complete public authorization
+inventories before using them to validate occurrence availability.
+
 ## Deviations
 
 None.
