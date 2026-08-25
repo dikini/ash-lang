@@ -140,9 +140,9 @@ fn authenticated_interface_state_ends_at_the_core_synthesis_boundary() {
 }
 
 fn validated_program_retains_linked_registry(source: &str) -> bool {
-    let identifiers = rust_code_identifiers(source);
-    let validated_program = identifiers_between(
-        &identifiers,
+    let tokens = rust_code_tokens(source);
+    let validated_program = code_tokens_between(
+        &tokens,
         &["pub", "struct", "ValidatedInterfaceProgram"],
         &["impl", "ValidatedInterfaceProgram"],
     )
@@ -151,30 +151,39 @@ fn validated_program_retains_linked_registry(source: &str) -> bool {
 }
 
 fn interface_state_release_is_ordered(source: &str) -> bool {
-    let identifiers = rust_code_identifiers(source);
-    let driver_pipeline = identifiers_between(
-        &identifiers,
+    let tokens = rust_code_tokens(source);
+    let driver_pipeline = code_tokens_between(
+        &tokens,
         &["fn", "run_path_with_consumers_and_constraint_budget"],
         &["fn", "entry_failure"],
     )
     .expect("the driver should retain one ordered modular pipeline");
-    let synthesis_finish =
-        identifier_sequence_position(driver_pipeline, &["elaborator", "finish", "typed", "node"])
-            .expect("the driver should finish Core synthesis");
-    let core_validation = identifier_sequence_position(
+    let synthesis_finish = code_token_sequence_position(
+        driver_pipeline,
+        &["elaborator", ".", "finish", "(", "typed", ".", "node", ")"],
+    )
+    .expect("the driver should finish Core synthesis");
+    let core_validation = code_token_sequence_position(
         driver_pipeline,
         &[
-            "let",
-            "validated",
             "validator",
+            "(",
             "unchecked",
+            ",",
+            "&",
             "sources",
+            ",",
+            "&",
             "module_sources",
+            ")",
         ],
     )
     .expect("the driver should independently validate synthesized Core");
-    identifier_sequence_position(driver_pipeline, &["drop", "validated_interfaces"])
-        .is_some_and(|release| release > synthesis_finish && release < core_validation)
+    code_token_sequence_position(
+        driver_pipeline,
+        &["drop", "(", "validated_interfaces", ")", ";"],
+    )
+    .is_some_and(|release| release > synthesis_finish && release < core_validation)
 }
 
 #[test]
@@ -210,6 +219,17 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
         fn entry_failure() {}
     "#;
     assert!(!interface_state_release_is_ordered(commented_drop));
+
+    let deferred_tuple_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            let _deferred_release: (fn(ValidatedInterfaceProgram), ValidatedInterfaceProgram) =
+                (drop, validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    assert!(!interface_state_release_is_ordered(deferred_tuple_drop));
 
     let actual_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
@@ -277,8 +297,20 @@ fn has_camel_component(identifier: &str, camel: &str) -> bool {
 }
 
 fn rust_code_identifiers(source: &str) -> Vec<&str> {
+    rust_code_tokens(source)
+        .into_iter()
+        .filter(|token| {
+            token
+                .as_bytes()
+                .first()
+                .is_some_and(|first| first.is_ascii_alphabetic() || *first == b'_')
+        })
+        .collect()
+}
+
+fn rust_code_tokens(source: &str) -> Vec<&str> {
     let bytes = source.as_bytes();
-    let mut identifiers = Vec::new();
+    let mut tokens = Vec::new();
     let mut cursor = 0;
 
     while cursor < bytes.len() {
@@ -317,32 +349,35 @@ fn rust_code_identifiers(source: &str) -> Vec<&str> {
             {
                 cursor += 1;
             }
-            identifiers.push(&source[start..cursor]);
+            tokens.push(&source[start..cursor]);
             continue;
+        }
+        if matches!(bytes[cursor], b'.' | b'(' | b')' | b';' | b',' | b'&') {
+            tokens.push(&source[cursor..cursor + 1]);
         }
         cursor += 1;
     }
 
-    identifiers
+    tokens
 }
 
-fn identifier_sequence_position(identifiers: &[&str], sequence: &[&str]) -> Option<usize> {
+fn code_token_sequence_position(tokens: &[&str], sequence: &[&str]) -> Option<usize> {
     if sequence.is_empty() {
         return None;
     }
-    identifiers
+    tokens
         .windows(sequence.len())
         .position(|window| window == sequence)
 }
 
-fn identifiers_between<'a>(
-    identifiers: &'a [&'a str],
+fn code_tokens_between<'a>(
+    tokens: &'a [&'a str],
     start: &[&str],
     end: &[&str],
 ) -> Option<&'a [&'a str]> {
-    let body_start = identifier_sequence_position(identifiers, start)? + start.len();
-    let body_end = body_start + identifier_sequence_position(&identifiers[body_start..], end)?;
-    Some(&identifiers[body_start..body_end])
+    let body_start = code_token_sequence_position(tokens, start)? + start.len();
+    let body_end = body_start + code_token_sequence_position(&tokens[body_start..], end)?;
+    Some(&tokens[body_start..body_end])
 }
 
 fn rust_literal_end(source: &[u8], cursor: usize) -> Option<usize> {
