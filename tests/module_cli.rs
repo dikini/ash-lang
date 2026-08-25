@@ -69,21 +69,60 @@ fn ash(arguments: impl IntoIterator<Item = OsString>) -> Output {
 }
 
 fn canonicalize_source_ids(rendered: &str) -> String {
-    rendered
-        .split_inclusive('\n')
-        .map(|line| {
-            let Some(marker) = line.find("source ") else {
-                return line.to_owned();
-            };
-            let id_start = marker + "source ".len();
-            let id_end = id_start
-                + line[id_start..]
-                    .bytes()
-                    .take_while(u8::is_ascii_digit)
-                    .count();
-            format!("{}_{}", &line[..id_start], &line[id_end..])
-        })
-        .collect()
+    let mut source_ids = Vec::new();
+    let mut canonical = String::with_capacity(rendered.len());
+    for line in rendered.split_inclusive('\n') {
+        let Some(marker) = line.find("source ") else {
+            canonical.push_str(line);
+            continue;
+        };
+        let id_start = marker + "source ".len();
+        let id_end = id_start
+            + line[id_start..]
+                .bytes()
+                .take_while(u8::is_ascii_digit)
+                .count();
+        let source_id = &line[id_start..id_end];
+        let ordinal = source_ids
+            .iter()
+            .position(|known| *known == source_id)
+            .unwrap_or_else(|| {
+                source_ids.push(source_id);
+                source_ids.len() - 1
+            });
+        canonical.push_str(&line[..id_start]);
+        canonical.push('_');
+        canonical.push_str(&ordinal.to_string());
+        canonical.push_str(&line[id_end..]);
+    }
+    canonical
+}
+
+#[test]
+fn canonical_source_ids_preserve_repeated_source_relationships() {
+    let first = concat!(
+        "primary: source 41 bytes 0..1: first\n",
+        "related: source 7 bytes 2..3: second\n",
+        "related: source 41 bytes 4..5: third\n",
+    );
+    let second = concat!(
+        "primary: source 9 bytes 0..1: first\n",
+        "related: source 12 bytes 2..3: second\n",
+        "related: source 12 bytes 4..5: third\n",
+    );
+
+    assert_eq!(
+        canonicalize_source_ids(first),
+        concat!(
+            "primary: source _0 bytes 0..1: first\n",
+            "related: source _1 bytes 2..3: second\n",
+            "related: source _0 bytes 4..5: third\n",
+        )
+    );
+    assert_ne!(
+        canonicalize_source_ids(first),
+        canonicalize_source_ids(second),
+    );
 }
 
 #[test]
