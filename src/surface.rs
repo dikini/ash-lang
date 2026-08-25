@@ -87,8 +87,8 @@ pub enum SurfaceImportItem {
     },
     /// Public implementations selected by one dependency interface spelling.
     Implementation {
-        /// The dependency interface spelling; this channel binds no source name and Task 3 uses it
-        /// to control implementation availability.
+        /// The dependency interface spelling; this channel binds no source name and controls
+        /// implementation availability.
         interface: SurfaceName,
         /// The complete selector item span.
         span: Span,
