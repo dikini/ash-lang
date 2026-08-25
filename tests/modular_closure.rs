@@ -12,8 +12,8 @@ use ash::{
         validate_modules,
     },
     diagnostic::SourceLabel,
+    driver::{RunConfiguration, run_path},
     elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
-    eval::{Evaluation, evaluate},
     evidence_validation::validate_interface_evidence,
     interface::InterfaceReason,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
@@ -80,13 +80,18 @@ impl Drop for ModuleTree {
 
 struct PositiveWitness {
     _tree: ModuleTree,
+    entry: PathBuf,
     graph: ModuleGraph,
     core: ValidatedProgram,
-    evaluation: Evaluation,
-    ty: Type,
     implementation_method: BinderId,
     same: BinderId,
     main: BinderId,
+}
+
+impl PositiveWitness {
+    fn entry(&self) -> &Path {
+        &self.entry
+    }
 }
 
 fn positive_witness() -> PositiveWitness {
@@ -121,13 +126,12 @@ fn positive_witness() -> PositiveWitness {
     let linked = validate_interface_evidence(linked)
         .expect("the linked interface evidence should authenticate");
 
-    // Act: synthesize ordinary Core, validate it independently, and evaluate it.
+    // Act: synthesize ordinary Core and validate it independently for inspection.
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("the Core namespace should reserve");
     let typed = elaborator
         .synthesize_module_program(&linked)
         .expect("validated evidence should synthesize ordinary Core");
-    let ty = typed.ty;
     let unchecked = elaborator
         .finish(typed.node)
         .expect("the synthesized Core arena should finish");
@@ -143,14 +147,12 @@ fn positive_witness() -> PositiveWitness {
         .collect::<Vec<_>>();
     let core = validate_modules(unchecked, &sources, &module_sources)
         .expect("the synthesized Core should validate independently");
-    let evaluation = evaluate(&core).expect("the validated equality program should evaluate");
 
     PositiveWitness {
         _tree: tree,
+        entry,
         graph,
         core,
-        evaluation,
-        ty,
         implementation_method,
         same,
         main,
@@ -278,15 +280,23 @@ fn primitive_in_subtree(
 
 #[test]
 fn integer_equality_paths_complete_the_pipeline_with_one_observation() {
-    // Arrange and act.
+    // Arrange.
     let witness = positive_witness();
+
+    // Act: use the public driver while the shared temporary module tree is alive.
+    let observation = run_path(RunConfiguration {
+        entry: witness.entry().to_path_buf(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the public driver should complete the equality module tree");
 
     // Assert.
     assert_eq!(
-        witness.ty,
+        observation.ty,
         Type::Tuple(vec![Type::Bool, Type::Bool, Type::Bool].into_boxed_slice())
     );
-    assert_eq!(witness.evaluation.value.to_string(), "(true, true, true)");
+    assert_eq!(observation.value_display(), "(true, true, true)");
+    assert_eq!(observation.type_display(), "(Bool, Bool, Bool)");
 }
 
 #[test]

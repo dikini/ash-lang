@@ -32,11 +32,18 @@ target or case existed under `tests/`.
 
 ## Positive witness
 
-`integer_equality_paths_complete_the_pipeline_with_one_observation` creates a
-temporary two-module tree with RAII cleanup. It loads the source graph, resolves
-and checks each dependency in order, links the checked modules, validates the
-linked interface evidence, synthesizes Core, independently validates the whole
-Core program, and evaluates it through the public compiler APIs.
+The shared `positive_witness` helper creates a temporary two-module tree with
+RAII cleanup. It manually loads the source graph, resolves and checks each
+dependency in order, links the checked modules, validates the linked interface
+evidence, synthesizes Core, and independently validates the whole Core program.
+That manual assembly retains the intermediate Core needed by the structural
+audit below.
+
+`integer_equality_paths_complete_the_pipeline_with_one_observation` separately
+invokes the public [`run_path`](../../../src/driver.rs) pipeline on the same
+temporary entry path while the tree remains alive. This path owns entry-contract
+validation, graph-wide resource orchestration, Core validation, and evaluation;
+the manual assembly is not used as a substitute for that driver boundary.
 
 The entry module returns this structural tuple:
 
@@ -48,15 +55,18 @@ The entry module returns this structural tuple:
 )
 ```
 
-The checked and independently validated result type is exactly
-`(Bool, Bool, Bool)`. Evaluation observes exactly `(true, true, true)`. This is
-one shared result, not a claim that the three source paths have identical
-typing, diagnostic, or Core structure.
+The public driver reports the exact structural type `(Bool, Bool, Bool)`, the
+same exact source-facing type display, and the exact value
+`(true, true, true)`. The separately assembled Core also passes independent
+whole-program validation before inspection. This is one shared result, not a
+claim that the three source paths have identical typing, diagnostic, or Core
+structure.
 
 ## Core facts
 
-`direct_and_library_equality_retain_distinct_core_paths` locates definitions by
-their resolved binder identities and module recursive-group membership. It uses
+`direct_and_library_equality_retain_distinct_core_paths` inspects the manually
+assembled, independently validated Core. It locates definitions by their
+resolved binder identities and module recursive-group membership. It uses
 source origins to distinguish the direct expression from the implementation
 method body. It does not depend on arena-wide node counts.
 
