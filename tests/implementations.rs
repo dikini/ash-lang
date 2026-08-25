@@ -472,6 +472,16 @@ fn rejects_impl_method_equation_arity() {
 }
 
 #[test]
+fn rejects_invalid_interface_method_shape_before_impl_equation_arity() {
+    let error = check_error(concat!(
+        "interface Keep<A> {\nkeep : (A, Int -> Int)\n}\n\n",
+        "impl Keep<Int> {\nkeep left right = left\n}\n",
+    ));
+
+    assert_eq!(reason(&error), "interface.method-not-function");
+}
+
+#[test]
 fn rejects_impl_method_pattern_with_the_wrong_instantiated_type() {
     let error = check_error(concat!(
         "interface Keep<A> {\nkeep : A -> A\n}\n",

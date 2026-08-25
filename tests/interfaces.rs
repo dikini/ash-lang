@@ -139,8 +139,45 @@ fn rejects_interface_method_without_function_arrow() {
 }
 
 #[test]
-fn accepts_interface_method_with_nested_function_arrow() {
-    check_valid("pub interface Callable<A> {\ncallable : (A, Int -> Int)\n}\n");
+fn rejects_interface_method_with_only_nested_function_arrow() {
+    let error = check_error("interface Callable<A> {\ncallable : (A, Int -> Int)\n}\n");
+
+    assert_eq!(reason(&error), "interface.method-not-function");
+}
+
+#[test]
+fn rejects_invalid_parameter_before_nested_function_shape() {
+    let error = check_error("interface Callable<A> {\ncallable : (B, Int -> Int)\n}\n");
+
+    assert_eq!(reason(&error), "interface.method-parameter");
+}
+
+#[test]
+fn accepts_top_level_function_with_nested_function_domain() {
+    check_valid("interface Transform<A> {\ntransform : (A, Int -> Int) -> Int\n}\n");
+}
+
+#[test]
+fn accepts_top_level_function_with_function_valued_codomain() {
+    check_valid("interface Transform<A> {\ntransform : A -> Int -> Int\n}\n");
+}
+
+#[test]
+fn top_level_function_with_nested_function_domain_completes_the_pipeline() {
+    observe_source(
+        concat!(
+            "interface Transform<A> {\ntransform : (A, Int -> Int) -> Int\n}\n\n",
+            "impl Transform<Int> {\n",
+            "transform (value, operation) = operation value\n",
+            "}\n\n",
+            "increment : Int -> Int\n",
+            "increment value = value + 1\n\n",
+            "main : Unit -> Int\n",
+            "main () = transform((41, increment))\n",
+        ),
+        "42",
+        Type::Int,
+    );
 }
 
 #[test]

@@ -5814,14 +5814,12 @@ fn check_interface_declarations(
                 ));
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
-            let contains_function = type_contains_function(&method.annotation.ty, budget)
-                .map_err(|()| constraint_resource())?;
-            if !contains_function {
+            if !matches!(&method.annotation.ty, Type::Function(_, _)) {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::MethodNotFunction,
                     SourceLabel::new(
                         method.annotation.span,
-                        "this method type contains no function arrow",
+                        "this method type must have a top-level function arrow",
                     ),
                 );
                 diagnostic.related.push(SourceLabel::new(
@@ -6600,36 +6598,6 @@ fn type_contains_variable(
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<bool, ()> {
     visit_type_variables(root, budget, |variable, _| Ok(variable == needle))
-}
-
-fn type_contains_function(root: &Type, budget: &mut InterfaceConstraintBudget) -> Result<bool, ()> {
-    budget.charge(1)?;
-    let mut pending = Vec::new();
-    pending.try_reserve(1).map_err(|_| ())?;
-    pending.push(root);
-    while let Some(ty) = pending.pop() {
-        budget.charge(1)?;
-        match ty {
-            Type::Function(_, _) => return Ok(true),
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
-                budget.charge(elements.len())?;
-                pending.try_reserve(elements.len()).map_err(|_| ())?;
-                pending.extend(elements.iter().rev());
-            }
-            Type::Forall(parameters, body) => {
-                budget.charge(parameters.len().saturating_add(1))?;
-                pending.try_reserve(1).map_err(|_| ())?;
-                pending.push(body);
-            }
-            Type::Int
-            | Type::Bool
-            | Type::Unit
-            | Type::Nominal(_)
-            | Type::Variable(_)
-            | Type::Inference(_) => {}
-        }
-    }
-    Ok(false)
 }
 
 fn first_variable_absent_from_types(
