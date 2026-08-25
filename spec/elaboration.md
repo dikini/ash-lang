@@ -69,8 +69,9 @@ refer to the same type. Opaque constructor access has already been enforced and
 does not restrict the defining constructor facts needed by the linked program.
 
 Every resolved method or constrained-global occurrence has an occurrence-local
-structural evidence field. Resolution creates its slots empty. Checking fills
-each slot once at the owning obligation-closure boundary defined by the
+structural evidence field. Resolution creates each slot empty. Checking
+atomically fills each slot with the zonked checked obligation argument and the
+selected evidence at the owning obligation-closure boundary defined by the
 [static semantics](static-semantics.md#constraint-satisfaction-and-checked-evidence).
 A method occurrence retains one selection for its interface requirement. A
 constrained-global occurrence retains one selection for each requirement in
@@ -93,7 +94,9 @@ checked definition groups and their combined registries. It authenticates:
 - abstract requirement ownership, declaration order, lexical scope, and
   provenance;
 - checked global and implementation-method schemes, selected method types, and
-  binder mappings; and
+  binder mappings;
+- equality between every checker-retained occurrence argument and its selected
+  evidence goal; and
 - source and module provenance, complete linked definitions, and the absence of
   unresolved inference variables.
 

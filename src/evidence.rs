@@ -876,7 +876,7 @@ impl EvidenceSelector {
                 causes: Vec::new(),
             })?;
             let mut causes = Vec::new();
-            let selection = match self.select_owned(
+            let (checked_argument, selection) = match self.select_owned(
                 obligation.interface,
                 argument,
                 &mut causes,
@@ -901,7 +901,7 @@ impl EvidenceSelector {
             };
             obligation
                 .slot
-                .fill(selection)
+                .fill(checked_argument, selection)
                 .map_err(|_| SelectionError {
                     failure: SelectionFailure::InvalidState,
                     span: Some(obligation.span),
@@ -924,7 +924,10 @@ impl EvidenceSelector {
         let argument = clone_type_with_budget(argument, type_work)
             .map_err(|()| SelectionFailure::TypeResource)?;
         let mut causes = Vec::new();
-        self.select_owned(interface, argument, &mut causes, constraint_work, type_work)
+        let (checked_argument, selection) =
+            self.select_owned(interface, argument, &mut causes, constraint_work, type_work)?;
+        discard_type_iteratively(checked_argument);
+        Ok(selection)
     }
 
     fn select_owned(
@@ -934,7 +937,7 @@ impl EvidenceSelector {
         causes: &mut Vec<SelectionCause>,
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
-    ) -> Result<EvidenceSelection, SelectionFailure> {
+    ) -> Result<(Type, EvidenceSelection), SelectionFailure> {
         causes.clear();
         if matches!(&argument, Type::Inference(_)) {
             let interface_entry = self.interface_entry(interface)?;
@@ -1212,10 +1215,30 @@ impl EvidenceSelector {
         if !active.is_empty() || results.len() != 1 {
             return Err(SelectionFailure::InvalidState);
         }
-        let argument = std::mem::replace(&mut checked_goal.argument, Type::Unit);
-        builder
-            .finish(results[0], interface, argument)
-            .map_err(|()| SelectionFailure::InvalidState)
+        let checked_argument = std::mem::replace(&mut checked_goal.argument, Type::Unit);
+        if constraint_work
+            .charge(1)
+            .and_then(|()| constraint_work.charge_type(&checked_argument))
+            .is_err()
+        {
+            discard_type_iteratively(checked_argument);
+            return Err(SelectionFailure::ConstraintResource);
+        }
+        let selection_argument = match clone_type_with_budget(&checked_argument, type_work) {
+            Ok(argument) => argument,
+            Err(()) => {
+                discard_type_iteratively(checked_argument);
+                return Err(SelectionFailure::TypeResource);
+            }
+        };
+        let selection = match builder.finish(results[0], interface, selection_argument) {
+            Ok(selection) => selection,
+            Err(()) => {
+                discard_type_iteratively(checked_argument);
+                return Err(SelectionFailure::InvalidState);
+            }
+        };
+        Ok((checked_argument, selection))
     }
 
     fn interface_entry(&self, interface: InterfaceId) -> Result<&InterfaceEntry, SelectionFailure> {
@@ -2422,6 +2445,7 @@ mod tests {
             )
             .expect("pending obligation");
 
+        let mut type_work = TypeWorkBudget::default();
         selector
             .close(
                 0,
@@ -2430,15 +2454,73 @@ mod tests {
                     Ok(Type::Int)
                 },
                 &mut constraints,
-                &mut TypeWorkBudget::default(),
+                &mut type_work,
             )
             .expect("selected closure");
+        let exact_type_work = type_work.used();
 
-        let selection = slot.selection().expect("filled exact slot");
+        let (checked_argument, selection) = slot.filled().expect("filled exact slot");
+        assert_eq!(checked_argument, &Type::Int);
+        assert_eq!(selection.argument(), &Type::Int);
         assert!(matches!(
             selection.node(selection.root()),
             Some(EvidenceNode::Implementation { implementation, .. })
                 if implementation == concrete
+        ));
+
+        let short_slot = EvidenceSlot::empty();
+        selector
+            .push_obligation(
+                interface,
+                Type::Inference(crate::types::InferenceVariableId::new(1)),
+                short_slot.handle(),
+                span,
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the one-short fixture should retain its obligation");
+        assert_eq!(
+            selector
+                .close(
+                    0,
+                    |argument, _type_work| {
+                        discard_type_iteratively(argument);
+                        Ok(Type::Int)
+                    },
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut TypeWorkBudget::with_limit(exact_type_work - 1),
+                )
+                .expect_err("one type-work unit below checked-goal retention must fail")
+                .failure(),
+            SelectionFailure::TypeResource,
+        );
+        assert!(short_slot.selection().is_none());
+
+        let exact_slot = EvidenceSlot::empty();
+        selector
+            .push_obligation(
+                interface,
+                Type::Inference(crate::types::InferenceVariableId::new(2)),
+                exact_slot.handle(),
+                span,
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the exact fixture should retain its obligation");
+        let mut exact = TypeWorkBudget::with_limit(exact_type_work);
+        selector
+            .close(
+                0,
+                |argument, _type_work| {
+                    discard_type_iteratively(argument);
+                    Ok(Type::Int)
+                },
+                &mut InterfaceConstraintBudget::default(),
+                &mut exact,
+            )
+            .expect("the exact checked-goal retention budget should fill its slot");
+        assert_eq!(exact.used(), exact_type_work);
+        assert!(matches!(
+            exact_slot.filled(),
+            Some((Type::Int, selected)) if selected.argument() == &Type::Int
         ));
     }
 

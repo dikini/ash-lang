@@ -20,6 +20,9 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+use crate::interface::EvidenceSelection;
+
 /// Stable identity of one resolved or compiler-generated term binder.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum BinderId {
@@ -90,7 +93,7 @@ pub struct ResolvedOccurrence {
     pub origin: Origin,
     /// Exact direct import occurrence that introduced this term binding.
     pub(crate) import_span: Option<Span>,
-    /// Structural evidence positions owned by this exact occurrence.
+    /// Atomic checked-goal and evidence positions owned by this exact occurrence.
     pub evidence: Box<[EvidenceSlot]>,
 }
 
@@ -792,6 +795,46 @@ impl ResolvedModuleProgram {
     #[must_use]
     pub const fn result(&self) -> &ResolvedExpr {
         &self.result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_direct_equation_body_selection_for_test(
+        &mut self,
+        module: ModuleId,
+        replacement: EvidenceSelection,
+    ) -> bool {
+        let Some(occurrence) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == module)
+            .and_then(|group| group.definitions.first_mut())
+            .and_then(|definition| definition.source.as_mut())
+            .and_then(|definition| match &mut definition.kind {
+                ResolvedDefinitionKind::Equational(global) => global.equations.first_mut(),
+                ResolvedDefinitionKind::InlineOperational(_) => None,
+            })
+            .and_then(|equation| match &mut equation.body.kind {
+                ResolvedExprKind::Occurrence(occurrence) => Some(occurrence),
+                ResolvedExprKind::Integer(_)
+                | ResolvedExprKind::Boolean(_)
+                | ResolvedExprKind::Unit
+                | ResolvedExprKind::Tuple(_)
+                | ResolvedExprKind::Constructor(_)
+                | ResolvedExprKind::Apply(_)
+                | ResolvedExprKind::Add(_)
+                | ResolvedExprKind::Multiply(_)
+                | ResolvedExprKind::Equal(_)
+                | ResolvedExprKind::Block(_)
+                | ResolvedExprKind::Function(_)
+                | ResolvedExprKind::Match(_) => None,
+            })
+        else {
+            return false;
+        };
+        let Some(slot) = occurrence.evidence.first_mut() else {
+            return false;
+        };
+        slot.replace_selection_for_test(replacement)
     }
 
     #[cfg(test)]

@@ -260,7 +260,7 @@ mod tests {
             .finish(root, InterfaceId::new(module, 0), Type::Int)
             .expect("the root should exist");
         slot.handle()
-            .fill(selection)
+            .fill(Type::Int, selection)
             .expect("the fresh slot should accept evidence");
         slot
     }

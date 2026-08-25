@@ -12,6 +12,7 @@ use crate::{
     source::{Origin, Span, discard_origin_iteratively},
     types::{
         Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget, discard_type_iteratively,
+        same_type,
     },
 };
 
@@ -1292,9 +1293,21 @@ fn try_copy_slice<T: Copy>(values: &[T]) -> Result<Box<[T]>, ()> {
     Ok(copied.into_boxed_slice())
 }
 
-/// Structural evidence state owned by one resolved constrained occurrence.
+#[derive(Debug)]
+struct FilledEvidenceSlot {
+    checked_argument: Type,
+    selection: EvidenceSelection,
+}
+
+impl Drop for FilledEvidenceSlot {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.checked_argument, Type::Unit));
+    }
+}
+
+/// Atomic checked-goal and evidence state owned by one constrained occurrence.
 pub struct EvidenceSlot {
-    selection: Arc<OnceLock<EvidenceSelection>>,
+    filled: Arc<OnceLock<FilledEvidenceSlot>>,
 }
 
 impl EvidenceSlot {
@@ -1302,21 +1315,36 @@ impl EvidenceSlot {
     #[must_use]
     pub fn empty() -> Self {
         Self {
-            selection: Arc::new(OnceLock::new()),
+            filled: Arc::new(OnceLock::new()),
         }
     }
 
-    /// Returns the selection filled by checking, when available.
+    /// Returns the selection filled together with the checked goal, when available.
     #[must_use]
     pub fn selection(&self) -> Option<&EvidenceSelection> {
-        self.selection.get()
+        self.filled.get().map(|filled| &filled.selection)
+    }
+
+    pub(crate) fn filled(&self) -> Option<(&Type, &EvidenceSelection)> {
+        self.filled
+            .get()
+            .map(|filled| (&filled.checked_argument, &filled.selection))
     }
 
     /// Returns a transient capability that fills this exact structural slot.
     pub(crate) fn handle(&self) -> EvidenceSlotHandle {
         EvidenceSlotHandle {
-            selection: Arc::clone(&self.selection),
+            filled: Arc::clone(&self.filled),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_selection_for_test(&mut self, replacement: EvidenceSelection) -> bool {
+        let Some(filled) = Arc::get_mut(&mut self.filled).and_then(OnceLock::get_mut) else {
+            return false;
+        };
+        filled.selection = replacement;
+        true
     }
 }
 
@@ -1330,7 +1358,7 @@ impl Clone for EvidenceSlot {
     fn clone(&self) -> Self {
         match self.selection() {
             Some(_) => Self {
-                selection: Arc::clone(&self.selection),
+                filled: Arc::clone(&self.filled),
             },
             None => Self::empty(),
         }
@@ -1339,8 +1367,8 @@ impl Clone for EvidenceSlot {
 
 impl fmt::Debug for EvidenceSlot {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.selection() {
-            Some(selection) => formatter.debug_tuple("Selected").field(selection).finish(),
+        match self.filled.get() {
+            Some(filled) => formatter.debug_tuple("Selected").field(filled).finish(),
             None => formatter.write_str("Empty"),
         }
     }
@@ -1348,9 +1376,12 @@ impl fmt::Debug for EvidenceSlot {
 
 impl PartialEq for EvidenceSlot {
     fn eq(&self, other: &Self) -> bool {
-        match (self.selection(), other.selection()) {
+        match (self.filled.get(), other.filled.get()) {
             (None, None) => true,
-            (Some(left), Some(right)) => left == right,
+            (Some(left), Some(right)) => {
+                same_type(&left.checked_argument, &right.checked_argument)
+                    && left.selection == right.selection
+            }
             _ => false,
         }
     }
@@ -1358,20 +1389,29 @@ impl PartialEq for EvidenceSlot {
 
 impl Eq for EvidenceSlot {}
 
-/// Transient capability for filling one exact occurrence's evidence slot.
+/// Transient capability for atomically filling one exact occurrence's evidence slot.
 #[derive(Clone, Debug)]
 pub(crate) struct EvidenceSlotHandle {
-    selection: Arc<OnceLock<EvidenceSelection>>,
+    filled: Arc<OnceLock<FilledEvidenceSlot>>,
 }
 
 impl EvidenceSlotHandle {
     #[cfg(test)]
     pub(crate) fn selection(&self) -> Option<&EvidenceSelection> {
-        self.selection.get()
+        self.filled.get().map(|filled| &filled.selection)
     }
 
-    pub(crate) fn fill(&self, selection: EvidenceSelection) -> Result<(), EvidenceSelection> {
-        self.selection.set(selection)
+    pub(crate) fn fill(
+        &self,
+        checked_argument: Type,
+        selection: EvidenceSelection,
+    ) -> Result<(), ()> {
+        self.filled
+            .set(FilledEvidenceSlot {
+                checked_argument,
+                selection,
+            })
+            .map_err(drop)
     }
 }
 
@@ -1581,13 +1621,15 @@ mod tests {
         ));
 
         pending
-            .fill(selection.clone())
+            .fill(Type::Int, selection.clone())
             .expect("the original empty slot should accept one selection");
 
         assert_eq!(slot.selection(), Some(&selection));
         assert_eq!(handle.selection(), Some(&selection));
+        assert!(matches!(slot.filled(), Some((Type::Int, _))));
         assert!(clone.selection().is_none());
-        assert!(handle.fill(selection).is_err());
+        assert!(handle.fill(Type::Bool, selection).is_err());
+        assert!(matches!(slot.filled(), Some((Type::Int, _))));
     }
 
     #[test]
@@ -1598,13 +1640,15 @@ mod tests {
             0,
         ));
         slot.handle()
-            .fill(selection)
+            .fill(Type::Int, selection)
             .expect("the empty slot should accept one selection");
 
         let clone = slot.clone();
         let original = slot.selection().expect("the original should be selected");
         let cloned = clone.selection().expect("the clone should be selected");
 
+        assert!(matches!(slot.filled(), Some((Type::Int, _))));
+        assert!(matches!(clone.filled(), Some((Type::Int, _))));
         assert_eq!(original.root(), cloned.root());
         assert!(original.shares_plan_with(cloned));
     }
@@ -1917,8 +1961,18 @@ mod tests {
                     .expect("the root should exist");
                 let clone = selection.clone();
                 assert!(selection.shares_plan_with(&clone));
+                let checked_argument =
+                    clone_type_with_budget(selection.argument(), &mut TypeWorkBudget::default())
+                        .expect("the checked occurrence argument should fit");
+                let slot = EvidenceSlot::empty();
+                slot.handle()
+                    .fill(checked_argument, selection.clone())
+                    .expect("the deep checked evidence should fill atomically");
+                let slot_clone = slot.clone();
                 drop(selection);
                 drop(clone);
+                drop(slot);
+                drop(slot_clone);
             })
             .expect("the small-stack evidence thread should start")
             .join()

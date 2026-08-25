@@ -1353,13 +1353,15 @@ fn validate_occurrence(
                 return Err(invalid_root(span));
             }
             for (slot, requirement) in occurrence.evidence.iter().zip(requirements) {
-                let selection = slot.selection().ok_or_else(|| invalid_root(span))?;
-                validate_selection_in_scope(
+                let (checked_argument, selection) =
+                    slot.filled().ok_or_else(|| invalid_root(span))?;
+                validate_checked_selection_in_scope(
                     program,
                     registry,
                     group,
                     selection,
                     requirement.interface,
+                    checked_argument,
                     scope,
                     budget,
                     span,
@@ -1373,13 +1375,14 @@ fn validate_occurrence(
             let [slot] = occurrence.evidence.as_ref() else {
                 return Err(invalid_root(span));
             };
-            let selection = slot.selection().ok_or_else(|| invalid_root(span))?;
-            validate_selection_in_scope(
+            let (checked_argument, selection) = slot.filled().ok_or_else(|| invalid_root(span))?;
+            validate_checked_selection_in_scope(
                 program,
                 registry,
                 group,
                 selection,
                 method.id.interface(),
+                checked_argument,
                 scope,
                 budget,
                 span,
@@ -1424,6 +1427,7 @@ fn validate_selection(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn validate_selection_in_scope(
     program: &ResolvedModuleProgram,
@@ -1435,9 +1439,34 @@ fn validate_selection_in_scope(
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
+    validate_checked_selection_in_scope(
+        program,
+        registry,
+        group,
+        selection,
+        expected_interface,
+        selection.argument(),
+        scope,
+        budget,
+        span,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_checked_selection_in_scope(
+    program: &ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
+    group: &ResolvedModuleGroup,
+    selection: &EvidenceSelection,
+    expected_interface: InterfaceId,
+    expected_argument: &Type,
+    scope: EvidenceScope<'_>,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
     charge(budget, 2, span)?;
     validate_type(
-        selection.argument(),
+        expected_argument,
         program.registry(),
         scope.variables,
         budget,
@@ -1447,6 +1476,9 @@ fn validate_selection_in_scope(
         || registry.interface(program, selection.interface()).is_none()
         || selection.node(selection.root()).is_none()
     {
+        return Err(invalid_root(span));
+    }
+    if !same_type_charged(selection.argument(), expected_argument, budget, span)? {
         return Err(invalid_root(span));
     }
     charge(budget, selection.node_count(), span)?;
@@ -1462,7 +1494,7 @@ fn validate_selection_in_scope(
         selection,
         selection.root(),
         expected_interface,
-        selection.argument(),
+        expected_argument,
         None,
         scope,
         &mut visited,
@@ -2433,6 +2465,15 @@ mod tests {
         interface: InterfaceId,
         methods: &[ImplMethodId],
     ) -> EvidenceSelection {
+        implementation_selection_for_argument(implementation, interface, methods, Type::Int)
+    }
+
+    fn implementation_selection_for_argument(
+        implementation: ImplId,
+        interface: InterfaceId,
+        methods: &[ImplMethodId],
+        argument: Type,
+    ) -> EvidenceSelection {
         let mut builder = EvidenceSelectionBuilder::new();
         let root = builder
             .push_implementation(
@@ -2444,7 +2485,7 @@ mod tests {
             )
             .expect("the tiny implementation node should fit");
         builder
-            .finish(root, interface, Type::Int)
+            .finish(root, interface, argument)
             .expect("the implementation root should exist")
     }
 
@@ -3485,7 +3526,7 @@ mod tests {
         .expect("exact current authentication should fit the default budget");
         let exact = measured.used();
         assert_eq!(
-            exact, 67,
+            exact, 73,
             "exact-current relationships and the mandated abstract prerequisite are charged"
         );
 
@@ -3930,6 +3971,43 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_selection_for_a_different_checked_occurrence_argument() {
+        let mut program = entry_program(concat!(
+            "interface Keep<A> {\nkeep : A -> A\n}\n\n",
+            "impl Keep<Int> {\nkeep value = value\n}\n\n",
+            "impl Keep<Bool> {\nkeep value = value\n}\n\n",
+            "main : Unit -> (Int -> Int)\nmain () = keep\n",
+        ));
+        let group = &program.groups()[0];
+        let module = group.module();
+        let bool_implementation = group
+            .implementation_facts()
+            .iter()
+            .find(|implementation| implementation.argument == Type::Bool)
+            .expect("the fixture should retain its Bool implementation");
+        let methods = bool_implementation
+            .methods
+            .iter()
+            .map(|method| method.id)
+            .collect::<Vec<_>>();
+        let forged = implementation_selection_for_argument(
+            bool_implementation.id,
+            bool_implementation.interface,
+            &methods,
+            Type::Bool,
+        );
+
+        assert!(program.replace_direct_equation_body_selection_for_test(module, forged));
+
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("evidence must retain the checked occurrence argument")
+                .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
     fn rejects_imported_implementation_route_without_its_exact_direct_edge() {
         let fixture = ValidationFixture::create(concat!(
             "import dependency as Dependency\n",
@@ -4132,7 +4210,7 @@ mod tests {
         .expect("the valid selected node should authenticate");
         let limit = measured.used();
         assert_eq!(
-            limit, 13,
+            limit, 15,
             "root goal, type, node, exact head, method slot, and availability are charged"
         );
 
