@@ -22,8 +22,7 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   shared evidence for the initial monomorphic functional nucleus.
 - [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md) — retained
   Mini-Ash history, the completed passive-module and method-only interface
-  increments, and the next separately authorized
-  core-versus-library audit.
+  increments, and the completed Modular Ash audit and closure checkpoint.
 - [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md) —
   retained design exploration for the implemented declarations-only modules,
   rooted imports, visibility, opacity, generated export summaries, and
@@ -36,14 +35,20 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   — a version-pinned external learning corpus, forward migration, and
   cooperative design-evidence flow.
 - [DN-0025: Library and Package Milestones](DN-0025-library-and-package-milestones.md)
-  — the proposed `modular-ash` closure and separate `lib-ash` language-library
-  and `pack-ash` package-artifact descendants.
+  — the completed `modular-ash` closure boundary and separate exploratory
+  `lib-ash` language-library and `pack-ash` package-artifact descendants.
 - [Passive-module evidence](modular-ash/evidence.md) — implementation,
   resource, locality, historical-comparison, and verification evidence for the
   first Modular Ash increment.
 - [Interface implementation evidence](modular-ash/interfaces-evidence.md) —
   implementation, diagnostic, resource, Core locality, runtime, and
   unspecialized trace evidence for the method-only interface increment.
+- [Core and library equality evidence](modular-ash/core-library-evidence.md) —
+  paired admission, typing, diagnostic, Core, evaluation, maintenance, and
+  lifetime evidence for the final Modular Ash audit.
+- [Modular Ash closure report](modular-ash/closure.md) — retained dialect,
+  stage boundaries, simplification conclusions, resources, ownership,
+  verification, and exclusions at the final checkpoint.
 - [Mini-Ash closure report](mini-ash/closure.md) — retained dialect inventory,
   simplification audit, budgets, ownership boundaries, and exclusions.
 - [Rank-1 integration evidence](mini-ash/rank-1-polymorphism/evidence.md) —

@@ -2,7 +2,7 @@
 
 - ID: `DN-0025`
 - Status: exploring
-- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), and [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md)
+- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
 
 > This design note is informative. It does not define current Ash, accept
 > language semantics, or accept a package or artifact architecture.
@@ -26,9 +26,13 @@ object linking remain outside current Ash.
 
 The `mini-ash` Git tag retains Mini-Ash as a historical runnable dialect.
 Current source does not carry a second grammar or compiler path for it.
-[DN-0020](DN-0020-ash-dialect-milestones.md) identifies a separately authorized
-core-versus-library audit and simplification analysis as the remaining work
-before closing Modular Ash.
+[DN-0020](DN-0020-ash-dialect-milestones.md) records the completed separately
+authorized core-versus-library audit and simplification analysis. The paired
+[audit](modular-ash/core-library-evidence.md) and
+[closure report](modular-ash/closure.md) retain that final milestone
+checkpoint. Task and plan cleanup, repeated root verification, the closure
+commit, and the annotated tag remain lifecycle mechanics rather than missing
+language work.
 
 The proposed type-system additions cross parsing, name resolution, kind and
 type checking, implementation selection, export summaries, linked-evidence
@@ -47,17 +51,20 @@ modular-ash -> lib-ash -> pack-ash
 
 ### `modular-ash`
 
-Close the current dialect after the authorized core-versus-library audit,
-simplification analysis, retained evidence, and tag. Do not add the proposed
-type-system, re-export, package, cache, or linker mechanisms while closing it.
+The current dialect is complete at its final milestone checkpoint. The retained
+core-versus-library audit, simplification analysis, module and interface
+evidence, and closure report establish the boundary; the annotated
+`modular-ash` tag will retain the final verified state after lifecycle cleanup.
+No proposed type-system, re-export, package, cache, or linker mechanism entered
+that closure.
 
 ### `lib-ash`
 
-Explore and, through later proposals, add the language mechanisms needed to
-define stronger libraries: higher-kinded parameters, method-local type
-parameters, multi-parameter interfaces, associated outputs or relational
-determination, method and associated-type defaults, and explicit module
-re-exports.
+This is the next separate design and proposal stage. It may explore and,
+through later proposals, add the language mechanisms needed to define stronger
+libraries: higher-kinded parameters, method-local type parameters,
+multi-parameter interfaces, associated outputs or relational determination,
+method and associated-type defaults, and explicit module re-exports.
 
 ### `pack-ash`
 

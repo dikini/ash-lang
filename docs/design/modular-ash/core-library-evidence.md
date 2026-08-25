@@ -324,5 +324,6 @@ shape or validity, evaluation, or observation rendering.
 
 The existing [passive-module evidence](evidence.md) and
 [interface evidence](interfaces-evidence.md) retain the broader module and
-interface boundaries. Modular Ash closure review, complete verification,
-lifecycle cleanup, and tagging remain outside this increment.
+interface boundaries. The [Modular Ash closure report](closure.md) records the
+current reviewed result across the paired audit and those retained boundaries.
+Lifecycle cleanup, repeated final verification, and tagging remain.

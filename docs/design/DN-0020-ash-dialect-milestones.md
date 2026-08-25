@@ -2,26 +2,27 @@
 
 - ID: `DN-0020`
 - Status: exploring
-- Related: [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), the [Mini-Ash closure report](mini-ash/closure.md), the [passive-module evidence](modular-ash/evidence.md), and the [interface implementation evidence](modular-ash/interfaces-evidence.md)
+- Related: [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0015: Mini-Ash Phase](DN-0015-mini-ash-phase.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), the [Mini-Ash closure report](mini-ash/closure.md), the [passive-module evidence](modular-ash/evidence.md), the [interface implementation evidence](modular-ash/interfaces-evidence.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
 
 > This design note is informative. It records implemented dialect increments
 > and future sequencing pressure, but it does not define current Ash or
 > authorize roadmap work.
 
-The Mini-Ash milestone, passive-static-module increment, and method-only
-interface increment are complete. Completion of the interface increment
-includes its specification, implementation, review, verification, and retained
-evidence. The `mini-ash` Git tag, closure report, and integration evidence
-retain the historical dialect. The
-[current specification](../../spec/README.md) defines Modular Ash with passive
-source modules and type-class-like interfaces and `impl`; these interfaces are
-not module signatures. A separately authorized core-versus-library audit is the
-next Modular Ash increment. This note does not begin that audit.
+The Mini-Ash milestone and every bounded Modular Ash increment are complete.
+Passive source modules, method-only interfaces, the separately authorized
+core-versus-library audit, and the final simplification analysis have retained
+implementation, review, verification, and evidence. The `mini-ash` Git tag,
+closure report, and integration evidence retain the historical dialect. The
+[current specification](../../spec/README.md) defines Modular Ash; these
+type-class-like interfaces and `impl` are not module signatures. Final task and
+plan cleanup, repeated root verification, the closure commit, and the annotated
+`modular-ash` tag are lifecycle mechanics rather than missing semantics. This
+note records the result but did not authorize that work.
 
 ## Question
 
-How should the completed Mini-Ash milestone constrain the Modular Ash
-milestone, and which design questions belong to each Modular Ash increment?
+How did the completed Mini-Ash milestone constrain the Modular Ash milestone,
+and which later design questions remain outside that completed boundary?
 
 ## Context
 
@@ -81,10 +82,14 @@ boundaries. The
 retains the resulting corpus and compiler boundaries. Associated types remain
 later comparison pressure rather than part of this increment.
 
-Modular Ash can now use representative cases to compare core forms with library
-definitions. That audit requires separate authorization and should state the
-typing, diagnostic, Core, and evaluation consequences rather than treating
-“move to a library” as a source-layout change.
+The separately authorized
+[core-and-library audit](modular-ash/core-library-evidence.md) used integer
+equality to compare a retained Core primitive with an explicit source-library
+interface. It recorded distinct admission, typing, diagnostic, Core, and
+evaluation consequences instead of treating “move to a library” as a
+source-layout change. The
+[closure report](modular-ash/closure.md) retains that conclusion with the
+module and interface evidence.
 
 Dynamic loading, providers, effects, registration, unloading, and runtime
 resolution remain later pressure.
@@ -117,8 +122,10 @@ The leading trajectory is:
 3. Design, specify, and implement interfaces and `impl` against the passive
    module boundary. This is complete.
 4. Separately authorize and compare representative core primitives with library
-   definitions. This is next and has not begun.
-5. Close Modular Ash with its own simplification analysis and tag.
+   definitions. This is complete.
+5. Close Modular Ash with its own simplification analysis and final
+   `modular-ash` checkpoint. This is complete; lifecycle cleanup and the tag
+   remain task mechanics.
 
 Keeping both Mini-Ash and Modular Ash runnable in the same current compiler
 would add grammar selection, driver selection, compatibility lowering, and
@@ -143,21 +150,26 @@ ambiguity, orphan and overlap policy, passive summaries, validation, Core
 lowering, runtime observations, and the retained unspecialized trace. It leaves
 associated types and specialization as future comparison pressure.
 
-The core-versus-library audit should retain at least one representative
-primitive in Core and express at least one representative operation through a
-library interface. It should compare source admission, typing, diagnostics,
-Core representation, evaluation, and maintenance sites.
+The paired [core-and-library audit](modular-ash/core-library-evidence.md)
+retains direct integer equality and `Primitive::Equal`, and expresses an
+explicit equality capability through `Equal<A>` and `Equal<Int>`. It records
+the different admission, typing, diagnostics, Core representation, evaluation,
+maintenance, resource, and lifetime paths. The
+[Modular Ash closure report](modular-ash/closure.md) joins that result to the
+passive-module and interface evidence at the final checkpoint.
 
 Historical comparison evidence may build the `mini-ash` tag in an isolated
 worktree. It should not copy the historical compiler into current source or
 make routine current-tree verification depend on two implementations.
 
-## Open questions
+## Recorded conclusions and later pressure
 
-- Which current primitives become credible library candidates after interfaces
-  exist?
-- What bounded audit corpus can compare a retained Core primitive with a
-  library-interface definition without silently changing diagnostics or
-  evaluation?
-- Which separately proposed associated-type or specialization semantics, if
-  any, are justified by later library pressure?
+The audit concludes that integer `==` and `Primitive::Equal` remain Core. An
+explicit `Equal<Int>` source-library capability is useful without an operator
+rewrite, implicit import, shipped prelude, interface-specific Core node, or
+runtime interface machinery. The two paths keep distinct admission, typing,
+diagnostic, Core, and trace behavior.
+
+Associated types and specialization remain later library-design pressure.
+They are not unresolved Modular Ash semantics, and this informative note does
+not authorize their design or implementation.

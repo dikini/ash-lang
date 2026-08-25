@@ -43,9 +43,10 @@ The paired integer-equality witness and complete core-versus-library comparison
 are retained. A focused architecture guard proved and now enforces two
 post-authentication lifetime boundaries: the linked-interface registry remains
 local to validation, and the driver releases the validated interface program
-after Core synthesis finish and before independent Core validation. Modular Ash
-closure reporting, independent reviews, full verification, lifecycle cleanup,
-the closure commit, and the tag remain.
+after Core synthesis finish and before independent Core validation. The Modular
+Ash closure report and informative design-note reconciliation are complete.
+Final independent reviews, lifecycle cleanup, root verification after cleanup,
+the closure commit, and the annotated tag remain.
 
 ## Verification
 
@@ -70,6 +71,14 @@ the closure commit, and the tag remain.
 - Confirm the closure commit and annotated `modular-ash` tag are unsigned and
   that the branch remains unmerged.
 
+The fresh pre-cleanup `cargo xtask verify` closure checkpoint passed formatting,
+metadata, build, denied-warning Clippy, every test, and denied-warning rustdoc.
+Its exact inventory is 298 library tests, 10 binary tests, 625 integration
+tests, and one `xtask` test: 934 tests with no failures. The closure-document
+increment also checks Markdown lint, every changed relative link, authority
+boundaries, stable maintenance searches, and `git diff --check`. Root
+verification and both independent reviews repeat after lifecycle cleanup.
+
 ## Discoveries
 
 - Interface-era linking and evidence validation consume
@@ -81,6 +90,14 @@ the closure commit, and the tag remain.
   structural value owns its heap through `ObservedValue`; the separate
   observation heap remains necessary when a returned closure captures an
   environment containing raw heap locations.
+- The paired equality audit retains integer `==` and `Primitive::Equal` while
+  showing that an explicit `Equal<Int>` source-library capability needs no new
+  Core or evaluator form. The paths intentionally keep different admission,
+  typing, diagnostic, Core, and trace behavior; no prelude or package is
+  implied.
+- Associated types, specialization, library re-exports, packages, caches, and
+  separate linking are later design pressure rather than missing Modular Ash
+  closure work.
 
 ## Deviations
 
