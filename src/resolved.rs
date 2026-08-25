@@ -5742,6 +5742,18 @@ mod tests {
         retain_public_implementation: bool,
         limit: usize,
     ) -> (Result<ExportSummary, ResolvedBuildFailure>, usize) {
+        let route_lengths: &[usize] = if retain_public_implementation {
+            &[1]
+        } else {
+            &[]
+        };
+        freeze_public_implementation_summary_with_routes(route_lengths, limit)
+    }
+
+    fn freeze_public_implementation_summary_with_routes(
+        route_lengths: &[usize],
+        limit: usize,
+    ) -> (Result<ExportSummary, ResolvedBuildFailure>, usize) {
         let source = SourceFile::new("public-implementation-summary.ash", "interface impl")
             .expect("the public implementation summary fixture should fit");
         let interface_span = source
@@ -5753,7 +5765,6 @@ mod tests {
         let defining = ModuleId::new(76);
         let facade = ModuleId::new(77);
         let interface = InterfaceId::new(defining, 0);
-        let implementation = ImplId::new(defining, 0);
         let mut imported = ImportedFacts::default();
         imported
             .reserve_interface()
@@ -5775,14 +5786,38 @@ mod tests {
             interface_span,
             true,
         );
-        if retain_public_implementation {
+        let mut direct_dependencies = Vec::new();
+        for (index, route_length) in route_lengths.iter().copied().enumerate() {
+            assert!(route_length > 0, "an imported route must contain one hop");
+            let implementation = ImplId::new(
+                defining,
+                u32::try_from(index).expect("the fixture implementation identity should fit"),
+            );
             let authorization = || {
-                ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
-                    from: facade,
-                    to: defining,
-                    import_span: implementation_span,
-                }])
+                let mut hops = Vec::new();
+                let mut from = facade;
+                for hop_index in 0..route_length {
+                    let to = if hop_index + 1 == route_length {
+                        defining
+                    } else {
+                        ModuleId::new(
+                            100 + u32::try_from(index * 16 + hop_index)
+                                .expect("the fixture route identity should fit"),
+                        )
+                    };
+                    hops.push(ImplementationRouteHop {
+                        from,
+                        to,
+                        import_span: implementation_span,
+                    });
+                    from = to;
+                }
+                ImplementationAuthorization::from_hops(hops)
             };
+            direct_dependencies.push(DirectDependencyRoute::new(
+                authorization().hops()[0].to,
+                implementation_span,
+            ));
             imported
                 .reserve_implementation()
                 .expect("one imported implementation slot should reserve");
@@ -5794,7 +5829,12 @@ mod tests {
                     id: implementation,
                     interface,
                     head_parameters: Box::new([]),
-                    argument: Type::Int,
+                    argument: match index {
+                        0 => Type::Int,
+                        1 => Type::Bool,
+                        2 => Type::Unit,
+                        _ => Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice()),
+                    },
                     prerequisites: Box::new([]),
                     methods: Box::new([]),
                     origin: Origin::Source(implementation_span),
@@ -5811,7 +5851,7 @@ mod tests {
             module: facade,
             registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
             imported,
-            direct_dependencies: vec![DirectDependencyRoute::new(defining, implementation_span)],
+            direct_dependencies,
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
             implementations: Vec::new(),
@@ -5880,6 +5920,50 @@ mod tests {
         };
         assert_eq!(retained.authorization().hops().len(), 1);
         assert_eq!(exact.used(), 3);
+        assert!(exact_summary.implementations().next().is_none());
+    }
+
+    #[test]
+    fn linked_public_authorization_move_charges_two_records_plus_every_hop() {
+        const ROUTE_LENGTHS: &[usize] = &[1, 2, 4, 7];
+        const ENTRIES: usize = ROUTE_LENGTHS.len();
+        const TOTAL_HOPS: usize = 1 + 2 + 4 + 7;
+        const EXACT: usize = 2 * ENTRIES + TOTAL_HOPS;
+
+        let (short_summary, _) =
+            freeze_public_implementation_summary_with_routes(ROUTE_LENGTHS, usize::MAX);
+        let mut short_summary = short_summary.expect("the varying-route summary should freeze");
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT - 1);
+        assert_eq!(
+            short_summary.take_public_implementation_authorizations(&mut short),
+            Err(()),
+        );
+        assert_eq!(short.used(), ENTRIES);
+        assert_eq!(
+            short_summary
+                .implementations()
+                .map(|implementation| implementation.authorization().hops().len())
+                .collect::<Vec<_>>(),
+            ROUTE_LENGTHS,
+            "failed aggregate preflight must leave every summary route undrained",
+        );
+
+        let (exact_summary, _) =
+            freeze_public_implementation_summary_with_routes(ROUTE_LENGTHS, usize::MAX);
+        let mut exact_summary = exact_summary.expect("the varying-route summary should freeze");
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT);
+        let retained = exact_summary
+            .take_public_implementation_authorizations(&mut exact)
+            .expect("two units per record plus every route hop should fit exactly");
+        assert_eq!(exact.used(), EXACT);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(
+            retained
+                .iter()
+                .map(|authorization| authorization.authorization().hops().len())
+                .collect::<Vec<_>>(),
+            ROUTE_LENGTHS,
+        );
         assert!(exact_summary.implementations().next().is_none());
     }
 
@@ -6528,6 +6612,74 @@ mod tests {
             Ok(true)
         );
         assert_eq!(fast.used(), 0);
+    }
+
+    #[test]
+    fn implementation_authorization_prepend_has_an_exact_limit() {
+        const SUFFIX_HOPS: usize = 3;
+        const EXACT: usize = SUFFIX_HOPS + 1;
+
+        let source = SourceFile::new("route-prepend.ash", "first suffix")
+            .expect("the prepend source should fit");
+        let first_span = source
+            .span(ByteRange::new(0, 5).expect("the first-hop range should be ordered"))
+            .expect("the first-hop range should fit");
+        let suffix_span = source
+            .span(ByteRange::new(6, 12).expect("the suffix range should be ordered"))
+            .expect("the suffix range should fit");
+        let suffix = ImplementationAuthorization::from_hops(vec![
+            ImplementationRouteHop {
+                from: ModuleId::new(2),
+                to: ModuleId::new(3),
+                import_span: suffix_span,
+            },
+            ImplementationRouteHop {
+                from: ModuleId::new(3),
+                to: ModuleId::new(4),
+                import_span: suffix_span,
+            },
+            ImplementationRouteHop {
+                from: ModuleId::new(4),
+                to: ModuleId::new(5),
+                import_span: suffix_span,
+            },
+        ]);
+
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT - 1);
+        assert_eq!(
+            ImplementationAuthorization::prepend(
+                ModuleId::new(1),
+                ModuleId::new(2),
+                first_span,
+                &suffix,
+                &mut short,
+            ),
+            Err(()),
+        );
+        assert_eq!(short.used(), 0, "prepending must charge before allocation");
+        assert_eq!(suffix.hops().len(), SUFFIX_HOPS);
+
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT);
+        let prepended = ImplementationAuthorization::prepend(
+            ModuleId::new(1),
+            ModuleId::new(2),
+            first_span,
+            &suffix,
+            &mut exact,
+        )
+        .expect("one new hop and the complete suffix should fit exactly");
+        assert_eq!(exact.used(), EXACT);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(prepended.hops().len(), EXACT);
+        assert_eq!(
+            prepended.hops()[0],
+            ImplementationRouteHop {
+                from: ModuleId::new(1),
+                to: ModuleId::new(2),
+                import_span: first_span,
+            }
+        );
+        assert_eq!(&prepended.hops()[1..], suffix.hops());
     }
 
     #[test]

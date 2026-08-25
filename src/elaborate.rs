@@ -8578,7 +8578,7 @@ mod tests {
     use super::*;
     use crate::{
         module::{ModuleId, ModuleRoots, load_module_graph},
-        resolve::resolve_module,
+        resolve::{DependencyExports, resolve_module},
         resolved::{
             ImportedFacts, ResolvedExportCandidate, ResolvedInterfaceDeclaration,
             ResolvedInterfaceMethod, ResolvedModuleParts, ResolvedTypeVariable,
@@ -8608,6 +8608,97 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_file(&self.0);
         }
+    }
+
+    struct PublicAuthorizationGraphFixture(PathBuf);
+
+    impl PublicAuthorizationGraphFixture {
+        fn create(width: usize) -> Self {
+            use std::fmt::Write as _;
+
+            loop {
+                let id = MODULE_FIXTURE_IDS.fetch_add(1, Ordering::Relaxed);
+                let directory = std::env::temp_dir().join(format!(
+                    "ash-public-authorization-graph-{}-{id}",
+                    std::process::id(),
+                ));
+                match fs::create_dir(&directory) {
+                    Ok(()) => {
+                        let mut base =
+                            String::from("pub interface Show<A> {\nshow : A -> A\n}\n\n");
+                        for index in 0..width {
+                            writeln!(base, "pub type Head{index} = Head{index}")
+                                .expect("writing to a String cannot fail");
+                            writeln!(
+                                base,
+                                "pub impl Show<Head{index}> {{\nshow value = value\n}}"
+                            )
+                            .expect("writing to a String cannot fail");
+                        }
+                        fs::write(directory.join("base.ash"), base)
+                            .expect("the implementation owner should be writable");
+                        fs::write(
+                            directory.join("facade.ash"),
+                            "pub import base (Show, impl Show)\n",
+                        )
+                        .expect("the implementation facade should be writable");
+                        fs::write(
+                            directory.join("entry.ash"),
+                            concat!(
+                                "pub import facade (Show, impl Show)\n",
+                                "main : Unit -> Unit\n",
+                                "main () = ()\n",
+                            ),
+                        )
+                        .expect("the implementation entry should be writable");
+                        return Self(directory);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        panic!("the public-authorization graph should be creatable: {error}")
+                    }
+                }
+            }
+        }
+    }
+
+    impl Drop for PublicAuthorizationGraphFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn link_public_authorization_fixture_with_limit(
+        width: usize,
+        limit: usize,
+    ) -> (Result<ResolvedModuleProgram, TypeError>, usize) {
+        let fixture = PublicAuthorizationGraphFixture::create(width);
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the public-authorization graph should load");
+        let mut checked = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let dependency = checked
+                        .iter()
+                        .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                        .expect("dependencies should check before their importers");
+                    DependencyExports::new(edge, dependency.exports())
+                        .expect("the loaded edge should match its checked summary")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies)
+                .expect("the explicit public implementation graph should resolve");
+            checked.push(
+                check_module(resolved)
+                    .expect("the graph's distinct nominal implementation heads should check"),
+            );
+        }
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(limit);
+        let result = link_modules_with_budget(checked, graph.entry(), &mut constraint_work);
+        (result, constraint_work.used())
     }
 
     fn resolved_module_fixture(
@@ -8975,6 +9066,60 @@ mod tests {
     }
 
     #[test]
+    fn link_retains_public_authorization_tables_at_an_exact_limit() {
+        const WIDTH: usize = 8;
+
+        let (measured, exact_limit) =
+            link_public_authorization_fixture_with_limit(WIDTH, 1_000_000);
+        measured.expect("the generous link budget should measure complete table retention");
+
+        let (short, _) = link_public_authorization_fixture_with_limit(WIDTH, exact_limit - 1);
+        let error = short.expect_err("one missing unit should reject linked table retention");
+        assert_eq!(
+            error,
+            TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
+        );
+
+        let (exact, exact_used) = link_public_authorization_fixture_with_limit(WIDTH, exact_limit);
+        let program = exact.expect("the measured link budget should retain every public route");
+        assert_eq!(exact_used, exact_limit);
+        assert_eq!(program.groups().len(), 3);
+
+        let group_for_route_length = |route_length| {
+            program
+                .groups()
+                .iter()
+                .find(|group| {
+                    let table = group.public_implementation_authorizations();
+                    table.len() == WIDTH
+                        && table.iter().all(|authorization| {
+                            authorization.authorization().hops().len() == route_length
+                        })
+                })
+                .expect("each dependency layer should retain one uniform lightweight table")
+        };
+        let base = group_for_route_length(0);
+        let facade = group_for_route_length(1);
+        let entry = group_for_route_length(2);
+        let implementation_ids = |group: &ResolvedModuleGroup| {
+            group
+                .public_implementation_authorizations()
+                .iter()
+                .map(|authorization| authorization.id())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(implementation_ids(facade), implementation_ids(base));
+        assert_eq!(implementation_ids(entry), implementation_ids(base));
+        assert_eq!(base.implementations().len(), WIDTH);
+        assert_eq!(base.implementation_facts().len(), WIDTH);
+        assert!(facade.implementations().is_empty());
+        assert!(facade.implementation_facts().is_empty());
+        assert!(entry.implementations().is_empty());
+        assert!(entry.implementation_facts().is_empty());
+    }
+
+    #[test]
     fn impl_method_substitution_uses_the_exact_constraint_budget() {
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
@@ -9195,17 +9340,36 @@ mod tests {
         };
         assert_eq!(diagnostic.primary.span(), second_route);
         assert_eq!(
+            diagnostic.primary.message(),
+            "this implementation overlaps an earlier available implementation",
+        );
+        assert_eq!(
             diagnostic
                 .related
                 .iter()
-                .map(SourceLabel::span)
+                .map(|label| (label.span(), label.message()))
                 .collect::<Vec<_>>(),
             vec![
-                first_definition,
-                first_route,
-                first_route_suffix,
-                second_definition,
-                second_route_suffix,
+                (
+                    first_definition,
+                    "the earlier overlapping implementation head is here",
+                ),
+                (
+                    first_route,
+                    "the earlier implementation became available through this import",
+                ),
+                (
+                    first_route_suffix,
+                    "the earlier implementation became available through this import",
+                ),
+                (
+                    second_definition,
+                    "the later implementation is defined here"
+                ),
+                (
+                    second_route_suffix,
+                    "the later implementation became available through this import",
+                ),
             ]
         );
         assert_eq!(exact.used(), 12);

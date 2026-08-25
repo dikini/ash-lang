@@ -5412,6 +5412,104 @@ mod tests {
     }
 
     #[test]
+    fn wide_implementation_selector_expansion_has_an_exact_constraint_limit() {
+        use std::fmt::Write as _;
+
+        const WIDTH: usize = 16;
+        const ENTRY: &str = "import dependency (impl Marker)\n";
+
+        let mut dependency = String::from("pub interface Marker<A> {\nmark : A -> A\n}\n\n");
+        for index in 0..WIDTH {
+            writeln!(dependency, "pub type Head{index} = Head{index}")
+                .expect("writing to a String cannot fail");
+            writeln!(
+                dependency,
+                "pub impl Marker<Head{index}> {{\nmark value = value\n}}"
+            )
+            .expect("writing to a String cannot fail");
+        }
+        let fixture = ImportBudgetFixture::create(ENTRY, &dependency);
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the wide-selector graph should load");
+        let dependency = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name()
+                    == Some("dependency.ash".as_ref())
+            })
+            .expect("the wide-selector dependency should load");
+        let dependency =
+            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
+                .expect("distinct nominal heads should check without overlap");
+        let entry = graph
+            .module(graph.entry())
+            .expect("the wide-selector entry should load");
+        let import = entry
+            .surface()
+            .imports
+            .first()
+            .expect("the entry should retain its targeted import");
+        let SurfaceImportSelection::Targeted(items) = &import.selection else {
+            panic!("the fixture should contain a targeted import");
+        };
+        let SurfaceImportItem::Implementation { interface, span } = &items[0] else {
+            panic!("the fixture should contain one implementation selector");
+        };
+        let selector_span = *span;
+        let selection = ImplementationImportSelection {
+            direct_dependency: dependency.module(),
+            selector_span,
+            import_span: import.span,
+            public: false,
+            route_rank: ImplementationRouteRank::new(0, 0, 0),
+        };
+        let select_with_limit = |limit| {
+            let mut resolver = Resolver::with_budgets(
+                entry.id(),
+                TypeWorkBudget::default(),
+                InterfaceConstraintBudget::with_limit(limit),
+            );
+            let result = resolver.select_imported_implementations(
+                dependency.exports(),
+                interface,
+                selection,
+            );
+            let heads = resolver
+                .imported
+                .implementations()
+                .map(|implementation| match implementation.fact.argument {
+                    Type::Nominal(id) => id,
+                    _ => panic!("each selected implementation should retain its nominal head"),
+                })
+                .collect::<Vec<_>>();
+            (result, resolver.constraint_work.used(), heads)
+        };
+
+        let (measured, exact_limit, measured_heads) = select_with_limit(1_000_000);
+        measured.expect("the generous selector budget should measure complete expansion");
+        assert_eq!(measured_heads.len(), WIDTH);
+        let mut distinct_heads = measured_heads.clone();
+        distinct_heads.sort_unstable();
+        distinct_heads.dedup();
+        assert_eq!(distinct_heads.len(), WIDTH);
+
+        let (short, _, _) = select_with_limit(exact_limit - 1);
+        let error = short.expect_err("one missing unit should reject selector expansion");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(error.primary.span(), selector_span);
+        assert_eq!(
+            error.primary.message(),
+            "imported implementation method type exceeded its work budget",
+        );
+
+        let (exact, exact_used, exact_heads) = select_with_limit(exact_limit);
+        exact.expect("the measured selector budget should retain every matching fact");
+        assert_eq!(exact_used, exact_limit);
+        assert_eq!(exact_heads, measured_heads);
+    }
+
+    #[test]
     fn hidden_interface_import_route_uses_its_exact_constraint_budget() {
         let short = retain_hidden_interface_import_with_limit(8);
         let error = short
