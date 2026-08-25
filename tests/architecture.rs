@@ -161,6 +161,15 @@ fn interface_state_release_is_ordered(source: &str) -> bool {
     ) else {
         return false;
     };
+    let Some(validated_interface_bindings) = code_token_sequence_positions_at_top_level(
+        driver_pipeline,
+        &["let", "validated_interfaces"],
+    ) else {
+        return false;
+    };
+    let [validated_interface_binding] = validated_interface_bindings.as_slice() else {
+        return false;
+    };
     let Some(synthesis_finish) = code_token_sequence_position_at_top_level(
         driver_pipeline,
         &["elaborator", ".", "finish", "(", "typed", ".", "node", ")"],
@@ -184,7 +193,7 @@ fn interface_state_release_is_ordered(source: &str) -> bool {
     ) else {
         return false;
     };
-    top_level_statement_position(
+    let Some(release) = top_level_statement_position(
         driver_pipeline,
         &[
             ":",
@@ -201,8 +210,12 @@ fn interface_state_release_is_ordered(source: &str) -> bool {
             ")",
             ";",
         ],
-    )
-    .is_some_and(|release| release > synthesis_finish && release < core_validation)
+    ) else {
+        return false;
+    };
+    *validated_interface_binding < synthesis_finish
+        && synthesis_finish < release
+        && release < core_validation
 }
 
 #[test]
@@ -232,6 +245,7 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
 
     let commented_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             // drop(validated_interfaces);
             let note = "drop(validated_interfaces);";
@@ -243,6 +257,7 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
 
     let deferred_tuple_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             let _deferred_release: (fn(ValidatedInterfaceProgram), ValidatedInterfaceProgram) =
                 (drop, validated_interfaces);
@@ -257,6 +272,7 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
             ($value:expr) => {};
         }
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             drop!(validated_interfaces);
             let validated = validator(unchecked, &sources, &module_sources)?;
@@ -267,6 +283,7 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
 
     let actual_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             ::std::mem::drop(validated_interfaces);
             let validated = validator(unchecked, &sources, &module_sources)?;
@@ -274,6 +291,48 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
         fn entry_failure() {}
     "#;
     assert!(interface_state_release_is_ordered(actual_drop));
+
+    let top_level_shadowed_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            let unchecked = elaborator.finish(typed.node)?;
+            let validated_interfaces = String::new();
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let top_level_moved_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            let unchecked = elaborator.finish(typed.node)?;
+            let validated_interfaces = ManuallyDrop::new(validated_interfaces);
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let nested_shadow_then_actual_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            let nested_shadow = || {
+                let validated_interfaces = String::new();
+                ::std::mem::drop(validated_interfaces);
+            };
+            let unchecked = elaborator.finish(typed.node)?;
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let shadowed_drop_looks_ordered = interface_state_release_is_ordered(top_level_shadowed_drop);
+    let moved_drop_looks_ordered = interface_state_release_is_ordered(top_level_moved_drop);
+    let nested_shadow_looks_ordered =
+        interface_state_release_is_ordered(nested_shadow_then_actual_drop);
+    assert!(
+        !shadowed_drop_looks_ordered && !moved_drop_looks_ordered && nested_shadow_looks_ordered,
+        "the release guard must reject top-level shadowing or moves without counting nested bindings; shadowed: {shadowed_drop_looks_ordered}, moved: {moved_drop_looks_ordered}, nested: {nested_shadow_looks_ordered}"
+    );
 }
 
 #[test]
@@ -322,6 +381,7 @@ fn validated_interface_program_guard_rejects_aliases_and_extra_fields() {
 fn interface_release_guard_rejects_nested_control_flow_and_delimiters() {
     let closure_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             let release_later = || {
                 ::std::mem::drop(validated_interfaces);
@@ -332,6 +392,7 @@ fn interface_release_guard_rejects_nested_control_flow_and_delimiters() {
     "#;
     let unreachable_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             if false {
                 ::std::mem::drop(validated_interfaces);
@@ -342,6 +403,7 @@ fn interface_release_guard_rejects_nested_control_flow_and_delimiters() {
     "#;
     let parenthesized_macro_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             ignore!(marker; ::std::mem::drop(validated_interfaces););
             let validated = validator(unchecked, &sources, &module_sources)?;
@@ -350,6 +412,7 @@ fn interface_release_guard_rejects_nested_control_flow_and_delimiters() {
     "#;
     let bracketed_macro_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             ignore!([marker; ::std::mem::drop(validated_interfaces);]);
             let validated = validator(unchecked, &sources, &module_sources)?;
@@ -358,6 +421,7 @@ fn interface_release_guard_rejects_nested_control_flow_and_delimiters() {
     "#;
     let mismatched_delimiters = r#"
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             ignore!([marker);
             ::std::mem::drop(validated_interfaces);
@@ -367,6 +431,7 @@ fn interface_release_guard_rejects_nested_control_flow_and_delimiters() {
     "#;
     let delimiter_character_literals = r#"
         fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
             let unchecked = elaborator.finish(typed.node)?;
             if false {
                 let closing = '}';
@@ -611,23 +676,29 @@ fn code_tokens_without_attributes<'a>(tokens: &'a [&'a str]) -> Option<Vec<&'a s
 }
 
 fn code_token_sequence_position_at_top_level(tokens: &[&str], sequence: &[&str]) -> Option<usize> {
+    code_token_sequence_positions_at_top_level(tokens, sequence)?
+        .into_iter()
+        .next()
+}
+
+fn code_token_sequence_positions_at_top_level(
+    tokens: &[&str],
+    sequence: &[&str],
+) -> Option<Vec<usize>> {
     if sequence.is_empty() {
         return None;
     }
     let mut delimiters = Vec::new();
-    let mut sequence_position = None;
-    for position in 0..tokens.len() {
-        if sequence_position.is_none()
-            && delimiters.is_empty()
-            && tokens[position..].starts_with(sequence)
-        {
-            sequence_position = Some(position);
+    let mut sequence_positions = Vec::new();
+    for (position, token) in tokens.iter().enumerate() {
+        if delimiters.is_empty() && tokens[position..].starts_with(sequence) {
+            sequence_positions.push(position);
         }
-        if !update_delimiter_stack(&mut delimiters, tokens[position]) {
+        if !update_delimiter_stack(&mut delimiters, token) {
             return None;
         }
     }
-    delimiters.is_empty().then_some(sequence_position).flatten()
+    delimiters.is_empty().then_some(sequence_positions)
 }
 
 fn top_level_statement_position(tokens: &[&str], statement: &[&str]) -> Option<usize> {
