@@ -27,8 +27,8 @@ and its [convergence record](design/mini-ash/first-stratum/comparisons/component
 [DN-0020](design/DN-0020-ash-dialect-milestones.md) outlines two retained
 milestones. Mini-Ash and passive static modules are complete. Method-only
 interfaces and `impl` are complete. Interfaces are type-class-like
-relationships, not module signatures. A separately authorized
-core-versus-library audit is next and has not begun.
+relationships, not module signatures. The bounded core-versus-library audit
+and Modular Ash closure work are active; they do not change current semantics.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
@@ -36,7 +36,7 @@ core-versus-library audit is next and has not begun.
 | [Executable learning and evidence stream](design/DN-0024-executable-learning-and-evidence-stream.md) | outlined | historical `mini-ash` tag, current [Modular Ash specification](../spec/README.md), [documentation policy](project/documentation.md), and retained [first corpus stratum](design/DN-0016-first-mini-ash-corpus.md) | Run an external-repository pilot that tests executable teaching, forward-only migration, source adaptation, and cooperative evidence exchange. |
 | [Passive static modules](design/DN-0022-passive-static-modules.md) | implementation | completed Mini-Ash tag and closure evidence, current [Modular Ash specification](../spec/README.md), and retained [passive-module evidence](design/modular-ash/evidence.md) | Preserve the implemented export-summary and module-identity boundaries during later audits. |
 | [Interfaces and `impl`](design/DN-0023-interfaces-and-implementations.md) | implementation | implemented passive static modules, current [specification](../spec/README.md), retained interface design, and [implementation evidence](design/modular-ash/interfaces-evidence.md) | Use the implemented method-only boundary and unspecialized evidence trace as inputs to a separately authorized core-versus-library audit. |
-| [Modular core-versus-library audit](design/DN-0020-ash-dialect-milestones.md#candidate-trajectory) | outlined | implemented passive modules and method-only interfaces, plus their retained evidence | Authorize a bounded comparison of retained Core behavior with an operation expressed through a library interface; do not begin it as interface-task cleanup. |
+| [Modular core-versus-library audit](design/DN-0020-ash-dialect-milestones.md#candidate-trajectory) | implementation | implemented passive modules and method-only interfaces, their retained evidence, and [TASK-0014](tasks/TASK-0014-finish-modular-ash.md) | Compare one retained Core intrinsic with one explicit-library-interface operation, retain audit and closure reports, and close Modular Ash without adding semantics. |
 | [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Exercise the retained closed pure dialect and operation-family seam against the next proposed feature pressure. |
 | [Parser architecture](decisions/AD-0005-parser-architecture.md) | implementation | accepted event-producing recursive-descent boundary and current grammar | Measure locality, recovery, and source coverage when a later proposal adds syntax. |
 | [Front-end semantic boundaries](decisions/AD-0006-front-end-semantic-boundaries.md) | implementation | accepted resolved-surface and bidirectional typed-elaboration boundaries | Extend stage interfaces and structured diagnostics only with an authorized semantic increment. |
