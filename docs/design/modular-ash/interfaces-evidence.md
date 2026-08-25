@@ -42,13 +42,16 @@ accepted transition through the current corrective product work are:
 - `18c04fd`, which rebaselines the affected resource evidence and makes rejected
   resolved interface payloads safe to destroy iteratively; and
 - `089c54e`, which updates the normative specification and retained evidence for
-  the outer-`Function` correction.
+  the outer-`Function` correction;
+- `5210beb`, which corrects checkpoint scope and task progress; and
+- `ee998a0`, which reconciles the remaining historical and current checkpoint
+  provenance.
 
-All intermediate implementation checkpoints are unsigned. The work remains on
-the unmerged `feature/modular-ash` branch. The review and verification section
-below retains the original increment's product checkpoint; it does not cover
-the corrective work above. Task 6 will perform the corrective branch-wide
-review and root verification.
+All named checkpoints are unsigned. The final reviewed product checkpoint is
+`ee998a05e9783972dc9952024fce2720b5d41449`. Current `main` at `8f4de9a` is an
+incorporated ancestor, but the product remains unmerged on
+`feature/modular-ash`. The review and verification section below records that
+product boundary. This report and transition cleanup do not move it.
 
 ## Causal semantic model
 
@@ -609,27 +612,33 @@ or authorize specialization.
 
 ## Review and verification checkpoint
 
-The final reviewed product checkpoint is unsigned commit `37ef9f8`. It includes
-the unsigned namespace fix `5398808` and evidence-validator fix `37ef9f8`. The
-four independent review tracks covering syntax and namespaces; checking and
-evidence; Core, validation, and resources; and specification and retained
-evidence are clear. Unsigned commit `07b9129` records the finalized evidence
-report for that reviewed product checkpoint; it does not move the reviewed
-product boundary.
+The final reviewed product checkpoint is unsigned commit
+`ee998a05e9783972dc9952024fce2720b5d41449`. Independent branch-wide reviews of
+language semantics and specification, Rust implementation and resource bounds,
+documentation authority and provenance, and current-`main` integration are
+clear after the findings below passed their fix and re-review loops. This report
+and transition cleanup record that checkpoint; they do not move the product
+boundary.
 
-Review found that targeted interface and method maps were absent from four
-local conflict gates. This allowed a targeted interface to conflict with a
-same-spelled local interface or nominal, and a targeted method to conflict with
-a same-spelled local method or renamed constructor. Commit `5398808` adds the
-four missing checks. Four focused TDD integration tests witnessed RED before
-the fix and GREEN after it.
+The original increment's reviewed product checkpoint was unsigned commit
+`37ef9f8`. It included the unsigned namespace fix `5398808` and
+evidence-validator fix `37ef9f8`. Unsigned commit `07b9129` recorded the
+finalized evidence report for that original checkpoint without moving its
+product boundary. The findings remain below as historical provenance.
 
-Review also found that linked evidence validation authenticated a selected
-node's individual facts without authenticating selection order. It accepted a
-concrete implementation over an identity-equal lexical abstract requirement,
-a freshly instantiated current implementation at the root or below another
-node, and a later duplicate abstract requirement out of source order. The
-validator also rejected a valid exact-current selection with repeated
+The original increment's review found that targeted interface and method maps
+were absent from four local conflict gates. This allowed a targeted interface
+to conflict with a same-spelled local interface or nominal, and a targeted
+method to conflict with a same-spelled local method or renamed constructor.
+Commit `5398808` adds the four missing checks. Four focused TDD integration
+tests witnessed RED before the fix and GREEN after it.
+
+That review also found that linked evidence validation authenticated a
+selected node's individual facts without authenticating selection order. It
+accepted a concrete implementation over an identity-equal lexical abstract
+requirement, a freshly instantiated current implementation at the root or below
+another node, and a later duplicate abstract requirement out of source order.
+The validator also rejected a valid exact-current selection with repeated
 identity-equal prerequisites. Commit `37ef9f8` reconstructs the required order
 with ordered
 `RequirementId` lookup, exact rigid current-identity substitution, exclusion of
@@ -639,9 +648,49 @@ behavior tests captured the RED findings and valid guards, then passed GREEN
 after the fix. Exact resource tests place the abstract-priority scan at 6
 constraint-work units and exact-current authentication with its mandated
 abstract prerequisite at 67 units; one unit less fails and the exact limit
-passes. The final checking-and-evidence review found no remaining defect.
+passes at that original checkpoint.
 
-The complete root verification boundary passes at `37ef9f8`:
+Later branch-wide review found that linking authenticated individual checked
+modules but not the selected entry's exact module closure. It accepted an
+omitted direct dependency, a dependency after its importer, an unrelated module,
+and a surplus module that depended on the selected entry. Commit `8a37934`
+requires dependencies before their importers and requires the linked modules to
+equal the selected entry's complete dependency closure. Four integration tests
+retain those malformed boundaries.
+
+Review also found that a filled occurrence slot retained selected evidence
+without independently retaining the checker-zonked obligation argument. A
+forged selection could therefore authenticate its own goal while disagreeing
+with the checked occurrence. Commit `d55366a` atomically retains the checked
+goal and selection in the one-shot evidence slot, and linked validation checks
+their equality before Core synthesis. Focused negative, exact-budget, clone,
+and small-stack tests retain that authentication boundary.
+
+The language review then found that arrow-anywhere interface admission accepted
+a method type that no positive-pattern implementation equation could check.
+Commit `364c736` requires `Function` as the outermost method-type constructor,
+preserves `interface.method-parameter` precedence, rejects a nested-only arrow,
+retains top-level functions with nested function domains and codomains, checks
+the implementation failure boundary, and completes a `42 : Int` end-to-end
+case.
+
+Commit `18c04fd` remeasures the resource cost after removing recursive
+nested-arrow search. One interface exhausts the constraint budget at 36 units
+and succeeds at 37; implementation-method substitution exhausts it at 76 and
+succeeds at 77; and the 10,000-level invalid outer-method fixture exhausts its
+local check at 7 and reaches `interface.method-not-function` at 8 on a 64 KiB
+stack. `ResolvedModule` destroys the rejected interface payload iteratively, so
+the same fixture also retains stack-safe teardown evidence.
+
+Unsigned merge `78c6da9` incorporates current `main` and reconciles DN-0024,
+the design index, and the trajectory with implemented Modular Ash. Commits
+`089c54e`, `5210beb`, and `ee998a0` then align the normative specification,
+retained evidence, task progress, and historical checkpoint provenance with the
+outer-`Function` correction. Repeated language, Rust and resource,
+documentation, and integration review found no remaining actionable defect at
+`ee998a0`.
+
+The complete verification boundary passes at `ee998a0`:
 
 ```text
 cargo fmt --check
@@ -653,13 +702,16 @@ markdownlint --disable MD013 -- README.md spec docs
 git diff --check
 ```
 
-The locked all-target test run passes 917 tests: 297 library tests, 10 binary
-tests, and 610 integration tests. A manual relative-link audit also passes.
+The locked all-target test inventory is exactly 927 tests: 298 library tests,
+10 binary tests, and 619 integration tests. The canonical `cargo xtask verify`
+workspace verifier additionally runs xtask's own one-test unit suite. Manual
+relative-link, authority-boundary, and formal-notation audits also pass.
 
-Complete-branch inspection from `main` to `37ef9f8` covers 130 files, 47,573
-insertions, 5,838 deletions, and 40 commits; the branch is 40 commits ahead and
-0 behind. Interface-increment inspection from `ca79328` to `37ef9f8`
-covers 66 files, 31,214 insertions, and 2,806 deletions. The search
+Complete-branch inspection from current `main` at `8f4de9a` to `ee998a0` covers
+133 files, 45,894 insertions, and 5,327 deletions. Current `main` is an ancestor;
+the branch is 51 commits ahead and 0 behind. Interface-increment inspection
+from `ca79328` through `ee998a0` covers 72 files, 31,180 insertions, 3,492
+deletions, and 31 commits. The search
 
 ```text
 rg -n '\b(Interface|Impl|Requirement|EvidenceSelection)\b' src/core src/eval
@@ -670,8 +722,10 @@ eight production files listed above, and the Core and runtime enum inventories
 remain unchanged from `ca79328`. The worktree was clean at the reviewed product
 checkpoint.
 
-Transition cleanup is complete: the completed proposal, task, execution plan,
-their index entries, and all live links to them have been removed. Git retains
-their history. The product remains unmerged on `feature/modular-ash`. The
-retained unspecialized trace remains the baseline for a later separately
-authorized comparison; that audit remains separate and has not begun.
+Transition cleanup is complete in this report-and-cleanup commit: the completed
+proposal, task, execution plan, their index entries, and all live links to them
+have been removed. Git retains their history. This cleanup does not move the
+`ee998a0` product boundary. The product remains unmerged into `main`, although
+current `main` at `8f4de9a` is incorporated and remains an ancestor. The retained
+unspecialized trace remains the baseline for a later separately authorized
+comparison; that audit remains separate and has not begun.

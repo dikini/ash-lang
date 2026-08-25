@@ -25,9 +25,9 @@ typed selection retained on checked occurrences, linked evidence validation,
 and lowering through ordinary pure Core functions and applications. The
 original interface increment's normative checkpoint is unsigned commit
 `f783271`. The [current specification](../../spec/README.md) includes the
-outer-`Function` correction retained by unsigned commit `089c54e`. After Task
-6, the [interface implementation evidence](modular-ash/interfaces-evidence.md)
-will record the final reviewed product checkpoint.
+outer-`Function` correction retained by unsigned commit `089c54e`. The
+[interface implementation evidence](modular-ash/interfaces-evidence.md) records
+`ee998a0` as the final reviewed product checkpoint.
 
 The evidence report records the implemented corpus, diagnostic and resource
 boundaries, Core and evaluator locality, and the unspecialized generic evidence

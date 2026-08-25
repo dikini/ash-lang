@@ -22,4 +22,4 @@ No change proposal is currently under consideration.
 
 ## Accepted changes
 
-- [CP-0007: Top-Level Interface Method Functions](CP-0007-top-level-interface-method-functions.md)
+No change proposal is currently accepted.
