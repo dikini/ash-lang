@@ -510,7 +510,11 @@ impl EvidenceSelector {
             methods: methods.into_boxed_slice(),
             span: fact.span,
             method_spans,
-            import_span: Some(imported.available_at),
+            import_span: imported
+                .authorization()
+                .hops()
+                .first()
+                .map(|hop| hop.import_span),
         });
         Ok(())
     }

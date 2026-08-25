@@ -1,6 +1,7 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     hash::Hash,
     sync::Arc,
@@ -424,7 +425,162 @@ impl Drop for CheckedImplementationBody {
     }
 }
 
-/// How one implementation entered a checked module's effective environment.
+/// One authenticated module-to-dependency edge in an implementation route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImplementationRouteHop {
+    /// Module whose import contains this edge.
+    pub from: ModuleId,
+    /// Canonical direct dependency selected by the import.
+    pub to: ModuleId,
+    /// Exact import declaration that authorizes the edge.
+    pub import_span: Span,
+}
+
+/// Flat authorization route for one implementation fact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImplementationAuthorization {
+    hops: Box<[ImplementationRouteHop]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ImplementationRouteRank {
+    dependency_summary_order: usize,
+    import_source_order: usize,
+    selector_source_order: usize,
+}
+
+impl ImplementationRouteRank {
+    pub(crate) const fn new(
+        dependency_summary_order: usize,
+        import_source_order: usize,
+        selector_source_order: usize,
+    ) -> Self {
+        Self {
+            dependency_summary_order,
+            import_source_order,
+            selector_source_order,
+        }
+    }
+}
+
+impl ImplementationAuthorization {
+    pub(crate) fn local() -> Self {
+        Self { hops: Box::new([]) }
+    }
+
+    pub(crate) fn from_hops(hops: Vec<ImplementationRouteHop>) -> Self {
+        Self {
+            hops: hops.into_boxed_slice(),
+        }
+    }
+
+    pub(crate) fn prepend(
+        from: ModuleId,
+        to: ModuleId,
+        import_span: Span,
+        suffix: &Self,
+        budget: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<Self, ()> {
+        let capacity = suffix.hops.len().checked_add(1).ok_or(())?;
+        budget.charge(capacity)?;
+        let mut hops = Vec::new();
+        hops.try_reserve_exact(capacity).map_err(|_| ())?;
+        hops.push(ImplementationRouteHop {
+            from,
+            to,
+            import_span,
+        });
+        hops.extend_from_slice(&suffix.hops);
+        Ok(Self::from_hops(hops))
+    }
+
+    pub(crate) fn clone_with_budget(
+        &self,
+        budget: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<Self, ()> {
+        budget.charge(self.hops.len())?;
+        let mut hops = Vec::new();
+        hops.try_reserve_exact(self.hops.len()).map_err(|_| ())?;
+        hops.extend_from_slice(&self.hops);
+        Ok(Self::from_hops(hops))
+    }
+
+    pub(crate) fn is_well_formed_for(
+        &self,
+        publisher: ModuleId,
+        fact: &CheckedImplementationFact,
+    ) -> bool {
+        if self.hops.is_empty() {
+            return publisher == fact.id.module()
+                && fact.methods.iter().all(|method| {
+                    method.id.implementation() == fact.id
+                        && method.binder.module() == Some(fact.id.module())
+                });
+        }
+        self.hops.first().is_some_and(|hop| hop.from == publisher)
+            && self.hops.windows(2).all(|pair| pair[0].to == pair[1].from)
+            && self
+                .hops
+                .last()
+                .is_some_and(|hop| hop.to == fact.id.module())
+            && fact.methods.iter().all(|method| {
+                method.id.implementation() == fact.id
+                    && method.binder.module() == Some(fact.id.module())
+            })
+    }
+
+    pub(crate) fn candidate_precedes(
+        &self,
+        candidate_rank: ImplementationRouteRank,
+        existing: &Self,
+        existing_rank: ImplementationRouteRank,
+    ) -> bool {
+        match self.hops.len().cmp(&existing.hops.len()) {
+            Ordering::Less => return true,
+            Ordering::Greater => return false,
+            Ordering::Equal => {}
+        }
+        match candidate_rank.cmp(&existing_rank) {
+            Ordering::Less => return true,
+            Ordering::Greater => return false,
+            Ordering::Equal => {}
+        }
+        compare_hop_sequences(&self.hops, &existing.hops) == Ordering::Less
+    }
+
+    /// Returns the ordered route from the selecting module to the defining module.
+    #[must_use]
+    pub const fn hops(&self) -> &[ImplementationRouteHop] {
+        &self.hops
+    }
+
+    /// Returns whether this is a local implementation route.
+    #[must_use]
+    pub const fn is_local(&self) -> bool {
+        self.hops.is_empty()
+    }
+}
+
+fn hop_key(hop: &ImplementationRouteHop) -> (ModuleId, ModuleId, u32, u32) {
+    (
+        hop.from,
+        hop.to,
+        hop.import_span.range().start(),
+        hop.import_span.range().end(),
+    )
+}
+
+fn compare_hop_sequences(
+    left: &[ImplementationRouteHop],
+    right: &[ImplementationRouteHop],
+) -> Ordering {
+    left.iter().map(hop_key).cmp(right.iter().map(hop_key))
+}
+
+/// Compatibility view of how one implementation entered a checked module.
+///
+/// The full transitive route is available through
+/// [`AvailableImplementation::authorization`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImplementationRoute {
     /// The implementation is declared by the checked module.
@@ -439,44 +595,46 @@ pub enum ImplementationRoute {
 }
 
 /// One implementation in deterministic effective-environment order.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AvailableImplementation {
     id: ImplId,
-    route: ImplementationRoute,
+    authorization: ImplementationAuthorization,
 }
 
 impl AvailableImplementation {
-    pub(crate) const fn local(id: ImplId) -> Self {
+    pub(crate) fn local(id: ImplId) -> Self {
         Self {
             id,
-            route: ImplementationRoute::Local,
+            authorization: ImplementationAuthorization::local(),
         }
     }
 
-    pub(crate) const fn direct_import(
-        id: ImplId,
-        direct_dependency: ModuleId,
-        available_at: Span,
-    ) -> Self {
-        Self {
-            id,
-            route: ImplementationRoute::DirectImport {
-                direct_dependency,
-                available_at,
-            },
-        }
+    pub(crate) const fn imported(id: ImplId, authorization: ImplementationAuthorization) -> Self {
+        Self { id, authorization }
     }
 
     /// Returns the stable implementation identity.
     #[must_use]
-    pub const fn id(self) -> ImplId {
+    pub const fn id(&self) -> ImplId {
         self.id
     }
 
-    /// Returns the local or first-direct-import availability route.
+    /// Returns the complete flat authorization route by reference.
     #[must_use]
-    pub const fn route(self) -> ImplementationRoute {
-        self.route
+    pub const fn authorization(&self) -> &ImplementationAuthorization {
+        &self.authorization
+    }
+
+    /// Returns the local or first-direct-import compatibility view.
+    #[must_use]
+    pub fn route(&self) -> ImplementationRoute {
+        let Some(first) = self.authorization.hops.first() else {
+            return ImplementationRoute::Local;
+        };
+        ImplementationRoute::DirectImport {
+            direct_dependency: first.to,
+            available_at: first.import_span,
+        }
     }
 }
 
@@ -862,7 +1020,17 @@ impl ResolvedModuleProgram {
         else {
             return false;
         };
-        available.route = route;
+        available.authorization = match route {
+            ImplementationRoute::Local => ImplementationAuthorization::local(),
+            ImplementationRoute::DirectImport {
+                direct_dependency,
+                available_at,
+            } => ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+                from: module,
+                to: direct_dependency,
+                import_span: available_at,
+            }]),
+        };
         true
     }
 
@@ -1132,6 +1300,7 @@ pub struct ImportedFacts {
     interface_positions: HashMap<InterfaceId, usize>,
     implementations: Vec<ImportedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
+    public_implementation_order: Vec<ImplId>,
 }
 
 impl ImportedFacts {
@@ -1164,7 +1333,7 @@ impl ImportedFacts {
         )
     }
 
-    /// Looks up one directly imported public implementation by semantic identity.
+    /// Looks up one selected public implementation by semantic identity.
     #[must_use]
     pub fn implementation(&self, id: ImplId) -> Option<&CheckedImplementationFact> {
         Some(
@@ -1173,6 +1342,19 @@ impl ImportedFacts {
                 .get(*self.implementation_positions.get(&id)?)?
                 .fact,
         )
+    }
+
+    pub(crate) fn implementation_import_mut(
+        &mut self,
+        id: ImplId,
+    ) -> Option<&mut ImportedImplementationFact> {
+        let position = *self.implementation_positions.get(&id)?;
+        self.implementations.get_mut(position)
+    }
+
+    pub(crate) fn implementation_import(&self, id: ImplId) -> Option<&ImportedImplementationFact> {
+        self.implementations
+            .get(*self.implementation_positions.get(&id)?)
     }
 
     pub(crate) fn globals(&self) -> impl Iterator<Item = &ImportedGlobalScheme> {
@@ -1294,21 +1476,39 @@ impl ImportedFacts {
     pub(crate) fn insert_implementation(
         &mut self,
         fact: CheckedImplementationFact,
-        direct_dependency: ModuleId,
-        available_at: Span,
+        authorization: ImplementationAuthorization,
+        public_authorization: Option<ImplementationAuthorization>,
     ) {
         let position = self.implementations.len();
         self.implementation_positions.insert(fact.id, position);
         self.implementations.push(ImportedImplementationFact {
             fact,
-            direct_dependency,
-            available_at,
+            authorization,
+            public_authorization,
         });
     }
 
     pub(crate) fn reserve_implementation(&mut self) -> Result<(), ()> {
         self.implementations.try_reserve(1).map_err(|_| ())?;
         self.implementation_positions.try_reserve(1).map_err(|_| ())
+    }
+
+    pub(crate) fn reserve_public_implementation(&mut self) -> Result<(), ()> {
+        self.public_implementation_order
+            .try_reserve(1)
+            .map_err(|_| ())
+    }
+
+    pub(crate) fn mark_implementation_public(&mut self, id: ImplId) -> Result<(), ()> {
+        if !self.implementation_positions.contains_key(&id) {
+            return Err(());
+        }
+        self.public_implementation_order.push(id);
+        Ok(())
+    }
+
+    pub(crate) fn public_implementation_ids(&self) -> &[ImplId] {
+        &self.public_implementation_order
     }
 }
 
@@ -1338,6 +1538,7 @@ impl Drop for ImportedFacts {
             drop(imported.fact);
         }
         self.implementation_positions.clear();
+        self.public_implementation_order.clear();
     }
 }
 
@@ -1436,15 +1637,27 @@ pub struct CheckedImplementationFact {
     pub span: Span,
 }
 
-/// One checked implementation admitted through its first direct import edge.
+/// One checked implementation selected through an authenticated import route.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ImportedImplementationFact {
     /// Defining implementation fact retained without a body.
     pub fact: CheckedImplementationFact,
-    /// Canonical direct dependency that published the implementation.
-    pub direct_dependency: ModuleId,
-    /// Direct import occurrence that first made the fact available.
-    pub available_at: Span,
+    pub(crate) authorization: ImplementationAuthorization,
+    pub(crate) public_authorization: Option<ImplementationAuthorization>,
+}
+
+impl ImportedImplementationFact {
+    /// Returns the canonical effective-availability route.
+    #[must_use]
+    pub const fn authorization(&self) -> &ImplementationAuthorization {
+        &self.authorization
+    }
+
+    /// Returns the canonical public route, when a public selector authorized one.
+    #[must_use]
+    pub const fn public_authorization(&self) -> Option<&ImplementationAuthorization> {
+        self.public_authorization.as_ref()
+    }
 }
 
 impl Drop for CheckedImplementationFact {
@@ -1647,6 +1860,27 @@ pub struct ImportedGlobalScheme {
     pub scheme: ConstrainedScheme,
     /// Causal declaration provenance.
     pub origin: Origin,
+}
+
+/// One checked implementation published with its complete authorization route.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AuthorizedImplementationFact {
+    fact: CheckedImplementationFact,
+    authorization: ImplementationAuthorization,
+}
+
+impl AuthorizedImplementationFact {
+    /// Returns the original checked implementation fact.
+    #[must_use]
+    pub const fn fact(&self) -> &CheckedImplementationFact {
+        &self.fact
+    }
+
+    /// Returns the route from the publishing summary to the defining module.
+    #[must_use]
+    pub const fn authorization(&self) -> &ImplementationAuthorization {
+        &self.authorization
+    }
 }
 
 /// One imported nominal access fact.
@@ -2295,7 +2529,7 @@ pub struct ExportSummary {
     interfaces: Vec<CheckedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
     hidden_interfaces: Vec<CheckedInterfaceFact>,
-    implementations: Vec<CheckedImplementationFact>,
+    implementations: Vec<AuthorizedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
     withheld: HashMap<String, WithheldExports>,
@@ -2602,13 +2836,18 @@ impl ExportSummary {
             }
         }
 
+        let selected_public_implementations = resolved.imported.public_implementation_ids().len();
+        let implementation_capacity = checked_implementations
+            .len()
+            .checked_add(selected_public_implementations)
+            .ok_or(ResolvedBuildFailure::ConstraintResource)?;
         summary
             .implementations
-            .try_reserve(checked_implementations.len())
+            .try_reserve(implementation_capacity)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         summary
             .implementation_positions
-            .try_reserve(checked_implementations.len())
+            .try_reserve(implementation_capacity)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         for (admitted, checked) in admitted_implementations.iter().zip(checked_implementations) {
             let implementation = resolved
@@ -2627,6 +2866,10 @@ impl ExportSummary {
                 continue;
             }
             let fact = clone_checked_implementation_fact(checked, type_work, constraint_work)?;
+            let authorization = ImplementationAuthorization::local();
+            if !authorization.is_well_formed_for(resolved.module, &fact) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             let position = summary.implementations.len();
             if summary
                 .implementation_positions
@@ -2635,7 +2878,42 @@ impl ExportSummary {
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            summary.implementations.push(fact);
+            summary.implementations.push(AuthorizedImplementationFact {
+                fact,
+                authorization,
+            });
+        }
+        for implementation in resolved.imported.public_implementation_ids() {
+            let imported = resolved
+                .imported
+                .implementation_import(*implementation)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let public_authorization = imported
+                .public_authorization()
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            constraint_work
+                .charge(public_authorization.hops().len().saturating_add(1))
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            if !public_authorization.is_well_formed_for(resolved.module, &imported.fact) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            let fact =
+                clone_checked_implementation_fact(&imported.fact, type_work, constraint_work)?;
+            let authorization = public_authorization
+                .clone_with_budget(constraint_work)
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            let position = summary.implementations.len();
+            if summary
+                .implementation_positions
+                .insert(fact.id, position)
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            summary.implementations.push(AuthorizedImplementationFact {
+                fact,
+                authorization,
+            });
         }
 
         constraint_work
@@ -2646,18 +2924,16 @@ impl ExportSummary {
                     .saturating_add(summary.implementations.len()),
             )
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        let interface_reference_count = summary
-            .terms
-            .values()
-            .map(|exported| exported.scheme.requirements.len())
-            .chain(
-                summary
-                    .implementations
-                    .iter()
-                    .map(|implementation| implementation.prerequisites.len().saturating_add(1)),
-            )
-            .fold(0usize, usize::saturating_add)
-            .saturating_add(resolved.export_candidate.methods.len());
+        let interface_reference_count =
+            summary
+                .terms
+                .values()
+                .map(|exported| exported.scheme.requirements.len())
+                .chain(summary.implementations.iter().map(|implementation| {
+                    implementation.fact.prerequisites.len().saturating_add(1)
+                }))
+                .fold(0usize, usize::saturating_add)
+                .saturating_add(resolved.export_candidate.methods.len());
         if interface_reference_count > 0 {
             constraint_work
                 .charge(
@@ -2695,10 +2971,10 @@ impl ExportSummary {
                 }
             }
             for implementation in &summary.implementations {
-                if referenced_interfaces.insert(implementation.interface) {
-                    referenced_interface_order.push(implementation.interface);
+                if referenced_interfaces.insert(implementation.fact.interface) {
+                    referenced_interface_order.push(implementation.fact.interface);
                 }
-                for prerequisite in &implementation.prerequisites {
+                for prerequisite in &implementation.fact.prerequisites {
                     if referenced_interfaces.insert(prerequisite.interface) {
                         referenced_interface_order.push(prerequisite.interface);
                     }
@@ -3089,12 +3365,12 @@ impl ExportSummary {
         }
         for implementation in &summary.implementations {
             collect_nominal_identities(
-                &implementation.argument,
+                &implementation.fact.argument,
                 &mut referenced_nominals,
                 type_work,
             )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            for prerequisite in &implementation.prerequisites {
+            for prerequisite in &implementation.fact.prerequisites {
                 collect_nominal_identities(
                     &prerequisite.argument,
                     &mut referenced_nominals,
@@ -3102,7 +3378,7 @@ impl ExportSummary {
                 )
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             }
-            for method in &implementation.methods {
+            for method in &implementation.fact.methods {
                 collect_scheme_nominal_identities(
                     &method.scheme,
                     &mut referenced_nominals,
@@ -3252,8 +3528,15 @@ impl ExportSummary {
         self.hidden_interfaces.iter()
     }
 
-    pub(crate) fn implementations(&self) -> impl Iterator<Item = &CheckedImplementationFact> {
+    pub(crate) fn implementations(&self) -> impl Iterator<Item = &AuthorizedImplementationFact> {
         self.implementations.iter()
+    }
+
+    /// Looks up one public implementation and its authorization by semantic identity.
+    #[must_use]
+    pub fn implementation(&self, id: ImplId) -> Option<&AuthorizedImplementationFact> {
+        self.implementations
+            .get(*self.implementation_positions.get(&id)?)
     }
 
     pub(crate) fn interface_names(&self) -> impl Iterator<Item = (&str, InterfaceId)> {
@@ -4914,7 +5197,14 @@ mod tests {
         let imported_id = ImplId::new(ModuleId::new(20), 0);
         let authenticated_dependency = DirectDependencyRoute::new(ModuleId::new(19), span);
         let available = vec![
-            AvailableImplementation::direct_import(imported_id, ModuleId::new(20), span),
+            AvailableImplementation::imported(
+                imported_id,
+                ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+                    from: module,
+                    to: ModuleId::new(20),
+                    import_span: span,
+                }]),
+            ),
             AvailableImplementation::local(implementation_id),
         ]
         .into_boxed_slice();
@@ -5693,8 +5983,12 @@ mod tests {
                         origin: Origin::Source(span),
                         span,
                     },
-                    module,
-                    span,
+                    ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+                        from: ModuleId::new(12),
+                        to: module,
+                        import_span: span,
+                    }]),
+                    None,
                 );
 
                 for _ in 0..2 {
@@ -5708,6 +6002,105 @@ mod tests {
             .expect("the small-stack imported fact thread should start")
             .join()
             .expect("identity-only dedup and cleanup should remain iterative");
+    }
+
+    #[test]
+    fn implementation_authorization_order_excludes_source_identity() {
+        let first_source = SourceFile::new("first-route.ash", "abcdefgh")
+            .expect("the first route source should fit");
+        let second_source = SourceFile::new("second-route.ash", "abcdefgh")
+            .expect("the second route source should fit");
+        let span = |source: &SourceFile, start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the route range should be ordered"))
+                .expect("the route range should fit its source")
+        };
+        let publisher = ModuleId::new(1);
+        let middle = ModuleId::new(2);
+        let owner = ModuleId::new(4);
+        let rank = ImplementationRouteRank::new(0, 0, 0);
+        let first = ImplementationAuthorization::from_hops(vec![
+            ImplementationRouteHop {
+                from: publisher,
+                to: middle,
+                import_span: span(&first_source, 0, 2),
+            },
+            ImplementationRouteHop {
+                from: middle,
+                to: owner,
+                import_span: span(&first_source, 3, 5),
+            },
+        ]);
+        let source_distinct_same_key = ImplementationAuthorization::from_hops(vec![
+            ImplementationRouteHop {
+                from: publisher,
+                to: middle,
+                import_span: span(&second_source, 0, 2),
+            },
+            ImplementationRouteHop {
+                from: middle,
+                to: owner,
+                import_span: span(&second_source, 3, 5),
+            },
+        ]);
+        assert!(!first.candidate_precedes(rank, &source_distinct_same_key, rank));
+        assert!(!source_distinct_same_key.candidate_precedes(rank, &first, rank));
+
+        let lexicographically_later = ImplementationAuthorization::from_hops(vec![
+            ImplementationRouteHop {
+                from: publisher,
+                to: middle,
+                import_span: span(&first_source, 0, 2),
+            },
+            ImplementationRouteHop {
+                from: middle,
+                to: ModuleId::new(5),
+                import_span: span(&first_source, 3, 5),
+            },
+        ]);
+        assert!(first.candidate_precedes(rank, &lexicographically_later, rank));
+        assert!(lexicographically_later.candidate_precedes(
+            ImplementationRouteRank::new(0, 0, 0),
+            &first,
+            ImplementationRouteRank::new(1, 0, 0),
+        ));
+        assert!(!lexicographically_later.candidate_precedes(
+            ImplementationRouteRank::new(0, 1, 0),
+            &first,
+            ImplementationRouteRank::new(0, 0, 0),
+        ));
+        assert!(lexicographically_later.candidate_precedes(
+            ImplementationRouteRank::new(0, 0, 0),
+            &first,
+            ImplementationRouteRank::new(0, 0, 1),
+        ));
+    }
+
+    #[test]
+    fn implementation_authorization_drops_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("long-route.ash", "import")
+                    .expect("the route source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 6).expect("the route range should be ordered"))
+                    .expect("the route range should fit");
+                let mut hops = Vec::new();
+                hops.try_reserve(20_000)
+                    .expect("the flat route should reserve");
+                for index in 0..20_000u32 {
+                    hops.push(ImplementationRouteHop {
+                        from: ModuleId::new(index),
+                        to: ModuleId::new(index + 1),
+                        import_span: span,
+                    });
+                }
+                drop(ImplementationAuthorization::from_hops(hops));
+            })
+            .expect("the small-stack authorization thread should start")
+            .join()
+            .expect("flat authorization destruction should fit the small stack");
     }
 
     #[test]

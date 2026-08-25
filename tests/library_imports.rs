@@ -7,6 +7,7 @@ use std::{
 };
 
 use ash::{
+    driver::{RunConfiguration, run_path},
     elaborate::{TypeError, check_module},
     interface::InterfaceReason,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
@@ -122,6 +123,30 @@ fn resolve_entry(graph: &ModuleGraph) -> ash::resolved::ResolvedModule {
         checked.push(check_module(resolved).expect("a dependency fixture should check"));
     }
     panic!("the graph should contain its entry module");
+}
+
+fn check_graph(graph: &ModuleGraph) -> Vec<ash::resolved::CheckedModule> {
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|dependency: &&ash::resolved::CheckedModule| {
+                        dependency.module() == edge.target()
+                    })
+                    .expect("dependencies should check before their importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("each dependency summary should authenticate its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the successful graph fixture should resolve");
+        checked.push(check_module(resolved).expect("the successful graph fixture should check"));
+    }
+    checked
 }
 
 #[test]
@@ -323,6 +348,310 @@ fn implementation_selector_rejects_a_public_nominal() {
 }
 
 #[test]
+fn public_implementation_selector_crosses_a_three_module_facade() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import facade (Equal, equal, impl Equal)\n\n",
+            "main : Unit -> Bool\n",
+            "main () = equal(1, 1)\n",
+        ),
+        &[
+            (
+                "equality.ash",
+                concat!(
+                    "pub interface Equal<A> {\n",
+                    "equal : (A, A) -> Bool\n",
+                    "}\n\n",
+                    "pub impl Equal<Int> {\n",
+                    "equal (left, right) = left == right\n",
+                    "}\n",
+                ),
+            ),
+            (
+                "facade.ash",
+                "pub import equality (Equal, equal, impl Equal)\n",
+            ),
+        ],
+    );
+
+    let equality = module_named(&graph, "equality.ash");
+    let equality_checked =
+        check_module(resolve_module(equality, &[]).expect("the defining module should resolve"))
+            .expect("the defining module should check");
+    let [defining_interface] = equality_checked.interface_facts() else {
+        panic!("the defining module should retain one interface fact");
+    };
+    let [defining_implementation] = equality_checked.implementation_facts() else {
+        panic!("the defining module should retain one implementation fact");
+    };
+    let interface = defining_interface.id;
+    let method = defining_interface.methods[0].id;
+    let implementation = defining_implementation.id;
+    let implementation_method = defining_implementation.methods[0].id;
+    let method_binder = defining_implementation.methods[0].binder;
+
+    let facade = module_named(&graph, "facade.ash");
+    let [facade_edge] = facade.dependencies() else {
+        panic!("the facade should have one dependency");
+    };
+    let facade_dependency = DependencyExports::new(facade_edge, equality_checked.exports())
+        .expect("the facade edge should authenticate the defining summary");
+    let facade_resolved =
+        resolve_module(facade, &[facade_dependency]).expect("the facade should resolve");
+    let facade_imported = facade_resolved
+        .imported_facts()
+        .implementation(implementation)
+        .expect("the facade selector should retain the defining implementation");
+    assert_eq!(facade_imported.interface, interface);
+    assert_eq!(facade_imported.methods[0].id, implementation_method);
+    assert_eq!(facade_imported.methods[0].method, method);
+    assert_eq!(facade_imported.methods[0].binder, method_binder);
+    let facade_checked = check_module(facade_resolved).expect("the facade should check");
+
+    let entry = module_named(&graph, "entry.ash");
+    let [entry_edge] = entry.dependencies() else {
+        panic!("the entry should have one dependency");
+    };
+    let entry_dependency = DependencyExports::new(entry_edge, facade_checked.exports())
+        .expect("the entry edge should authenticate the facade summary");
+    let entry_resolved = resolve_module(entry, &[entry_dependency])
+        .expect("the facade implementation should resolve");
+    let entry_imported = entry_resolved
+        .imported_facts()
+        .implementation(implementation)
+        .expect("the facade should publish the original implementation identity");
+    assert_eq!(entry_imported.interface, interface);
+    assert_eq!(entry_imported.methods[0].id, implementation_method);
+    assert_eq!(entry_imported.methods[0].method, method);
+    assert_eq!(entry_imported.methods[0].binder, method_binder);
+    let entry_checked = check_module(entry_resolved).expect("the entry should check");
+    assert_eq!(
+        entry_checked.available_implementations()[0].id(),
+        implementation
+    );
+
+    let linked_failure = run_path(RunConfiguration {
+        entry: tree.0.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("Task 6 must retain and authenticate the intermediate public route");
+    assert_eq!(
+        linked_failure.reason_code(),
+        "evidence.validation.unknown-identity",
+    );
+}
+
+#[test]
+fn implementation_routes_choose_the_deterministic_shortest_path() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import facade (impl Equal)\n",
+        &[
+            (
+                "base.ash",
+                concat!(
+                    "pub interface Equal<A> {\n",
+                    "equal : (A, A) -> Bool\n",
+                    "}\n\n",
+                    "pub impl Equal<Int> {\n",
+                    "equal (left, right) = left == right\n",
+                    "}\n",
+                ),
+            ),
+            ("inner.ash", "pub import base (Equal, equal, impl Equal)\n"),
+            ("long.ash", "pub import inner (Equal, equal, impl Equal)\n"),
+            (
+                "facade.ash",
+                concat!(
+                    "pub import long (impl Equal)\n",
+                    "pub import base (Equal, equal, impl Equal)\n",
+                ),
+            ),
+        ],
+    );
+    let checked = check_graph(&graph);
+    let base = module_named(&graph, "base.ash");
+    let base_checked = checked
+        .iter()
+        .find(|module| module.module() == base.id())
+        .expect("the base should check");
+    let implementation = base_checked.implementation_facts()[0].id;
+    let facade = module_named(&graph, "facade.ash");
+    let facade_checked = checked
+        .iter()
+        .find(|module| module.module() == facade.id())
+        .expect("the facade should check");
+    let effective = facade_checked
+        .available_implementations()
+        .iter()
+        .find(|available| available.id() == implementation)
+        .expect("the facade should retain one effective implementation route");
+    let published = facade_checked
+        .exports()
+        .implementation(implementation)
+        .expect("the facade should publish one implementation route");
+    assert_eq!(effective.authorization().hops().len(), 1);
+    assert_eq!(effective.authorization().hops()[0].to, base.id());
+    assert_eq!(published.authorization().hops().len(), 1);
+    assert_eq!(published.authorization().hops()[0].to, base.id());
+
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import facade (impl Equal)\n",
+        &[
+            (
+                "base.ash",
+                concat!(
+                    "pub interface Equal<A> {\n",
+                    "equal : (A, A) -> Bool\n",
+                    "}\n\n",
+                    "pub impl Equal<Int> {\n",
+                    "equal (left, right) = left == right\n",
+                    "}\n",
+                ),
+            ),
+            ("left.ash", "pub import base (Equal, equal, impl Equal)\n"),
+            ("right.ash", "pub import base (Equal, equal, impl Equal)\n"),
+            (
+                "facade.ash",
+                concat!(
+                    "pub import right (Equal, equal, impl Equal)\n",
+                    "pub import left (impl Equal)\n",
+                ),
+            ),
+        ],
+    );
+    let checked = check_graph(&graph);
+    let base = module_named(&graph, "base.ash");
+    let implementation = checked
+        .iter()
+        .find(|module| module.module() == base.id())
+        .expect("the equal-length base should check")
+        .implementation_facts()[0]
+        .id;
+    let right = module_named(&graph, "right.ash");
+    let facade = module_named(&graph, "facade.ash");
+    let facade_checked = checked
+        .iter()
+        .find(|module| module.module() == facade.id())
+        .expect("the equal-length facade should check");
+    let published = facade_checked
+        .exports()
+        .implementation(implementation)
+        .expect("the equal-length facade should publish the implementation");
+    assert_eq!(published.authorization().hops()[0].to, right.id());
+
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import facade (impl Equal)\n",
+        &[
+            (
+                "base.ash",
+                concat!(
+                    "pub interface Equal<A> {\n",
+                    "equal : (A, A) -> Bool\n",
+                    "}\n\n",
+                    "pub impl Equal<Int> {\n",
+                    "equal (left, right) = left == right\n",
+                    "}\n",
+                ),
+            ),
+            (
+                "facade.ash",
+                concat!(
+                    "pub import base (Equal, equal)\n",
+                    "pub import base (impl Equal)\n",
+                    "pub import base (impl Equal)\n",
+                ),
+            ),
+        ],
+    );
+    let checked = check_graph(&graph);
+    let base = module_named(&graph, "base.ash");
+    let implementation = checked
+        .iter()
+        .find(|module| module.module() == base.id())
+        .expect("the repeated-edge base should check")
+        .implementation_facts()[0]
+        .id;
+    let facade = module_named(&graph, "facade.ash");
+    let facade_checked = checked
+        .iter()
+        .find(|module| module.module() == facade.id())
+        .expect("the repeated-edge facade should check");
+    let published = facade_checked
+        .exports()
+        .implementation(implementation)
+        .expect("the repeated-edge facade should publish the implementation");
+    assert_eq!(
+        published.authorization().hops()[0].import_span,
+        facade.dependencies()[1].import_span()
+    );
+
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import facade (impl Equal)\n",
+        &[
+            (
+                "base.ash",
+                concat!(
+                    "pub interface Equal<A> {\n",
+                    "equal : (A, A) -> Bool\n",
+                    "}\n\n",
+                    "pub impl Equal<Int> {\n",
+                    "equal (left, right) = left == right\n",
+                    "}\n",
+                ),
+            ),
+            ("inner.ash", "pub import base (Equal, equal, impl Equal)\n"),
+            ("long.ash", "pub import inner (Equal, equal, impl Equal)\n"),
+            (
+                "facade.ash",
+                concat!(
+                    "import base (impl Equal)\n",
+                    "pub import long (Equal, equal, impl Equal)\n",
+                ),
+            ),
+        ],
+    );
+    let checked = check_graph(&graph);
+    let base = module_named(&graph, "base.ash");
+    let implementation = checked
+        .iter()
+        .find(|module| module.module() == base.id())
+        .expect("the private-route base should check")
+        .implementation_facts()[0]
+        .id;
+    let facade = module_named(&graph, "facade.ash");
+    let facade_checked = checked
+        .iter()
+        .find(|module| module.module() == facade.id())
+        .expect("the private-route facade should check");
+    let effective = facade_checked
+        .available_implementations()
+        .iter()
+        .find(|available| available.id() == implementation)
+        .expect("the private route should remain effective");
+    let published = facade_checked
+        .exports()
+        .implementation(implementation)
+        .expect("the public route should remain independently authorized");
+    assert_eq!(effective.authorization().hops().len(), 1);
+    assert_eq!(effective.authorization().hops()[0].to, base.id());
+    assert_eq!(published.authorization().hops().len(), 3);
+    assert_eq!(
+        published.authorization().hops()[0].to,
+        module_named(&graph, "long.ash").id()
+    );
+}
+
+#[test]
 fn public_targeted_import_reexports_each_selected_name_namespace() {
     let tree = ModuleTree::create();
     let graph = load(
@@ -460,8 +789,13 @@ fn public_targeted_import_reexports_each_selected_name_namespace() {
     assert_eq!(
         facade_checked.available_implementations()[0].id(),
         expected_implementation,
-        "Task 4 should retain the selected implementation only in the facade environment",
+        "the public selector should retain the implementation in the facade environment",
     );
+    let facade_implementation = facade_checked
+        .exports()
+        .implementation(expected_implementation)
+        .expect("the public selector should publish an authorized implementation fact");
+    assert_eq!(facade_implementation.authorization().hops().len(), 1);
 
     let entry = module_named(&graph, "entry.ash");
     let [entry_edge] = entry.dependencies() else {
@@ -513,12 +847,18 @@ fn public_targeted_import_reexports_each_selected_name_namespace() {
         .expect("the facade should retain the original interface identity");
     assert_eq!(imported_interface.id, expected_interface);
     assert_eq!(imported_interface.methods[0].id, expected_method);
-    assert!(
+    assert_eq!(
         entry_resolved
             .imported_facts()
             .implementation(expected_implementation)
-            .is_none(),
-        "Task 4 must not publish the facade's imported implementation fact",
+            .map(|implementation| implementation.id),
+        Some(expected_implementation),
+        "the facade must publish the original implementation identity",
+    );
+    let entry_checked = check_module(entry_resolved).expect("the facade entry should check");
+    assert_eq!(
+        entry_checked.available_implementations()[0].id(),
+        expected_implementation
     );
 }
 

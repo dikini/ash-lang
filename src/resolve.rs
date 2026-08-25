@@ -15,11 +15,12 @@ use crate::{
     },
     module::{LoadedModule, ModuleDependency, ModuleId},
     resolved::{
-        Binder, BinderId, CandidateConstructor, CandidateFactSource, CandidateGlobal,
-        CandidateHiddenNominal, CandidateInterface, CandidateMethod, CandidateNominal,
-        CheckedImplementationFact, CheckedInterfaceFact, CheckedInterfaceMethodFact,
-        DirectDependencyRoute, ExportSummary, ExportedConstructor, ExportedGlobal, ExportedType,
-        ExportedTypeAccess, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
+        AuthorizedImplementationFact, Binder, BinderId, CandidateConstructor, CandidateFactSource,
+        CandidateGlobal, CandidateHiddenNominal, CandidateInterface, CandidateMethod,
+        CandidateNominal, CheckedImplementationFact, CheckedInterfaceFact,
+        CheckedInterfaceMethodFact, DirectDependencyRoute, ExportSummary, ExportedConstructor,
+        ExportedGlobal, ExportedType, ExportedTypeAccess, ImplementationAuthorization,
+        ImplementationRouteRank, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
         ImportedNominalFact, ImportedTypeAccess, ResolvedApplicationExpr, ResolvedBinaryExpr,
         ResolvedBinding, ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence,
         ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
@@ -657,6 +658,8 @@ struct Resolver {
     targeted_withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
     public_import_candidate: ResolvedExportCandidate,
     imported: ImportedFacts,
+    implementation_route_ranks: HashMap<ImplId, ImplementationRouteRank>,
+    public_implementation_route_ranks: HashMap<ImplId, ImplementationRouteRank>,
     type_scopes: Vec<HashMap<String, ResolvedTypeVariable>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     type_work: TypeWorkBudget,
@@ -744,6 +747,15 @@ struct ImportedNominalName {
     parameter_count: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ImplementationImportSelection {
+    direct_dependency: ModuleId,
+    selector_span: crate::source::Span,
+    import_span: crate::source::Span,
+    public: bool,
+    route_rank: ImplementationRouteRank,
+}
+
 impl Resolver {
     #[cfg(test)]
     fn new(module: ModuleId) -> Self {
@@ -779,6 +791,8 @@ impl Resolver {
             targeted_withheld: HashMap::new(),
             public_import_candidate: ResolvedExportCandidate::default(),
             imported: ImportedFacts::default(),
+            implementation_route_ranks: HashMap::new(),
+            public_implementation_route_ranks: HashMap::new(),
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
             type_work,
@@ -1117,7 +1131,9 @@ impl Resolver {
         surface: &SurfaceModule,
         dependencies: &[DependencyExports<'_>],
     ) -> Result<(), ResolveError> {
-        for (import, dependency) in surface.imports.iter().zip(dependencies) {
+        for (dependency_summary_order, (import, dependency)) in
+            surface.imports.iter().zip(dependencies).enumerate()
+        {
             self.retain_dependency_interface_facts(
                 dependency.summary,
                 dependency.edge.target(),
@@ -1133,14 +1149,23 @@ impl Resolver {
                     self.module_aliases.insert(alias.text.clone(), namespaces);
                 }
                 SurfaceImportSelection::Targeted(items) => {
-                    for item in items {
+                    for (selector_source_order, item) in items.iter().enumerate() {
                         if let SurfaceImportItem::Implementation { interface, span } = item {
+                            let route_rank = ImplementationRouteRank::new(
+                                dependency_summary_order,
+                                dependency_summary_order,
+                                selector_source_order,
+                            );
                             self.select_imported_implementations(
                                 dependency.summary,
-                                dependency.edge.target(),
                                 interface,
-                                *span,
-                                import.span,
+                                ImplementationImportSelection {
+                                    direct_dependency: dependency.edge.target(),
+                                    selector_span: *span,
+                                    import_span: import.span,
+                                    public: import.public,
+                                    route_rank,
+                                },
                             )?;
                             continue;
                         }
@@ -1401,39 +1426,37 @@ impl Resolver {
     fn select_imported_implementations(
         &mut self,
         summary: &ExportSummary,
-        direct_dependency: ModuleId,
         interface: &crate::surface::SurfaceName,
-        selector_span: crate::source::Span,
-        import_span: crate::source::Span,
+        selection: ImplementationImportSelection,
     ) -> Result<(), ResolveError> {
         self.constraint_work.charge(1).map_err(|()| {
             error(
                 ResolveReason::ConstraintResourceExhausted,
-                selector_span,
+                selection.selector_span,
                 "implementation selector processing exceeded its work budget",
             )
         })?;
-        self.charge_implementation_selector_summary_probe(selector_span)?;
+        self.charge_implementation_selector_summary_probe(selection.selector_span)?;
         let selected_interface = match summary.interface(&interface.text) {
             Some(exported) => exported.id,
             None => {
-                self.charge_implementation_selector_summary_probe(selector_span)?;
+                self.charge_implementation_selector_summary_probe(selection.selector_span)?;
                 if summary.nominal(&interface.text).is_some() {
                     return Err(interface_kind_error(interface.span, &interface.text));
                 }
-                self.charge_implementation_selector_summary_probe(selector_span)?;
+                self.charge_implementation_selector_summary_probe(selection.selector_span)?;
                 if summary.constructor(&interface.text).is_some() {
                     return Err(interface_kind_error(interface.span, &interface.text));
                 }
-                self.charge_implementation_selector_summary_probe(selector_span)?;
+                self.charge_implementation_selector_summary_probe(selection.selector_span)?;
                 if summary.term(&interface.text).is_some() {
                     return Err(interface_kind_error(interface.span, &interface.text));
                 }
-                self.charge_implementation_selector_summary_probe(selector_span)?;
+                self.charge_implementation_selector_summary_probe(selection.selector_span)?;
                 if summary.method(&interface.text).is_some() {
                     return Err(interface_kind_error(interface.span, &interface.text));
                 }
-                self.charge_implementation_selector_summary_probe(selector_span)?;
+                self.charge_implementation_selector_summary_probe(selection.selector_span)?;
                 let withheld = summary
                     .withheld_export(WithheldNamespace::Nominal, &interface.text)
                     .map(|withheld| WithheldImport {
@@ -1455,18 +1478,12 @@ impl Resolver {
             self.constraint_work.charge(1).map_err(|()| {
                 error(
                     ResolveReason::ConstraintResourceExhausted,
-                    selector_span,
+                    selection.selector_span,
                     "implementation selector summary inspection exceeded its work budget",
                 )
             })?;
-            if implementation.interface == selected_interface {
-                self.retain_imported_implementation_fact(
-                    implementation,
-                    summary,
-                    direct_dependency,
-                    selector_span,
-                    import_span,
-                )?;
+            if implementation.fact().interface == selected_interface {
+                self.retain_imported_implementation_fact(implementation, summary, selection)?;
             }
         }
         Ok(())
@@ -1769,12 +1786,11 @@ impl Resolver {
 
     fn retain_imported_implementation_fact(
         &mut self,
-        exported: &CheckedImplementationFact,
+        exported: &AuthorizedImplementationFact,
         summary: &ExportSummary,
-        direct_dependency: ModuleId,
-        span: crate::source::Span,
-        available_at: crate::source::Span,
+        selection: ImplementationImportSelection,
     ) -> Result<(), ResolveError> {
+        let span = selection.selector_span;
         self.constraint_work.charge(1).map_err(|()| {
             error(
                 ResolveReason::ConstraintResourceExhausted,
@@ -1782,31 +1798,104 @@ impl Resolver {
                 "imported implementation route retention exceeded its work budget",
             )
         })?;
-        if exported.id.module() != summary.module() {
-            return Err(error(
-                ResolveReason::InternalState,
-                span,
-                "an implementation summary contains an identity from another owner",
-            ));
-        }
-        if let Some(existing) = self.imported.implementation(exported.id) {
-            debug_assert_eq!(existing.id, exported.id);
-            return Ok(());
-        }
-        self.imported.reserve_implementation().map_err(|()| {
-            error(
-                ResolveReason::ConstraintResourceExhausted,
-                span,
-                "imported implementation storage exceeded its work budget",
-            )
-        })?;
+        let fact = exported.fact();
         self.constraint_work
             .charge(
                 exported
-                    .head_parameters
+                    .authorization()
+                    .hops()
                     .len()
-                    .saturating_add(exported.prerequisites.len())
-                    .saturating_add(exported.methods.len())
+                    .saturating_add(fact.methods.len()),
+            )
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "implementation authorization inspection exceeded its work budget",
+                )
+            })?;
+        if selection.direct_dependency != summary.module()
+            || !exported
+                .authorization()
+                .is_well_formed_for(summary.module(), fact)
+        {
+            return Err(error(
+                ResolveReason::InternalState,
+                span,
+                "an implementation summary contains an invalid authorization route",
+            ));
+        }
+        let authorization = ImplementationAuthorization::prepend(
+            self.module,
+            selection.direct_dependency,
+            selection.import_span,
+            exported.authorization(),
+            &mut self.constraint_work,
+        )
+        .map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported implementation route retention exceeded its work budget",
+            )
+        })?;
+        let public_authorization = selection
+            .public
+            .then(|| {
+                ImplementationAuthorization::prepend(
+                    self.module,
+                    selection.direct_dependency,
+                    selection.import_span,
+                    exported.authorization(),
+                    &mut self.constraint_work,
+                )
+            })
+            .transpose()
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "public implementation route retention exceeded its work budget",
+                )
+            })?;
+        let needs_public_order = public_authorization.is_some()
+            && match self.imported.implementation_import(fact.id) {
+                Some(existing) => existing.public_authorization().is_none(),
+                None => true,
+            };
+        if needs_public_order {
+            self.constraint_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "public implementation ordering exceeded its work budget",
+                )
+            })?;
+            self.imported
+                .reserve_public_implementation()
+                .map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "public implementation ordering exceeded its work budget",
+                    )
+                })?;
+            self.public_implementation_route_ranks
+                .try_reserve(1)
+                .map_err(|_| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "public implementation route ordering exceeded its work budget",
+                    )
+                })?;
+        }
+        self.constraint_work
+            .charge(
+                fact.head_parameters
+                    .len()
+                    .saturating_add(fact.prerequisites.len())
+                    .saturating_add(fact.methods.len())
                     .saturating_add(1),
             )
             .map_err(|()| {
@@ -1817,7 +1906,7 @@ impl Resolver {
                 )
             })?;
         self.constraint_work
-            .charge_type(&exported.argument)
+            .charge_type(&fact.argument)
             .map_err(|()| {
                 error(
                     ResolveReason::ConstraintResourceExhausted,
@@ -1825,15 +1914,14 @@ impl Resolver {
                     "imported implementation head exceeded its work budget",
                 )
             })?;
-        self.retain_type_nominals(&exported.argument, summary, span)?;
+        self.retain_type_nominals(&fact.argument, summary, span)?;
 
         self.type_work
             .charge(
-                exported
-                    .head_parameters
+                fact.head_parameters
                     .len()
-                    .saturating_add(exported.prerequisites.len())
-                    .saturating_add(exported.methods.len()),
+                    .saturating_add(fact.prerequisites.len())
+                    .saturating_add(fact.methods.len()),
             )
             .map_err(|()| {
                 error(
@@ -1844,7 +1932,7 @@ impl Resolver {
             })?;
         let mut prerequisites = Vec::new();
         prerequisites
-            .try_reserve(exported.prerequisites.len())
+            .try_reserve(fact.prerequisites.len())
             .map_err(|_| {
                 error(
                     ResolveReason::ConstraintResourceExhausted,
@@ -1852,8 +1940,8 @@ impl Resolver {
                     "imported prerequisite retention exceeded its work budget",
                 )
             })?;
-        for (index, prerequisite) in exported.prerequisites.iter().enumerate() {
-            if prerequisite.id.owner() != RequirementOwner::Impl(exported.id)
+        for (index, prerequisite) in fact.prerequisites.iter().enumerate() {
+            if prerequisite.id.owner() != RequirementOwner::Impl(fact.id)
                 || usize::try_from(prerequisite.id.declaration()) != Ok(index)
             {
                 return Err(error(
@@ -1889,7 +1977,7 @@ impl Resolver {
         }
         let mut head_parameters = Vec::new();
         head_parameters
-            .try_reserve(exported.head_parameters.len())
+            .try_reserve(fact.head_parameters.len())
             .map_err(|_| {
                 error(
                     ResolveReason::ConstraintResourceExhausted,
@@ -1897,16 +1985,16 @@ impl Resolver {
                     "imported implementation parameters exceeded their work budget",
                 )
             })?;
-        head_parameters.extend(exported.head_parameters.iter().cloned());
+        head_parameters.extend(fact.head_parameters.iter().cloned());
         let mut methods = Vec::new();
-        methods.try_reserve(exported.methods.len()).map_err(|_| {
+        methods.try_reserve(fact.methods.len()).map_err(|_| {
             error(
                 ResolveReason::ConstraintResourceExhausted,
                 span,
                 "imported implementation methods exceeded their work budget",
             )
         })?;
-        for (index, method) in exported.methods.iter().enumerate() {
+        for (index, method) in fact.methods.iter().enumerate() {
             self.constraint_work
                 .charge(
                     method
@@ -1923,22 +2011,24 @@ impl Resolver {
                         "imported implementation method exceeded its work budget",
                     )
                 })?;
-            let method_identity_is_valid = method.id.implementation() == exported.id
+            let method_identity_is_valid = method.id.implementation() == fact.id
                 && method.id.method() == method.method
-                && method.method.interface() == exported.interface
+                && method.method.interface() == fact.interface
                 && usize::try_from(method.method.declaration()) == Ok(index)
-                && method.binder.module() == Some(summary.module())
-                && method.scheme.type_parameters.len() == exported.head_parameters.len()
-                && method.scheme.type_parameters.iter().copied().eq(exported
-                    .head_parameters
+                && method.binder.module() == Some(fact.id.module())
+                && method.scheme.type_parameters.len() == fact.head_parameters.len()
+                && method
+                    .scheme
+                    .type_parameters
                     .iter()
-                    .map(|parameter| parameter.id))
-                && method.scheme.requirements.len() == exported.prerequisites.len()
+                    .copied()
+                    .eq(fact.head_parameters.iter().map(|parameter| parameter.id))
+                && method.scheme.requirements.len() == fact.prerequisites.len()
                 && method
                     .scheme
                     .requirements
                     .iter()
-                    .zip(&exported.prerequisites)
+                    .zip(&fact.prerequisites)
                     .all(|(requirement, prerequisite)| {
                         requirement.id == prerequisite.id
                             && requirement.interface == prerequisite.interface
@@ -1989,28 +2079,218 @@ impl Resolver {
                 span: method.span,
             });
         }
-        self.imported.insert_implementation(
-            CheckedImplementationFact {
-                id: exported.id,
-                interface: exported.interface,
-                head_parameters: head_parameters.into_boxed_slice(),
-                argument: clone_type_with_budget(&exported.argument, &mut self.type_work).map_err(
-                    |()| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
+        let cloned_fact = CheckedImplementationFact {
+            id: fact.id,
+            interface: fact.interface,
+            head_parameters: head_parameters.into_boxed_slice(),
+            argument: clone_type_with_budget(&fact.argument, &mut self.type_work).map_err(
+                |()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "imported implementation head exceeded its type-work budget",
+                    )
+                },
+            )?,
+            prerequisites: prerequisites.into_boxed_slice(),
+            methods: methods.into_boxed_slice(),
+            origin: fact.origin.clone(),
+            span: fact.span,
+        };
+        if self.imported.implementation(fact.id).is_some() {
+            self.constraint_work
+                .charge(
+                    fact.head_parameters
+                        .len()
+                        .saturating_add(fact.prerequisites.len())
+                        .saturating_add(fact.methods.len())
+                        .saturating_add(1),
+                )
+                .map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "alternate implementation identity comparison exceeded its work budget",
+                    )
+                })?;
+        }
+        if self.imported.implementation(fact.id).is_some() {
+            let existing_rank = self
+                .implementation_route_ranks
+                .get(&fact.id)
+                .copied()
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an effective implementation route lost its transient ordering rank",
+                    )
+                })?;
+            let existing_public_rank = self
+                .public_implementation_route_ranks
+                .get(&fact.id)
+                .copied();
+            let mut replace_effective_rank = false;
+            let mut replace_public_rank = false;
+            let existing = self
+                .imported
+                .implementation_import_mut(fact.id)
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an implementation route rank has no selected fact",
+                    )
+                })?;
+            let stable_identity_matches = existing.fact.id == cloned_fact.id
+                && existing.fact.interface == cloned_fact.interface
+                && existing.fact.head_parameters.len() == cloned_fact.head_parameters.len()
+                && existing
+                    .fact
+                    .head_parameters
+                    .iter()
+                    .zip(&cloned_fact.head_parameters)
+                    .all(|(left, right)| left.id == right.id)
+                && existing.fact.prerequisites.len() == cloned_fact.prerequisites.len()
+                && existing
+                    .fact
+                    .prerequisites
+                    .iter()
+                    .zip(&cloned_fact.prerequisites)
+                    .all(|(left, right)| left.id == right.id && left.interface == right.interface)
+                && existing.fact.methods.len() == cloned_fact.methods.len()
+                && existing
+                    .fact
+                    .methods
+                    .iter()
+                    .zip(&cloned_fact.methods)
+                    .all(|(left, right)| {
+                        left.id == right.id
+                            && left.method == right.method
+                            && left.binder == right.binder
+                    });
+            if !stable_identity_matches {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "alternate implementation routes disagree on the checked fact",
+                ));
+            }
+            if authorization.candidate_precedes(
+                selection.route_rank,
+                &existing.authorization,
+                existing_rank,
+            ) {
+                existing.authorization = authorization;
+                replace_effective_rank = true;
+            }
+            if existing.public_authorization.is_some() != existing_public_rank.is_some() {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "a public implementation route lost its transient ordering rank",
+                ));
+            }
+            if let Some(candidate) = public_authorization {
+                match (&mut existing.public_authorization, existing_public_rank) {
+                    (Some(selected), Some(selected_rank))
+                        if candidate.candidate_precedes(
+                            selection.route_rank,
+                            selected,
+                            selected_rank,
+                        ) =>
+                    {
+                        *selected = candidate;
+                        replace_public_rank = true;
+                    }
+                    (None, None) => {
+                        existing.public_authorization = Some(candidate);
+                        replace_public_rank = true;
+                    }
+                    (Some(_), Some(_)) => {}
+                    (Some(_), None) | (None, Some(_)) => {
+                        return Err(error(
+                            ResolveReason::InternalState,
                             span,
-                            "imported implementation head exceeded its type-work budget",
+                            "a public implementation route lost its transient ordering rank",
+                        ));
+                    }
+                }
+            }
+            drop(cloned_fact);
+            if replace_effective_rank {
+                self.implementation_route_ranks
+                    .insert(fact.id, selection.route_rank);
+            }
+            if replace_public_rank {
+                self.public_implementation_route_ranks
+                    .insert(fact.id, selection.route_rank);
+            }
+            if needs_public_order {
+                self.imported
+                    .mark_implementation_public(fact.id)
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "a public implementation lost its selected fact",
                         )
-                    },
-                )?,
-                prerequisites: prerequisites.into_boxed_slice(),
-                methods: methods.into_boxed_slice(),
-                origin: exported.origin.clone(),
-                span: exported.span,
-            },
-            direct_dependency,
-            available_at,
-        );
+                    })?;
+            }
+            return Ok(());
+        }
+        self.imported.reserve_implementation().map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported implementation storage exceeded its work budget",
+            )
+        })?;
+        self.implementation_route_ranks
+            .try_reserve(1)
+            .map_err(|_| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "implementation route ordering exceeded its work budget",
+                )
+            })?;
+        if self
+            .implementation_route_ranks
+            .insert(fact.id, selection.route_rank)
+            .is_some()
+        {
+            return Err(error(
+                ResolveReason::InternalState,
+                span,
+                "an implementation route rank was retained twice",
+            ));
+        }
+        if public_authorization.is_some()
+            && self
+                .public_implementation_route_ranks
+                .insert(fact.id, selection.route_rank)
+                .is_some()
+        {
+            return Err(error(
+                ResolveReason::InternalState,
+                span,
+                "a public implementation route rank was retained twice",
+            ));
+        }
+        self.imported
+            .insert_implementation(cloned_fact, authorization, public_authorization);
+        if needs_public_order {
+            self.imported
+                .mark_implementation_public(fact.id)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "a public implementation lost its selected fact",
+                    )
+                })?;
+        }
         Ok(())
     }
 
@@ -4707,24 +4987,26 @@ mod tests {
 
     #[test]
     fn duplicate_impl_route_charges_lookup_without_retaining_a_second_fact() {
+        let one_source = "import dependency (impl Equal)\n";
+        let two_source = "import dependency (impl Equal)\nimport dependency (impl Equal)\n";
+        let (one_probe, one_used) = resolve_import_fixture_with_limit(one_source, 1_000);
+        one_probe.expect("the route probe budget should fit");
         let (one_short, one_short_used) =
-            resolve_import_fixture_with_limit("import dependency (impl Equal)\n", 24);
+            resolve_import_fixture_with_limit(one_source, one_used - 1);
         let error = one_short.expect_err(
             "one unit short of the selector's cumulative work should reject resolution",
         );
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
-        assert_eq!(one_short_used, 24);
+        assert!(one_short_used < one_used);
 
-        let (one, one_used) =
-            resolve_import_fixture_with_limit("import dependency (impl Equal)\n", 25);
+        let (one, exact_one_used) = resolve_import_fixture_with_limit(one_source, one_used);
         one.expect("one explicit implementation route should resolve");
-        let (two, two_used) = resolve_import_fixture_with_limit(
-            "import dependency (impl Equal)\nimport dependency (impl Equal)\n",
-            31,
-        );
+        assert_eq!(exact_one_used, one_used);
+        let (two_probe, two_used) = resolve_import_fixture_with_limit(two_source, 1_000);
+        two_probe.expect("the duplicate route probe budget should fit");
+        let (two, exact_two_used) = resolve_import_fixture_with_limit(two_source, two_used);
         let two = two.expect("the duplicate implementation route should deduplicate");
-        assert_eq!(two_used, 31);
-        assert_eq!(one_used, 25);
+        assert_eq!(exact_two_used, two_used);
         let implementation = two
             .imported_facts()
             .implementations()
@@ -4737,13 +5019,10 @@ mod tests {
         );
         assert_eq!(two.imported_facts().implementations().count(), 1);
 
-        let (short, short_used) = resolve_import_fixture_with_limit(
-            "import dependency (impl Equal)\nimport dependency (impl Equal)\n",
-            30,
-        );
+        let (short, short_used) = resolve_import_fixture_with_limit(two_source, two_used - 1);
         let error = short.expect_err("one missing route unit should reject the duplicate edge");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
-        assert_eq!(short_used, 30);
+        assert!(short_used < two_used);
     }
 
     #[test]

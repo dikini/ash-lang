@@ -614,12 +614,13 @@ fn private_impl_head_spelling_and_constructor_remain_unavailable() {
 }
 
 #[test]
-fn public_impls_are_not_reexported_through_an_intermediary() {
+fn public_implementation_selectors_reexport_through_an_intermediary() {
     let tree = ModuleTree::create();
     let graph = load(
         &tree,
         concat!(
             "import middle as Middle\n",
+            "import middle (impl Equal)\n",
             "probe : Int -> Int\n",
             "probe value = value\n",
         ),
@@ -633,7 +634,7 @@ fn public_impls_are_not_reexported_through_an_intermediary() {
             ),
             (
                 "middle.ash",
-                "import implementation as Implementation\npub import implementation (impl Equal)\n",
+                "import implementation as Implementation\npub import implementation (Equal, impl Equal)\n",
             ),
         ],
     );
@@ -663,8 +664,8 @@ fn public_impls_are_not_reexported_through_an_intermediary() {
         if file_name == Some("entry.ash".as_ref()) {
             let id = implementation_id.expect("implementation module should have checked first");
             assert!(
-                resolved.imported_facts().implementation(id).is_none(),
-                "the public selector should not publish an imported implementation summary"
+                resolved.imported_facts().implementation(id).is_some(),
+                "the entry selector should receive the intermediary's authorized implementation"
             );
         }
         let module_checked = check_module(resolved).expect("module should check");

@@ -87,7 +87,15 @@ fn dependency_exports<'a>(
 #[test]
 fn preserves_all_interface_identity_families_through_dependency_diamond() {
     let tree = ModuleTree::create();
-    let entry = tree.write("entry.ash", "import left as Left\nimport right as Right\n");
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "import left as Left\n",
+            "import right as Right\n",
+            "import left (impl Transform)\n",
+            "import right (impl Transform)\n",
+        ),
+    );
     tree.write(
         "base.ash",
         concat!(
@@ -101,7 +109,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
         "left.ash",
         concat!(
             "import base as Base\n",
-            "import base (impl Transform)\n",
+            "pub import base (Transform, impl Transform)\n",
             "pub left : A -> A where Base.Transform<A>\n",
             "left value = value\n",
         ),
@@ -110,7 +118,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
         "right.ash",
         concat!(
             "import base as Base\n",
-            "import base (impl Transform)\n",
+            "pub import base (Transform, impl Transform)\n",
             "pub right : A -> A where Base.Transform<A>\n",
             "right value = value\n",
         ),
@@ -177,12 +185,14 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
                 let identities = base.expect("base should check before the entry");
                 let left = left.expect("left should check before the entry");
                 let right = right.expect("right should check before the entry");
-                assert!(
-                    resolved
-                        .imported_facts()
-                        .implementation(identities.implementation)
-                        .is_none(),
-                    "entry must not receive the base implementation transitively",
+                let implementation = resolved
+                    .imported_facts()
+                    .implementation(identities.implementation)
+                    .expect("the two explicit facade selectors should deduplicate one identity");
+                assert_eq!(implementation.id, identities.implementation);
+                assert_eq!(
+                    implementation.methods[0].id,
+                    identities.implementation_method
                 );
                 assert_ne!(left.global, right.global);
                 assert_ne!(left.requirement, right.requirement);

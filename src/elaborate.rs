@@ -6027,7 +6027,10 @@ impl<'a> ImplementationHeadRef<'a> {
 
     const fn primary_span(self) -> Span {
         match self {
-            Self::Imported(implementation) => implementation.available_at,
+            Self::Imported(implementation) => match implementation.authorization().hops().first() {
+                Some(hop) => hop.import_span,
+                None => implementation.fact.span,
+            },
             Self::Local(implementation) => implementation.argument.span,
         }
     }
@@ -6041,7 +6044,10 @@ impl<'a> ImplementationHeadRef<'a> {
 
     const fn import_span(self) -> Option<Span> {
         match self {
-            Self::Imported(implementation) => Some(implementation.available_at),
+            Self::Imported(implementation) => match implementation.authorization().hops().first() {
+                Some(hop) => Some(hop.import_span),
+                None => None,
+            },
             Self::Local(_) => None,
         }
     }
@@ -6776,13 +6782,16 @@ pub(crate) fn check_module_with_budget(
     available_implementations
         .try_reserve(imported_implementation_count.saturating_add(local_implementation_count))
         .map_err(|_| constraint_resource())?;
-    available_implementations.extend(resolved.imported_facts().implementations().map(|imported| {
-        AvailableImplementation::direct_import(
+    for imported in resolved.imported_facts().implementations() {
+        let authorization = imported
+            .authorization()
+            .clone_with_budget(constraint_work)
+            .map_err(|()| constraint_resource())?;
+        available_implementations.push(AvailableImplementation::imported(
             imported.fact.id,
-            imported.direct_dependency,
-            imported.available_at,
-        )
-    }));
+            authorization,
+        ));
+    }
     available_implementations.extend(
         resolved
             .implementations()
@@ -9058,7 +9067,7 @@ mod tests {
     }
 
     #[test]
-    fn imported_overlap_uses_retained_route_order_and_exact_budget() {
+    fn distinct_reexported_implementations_conflict_at_the_first_combined_closure() {
         let source = SourceFile::new("import-overlap.ash", "abcdefghijklmnop")
             .expect("the overlap span fixture should fit");
         let span = |start, end| {
@@ -9082,8 +9091,19 @@ mod tests {
                 origin: Origin::Source(first_definition),
                 span: first_definition,
             },
-            direct_dependency: ModuleId::new(90),
-            available_at: first_route,
+            authorization: crate::resolved::ImplementationAuthorization::from_hops(vec![
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(1),
+                    to: ModuleId::new(80),
+                    import_span: first_route,
+                },
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(80),
+                    to: ModuleId::new(90),
+                    import_span: first_definition,
+                },
+            ]),
+            public_authorization: None,
         };
         let second = crate::resolved::ImportedImplementationFact {
             fact: CheckedImplementationFact {
@@ -9096,8 +9116,19 @@ mod tests {
                 origin: Origin::Source(second_definition),
                 span: second_definition,
             },
-            direct_dependency: ModuleId::new(10),
-            available_at: second_route,
+            authorization: crate::resolved::ImplementationAuthorization::from_hops(vec![
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(1),
+                    to: ModuleId::new(20),
+                    import_span: second_route,
+                },
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(20),
+                    to: ModuleId::new(10),
+                    import_span: second_definition,
+                },
+            ]),
+            public_authorization: None,
         };
         let effective = [
             ImplementationHeadRef::Imported(&first),
