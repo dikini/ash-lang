@@ -479,7 +479,8 @@ Add a graph where one `ImplId` reaches the application through paths of
 different lengths and another graph with equal lengths. Assert:
 
 1. shortest hop count wins;
-2. equal lengths preserve dependency order, then import source order; and
+2. equal lengths preserve the explicit dependency-summary ordinal, then the
+   import and selector source ordinals;
 3. a lexicographic graph-local sequence of `(from ModuleId, to ModuleId,
    import byte range)` breaks any remaining equality without process-global
    source allocation or hash-map iteration affecting output; and
@@ -487,6 +488,8 @@ different lengths and another graph with equal lengths. Assert:
 
 Process summaries and selectors in stable source order. On duplicate `ImplId`,
 compare the candidate route before discarding its charged fact and provenance.
+Selection ranks are transient comparator inputs; do not reconstruct them from
+`ModuleId` or persist them in public authorization paths.
 
 Run:
 

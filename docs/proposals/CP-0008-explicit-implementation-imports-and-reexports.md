@@ -111,10 +111,14 @@ Each imported or re-exported fact records an authorization route from the
 current module through its immediate dependency. A route preserves the original
 declaration identity and every summary edge that authorized it. Multiple routes
 to one identity select a shortest route; equal-length routes use dependency
-order, then import source order. When those orders converge on alternate
-suffixes, stable route identity is the lexicographic sequence of graph-local
-`(from ModuleId, to ModuleId, import byte range)` hop keys. It excludes
-process-global source allocation and hash-map iteration.
+order, then import and selector source order. Dependency order is the explicit
+ordinal in the resolver's dependency-summary input; import and selector order
+use their source ordinals within that input. These transient ranks choose the
+current module's winner and do not enter public authorization data. When the
+ranks converge on alternate suffixes, stable route identity is the
+lexicographic sequence of graph-local `(from ModuleId, to ModuleId, import byte
+range)` hop keys. Neither `ModuleId` nor process-global source allocation acts
+as an order rank, and hash-map iteration does not participate.
 
 Effective availability and public authorization choose routes independently.
 The effective winner may come from any explicit selector. The public winner may

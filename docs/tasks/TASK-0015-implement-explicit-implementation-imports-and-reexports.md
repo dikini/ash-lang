@@ -131,6 +131,10 @@ defined by CP-0008; process-global source allocation and hash-map order do not
 participate. Linked validation authenticates complete public authorization
 inventories before using them to validate occurrence availability.
 
+Route comparison receives explicit transient dependency, import, and selector
+ordinals from stable resolver traversal. It never substitutes `ModuleId` for a
+rank and does not persist those ordinals in public authorization paths.
+
 The retained orphan rule and acyclic module graph make valid overlapping
 public implementations from distinct source modules unreachable. Task 5 uses
 source programs for transitive availability and identity deduplication, and a
