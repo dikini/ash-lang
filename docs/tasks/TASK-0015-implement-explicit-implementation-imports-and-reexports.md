@@ -105,6 +105,17 @@ or evaluator forms.
   defining method binder. Exact retention preflight, forged-route, unused-table,
   failure-ownership, and 0/1/2-hop structural witnesses pass. The full workspace
   and independent semantic and resource-quality reviews have no open findings.
+- Task 7 closes the explicit-import evidence matrix. Exact-limit witnesses cover
+  wide selectors, atomic route prepends, multi-entry summary extraction and
+  linked retention, a 20,000-hop authorization suffix, and the full 48-layer,
+  four-way facade pipeline on a 256 KiB stack. Diagnostics now pin unavailable
+  and conflicting selectors, name-only unsatisfied constraints, prerequisite
+  routes, overlap routes, and CLI rendering while preserving relationships
+  between distinct source files. The architecture guard excludes route and
+  authorization state from Core and the evaluator. Every cross-module fixture
+  that requires implementation evidence uses an explicit selector, with a
+  retained negative witness for name-only imports. Focused suites, the full
+  workspace, and three independent reviews have no open findings.
 - The execution plan defines focused red-green increments, review checkpoints,
   migration, retained evidence, and lifecycle cleanup.
 
@@ -205,3 +216,16 @@ inspection harness. `src/evidence_audit.rs` and `tests/interface_selection.rs`
 required no change: the former authenticates occurrence slots before summary
 freeze, and the latter remains a passing selection regression suite rather than
 acquiring linked-table policy.
+
+Task 7 keeps injected exact-limit cases in crate unit tests because integration
+crates cannot set private graph budgets. `tests/interface_resources.rs` proves
+the same deep facade shape through the public driver at the admitted limit. A
+valid sibling-facade overlap remains unreachable under the retained orphan rule
+and acyclic module graph, so the overlap-route diagnostic witness uses the
+structurally assembled checked closure established in Task 5. Existing
+production accounting, diagnostic reasons, rendering, and phase boundaries
+were sufficient; Task 7 changes only evidence. CLI assertions canonicalize
+numeric source identifiers by encounter order so output is allocation-
+independent without erasing whether two labels refer to the same or different
+source files. Task 8 retains the normative specification and retained-evidence
+reconciliation.
