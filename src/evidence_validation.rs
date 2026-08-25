@@ -30,7 +30,7 @@ use crate::{
 pub enum EvidenceValidationReason {
     /// A linked checked identity is absent, duplicated, or owned by another declaration.
     UnknownIdentity,
-    /// A selected implementation is not in the occurrence module's direct environment.
+    /// A selected implementation is not in the occurrence module's effective environment.
     UnavailableImplementation,
     /// An occurrence selection does not authenticate its checked interface obligation.
     InvalidEvidenceRoot,
@@ -1294,7 +1294,7 @@ impl ValidatedInterfaceProgram {
 /// # Errors
 ///
 /// Returns an internal validation failure when a retained checked identity,
-/// direct implementation route, or occurrence evidence root is malformed.
+/// implementation authorization route, or occurrence evidence root is malformed.
 pub fn validate_interface_evidence(
     program: ResolvedModuleProgram,
 ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure> {
@@ -4411,6 +4411,36 @@ mod tests {
         ));
         let failure = validate_interface_evidence(program)
             .expect_err("an intermediate public suffix must match the authenticated dependency");
+        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+        assert_eq!(failure.primary(), facade_span);
+    }
+
+    #[test]
+    fn rejects_an_unused_forged_public_authorization_before_occurrences() {
+        let mut program = dual_reexport_program();
+        let [base, facade, entry] = program.groups() else {
+            panic!("the dual re-export fixture should retain three groups");
+        };
+        let unused_implementation = base.implementation_facts()[1].id;
+        let selected_implementation = entry.available_implementations()[0].id();
+        assert_ne!(unused_implementation, selected_implementation);
+        let facade_module = facade.module();
+        let facade_span = facade.span();
+        let unused = facade
+            .public_implementation_authorizations()
+            .iter()
+            .find(|authorization| authorization.id() == unused_implementation)
+            .expect("the facade should publish the unused implementation");
+        let mut forged = unused.authorization().hops().to_vec();
+        forged[0].import_span = facade_span;
+
+        assert!(program.replace_public_authorization_hops_for_test(
+            facade_module,
+            unused_implementation,
+            forged,
+        ));
+        let failure = validate_interface_evidence(program)
+            .expect_err("every public authorization must authenticate before occurrences");
         assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
         assert_eq!(failure.primary(), facade_span);
     }
