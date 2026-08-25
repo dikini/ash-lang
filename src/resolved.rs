@@ -1715,7 +1715,7 @@ pub struct ResolvedExportCandidate {
     method_order: Vec<String>,
     hidden_nominals: HashMap<NominalTypeId, CandidateHiddenNominal>,
     withheld: HashMap<String, WithheldExports>,
-    withheld_order: Vec<(String, WithheldNamespace)>,
+    withheld_order: Vec<WithheldOrderEntry>,
 }
 
 impl ResolvedExportCandidate {
@@ -1871,22 +1871,38 @@ impl ResolvedExportCandidate {
         withheld: WithheldExport,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ()> {
+        let owner = withheld.owner;
         if let Some(existing) = self.withheld.get_mut(&spelling)
-            && existing.get(namespace).is_some()
+            && let Some(existing) = existing.get_exact_mut(namespace, owner)
         {
-            existing.insert(namespace, withheld);
+            *existing = withheld;
             return Ok(());
         }
         budget.charge(2)?;
-        if !self.withheld.contains_key(&spelling) {
+        let spelling_exists = self.withheld.contains_key(&spelling);
+        if !spelling_exists {
             self.withheld.try_reserve(1).map_err(|_| ())?;
         }
         self.withheld_order.try_reserve(1).map_err(|_| ())?;
+        if spelling_exists {
+            self.withheld
+                .get_mut(&spelling)
+                .expect("the retained withheld spelling should remain present")
+                .try_reserve(namespace, 1)?;
+        } else {
+            let mut entries = WithheldExports::default();
+            entries.try_reserve(namespace, 1)?;
+            self.withheld.insert(spelling.clone(), entries);
+        }
         self.withheld
-            .entry(spelling.clone())
-            .or_default()
-            .insert(namespace, withheld);
-        self.withheld_order.push((spelling, namespace));
+            .get_mut(&spelling)
+            .expect("the reserved withheld spelling should be present")
+            .insert_new(namespace, withheld);
+        self.withheld_order.push(WithheldOrderEntry {
+            spelling,
+            namespace,
+            owner,
+        });
         Ok(())
     }
 }
@@ -2029,6 +2045,13 @@ pub(crate) enum WithheldNamespace {
     Constructor,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WithheldOrderEntry {
+    spelling: String,
+    namespace: WithheldNamespace,
+    owner: Option<NominalTypeId>,
+}
+
 /// Diagnostic-only metadata for a withheld dependency spelling.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WithheldExport {
@@ -2041,7 +2064,7 @@ pub(crate) struct WithheldExport {
 struct WithheldExports {
     term: Option<WithheldExport>,
     nominal: Option<WithheldExport>,
-    constructor: Option<WithheldExport>,
+    constructor: Vec<WithheldExport>,
 }
 
 impl WithheldExports {
@@ -2049,36 +2072,85 @@ impl WithheldExports {
         match namespace {
             WithheldNamespace::Term => self.term.as_ref(),
             WithheldNamespace::Nominal => self.nominal.as_ref(),
-            WithheldNamespace::Constructor => self.constructor.as_ref(),
+            WithheldNamespace::Constructor => self.constructor.first(),
         }
     }
 
-    fn insert(
+    fn get_exact_mut(
         &mut self,
         namespace: WithheldNamespace,
-        withheld: WithheldExport,
-    ) -> Option<WithheldExport> {
+        owner: Option<NominalTypeId>,
+    ) -> Option<&mut WithheldExport> {
         match namespace {
-            WithheldNamespace::Term => self.term.replace(withheld),
-            WithheldNamespace::Nominal => self.nominal.replace(withheld),
-            WithheldNamespace::Constructor => self.constructor.replace(withheld),
+            WithheldNamespace::Term => self
+                .term
+                .as_mut()
+                .filter(|withheld| withheld.owner == owner),
+            WithheldNamespace::Nominal => self
+                .nominal
+                .as_mut()
+                .filter(|withheld| withheld.owner == owner),
+            WithheldNamespace::Constructor => self
+                .constructor
+                .iter_mut()
+                .find(|withheld| withheld.owner == owner),
+        }
+    }
+
+    fn get_exact(
+        &self,
+        namespace: WithheldNamespace,
+        owner: Option<NominalTypeId>,
+    ) -> Option<&WithheldExport> {
+        match namespace {
+            WithheldNamespace::Term => self
+                .term
+                .as_ref()
+                .filter(|withheld| withheld.owner == owner),
+            WithheldNamespace::Nominal => self
+                .nominal
+                .as_ref()
+                .filter(|withheld| withheld.owner == owner),
+            WithheldNamespace::Constructor => self
+                .constructor
+                .iter()
+                .find(|withheld| withheld.owner == owner),
+        }
+    }
+
+    fn try_reserve(&mut self, namespace: WithheldNamespace, additional: usize) -> Result<(), ()> {
+        if namespace == WithheldNamespace::Constructor {
+            self.constructor.try_reserve(additional).map_err(|_| ())?;
+        }
+        Ok(())
+    }
+
+    fn insert_new(&mut self, namespace: WithheldNamespace, withheld: WithheldExport) {
+        match namespace {
+            WithheldNamespace::Term => {
+                debug_assert!(self.term.is_none());
+                self.term = Some(withheld);
+            }
+            WithheldNamespace::Nominal => {
+                debug_assert!(self.nominal.is_none());
+                self.nominal = Some(withheld);
+            }
+            WithheldNamespace::Constructor => self.constructor.push(withheld),
         }
     }
 
     fn iter(&self) -> impl Iterator<Item = &WithheldExport> {
-        [
-            self.term.as_ref(),
-            self.nominal.as_ref(),
-            self.constructor.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
+        self.term
+            .iter()
+            .chain(self.nominal.iter())
+            .chain(self.constructor.iter())
     }
 
     fn into_values(self) -> impl Iterator<Item = WithheldExport> {
-        [self.term, self.nominal, self.constructor]
+        self.term
             .into_iter()
-            .flatten()
+            .chain(self.nominal)
+            .chain(self.constructor)
     }
 }
 
@@ -2181,7 +2253,7 @@ pub struct ExportSummary {
     implementation_positions: HashMap<ImplId, usize>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
     withheld: HashMap<String, WithheldExports>,
-    withheld_order: Vec<(String, WithheldNamespace)>,
+    withheld_order: Vec<WithheldOrderEntry>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2286,22 +2358,22 @@ impl ExportSummary {
             .withheld_order
             .try_reserve(resolved.export_candidate.withheld_order.len())
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        for (spelling, namespace) in &resolved.export_candidate.withheld_order {
+        for entry in &resolved.export_candidate.withheld_order {
             let withheld = resolved
                 .export_candidate
                 .withheld
-                .get(spelling)
-                .and_then(|withheld| withheld.get(*namespace))
+                .get(&entry.spelling)
+                .and_then(|withheld| withheld.get_exact(entry.namespace, entry.owner))
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let replaced = summary
-                .withheld
-                .entry(spelling.clone())
-                .or_default()
-                .insert(*namespace, withheld.clone());
-            if replaced.is_some() {
+            let entries = summary.withheld.entry(entry.spelling.clone()).or_default();
+            entries
+                .try_reserve(entry.namespace, 1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if entries.get_exact(entry.namespace, entry.owner).is_some() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            summary.withheld_order.push((spelling.clone(), *namespace));
+            entries.insert_new(entry.namespace, withheld.clone());
+            summary.withheld_order.push(entry.clone());
         }
         summary
             .terms
@@ -2669,11 +2741,11 @@ impl ExportSummary {
             cloned_parameters
                 .try_reserve(parameters.len())
                 .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-            cloned_parameters.extend(parameters.iter().cloned());
             let mut cloned_constructors = Vec::new();
             cloned_constructors
                 .try_reserve(constructors.len())
                 .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            cloned_parameters.extend(parameters.iter().cloned());
             cloned_constructors.extend_from_slice(constructors);
             summary
                 .nominal_names_by_id
@@ -2766,35 +2838,70 @@ impl ExportSummary {
             }
         }
 
-        let mut constructor_family_capacity = 0usize;
+        let mut constructor_owners = HashSet::new();
+        let mut constructor_owner_order = Vec::new();
         for spelling in &resolved.export_candidate.nominal_order {
             let exported = summary
                 .nominals
                 .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            constructor_family_capacity =
-                constructor_family_capacity.saturating_add(exported.constructors.len());
+            if exported.access == ExportedTypeAccess::Transparent
+                && !constructor_owners.contains(&exported.id)
+            {
+                type_work
+                    .charge(2)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                constructor_owners
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                constructor_owner_order
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                constructor_owners.insert(exported.id);
+                constructor_owner_order.push(exported.id);
+            }
         }
         for spelling in &resolved.export_candidate.constructor_order {
             let exported = summary
                 .constructors
                 .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let owner = if exported.id.owner().module() == resolved.module {
+            let owner = exported.id.owner();
+            if !constructor_owners.contains(&owner) {
+                type_work
+                    .charge(2)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                constructor_owners
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                constructor_owner_order
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                constructor_owners.insert(owner);
+                constructor_owner_order.push(owner);
+            }
+        }
+
+        let mut constructor_family_capacity = 0usize;
+        for owner in &constructor_owner_order {
+            let family_len = if owner.module() == resolved.module {
                 resolved
                     .registry
-                    .nominal(exported.id.owner())
+                    .nominal(*owner)
                     .map(|nominal| nominal.constructors.len())
             } else {
                 resolved
                     .imported
-                    .nominal(exported.id.owner())
+                    .nominal(*owner)
                     .filter(|nominal| nominal.access == ImportedTypeAccess::Transparent)
                     .map(|nominal| nominal.constructors.len())
             }
             .ok_or(ResolvedBuildFailure::InvalidState)?;
-            constructor_family_capacity = constructor_family_capacity.saturating_add(owner);
+            constructor_family_capacity = constructor_family_capacity.saturating_add(family_len);
         }
+        type_work
+            .charge(constructor_family_capacity.saturating_mul(3))
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         let mut constructor_family_ids = HashSet::new();
         constructor_family_ids
             .try_reserve(constructor_family_capacity)
@@ -2803,12 +2910,21 @@ impl ExportSummary {
         constructor_family_order
             .try_reserve(constructor_family_capacity)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        for spelling in &resolved.export_candidate.nominal_order {
-            let exported = summary
-                .nominals
-                .get(spelling)
-                .ok_or(ResolvedBuildFailure::InvalidState)?;
-            for constructor in &exported.constructors {
+        for owner in constructor_owner_order {
+            let family = if owner.module() == resolved.module {
+                resolved
+                    .registry
+                    .nominal(owner)
+                    .map(|nominal| nominal.constructors.as_ref())
+            } else {
+                resolved
+                    .imported
+                    .nominal(owner)
+                    .filter(|nominal| nominal.access == ImportedTypeAccess::Transparent)
+                    .map(|nominal| nominal.constructors.as_ref())
+            }
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+            for constructor in family {
                 if constructor_family_ids.insert(*constructor) {
                     constructor_family_order.push(*constructor);
                 }
@@ -2819,26 +2935,8 @@ impl ExportSummary {
                 .constructors
                 .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let owner = if exported.id.owner().module() == resolved.module {
-                resolved
-                    .registry
-                    .nominal(exported.id.owner())
-                    .map(|nominal| nominal.constructors.as_ref())
-            } else {
-                resolved
-                    .imported
-                    .nominal(exported.id.owner())
-                    .filter(|nominal| nominal.access == ImportedTypeAccess::Transparent)
-                    .map(|nominal| nominal.constructors.as_ref())
-            }
-            .ok_or(ResolvedBuildFailure::InvalidState)?;
-            if !owner.contains(&exported.id) {
+            if !constructor_family_ids.contains(&exported.id) {
                 return Err(ResolvedBuildFailure::InvalidState);
-            }
-            for constructor in owner {
-                if constructor_family_ids.insert(*constructor) {
-                    constructor_family_order.push(*constructor);
-                }
             }
         }
         summary
@@ -3035,11 +3133,11 @@ impl ExportSummary {
             parameters
                 .try_reserve(imported.parameters.len())
                 .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-            parameters.extend(imported.parameters.iter().cloned());
             let mut constructors = Vec::new();
             constructors
                 .try_reserve(imported.constructors.len())
                 .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            parameters.extend(imported.parameters.iter().cloned());
             constructors.extend_from_slice(&imported.constructors);
             if summary
                 .hidden_nominals
@@ -3158,34 +3256,30 @@ impl ExportSummary {
     pub(crate) fn withheld(
         &self,
     ) -> impl Iterator<Item = (WithheldNamespace, &str, &WithheldExport)> {
-        self.withheld_order
-            .iter()
-            .filter_map(|(spelling, namespace)| {
-                self.withheld
-                    .get(spelling)
-                    .and_then(|withheld| withheld.get(*namespace))
-                    .map(|withheld| (*namespace, spelling.as_str(), withheld))
-            })
+        self.withheld_order.iter().filter_map(|entry| {
+            self.withheld
+                .get(&entry.spelling)
+                .and_then(|withheld| withheld.get_exact(entry.namespace, entry.owner))
+                .map(|withheld| (entry.namespace, entry.spelling.as_str(), withheld))
+        })
     }
 
     pub(crate) fn opaque_constructors(
         &self,
         owner: NominalTypeId,
     ) -> impl Iterator<Item = (&str, &WithheldExport)> {
-        self.withheld_order
-            .iter()
-            .filter_map(move |(spelling, namespace)| {
-                if *namespace != WithheldNamespace::Constructor {
-                    return None;
-                }
-                let withheld = self
-                    .withheld
-                    .get(spelling)
-                    .and_then(|withheld| withheld.get(*namespace))?;
-                (withheld.kind == WithheldExportKind::OpaqueConstructor
-                    && withheld.owner == Some(owner))
-                .then_some((spelling.as_str(), withheld))
-            })
+        self.withheld_order.iter().filter_map(move |entry| {
+            if entry.namespace != WithheldNamespace::Constructor || entry.owner != Some(owner) {
+                return None;
+            }
+            let withheld = self
+                .withheld
+                .get(&entry.spelling)
+                .and_then(|withheld| withheld.get_exact(entry.namespace, entry.owner))?;
+            (withheld.kind == WithheldExportKind::OpaqueConstructor
+                && withheld.owner == Some(owner))
+            .then_some((entry.spelling.as_str(), withheld))
+        })
     }
 
     pub(crate) fn nominal_fact(&self, id: NominalTypeId) -> Option<ImportedNominalFactRef<'_>> {
@@ -3251,7 +3345,11 @@ impl ExportSummary {
                     WithheldNamespace::Constructor,
                 ]
                 .into_iter()
-                .map(move |namespace| ((*spelling).to_owned(), namespace))
+                .map(move |namespace| WithheldOrderEntry {
+                    spelling: (*spelling).to_owned(),
+                    namespace,
+                    owner: None,
+                })
             })
             .collect();
         let mut withheld = HashMap::<String, WithheldExports>::new();
@@ -3262,7 +3360,7 @@ impl ExportSummary {
                 WithheldNamespace::Nominal,
                 WithheldNamespace::Constructor,
             ] {
-                entries.insert(
+                entries.insert_new(
                     namespace,
                     WithheldExport {
                         kind: WithheldExportKind::Private,
@@ -3347,27 +3445,27 @@ impl ExportSummary {
         for (spelling, _) in &opaque_constructors {
             if let Some(withheld) = summary.withheld.get_mut(*spelling) {
                 withheld.term = None;
-                withheld.constructor = None;
+                withheld.constructor.clear();
             }
-            summary
-                .withheld_order
-                .retain(|(retained_spelling, namespace)| {
-                    retained_spelling != spelling
-                        || !matches!(
-                            namespace,
-                            WithheldNamespace::Term | WithheldNamespace::Constructor
-                        )
-                });
+            summary.withheld_order.retain(|entry| {
+                entry.spelling != *spelling
+                    || !matches!(
+                        entry.namespace,
+                        WithheldNamespace::Term | WithheldNamespace::Constructor
+                    )
+            });
         }
         for (spelling, origin) in opaque_constructors {
-            summary
-                .withheld_order
-                .push((spelling.to_owned(), WithheldNamespace::Constructor));
+            summary.withheld_order.push(WithheldOrderEntry {
+                spelling: spelling.to_owned(),
+                namespace: WithheldNamespace::Constructor,
+                owner: None,
+            });
             summary
                 .withheld
                 .entry(spelling.to_owned())
                 .or_default()
-                .insert(
+                .insert_new(
                     WithheldNamespace::Constructor,
                     WithheldExport {
                         kind: WithheldExportKind::OpaqueConstructor,
@@ -5078,6 +5176,117 @@ mod tests {
         assert_eq!(cloned, fact);
         assert_eq!(exact.used(), 11);
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    fn freeze_transparent_constructor_aliases_with_limit(
+        family_width: usize,
+        alias_count: usize,
+        limit: usize,
+    ) -> (Result<ExportSummary, ResolvedBuildFailure>, usize) {
+        let source = SourceFile::new("transparent-family-summary.ash", "constructor")
+            .expect("the constructor-family fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 11).expect("the constructor span should be ordered"))
+            .expect("the constructor span should belong to the fixture");
+        let base = ModuleId::new(72);
+        let facade = ModuleId::new(73);
+        let nominal = NominalTypeId::new(base, 0);
+        let constructors = (0..family_width)
+            .map(|index| {
+                ConstructorId::new(
+                    nominal,
+                    u32::try_from(index).expect("the family index should fit"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut imported = ImportedFacts::default();
+        imported
+            .merge_nominal(ImportedNominalFact {
+                id: nominal,
+                parameter_count: 0,
+                parameters: Box::new([]),
+                constructors: constructors.clone().into_boxed_slice(),
+                access: ImportedTypeAccess::Transparent,
+                display_spelling: Some("Family".into()),
+                display_is_private: false,
+                origin: Origin::Source(span),
+            })
+            .expect("the transparent nominal fixture should be unique");
+        for (index, constructor) in constructors.iter().copied().enumerate() {
+            imported.insert_constructor(ImportedConstructorFact {
+                id: constructor,
+                spelling: format!("Member{index}"),
+                payload: None,
+                origin: Origin::Source(span),
+            });
+        }
+        let mut export_candidate = ResolvedExportCandidate::default();
+        let mut staging_work = TypeWorkBudget::default();
+        for alias in 0..alias_count {
+            export_candidate
+                .try_insert_constructor(
+                    format!("Alias{alias}"),
+                    CandidateConstructor {
+                        id: constructors[0],
+                        source: CandidateFactSource::Imported,
+                        origin: Origin::Source(span),
+                    },
+                    &mut staging_work,
+                )
+                .expect("the constructor alias fixture has an unbounded staging budget");
+        }
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module: facade,
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported,
+            direct_dependencies: Vec::new(),
+            declaration_order: Vec::new(),
+            interfaces: Vec::new(),
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate,
+            span,
+        });
+        let mut type_work = TypeWorkBudget::with_limit(limit);
+        let result = ExportSummary::freeze(
+            &resolved,
+            &[],
+            &[],
+            &[],
+            &[],
+            &mut type_work,
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        );
+        (result, type_work.used())
+    }
+
+    #[test]
+    fn transparent_constructor_family_closure_scans_each_unique_owner_once() {
+        const FAMILY_WIDTH: usize = 256;
+        const ALIAS_COUNT: usize = 512;
+        const UNIQUE_OWNER_WORK: usize = 2;
+        const FAMILY_ENTRY_WORK: usize = 3 * FAMILY_WIDTH;
+        const FULL_EXACT: usize = ALIAS_COUNT + 5 * FAMILY_WIDTH + 3;
+
+        let traversal_exact = ALIAS_COUNT + UNIQUE_OWNER_WORK + FAMILY_ENTRY_WORK;
+        let (traversal_short, traversal_short_used) =
+            freeze_transparent_constructor_aliases_with_limit(
+                FAMILY_WIDTH,
+                ALIAS_COUNT,
+                traversal_exact - 1,
+            );
+        assert_eq!(traversal_short, Err(ResolvedBuildFailure::TypeResource));
+        assert_eq!(traversal_short_used, ALIAS_COUNT + UNIQUE_OWNER_WORK);
+
+        let (exact, exact_used) = freeze_transparent_constructor_aliases_with_limit(
+            FAMILY_WIDTH,
+            ALIAS_COUNT,
+            FULL_EXACT,
+        );
+        let summary = exact.expect("the exact unique-family closure budget should freeze");
+        assert_eq!(exact_used, FULL_EXACT);
+        assert_eq!(summary.constructors.len(), ALIAS_COUNT);
+        assert_eq!(summary.hidden_constructors.len(), FAMILY_WIDTH - 1);
     }
 
     fn freeze_hidden_interface_summary_with_limit(

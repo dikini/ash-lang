@@ -863,6 +863,64 @@ fn opaque_constructor_family_withholding_crosses_nominal_only_facades() {
 }
 
 #[test]
+fn owner_distinct_opaque_constructor_markers_survive_one_shared_facade() {
+    for (selected, outer_name, defining_module) in [
+        ("PublicA", "OuterA", "a.ash"),
+        ("PublicB", "OuterB", "b.ash"),
+    ] {
+        for qualified in [false, true] {
+            let entry = if qualified {
+                format!(
+                    "import outer as Outer\n\n\
+                     main : Unit -> Outer.{outer_name}\n\
+                     main () = Outer.Seal(1)\n"
+                )
+            } else {
+                "import outer (Seal)\n".to_owned()
+            };
+            let outer = format!("pub import facade ({selected} as {outer_name})\n");
+            let tree = ModuleTree::create();
+            let graph = load(
+                &tree,
+                &entry,
+                &[
+                    ("a.ash", "pub opaque type A = Seal(Int)\n"),
+                    ("b.ash", "pub opaque type B = Seal(Int)\n"),
+                    (
+                        "facade.ash",
+                        concat!(
+                            "pub import a (A as PublicA)\n",
+                            "pub import b (B as PublicB)\n",
+                        ),
+                    ),
+                    ("outer.ash", &outer),
+                ],
+            );
+
+            let error = resolve_entry_error(&graph);
+            let diagnostic = error.diagnostic();
+            let defining = module_named(&graph, defining_module);
+            assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+            assert_eq!(diagnostic.found.as_deref(), Some("Seal"));
+            assert_eq!(diagnostic.related.len(), 1);
+            assert_eq!(
+                diagnostic.related[0].span().source(),
+                defining.source().id(),
+            );
+            assert_eq!(
+                usize::try_from(diagnostic.related[0].span().range().start())
+                    .expect("the defining constructor offset should fit"),
+                defining
+                    .source()
+                    .text()
+                    .find("Seal")
+                    .expect("the defining constructor should exist"),
+            );
+        }
+    }
+}
+
+#[test]
 fn method_only_reexport_and_imported_scheme_retain_hidden_interface_closure() {
     for (facade_selection, entry_name, exported_global) in [
         ("equal as facade_equal", "facade_equal", false),
