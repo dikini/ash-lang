@@ -8,16 +8,18 @@
 > and future sequencing pressure, but it does not define current Ash or
 > authorize roadmap work.
 
-The Mini-Ash milestone and every bounded Modular Ash increment are complete.
-Passive source modules, method-only interfaces, the separately authorized
-core-versus-library audit, and the final simplification analysis have retained
-implementation, review, verification, and evidence. The `mini-ash` Git tag,
-closure report, and integration evidence retain the historical dialect. The
+The Mini-Ash milestone and every bounded Modular Ash semantic or audit increment
+are complete. Passive source modules, method-only interfaces, the separately
+authorized core-versus-library audit, and the final simplification analysis
+each retain their increment-local implementation, review, verification, and
+evidence. The `mini-ash` Git tag, closure report, and integration evidence retain
+the historical dialect. The
 [current specification](../../spec/README.md) defines Modular Ash; these
-type-class-like interfaces and `impl` are not module signatures. Final task and
-plan cleanup, repeated root verification, the closure commit, and the annotated
-`modular-ash` tag are lifecycle mechanics rather than missing semantics. This
-note records the result but did not authorize that work.
+type-class-like interfaces and `impl` are not module signatures. The final
+cross-cutting independent reviews and root verification still follow task and
+plan cleanup. Those reviews, the closure commit, and the annotated
+`modular-ash` tag are a pending lifecycle gate rather than missing semantics.
+This note records the result but did not authorize that work.
 
 ## Question
 
@@ -124,8 +126,9 @@ The leading trajectory is:
 4. Separately authorize and compare representative core primitives with library
    definitions. This is complete.
 5. Close Modular Ash with its own simplification analysis and final
-   `modular-ash` checkpoint. This is complete; lifecycle cleanup and the tag
-   remain task mechanics.
+   `modular-ash` checkpoint. The dialect and audit checkpoint is complete;
+   lifecycle cleanup, final cross-cutting independent reviews, root
+   verification, the closure commit, and the tag remain task mechanics.
 
 Keeping both Mini-Ash and Modular Ash runnable in the same current compiler
 would add grammar selection, driver selection, compatibility lowering, and

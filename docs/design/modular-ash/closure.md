@@ -185,10 +185,16 @@ The focused architecture target passed all eight tests. The stable equality
 maintenance search returned the recorded 15 production files; the interface
 maintenance search returned the recorded eight production files; and the
 interface-identifier search over `src/core` and `src/eval` returned no matches.
-Markdown lint, relative-link review, authority review, and `git diff --check`
-complete this documentation checkpoint. The final lifecycle increment will
-repeat root verification and independent reviews after removing the completed
-task and temporary execution plan.
+The documentation checkpoint used this full-tree Markdown command:
+
+```text
+markdownlint --disable MD013 -- README.md spec docs
+```
+
+It reported no findings and covers all six changed documents. Manual relative-
+link and anchor review, authority review, and `git diff --check` also passed.
+The final lifecycle increment will repeat root verification and independent
+reviews after removing this task and its temporary execution plan.
 
 ## Intentional exclusions and later pressure
 

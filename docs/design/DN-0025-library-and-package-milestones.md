@@ -60,9 +60,9 @@ that closure.
 
 ### `lib-ash`
 
-This is the next separate design and proposal stage. It may explore and,
-through later proposals, add the language mechanisms needed to define stronger
-libraries: higher-kinded parameters, method-local type parameters,
+The first descendant, `lib-ash`, remains an exploratory design-and-proposal
+stage. Later proposals may add the language mechanisms needed to define
+stronger libraries: higher-kinded parameters, method-local type parameters,
 multi-parameter interfaces, associated outputs or relational determination,
 method and associated-type defaults, and explicit module re-exports.
 
