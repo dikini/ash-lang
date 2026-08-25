@@ -35,7 +35,11 @@ milestones. Mini-Ash, passive static modules, method-only interfaces and
 `impl`, the bounded core-versus-library audit, simplification, and Modular Ash
 closure are complete. Interfaces are type-class-like relationships, not module
 signatures. The final annotated unsigned `modular-ash` tag retains the completed
-current milestone checkpoint; no closure task is active.
+current milestone checkpoint. [DN-0025](design/DN-0025-library-and-package-milestones.md)
+now gives `lib-ash` a dependency spine with decreasing planning detail. Its
+first bounded increment is accepted by
+[CP-0008](proposals/CP-0008-explicit-implementation-imports-and-reexports.md);
+implementation has not begun.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
@@ -44,6 +48,7 @@ current milestone checkpoint; no closure task is active.
 | [Passive static modules](design/DN-0022-passive-static-modules.md) | complete / implementation | completed Mini-Ash tag and closure evidence, current [Modular Ash specification](../spec/README.md), and retained [passive-module evidence](design/modular-ash/evidence.md) | Preserve the implemented export-summary and module-identity boundaries during later audits. |
 | [Interfaces and `impl`](design/DN-0023-interfaces-and-implementations.md) | complete / implementation | implemented passive static modules, current [specification](../spec/README.md), retained interface design, and [implementation evidence](design/modular-ash/interfaces-evidence.md) | Preserve the method-only, authenticated-evidence, and unspecialized-trace boundaries during separately authorized later interface work. |
 | [Modular core-versus-library audit](design/modular-ash/core-library-evidence.md) | complete / implementation | implemented passive modules and method-only interfaces, their retained evidence, and the [Modular Ash closure report](design/modular-ash/closure.md) | Treat exploratory `lib-ash` pressure as separate work that requires its own authorization, not as the next authorized step in a sequential roadmap. |
+| [Explicit implementation imports and re-exports](proposals/CP-0008-explicit-implementation-imports-and-reexports.md) | accepted | completed `modular-ash` checkpoint, stable module and interface identities, body-free summaries, scoped implementation evidence, and the prepared [library milestone sequence](design/DN-0025-library-and-package-milestones.md#prepared-lib-ash-sequence) | Create the active task and execution plan for the first bounded `lib-ash` increment. |
 | [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Exercise the retained closed pure dialect and operation-family seam against the next proposed feature pressure. |
 | [Parser architecture](decisions/AD-0005-parser-architecture.md) | implementation | accepted event-producing recursive-descent boundary and current grammar | Measure locality, recovery, and source coverage when a later proposal adds syntax. |
 | [Front-end semantic boundaries](decisions/AD-0006-front-end-semantic-boundaries.md) | implementation | accepted resolved-surface and bidirectional typed-elaboration boundaries | Extend stage interfaces and structured diagnostics only with an authorized semantic increment. |

@@ -2,7 +2,7 @@
 
 - ID: `DN-0025`
 - Status: exploring
-- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
+- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [CP-0008: Explicit Implementation Imports and Re-exports](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
 
 > This design note is informative. It does not define current Ash, accept
 > language semantics, or accept a package or artifact architecture.
@@ -77,6 +77,40 @@ artifact format pinned to the `pack-ash` milestone.
 This sequence avoids extending `modular-ash` indefinitely. It also avoids
 freezing a package artifact around public-summary semantics that `lib-ash`
 would immediately change.
+
+## Prepared `lib-ash` sequence
+
+Planning detail decreases after the first increment. Each later semantic
+increment requires its own accepted proposal and task, and evidence may split,
+narrow, reorder, or remove it.
+
+1. Replace automatic direct-import implementation availability with explicit
+   implementation selectors. Add targeted name and implementation re-exports,
+   transitive authorization routes, and a migration corpus. This is the first
+   prepared increment and is accepted by
+   [CP-0008](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md).
+2. Add explicit `Type` and function kinds and higher-kinded parameters without
+   kind inference or kind polymorphism. Make checking, summaries,
+   substitution, and independent Core validation kind-aware.
+3. Add method-local type parameters. Keep ordinary source rank-1 and admit
+   polymorphic term slots only as authenticated compiler-generated interface
+   evidence.
+4. Compare multi-parameter interfaces, associated outputs, and functional
+   dependencies on one corpus. Retain only source forms that improve
+   expressiveness or diagnostics, and make equivalent relationships converge
+   on one canonical determination model and Core shape.
+5. Add method defaults after method evidence is stable. Add associated-output
+   defaults only if the comparison retains associated outputs. Lower defaults
+   through generated adapters rather than runtime dictionaries.
+6. Close `lib-ash` with its combined library corpus, summary and identity
+   audit, Core-versus-library simplification analysis, resource verification,
+   specification review, migration verification, and one retained linked Core
+   program.
+
+The first increment establishes the visibility and coherence closure used by
+later multi-parameter and determination work. `pack-ash` remains separate
+until the complete `lib-ash` milestone stabilizes those summaries and
+identities.
 
 ## `lib-ash` type and interface model
 
@@ -313,19 +347,37 @@ evidence fact makes the implementation summary unavailable as a whole.
 
 Names and implementation availability remain separate semantic channels. One
 import or re-export declaration may select both, but selecting one does not
-imply the other. The following syntax is illustrative:
+imply the other. The prepared first increment uses a targeted public import:
 
 ```ash
-import equality (Equal, equal, impl Equal)
+pub import equality (Equal, equal, impl Equal)
 ```
 
-`Equal` imports the interface name, `equal` imports the method name, and
-`impl Equal` imports every public implementation fact exported for that
-`InterfaceId`. `impl Equal` alone does not bind `Equal` as a source name.
+`Equal` imports and re-exports the interface name, `equal` imports and
+re-exports the method name, and `impl Equal` imports and re-exports every
+public implementation fact exported for that `InterfaceId`. Without `pub`,
+the same selectors affect only the importing module. `impl Equal` alone does
+not bind or export `Equal` as a source name.
+
+Only targeted imports may be public in this increment. A qualified import
+keeps its current local module alias and acquires no implementation facts. A
+module that needs qualified names and implementations may use two imports:
+
+```ash
+import equality as Equality
+import equality (impl Equal)
+```
+
+A name selector may retain its existing `as` alias. An implementation selector
+cannot be renamed and names the dependency's public interface spelling. A
+public name re-export uses the selected local spelling while retaining the
+original declaration identity. A public implementation re-export retains the
+original implementation identity and records another authorization route; it
+does not copy the declaration.
 
 The initial design imports all public implementations for a selected interface
 name. It does not name individual implementations or select implementation-head
-patterns. Exact pattern syntax remains open.
+patterns.
 
 This selector replaces Modular Ash's rule that every direct import
 automatically admits every public implementation from that dependency. Names
@@ -340,6 +392,18 @@ implementation identity through multiple paths retains one fact; distinct
 declarations still undergo overlap and determination checks. Dead-code
 elimination may remove unused evidence only after the full imported closure has
 passed validation.
+
+The first increment retains current single-parameter interfaces, so its
+coherence check remains ordinary full-head overlap. A module checks the
+deduplicated union of its selected imported and local implementations. The
+first module that combines two distinct overlapping implementations owns the
+failure. A public summary is available only after that closure succeeds.
+
+The primary witness has three modules: a definition module publishes an
+interface, method, and implementation; a facade re-exports all three channels;
+and an application explicitly imports all three from the facade. Removing the
+application's implementation selector leaves the method name available but
+produces the existing unsatisfied-constraint failure.
 
 ## `lib-ash` error ownership
 
@@ -370,6 +434,16 @@ compiler chooses a shortest provenance path, breaking equal-length ties by
 dependency order, import source order, and then stable route identity.
 
 ## `lib-ash` evidence and closure
+
+The first increment requires a complete name-versus-implementation and
+private-versus-public selector matrix. Its evidence includes the three-module
+facade; transitive and diamond identity; aliases; hidden and opaque nominal
+facts; private exports; overlap at the first combined closure; deterministic
+shortest authorization routes; graph-wide selector, closure, summary, and
+validation budgets; rejection of forged routes; unchanged Core node inventory;
+and explicit migration of every existing imported implementation dependency.
+Neither complete nor ordinary targeted name imports make implementations
+available implicitly after this increment.
 
 The comparison corpus should cover kind-aware Core, authenticated polymorphic
 evidence slots, higher-kinded partial application, method-local parameters,
