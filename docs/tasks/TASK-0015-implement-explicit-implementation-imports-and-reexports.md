@@ -67,6 +67,12 @@ or evaluator forms.
   selectors. Focused projection, malformed recovery, token-completeness,
   parser, formatting, and all-target compilation checks pass. Independent
   semantic-compliance and code-quality reviews have no open findings.
+- Task 3 removes automatic implementation availability. Only explicit
+  implementation selectors retain matching public facts; name and qualified
+  imports retain no implementation facts. Selector diagnostics, identity
+  deduplication, direct-route provenance, and exact index/summary budget probes
+  pass focused and full-workspace verification. Independent semantic and code-
+  quality reviews have no open findings.
 - The execution plan defines focused red-green increments, review checkpoints,
   migration, retained evidence, and lifecycle cleanup.
 
@@ -117,4 +123,7 @@ inventories before using them to validate occurrence availability.
 
 ## Deviations
 
-None.
+Task 3 mechanically migrated three executable specification examples and their
+exact paired source snippets so the full workspace stayed green. Task 8 still
+owns the complete normative grammar, semantics, validation, and explanatory
+reconciliation; no broader specification claim moved forward.
