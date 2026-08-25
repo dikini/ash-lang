@@ -240,9 +240,12 @@ This proposal does not add:
 - A three-module definition, facade, and application program passes the public
   driver. Removing the application's implementation selector retains the name
   binding and produces the existing structured unsatisfied-constraint reason.
-- Transitive and diamond cases preserve original declaration identities,
-  deduplicate one `ImplId`, choose deterministic shortest provenance, and
-  reject distinct overlapping implementations at the first combined closure.
+- Transitive and diamond source cases preserve original declaration
+  identities, deduplicate one `ImplId`, and choose deterministic shortest
+  provenance. The orphan rule and acyclic module graph make valid
+  distinct-module overlapping public implementations unreachable in source;
+  a structurally assembled checked-closure fixture therefore proves that the
+  first combined effective closure rejects distinct overlapping facts.
 - Alias, alternate-route, hidden-carrier, opaque-type, private-export, orphan,
   and conflict cases preserve current visibility, ownership, and failure
   boundaries.

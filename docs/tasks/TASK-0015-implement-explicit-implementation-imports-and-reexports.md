@@ -131,6 +131,14 @@ defined by CP-0008; process-global source allocation and hash-map order do not
 participate. Linked validation authenticates complete public authorization
 inventories before using them to validate occurrence availability.
 
+The retained orphan rule and acyclic module graph make valid overlapping
+public implementations from distinct source modules unreachable. Task 5 uses
+source programs for transitive availability and identity deduplication, and a
+structurally assembled checked-closure fixture for first-combined-closure
+overlap rejection. Task 6 owns the first full public-driver success because
+checked groups do not yet retain the authorization tables needed by linked
+validation.
+
 ## Deviations
 
 Task 3 mechanically migrated three executable specification examples and their

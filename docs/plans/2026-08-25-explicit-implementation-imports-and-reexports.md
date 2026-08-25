@@ -422,10 +422,11 @@ git commit --no-gpg-sign -m "feat: re-export selected library names"
 ### Step 1: Write the primary facade RED test
 
 Add `public_implementation_selector_crosses_a_three_module_facade`. Use the
-definition, facade, and application source from CP-0008. Run the complete
-public driver and assert exact observation `true : Bool`. Inspect checked
-summaries and assert one original `InterfaceId`, `MethodId`, `ImplId`, and
-implementation-method binder through both edges.
+definition, facade, and application source from CP-0008. Through resolution,
+checking, and summary freeze, assert one original `InterfaceId`, `MethodId`,
+`ImplId`, and implementation-method binder through both edges. Retain the
+complete public driver as an exact linked-validation RED for Task 6, which owns
+authorization-table retention and full observation `true : Bool`.
 
 Run:
 
@@ -468,8 +469,9 @@ authorization. All explicit selectors compete for the effective winner; only
 public selectors compete for the public winner. An empty public path is valid
 only for a public local implementation.
 
-Rerun the primary facade test. Expected: GREEN through checking; linked
-validation remains pending in Task 6 if it rejects the new route.
+Rerun the primary facade test. Expected: GREEN through checking, summary
+freeze, and entry availability. The recorded public-driver RED must continue to
+fail at linked route validation until Task 6.
 
 ### Step 3: Select deterministic shortest routes
 
@@ -496,16 +498,18 @@ Expected: GREEN.
 
 ### Step 4: Check closure overlap where facts first meet
 
-Replace the old non-re-export witness with positive transitive availability.
-Add sibling facade cases that publish overlapping `Equal<Int>`
-implementations. Assert that unrelated branches check independently and the
-first module selecting both reports the existing overlap reason with both
-declarations and the chosen import/re-export paths.
+Replace the old non-re-export source witness with positive transitive
+availability. The orphan rule and acyclic graph make valid distinct-module
+overlapping public implementations unreachable in Ash source. Extend the
+checker's structurally assembled imported-fact fixture instead: unrelated
+branches remain independent, while the first effective closure containing two
+distinct overlapping facts reports the existing overlap reason with both
+declarations and chosen import/re-export paths.
 
 Run:
 
 ```text
-cargo test --locked --test library_imports distinct_reexported_implementations_conflict_at_the_first_combined_closure -- --exact
+cargo test --locked --lib distinct_reexported_implementations_conflict_at_the_first_combined_closure
 cargo test --locked --test interface_modules
 cargo test --locked --test interface_diagnostics
 ```
