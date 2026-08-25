@@ -10,14 +10,14 @@ module boundary on which this increment depends.
 
 ## Scope and checkpoints
 
-The comparison baseline is accepted-interface checkpoint
-`ca7932877df3553cbb2325c7a73a0b38812b5db8`, which records the accepted
-[interface proposal](../../proposals/CP-0006-interfaces-and-implementations.md).
+The comparison baseline is commit
+`ca7932877df3553cbb2325c7a73a0b38812b5db8`, which accepts the interface
+transition.
 The current normative checkpoint is unsigned commit
 `f783271dab81db382e0fdcc1c8a1fe4abb12cea3`. The principal checkpoints between
 them are:
 
-- `ff2ea36`, which authorizes the implementation plan;
+- `ff2ea36`, which authorizes the interface implementation work;
 - `3d53619`, which admits interface and implementation syntax;
 - `898afec`, which resolves interface identities and constraints;
 - `45790f7` and `f3bbc3a`, which check interface declarations and
@@ -40,10 +40,7 @@ them are:
 
 All intermediate implementation checkpoints are unsigned. The work remains on
 the unmerged `feature/modular-ash` branch. The final product review and
-verification boundary is witnessed below. The
-[active task](../../tasks/TASK-0012-implement-interfaces-and-implementations.md)
-and [execution plan](../../plans/2026-08-24-implement-interfaces-and-implementations.md)
-remain only for transition cleanup.
+verification boundary is witnessed below.
 
 ## Causal semantic model
 
@@ -197,7 +194,7 @@ rules, not a new evaluation rule or a specialization claim.
 
 ## Required evidence
 
-The accepted proposal's required evidence is retained by the exact targets and
+The accepted transition's required evidence is retained by the exact targets and
 named witnesses below. A target can contain additional boundary cases beyond
 the ones named here.
 
@@ -577,13 +574,15 @@ an existing Core behavior with a library interface after this increment is
 complete and specified. This work does not begin the audit, choose a migration,
 or authorize specialization.
 
-## Task 11 review and verification checkpoint
+## Review and verification checkpoint
 
 The final reviewed product checkpoint is unsigned commit `37ef9f8`. It includes
 the unsigned namespace fix `5398808` and evidence-validator fix `37ef9f8`. The
 four independent review tracks covering syntax and namespaces; checking and
 evidence; Core, validation, and resources; and specification and retained
-evidence are clear.
+evidence are clear. Unsigned commit `07b9129` records the finalized evidence
+report for that reviewed product checkpoint; it does not move the reviewed
+product boundary.
 
 Review found that targeted interface and method maps were absent from four
 local conflict gates. This allowed a targeted interface to conflict with a
@@ -638,11 +637,8 @@ eight production files listed above, and the Core and runtime enum inventories
 remain unchanged from `ca79328`. The worktree was clean at the reviewed product
 checkpoint.
 
-The retained unspecialized trace remains the baseline for a later separately
-authorized comparison. Product review and verification are complete. Only
-transition cleanup remains: remove the completed proposal, task, execution
-plan, index entries, and their live transition links. The
-[active task](../../tasks/TASK-0012-implement-interfaces-and-implementations.md),
-[accepted proposal](../../proposals/CP-0006-interfaces-and-implementations.md),
-and [execution plan](../../plans/2026-08-24-implement-interfaces-and-implementations.md)
-remain linked here until that next checkpoint removes them together.
+Transition cleanup is complete: the completed proposal, task, execution plan,
+their index entries, and all live links to them have been removed. Git retains
+their history. The product remains unmerged on `feature/modular-ash`. The
+retained unspecialized trace remains the baseline for a later separately
+authorized comparison; that audit remains separate and has not begun.

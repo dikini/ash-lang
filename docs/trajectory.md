@@ -15,9 +15,9 @@ The [`ash` tool guide](tools/ash.md) documents entry-module execution, named
 module roots, and interface-related source failures. The
 [passive-module evidence](design/modular-ash/evidence.md) and
 [interface implementation evidence](design/modular-ash/interfaces-evidence.md)
-retain the completed passive-module increment and the implemented and specified
-interface increment across implementation, resources, locality, Core assembly,
-runtime observations, and historical or future comparison baselines.
+retain the completed passive-module and method-only interface increments across
+implementation, resources, locality, Core assembly, runtime observations, and
+historical or future comparison baselines.
 
 The first Mini-Ash corpus consistency, component-comparison, and convergence
 gates are complete. Their retained results remain in the
@@ -26,16 +26,15 @@ and its [convergence record](design/mini-ash/first-stratum/comparisons/component
 
 [DN-0020](design/DN-0020-ash-dialect-milestones.md) outlines two retained
 milestones. Mini-Ash and passive static modules are complete. Method-only
-interfaces and `impl` are implemented and specified while final task closure
-remains pending. Interfaces are type-class-like relationships, not module
-signatures. A separately authorized core-versus-library audit is next; the
-interface implementation task does not begin it.
+interfaces and `impl` are complete. Interfaces are type-class-like
+relationships, not module signatures. A separately authorized
+core-versus-library audit is next and has not begun.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
 | [Mini-Ash phase](design/DN-0015-mini-ash-phase.md) | implementation | historical `mini-ash` tag, reviewed [first corpus stratum](design/DN-0016-first-mini-ash-corpus.md), accepted component decisions, retained [data-and-pattern evidence](design/mini-ash/data-and-patterns/evidence.md), and retained [rank-1 evidence](design/mini-ash/rank-1-polymorphism/evidence.md) | Use the separately built tag only for bounded historical comparisons. |
 | [Passive static modules](design/DN-0022-passive-static-modules.md) | implementation | completed Mini-Ash tag and closure evidence, current [Modular Ash specification](../spec/README.md), and retained [passive-module evidence](design/modular-ash/evidence.md) | Preserve the implemented export-summary and module-identity boundaries during later audits. |
-| [Interfaces and `impl`](tasks/TASK-0012-implement-interfaces-and-implementations.md) | implementation | accepted [CP-0006](proposals/CP-0006-interfaces-and-implementations.md), implemented passive static modules, current [specification](../spec/README.md), retained [interface design](design/DN-0023-interfaces-and-implementations.md), and [implementation evidence](design/modular-ash/interfaces-evidence.md) | Use the implemented method-only boundary and unspecialized evidence trace as inputs to a separately authorized core-versus-library audit. |
+| [Interfaces and `impl`](design/DN-0023-interfaces-and-implementations.md) | implementation | implemented passive static modules, current [specification](../spec/README.md), retained interface design, and [implementation evidence](design/modular-ash/interfaces-evidence.md) | Use the implemented method-only boundary and unspecialized evidence trace as inputs to a separately authorized core-versus-library audit. |
 | [Modular core-versus-library audit](design/DN-0020-ash-dialect-milestones.md#candidate-trajectory) | outlined | implemented passive modules and method-only interfaces, plus their retained evidence | Authorize a bounded comparison of retained Core behavior with an operation expressed through a library interface; do not begin it as interface-task cleanup. |
 | [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Exercise the retained closed pure dialect and operation-family seam against the next proposed feature pressure. |
 | [Parser architecture](decisions/AD-0005-parser-architecture.md) | implementation | accepted event-producing recursive-descent boundary and current grammar | Measure locality, recovery, and source coverage when a later proposal adds syntax. |

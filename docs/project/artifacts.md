@@ -18,7 +18,7 @@ Architectural decisions record accepted non-language choices such as parser arch
 
 ## Change proposals
 
-Change proposals describe proposed transitions in Ash semantics. They state current behavior, proposed behavior, semantic delta, affected specification areas, resulting truth, interactions, non-goals, and required evidence. A `proposed` proposal is under consideration. An `accepted` proposal may authorize tasks, but still does not describe current Ash. After its implementation, tests, and specification update merge together, remove the proposal from the current tree; Git retains it as transition evidence.
+Change proposals describe proposed transitions in Ash semantics. They state current behavior, proposed behavior, semantic delta, affected specification areas, resulting truth, interactions, non-goals, and required evidence. A `proposed` proposal is under consideration. An `accepted` proposal may authorize tasks, but still does not describe current Ash. After one product checkpoint retains the implementation, tests, specification update, review, and verification, remove the proposal from that product branch. Git retains it as transition evidence. This cleanup prepares the branch's post-transition tree; it does not make the change current or replace integration into `main`.
 
 ## Tasks
 

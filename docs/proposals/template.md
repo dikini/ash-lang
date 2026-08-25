@@ -26,7 +26,8 @@ Link every section that would change.
 
 ## Resulting specification truth
 
-What normative statements become true after implementation, tests, and specification changes merge?
+What normative statements become true when the complete product branch is
+integrated into `main`?
 
 ## Interactions
 

@@ -2,7 +2,7 @@
 
 - ID: `DN-0023`
 - Status: exploring
-- Related: [CP-0006: Interfaces and Implementations](../proposals/CP-0006-interfaces-and-implementations.md), [TASK-0012: Implement Interfaces and Implementations](../tasks/TASK-0012-implement-interfaces-and-implementations.md), [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), the [passive-module evidence](modular-ash/evidence.md), and the [interface implementation evidence](modular-ash/interfaces-evidence.md)
+- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), the [passive-module evidence](modular-ash/evidence.md), and the [interface implementation evidence](modular-ash/interfaces-evidence.md)
 
 > This design note is informative. It records the exploration that led to the
 > implemented method-only interface increment, but it does not define current
@@ -196,9 +196,9 @@ and every evidence slot is a function. A method introduces no additional type
 parameters or constraints. Methods have no default bodies in the first
 increment.
 
-Accepted [CP-0006](../proposals/CP-0006-interfaces-and-implementations.md)
-specifies one trailing `where` clause shared by global signatures, operational
-headers, and impl heads. The earlier comparison form is:
+The accepted change proposal specified one trailing `where` clause shared by
+global signatures, operational headers, and impl heads. The earlier comparison
+form is:
 
 ```ash
 pub interface Equal<A> {
@@ -225,9 +225,9 @@ are rejected. Constraints are part of the checked rank-1 scheme and export
 summary; they are not ordinary source types or runtime values.
 
 An inline operational global carries the same ordered requirement list in its
-header and produces the same constrained scheme. CP-0006 selected one token
-placement for both presentations; equational and operational globals do not
-have different constraint semantics.
+header and produces the same constrained scheme. The accepted change proposal
+selected one token placement for both presentations; equational and operational
+globals do not have different constraint semantics.
 
 An interface method behaves as a constrained term with the interface's
 parameter and constraint. A complete import qualifies it by module alias, such
@@ -260,8 +260,8 @@ pub impl Equal<Option<A>> where Equal<A> {
 }
 ```
 
-Accepted [CP-0006](../proposals/CP-0006-interfaces-and-implementations.md)
-selects this `where` spelling as part of its complete grammar.
+The accepted change proposal selected this `where` spelling as part of its
+complete grammar.
 
 `impl` is private by default. `pub impl` publishes an anonymous implementation
 fact in the defining module's checked export summary. A public implementation
@@ -646,7 +646,7 @@ through every nested constrained call.
 Together these traces preserve every source relationship until its owning
 validation judgment and then use only existing Core binders and applications.
 They exposed no unresolved representation question, so the increment did not
-require a disposable compiler probe before CP-0006.
+require a disposable compiler probe before the accepted change proposal.
 
 ## Associated-type pressure
 
@@ -789,12 +789,10 @@ registration, unloading, effects, and runtime implementation lookup.
 
 ## Implemented boundary and future pressure
 
-[CP-0006](../proposals/CP-0006-interfaces-and-implementations.md) selected the
-method-only transition explored here, and
-[TASK-0012](../tasks/TASK-0012-implement-interfaces-and-implementations.md)
-organized its implementation. The current
-[specification](../../spec/README.md) now owns the grammar, checking,
-selection, evidence, lowering, and evaluation rules. The retained
+The accepted change proposal selected the method-only transition explored here,
+and the implementation task completed it. The current
+[specification](../../spec/README.md) now owns the grammar, checking, selection,
+evidence, lowering, and evaluation rules. The retained
 [implementation evidence](modular-ash/interfaces-evidence.md) maps the original
 comparison corpus to tests and implementation boundaries.
 

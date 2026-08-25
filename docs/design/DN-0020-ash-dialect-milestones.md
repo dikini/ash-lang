@@ -8,10 +8,11 @@
 > and future sequencing pressure, but it does not define current Ash or
 > authorize roadmap work.
 
-The Mini-Ash milestone and passive-static-module increment are complete. The
-method-only interface increment is implemented and specified while its final
-review and task closure remain pending. The `mini-ash` Git tag, closure report,
-and integration evidence retain the historical dialect. The
+The Mini-Ash milestone, passive-static-module increment, and method-only
+interface increment are complete. Completion of the interface increment
+includes its specification, implementation, review, verification, and retained
+evidence. The `mini-ash` Git tag, closure report, and integration evidence
+retain the historical dialect. The
 [current specification](../../spec/README.md) defines Modular Ash with passive
 source modules and type-class-like interfaces and `impl`; these interfaces are
 not module signatures. A separately authorized core-versus-library audit is the
@@ -42,8 +43,8 @@ unloading. Those later mechanisms should not enter the initial static-module
 increment.
 
 Ash interfaces and `impl` are type-class-like typed relationships, not module
-signatures. Their implemented and specified increment followed passive modules
-so imports, exports, visibility, and typed composition were established first.
+signatures. Their completed increment followed passive modules so imports,
+exports, visibility, and typed composition were established first.
 
 ## Constraints
 
@@ -114,8 +115,7 @@ The leading trajectory is:
 2. Evolve current source through a passive-static-module proposal based on
    DN-0022. This is complete.
 3. Design, specify, and implement interfaces and `impl` against the passive
-   module boundary. This is implemented and specified; final task closure
-   remains pending.
+   module boundary. This is complete.
 4. Separately authorize and compare representative core primitives with library
    definitions. This is next and has not begun.
 5. Close Modular Ash with its own simplification analysis and tag.
