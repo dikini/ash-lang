@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No implementation task is currently active.
+- [TASK-0013: Require Top-Level Interface Method Functions](TASK-0013-require-top-level-interface-method-functions.md)
