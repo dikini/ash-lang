@@ -83,6 +83,16 @@ or evaluator forms.
   storage and iterative destruction. Focused resource, visibility, resolution,
   and diamond checks, the full workspace, and independent semantic and code-
   quality reviews have no open findings.
+- Task 5 publishes explicitly selected implementations through checked summaries
+  with flat authorization routes. Transitive and diamond cases preserve the
+  defining implementation, method, binder, prerequisite, and interface
+  identities. Effective and public routes choose independent deterministic
+  winners by hop count, transient source-order ranks, and graph-local hop keys.
+  Overlap and selection diagnostics retain every chosen route hop. Summary,
+  route-copy, route-comparison, effective-environment, and diagnostic retention
+  have exact graph-budget boundaries and flat small-stack destruction. Focused
+  tests, the full workspace, and independent semantic and code-quality reviews
+  have no open findings.
 - The execution plan defines focused red-green increments, review checkpoints,
   migration, retained evidence, and lifecycle cleanup.
 
@@ -156,3 +166,15 @@ fact's defining owner. The new facade, closure, opacity, alias, and resource
 evidence therefore lives in resolver and library-import tests; the existing
 visibility, resolution, and diamond suites remain unchanged and pass as
 regression witnesses.
+
+Task 5 proves the three-module facade through resolution, checking, summary
+freeze, and entry-module availability. It does not run that fixture through the
+public driver because checked module groups do not yet retain the public
+authorization inventory required to authenticate a transitive route. The exact
+driver failure remains `evidence.validation.unknown-identity`; Task 6 owns its
+transition to success. The current orphan rule and acyclic module graph also
+make a valid source-level sibling overlap witness unreachable, so Task 5 uses a
+structurally assembled effective-closure test without changing orphan
+ownership. Review added explicit charges for complete diagnostic routes,
+summary storage and inspection, and equal-rank route comparison; it also
+removed implicit cloning from allocation-owning authorization routes.
