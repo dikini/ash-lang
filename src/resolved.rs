@@ -1878,7 +1878,12 @@ impl ResolvedExportCandidate {
             *existing = withheld;
             return Ok(());
         }
-        budget.charge(2)?;
+        let retained_work = if namespace == WithheldNamespace::Constructor {
+            3
+        } else {
+            2
+        };
+        budget.charge(retained_work)?;
         let spelling_exists = self.withheld.contains_key(&spelling);
         if !spelling_exists {
             self.withheld.try_reserve(1).map_err(|_| ())?;
@@ -1894,7 +1899,8 @@ impl ResolvedExportCandidate {
             entries.try_reserve(namespace, 1)?;
             self.withheld.insert(spelling.clone(), entries);
         }
-        self.withheld
+        let constructor_index = self
+            .withheld
             .get_mut(&spelling)
             .expect("the reserved withheld spelling should be present")
             .insert_new(namespace, withheld);
@@ -1902,6 +1908,7 @@ impl ResolvedExportCandidate {
             spelling,
             namespace,
             owner,
+            constructor_index,
         });
         Ok(())
     }
@@ -2050,6 +2057,7 @@ struct WithheldOrderEntry {
     spelling: String,
     namespace: WithheldNamespace,
     owner: Option<NominalTypeId>,
+    constructor_index: Option<usize>,
 }
 
 /// Diagnostic-only metadata for a withheld dependency spelling.
@@ -2065,6 +2073,7 @@ struct WithheldExports {
     term: Option<WithheldExport>,
     nominal: Option<WithheldExport>,
     constructor: Vec<WithheldExport>,
+    constructor_positions: HashMap<Option<NominalTypeId>, usize>,
 }
 
 impl WithheldExports {
@@ -2090,10 +2099,12 @@ impl WithheldExports {
                 .nominal
                 .as_mut()
                 .filter(|withheld| withheld.owner == owner),
-            WithheldNamespace::Constructor => self
-                .constructor
-                .iter_mut()
-                .find(|withheld| withheld.owner == owner),
+            WithheldNamespace::Constructor => {
+                let position = *self.constructor_positions.get(&owner)?;
+                self.constructor
+                    .get_mut(position)
+                    .filter(|withheld| withheld.owner == owner)
+            }
         }
     }
 
@@ -2111,31 +2122,62 @@ impl WithheldExports {
                 .nominal
                 .as_ref()
                 .filter(|withheld| withheld.owner == owner),
-            WithheldNamespace::Constructor => self
-                .constructor
-                .iter()
-                .find(|withheld| withheld.owner == owner),
+            WithheldNamespace::Constructor => {
+                let position = *self.constructor_positions.get(&owner)?;
+                self.constructor
+                    .get(position)
+                    .filter(|withheld| withheld.owner == owner)
+            }
         }
+    }
+
+    fn get_ordered(&self, entry: &WithheldOrderEntry) -> Option<&WithheldExport> {
+        if entry.namespace != WithheldNamespace::Constructor {
+            if entry.constructor_index.is_some() {
+                return None;
+            }
+            return self.get_exact(entry.namespace, entry.owner);
+        }
+        let position = entry.constructor_index?;
+        let withheld = self.constructor.get(position)?;
+        (withheld.owner == entry.owner
+            && self.constructor_positions.get(&entry.owner) == Some(&position))
+        .then_some(withheld)
     }
 
     fn try_reserve(&mut self, namespace: WithheldNamespace, additional: usize) -> Result<(), ()> {
         if namespace == WithheldNamespace::Constructor {
             self.constructor.try_reserve(additional).map_err(|_| ())?;
+            self.constructor_positions
+                .try_reserve(additional)
+                .map_err(|_| ())?;
         }
         Ok(())
     }
 
-    fn insert_new(&mut self, namespace: WithheldNamespace, withheld: WithheldExport) {
+    fn insert_new(
+        &mut self,
+        namespace: WithheldNamespace,
+        withheld: WithheldExport,
+    ) -> Option<usize> {
         match namespace {
             WithheldNamespace::Term => {
                 debug_assert!(self.term.is_none());
                 self.term = Some(withheld);
+                None
             }
             WithheldNamespace::Nominal => {
                 debug_assert!(self.nominal.is_none());
                 self.nominal = Some(withheld);
+                None
             }
-            WithheldNamespace::Constructor => self.constructor.push(withheld),
+            WithheldNamespace::Constructor => {
+                let position = self.constructor.len();
+                let replaced = self.constructor_positions.insert(withheld.owner, position);
+                debug_assert!(replaced.is_none());
+                self.constructor.push(withheld);
+                Some(position)
+            }
         }
     }
 
@@ -2147,10 +2189,14 @@ impl WithheldExports {
     }
 
     fn into_values(self) -> impl Iterator<Item = WithheldExport> {
-        self.term
-            .into_iter()
-            .chain(self.nominal)
-            .chain(self.constructor)
+        let Self {
+            term,
+            nominal,
+            constructor,
+            constructor_positions,
+        } = self;
+        drop(constructor_positions);
+        term.into_iter().chain(nominal).chain(constructor)
     }
 }
 
@@ -2347,6 +2393,14 @@ impl ExportSummary {
                             .withheld_order
                             .len()
                             .saturating_mul(2),
+                    )
+                    .saturating_add(
+                        resolved
+                            .export_candidate
+                            .withheld_order
+                            .iter()
+                            .filter(|entry| entry.namespace == WithheldNamespace::Constructor)
+                            .count(),
                     ),
             )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -2363,7 +2417,7 @@ impl ExportSummary {
                 .export_candidate
                 .withheld
                 .get(&entry.spelling)
-                .and_then(|withheld| withheld.get_exact(entry.namespace, entry.owner))
+                .and_then(|withheld| withheld.get_ordered(entry))
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             let entries = summary.withheld.entry(entry.spelling.clone()).or_default();
             entries
@@ -2372,7 +2426,10 @@ impl ExportSummary {
             if entries.get_exact(entry.namespace, entry.owner).is_some() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            entries.insert_new(entry.namespace, withheld.clone());
+            let constructor_index = entries.insert_new(entry.namespace, withheld.clone());
+            if constructor_index != entry.constructor_index {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             summary.withheld_order.push(entry.clone());
         }
         summary
@@ -3259,7 +3316,7 @@ impl ExportSummary {
         self.withheld_order.iter().filter_map(|entry| {
             self.withheld
                 .get(&entry.spelling)
-                .and_then(|withheld| withheld.get_exact(entry.namespace, entry.owner))
+                .and_then(|withheld| withheld.get_ordered(entry))
                 .map(|withheld| (entry.namespace, entry.spelling.as_str(), withheld))
         })
     }
@@ -3275,7 +3332,7 @@ impl ExportSummary {
             let withheld = self
                 .withheld
                 .get(&entry.spelling)
-                .and_then(|withheld| withheld.get_exact(entry.namespace, entry.owner))?;
+                .and_then(|withheld| withheld.get_ordered(entry))?;
             (withheld.kind == WithheldExportKind::OpaqueConstructor
                 && withheld.owner == Some(owner))
             .then_some((entry.spelling.as_str(), withheld))
@@ -3349,6 +3406,7 @@ impl ExportSummary {
                     spelling: (*spelling).to_owned(),
                     namespace,
                     owner: None,
+                    constructor_index: (namespace == WithheldNamespace::Constructor).then_some(0),
                 })
             })
             .collect();
@@ -3360,7 +3418,7 @@ impl ExportSummary {
                 WithheldNamespace::Nominal,
                 WithheldNamespace::Constructor,
             ] {
-                entries.insert_new(
+                let _ = entries.insert_new(
                     namespace,
                     WithheldExport {
                         kind: WithheldExportKind::Private,
@@ -3446,6 +3504,7 @@ impl ExportSummary {
             if let Some(withheld) = summary.withheld.get_mut(*spelling) {
                 withheld.term = None;
                 withheld.constructor.clear();
+                withheld.constructor_positions.clear();
             }
             summary.withheld_order.retain(|entry| {
                 entry.spelling != *spelling
@@ -3456,12 +3515,7 @@ impl ExportSummary {
             });
         }
         for (spelling, origin) in opaque_constructors {
-            summary.withheld_order.push(WithheldOrderEntry {
-                spelling: spelling.to_owned(),
-                namespace: WithheldNamespace::Constructor,
-                owner: None,
-            });
-            summary
+            let constructor_index = summary
                 .withheld
                 .entry(spelling.to_owned())
                 .or_default()
@@ -3473,6 +3527,12 @@ impl ExportSummary {
                         origin: Some(origin),
                     },
                 );
+            summary.withheld_order.push(WithheldOrderEntry {
+                spelling: spelling.to_owned(),
+                namespace: WithheldNamespace::Constructor,
+                owner: None,
+                constructor_index,
+            });
         }
         summary
             .hidden_nominals
@@ -5287,6 +5347,108 @@ mod tests {
         assert_eq!(exact_used, FULL_EXACT);
         assert_eq!(summary.constructors.len(), ALIAS_COUNT);
         assert_eq!(summary.hidden_constructors.len(), FAMILY_WIDTH - 1);
+    }
+
+    fn freeze_shared_spelling_withheld_owners_with_limit(
+        owner_count: usize,
+        limit: usize,
+    ) -> (Result<ExportSummary, ResolvedBuildFailure>, usize) {
+        let source = SourceFile::new("shared-withheld-owners.ash", "Seal")
+            .expect("the shared withheld-owner fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the constructor span should be ordered"))
+            .expect("the constructor span should belong to the fixture");
+        let defining = ModuleId::new(74);
+        let facade = ModuleId::new(75);
+        let mut export_candidate = ResolvedExportCandidate::default();
+        let mut type_work = TypeWorkBudget::with_limit(limit);
+        for index in 0..owner_count {
+            let owner = NominalTypeId::new(
+                defining,
+                u32::try_from(index).expect("the owner index should fit"),
+            );
+            for _ in 0..2 {
+                if export_candidate
+                    .try_insert_withheld(
+                        WithheldNamespace::Constructor,
+                        "Seal".to_owned(),
+                        WithheldExport {
+                            kind: WithheldExportKind::OpaqueConstructor,
+                            owner: Some(owner),
+                            origin: Some(Origin::Source(span)),
+                        },
+                        &mut type_work,
+                    )
+                    .is_err()
+                {
+                    return (Err(ResolvedBuildFailure::TypeResource), type_work.used());
+                }
+            }
+        }
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module: facade,
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported: ImportedFacts::default(),
+            direct_dependencies: Vec::new(),
+            declaration_order: Vec::new(),
+            interfaces: Vec::new(),
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate,
+            span,
+        });
+        let result = ExportSummary::freeze(
+            &resolved,
+            &[],
+            &[],
+            &[],
+            &[],
+            &mut type_work,
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        );
+        (result, type_work.used())
+    }
+
+    #[test]
+    fn shared_constructor_spelling_owner_indexes_use_exact_linear_budget() {
+        const OWNER_COUNT: usize = 1_024;
+        const STAGING_WORK: usize = OWNER_COUNT * 3;
+        const FREEZE_WORK: usize = OWNER_COUNT * 3;
+
+        let (short, short_used) = freeze_shared_spelling_withheld_owners_with_limit(
+            OWNER_COUNT,
+            STAGING_WORK + FREEZE_WORK - 1,
+        );
+        assert_eq!(short, Err(ResolvedBuildFailure::TypeResource));
+        assert_eq!(short_used, STAGING_WORK);
+
+        let (exact, exact_used) = freeze_shared_spelling_withheld_owners_with_limit(
+            OWNER_COUNT,
+            STAGING_WORK + FREEZE_WORK,
+        );
+        let summary = exact.expect("the exact linear owner-index budget should freeze");
+        assert_eq!(exact_used, STAGING_WORK + FREEZE_WORK);
+        assert_eq!(summary.withheld_count(), OWNER_COUNT);
+        assert_eq!(
+            summary
+                .withheld_export(WithheldNamespace::Constructor, "Seal")
+                .and_then(|withheld| withheld.owner),
+            Some(NominalTypeId::new(ModuleId::new(74), 0)),
+        );
+        let mut enumerated = 0;
+        for (index, (namespace, spelling, withheld)) in summary.withheld().enumerate() {
+            assert_eq!(namespace, WithheldNamespace::Constructor);
+            assert_eq!(spelling, "Seal");
+            assert_eq!(
+                withheld.owner,
+                Some(NominalTypeId::new(
+                    ModuleId::new(74),
+                    u32::try_from(index).expect("the retained owner index should fit"),
+                )),
+            );
+            enumerated += 1;
+        }
+        assert_eq!(enumerated, OWNER_COUNT);
     }
 
     fn freeze_hidden_interface_summary_with_limit(

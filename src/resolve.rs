@@ -4782,7 +4782,7 @@ mod tests {
         );
         private_opaque.expect("the private opaque import should establish its staging baseline");
 
-        let opaque_exact_limit = private_opaque_used + 5;
+        let opaque_exact_limit = private_opaque_used + 6;
         let (opaque_short, opaque_short_used) = resolve_import_fixture_with_type_limit(
             PUBLIC_OPAQUE,
             OPAQUE_DEPENDENCY,
@@ -4875,7 +4875,7 @@ mod tests {
         const PRIVATE: &str = "import dependency (Token as FirstToken, Token as SecondToken)\n";
         const PUBLIC: &str = "pub import dependency (Token as FirstToken, Token as SecondToken)\n";
         const WITHHELD_ENTRY_COUNT: usize = 5;
-        const RETAINED_CANDIDATE_WORK: usize = 8;
+        const RETAINED_CANDIDATE_WORK: usize = 10;
 
         let (private, private_used) =
             resolve_import_fixture_with_type_limit(PRIVATE, DEPENDENCY, TYPE_WORK_LIMIT);
@@ -4898,7 +4898,7 @@ mod tests {
                 .find("Token as SecondToken")
                 .expect("the repeated selector should exist"),
         );
-        assert_eq!(short_used, private_used + 2 + WITHHELD_ENTRY_COUNT + 4 + 2,);
+        assert_eq!(short_used, private_used + 2 + WITHHELD_ENTRY_COUNT + 6 + 2,);
 
         let (exact, exact_used) =
             resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit);
