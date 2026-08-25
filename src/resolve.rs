@@ -1609,20 +1609,18 @@ impl Resolver {
                     "imported namespace retention exceeded its work budget",
                 )
             })?;
-        namespaces
-            .withheld
-            .extend(summary.withheld().map(|(namespace, spelling, withheld)| {
-                (
-                    (spelling.to_owned(), namespace),
-                    WithheldImport {
-                        kind: withheld.kind,
-                        declaration: withheld
-                            .origin
-                            .as_ref()
-                            .map(crate::source::Origin::primary_span),
-                    },
-                )
-            }));
+        for (namespace, spelling, withheld) in summary.withheld() {
+            namespaces
+                .withheld
+                .entry((spelling.to_owned(), namespace))
+                .or_insert_with(|| WithheldImport {
+                    kind: withheld.kind,
+                    declaration: withheld
+                        .origin
+                        .as_ref()
+                        .map(crate::source::Origin::primary_span),
+                });
+        }
         Ok(namespaces)
     }
 

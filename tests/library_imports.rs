@@ -921,6 +921,58 @@ fn owner_distinct_opaque_constructor_markers_survive_one_shared_facade() {
 }
 
 #[test]
+fn opaque_constructor_diagnostics_follow_facade_import_order() {
+    for (facade, defining_module) in [
+        (
+            concat!(
+                "pub import a (A as PublicA, A as AlternateA)\n",
+                "pub import b (B as PublicB)\n",
+            ),
+            "a.ash",
+        ),
+        (
+            concat!(
+                "pub import b (B as PublicB, B as AlternateB)\n",
+                "pub import a (A as PublicA)\n",
+            ),
+            "b.ash",
+        ),
+    ] {
+        for entry in [
+            "import facade (Seal)\n".to_owned(),
+            concat!(
+                "import facade as Facade\n\n",
+                "main : Unit -> Facade.PublicA\n",
+                "main () = Facade.Seal(1)\n",
+            )
+            .to_owned(),
+        ] {
+            let tree = ModuleTree::create();
+            let graph = load(
+                &tree,
+                &entry,
+                &[
+                    ("a.ash", "pub opaque type A = Seal(Int)\n"),
+                    ("b.ash", "pub opaque type B = Seal(Int)\n"),
+                    ("facade.ash", facade),
+                ],
+            );
+
+            let error = resolve_entry_error(&graph);
+            let diagnostic = error.diagnostic();
+            let defining = module_named(&graph, defining_module);
+            assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+            assert_eq!(diagnostic.found.as_deref(), Some("Seal"));
+            assert_eq!(diagnostic.related.len(), 1);
+            assert_eq!(
+                diagnostic.related[0].span().source(),
+                defining.source().id(),
+            );
+        }
+    }
+}
+
+#[test]
 fn method_only_reexport_and_imported_scheme_retain_hidden_interface_closure() {
     for (facade_selection, entry_name, exported_global) in [
         ("equal as facade_equal", "facade_equal", false),
