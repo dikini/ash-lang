@@ -30,8 +30,9 @@ Current source does not carry a second grammar or compiler path for it.
 authorized core-versus-library audit and simplification analysis. The paired
 [audit](modular-ash/core-library-evidence.md) and
 [closure report](modular-ash/closure.md) retain that final milestone
-checkpoint. Task and plan cleanup, repeated root verification, the closure
-commit, and the annotated tag remain lifecycle mechanics rather than missing
+checkpoint. Task and plan cleanup, repeated root verification, independent
+reviews, and the closure commit completed the lifecycle mechanics. The
+annotated `modular-ash` tag retains that commit. None of those mechanics added
 language work.
 
 The proposed type-system additions cross parsing, name resolution, kind and
@@ -53,8 +54,8 @@ modular-ash -> lib-ash -> pack-ash
 
 The current dialect is complete at its final milestone checkpoint. The retained
 core-versus-library audit, simplification analysis, module and interface
-evidence, and closure report establish the boundary; the annotated
-`modular-ash` tag will retain the final verified state after lifecycle cleanup.
+evidence, and closure report establish the boundary. The annotated
+`modular-ash` tag retains the final verified closure commit.
 No proposed type-system, re-export, package, cache, or linker mechanism entered
 that closure.
 

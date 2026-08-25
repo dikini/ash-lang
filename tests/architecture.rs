@@ -129,41 +129,45 @@ fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories()
 
 #[test]
 fn authenticated_interface_state_ends_at_the_core_synthesis_boundary() {
-    let retains_linked_registry =
-        validated_program_retains_linked_registry(EVIDENCE_VALIDATION_SOURCE);
+    let has_exact_retained_shape =
+        validated_program_has_exact_retained_shape(EVIDENCE_VALIDATION_SOURCE);
     let releases_before_core_validation = interface_state_release_is_ordered(DRIVER_SOURCE);
 
     assert!(
-        !retains_linked_registry && releases_before_core_validation,
-        "authenticated interface state must not retain the validator registry and the driver must release the validated interface program after synthesis finish but before Core validation; retains registry: {retains_linked_registry}, releases at boundary: {releases_before_core_validation}"
+        has_exact_retained_shape && releases_before_core_validation,
+        "authenticated interface state must retain exactly the resolved source program and the driver must release the validated interface program after synthesis finish but before Core validation; exact retained shape: {has_exact_retained_shape}, releases at boundary: {releases_before_core_validation}"
     );
 }
 
-fn validated_program_retains_linked_registry(source: &str) -> bool {
+fn validated_program_has_exact_retained_shape(source: &str) -> bool {
     let tokens = rust_code_tokens(source);
-    let validated_program = code_tokens_between(
+    let Some(validated_program) = code_tokens_in_immediate_braced_body_after(
         &tokens,
         &["pub", "struct", "ValidatedInterfaceProgram"],
-        &["impl", "ValidatedInterfaceProgram"],
-    )
-    .expect("the validated interface capability should retain a visible definition");
-    validated_program.contains(&"LinkedInterfaceRegistry")
+    ) else {
+        return false;
+    };
+    code_tokens_without_attributes(validated_program).is_some_and(|fields| {
+        fields == ["source", ":", "ResolvedModuleProgram"]
+            || fields == ["source", ":", "ResolvedModuleProgram", ","]
+    })
 }
 
 fn interface_state_release_is_ordered(source: &str) -> bool {
     let tokens = rust_code_tokens(source);
-    let driver_pipeline = code_tokens_between(
+    let Some(driver_pipeline) = code_tokens_in_braced_body_after(
         &tokens,
         &["fn", "run_path_with_consumers_and_constraint_budget"],
-        &["fn", "entry_failure"],
-    )
-    .expect("the driver should retain one ordered modular pipeline");
-    let synthesis_finish = code_token_sequence_position(
+    ) else {
+        return false;
+    };
+    let Some(synthesis_finish) = code_token_sequence_position_at_top_level(
         driver_pipeline,
         &["elaborator", ".", "finish", "(", "typed", ".", "node", ")"],
-    )
-    .expect("the driver should finish Core synthesis");
-    let core_validation = code_token_sequence_position(
+    ) else {
+        return false;
+    };
+    let Some(core_validation) = code_token_sequence_position_at_top_level(
         driver_pipeline,
         &[
             "validator",
@@ -177,9 +181,10 @@ fn interface_state_release_is_ordered(source: &str) -> bool {
             "module_sources",
             ")",
         ],
-    )
-    .expect("the driver should independently validate synthesized Core");
-    code_token_sequence_position(
+    ) else {
+        return false;
+    };
+    top_level_statement_position(
         driver_pipeline,
         &[
             ":",
@@ -210,7 +215,7 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
         }
         impl ValidatedInterfaceProgram {}
     "#;
-    assert!(!validated_program_retains_linked_registry(
+    assert!(validated_program_has_exact_retained_shape(
         registry_in_prose
     ));
 
@@ -221,7 +226,9 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
         }
         impl ValidatedInterfaceProgram {}
     "#;
-    assert!(validated_program_retains_linked_registry(registry_in_code));
+    assert!(!validated_program_has_exact_retained_shape(
+        registry_in_code
+    ));
 
     let commented_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
@@ -267,6 +274,125 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
         fn entry_failure() {}
     "#;
     assert!(interface_state_release_is_ordered(actual_drop));
+}
+
+#[test]
+fn validated_interface_program_guard_rejects_aliases_and_extra_fields() {
+    let exact_shape = r#"
+        /// Prose may name LinkedInterfaceRegistry without retaining one.
+        #[derive(Debug)]
+        pub struct ValidatedInterfaceProgram {
+            #[doc = "The authenticated source program."]
+            source : ResolvedModuleProgram,
+        }
+        impl ValidatedInterfaceProgram {}
+    "#;
+    assert!(validated_program_has_exact_retained_shape(exact_shape));
+
+    let aliased_source = r#"
+        type RetainedState = ResolvedModuleProgram;
+        pub struct ValidatedInterfaceProgram {
+            source: RetainedState,
+        }
+        impl ValidatedInterfaceProgram {}
+    "#;
+    let extra_field = r#"
+        pub struct ValidatedInterfaceProgram {
+            source: ResolvedModuleProgram,
+            retained: OtherState,
+        }
+        impl ValidatedInterfaceProgram {}
+    "#;
+    let unit_struct_before_macro_body = r#"
+        pub struct ValidatedInterfaceProgram;
+        retain_shape! { source: ResolvedModuleProgram, }
+        impl ValidatedInterfaceProgram {}
+    "#;
+    let alias_has_exact_shape = validated_program_has_exact_retained_shape(aliased_source);
+    let extra_field_has_exact_shape = validated_program_has_exact_retained_shape(extra_field);
+    let unit_struct_has_exact_shape =
+        validated_program_has_exact_retained_shape(unit_struct_before_macro_body);
+    assert!(
+        !alias_has_exact_shape && !extra_field_has_exact_shape && !unit_struct_has_exact_shape,
+        "the guard must reject indirect, unknown, and non-record retained state; alias exact: {alias_has_exact_shape}, extra field exact: {extra_field_has_exact_shape}, unit struct exact: {unit_struct_has_exact_shape}"
+    );
+}
+
+#[test]
+fn interface_release_guard_rejects_nested_control_flow_and_delimiters() {
+    let closure_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            let release_later = || {
+                ::std::mem::drop(validated_interfaces);
+            };
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let unreachable_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            if false {
+                ::std::mem::drop(validated_interfaces);
+            }
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let parenthesized_macro_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            ignore!(marker; ::std::mem::drop(validated_interfaces););
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let bracketed_macro_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            ignore!([marker; ::std::mem::drop(validated_interfaces);]);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let mismatched_delimiters = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            ignore!([marker);
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let delimiter_character_literals = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let unchecked = elaborator.finish(typed.node)?;
+            if false {
+                let closing = '}';
+                ::std::mem::drop(validated_interfaces);
+                let opening = b'{';
+            }
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let closure_looks_ordered = interface_state_release_is_ordered(closure_drop);
+    let unreachable_looks_ordered = interface_state_release_is_ordered(unreachable_drop);
+    let macro_input_looks_ordered = interface_state_release_is_ordered(parenthesized_macro_drop);
+    let bracketed_input_looks_ordered = interface_state_release_is_ordered(bracketed_macro_drop);
+    let mismatched_looks_ordered = interface_state_release_is_ordered(mismatched_delimiters);
+    let character_literals_look_ordered =
+        interface_state_release_is_ordered(delimiter_character_literals);
+    assert!(
+        !closure_looks_ordered
+            && !unreachable_looks_ordered
+            && !macro_input_looks_ordered
+            && !bracketed_input_looks_ordered
+            && !mismatched_looks_ordered
+            && !character_literals_look_ordered,
+        "the release must be an executed top-level statement; closure: {closure_looks_ordered}, if false: {unreachable_looks_ordered}, macro input: {macro_input_looks_ordered}, bracketed input: {bracketed_input_looks_ordered}, mismatched: {mismatched_looks_ordered}, character literals: {character_literals_look_ordered}"
+    );
 }
 
 fn is_forbidden_interface_identifier(identifier: &str) -> bool {
@@ -381,7 +507,18 @@ fn rust_code_tokens(source: &str) -> Vec<&str> {
         }
         if matches!(
             bytes[cursor],
-            b'.' | b'(' | b')' | b';' | b',' | b'&' | b':' | b'!'
+            b'.' | b'('
+                | b')'
+                | b'{'
+                | b'}'
+                | b'['
+                | b']'
+                | b'#'
+                | b';'
+                | b','
+                | b'&'
+                | b':'
+                | b'!'
         ) {
             tokens.push(&source[cursor..cursor + 1]);
         }
@@ -400,18 +537,138 @@ fn code_token_sequence_position(tokens: &[&str], sequence: &[&str]) -> Option<us
         .position(|window| window == sequence)
 }
 
-fn code_tokens_between<'a>(
+fn code_tokens_in_braced_body_after<'a>(
     tokens: &'a [&'a str],
-    start: &[&str],
-    end: &[&str],
+    declaration: &[&str],
 ) -> Option<&'a [&'a str]> {
-    let body_start = code_token_sequence_position(tokens, start)? + start.len();
-    let body_end = body_start + code_token_sequence_position(&tokens[body_start..], end)?;
-    Some(&tokens[body_start..body_end])
+    let declaration_end = code_token_sequence_position(tokens, declaration)? + declaration.len();
+    let open = declaration_end
+        + tokens[declaration_end..]
+            .iter()
+            .position(|token| *token == "{")?;
+    code_tokens_in_braced_body_at(tokens, open)
+}
+
+fn code_tokens_in_immediate_braced_body_after<'a>(
+    tokens: &'a [&'a str],
+    declaration: &[&str],
+) -> Option<&'a [&'a str]> {
+    let open = code_token_sequence_position(tokens, declaration)? + declaration.len();
+    if tokens.get(open) != Some(&"{") {
+        return None;
+    }
+    code_tokens_in_braced_body_at(tokens, open)
+}
+
+fn code_tokens_in_braced_body_at<'a>(tokens: &'a [&'a str], open: usize) -> Option<&'a [&'a str]> {
+    let mut depth = 0usize;
+    for (offset, token) in tokens[open..].iter().enumerate() {
+        match *token {
+            "{" => depth += 1,
+            "}" => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(&tokens[open + 1..open + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn code_tokens_without_attributes<'a>(tokens: &'a [&'a str]) -> Option<Vec<&'a str>> {
+    let mut code = Vec::with_capacity(tokens.len());
+    let mut cursor = 0usize;
+    while cursor < tokens.len() {
+        if tokens[cursor] != "#" {
+            code.push(tokens[cursor]);
+            cursor += 1;
+            continue;
+        }
+        cursor += 1;
+        if tokens.get(cursor) == Some(&"!") {
+            cursor += 1;
+        }
+        if tokens.get(cursor) != Some(&"[") {
+            return None;
+        }
+        let mut depth = 1usize;
+        cursor += 1;
+        while cursor < tokens.len() && depth > 0 {
+            match tokens[cursor] {
+                "[" => depth += 1,
+                "]" => depth -= 1,
+                _ => {}
+            }
+            cursor += 1;
+        }
+        if depth != 0 {
+            return None;
+        }
+    }
+    Some(code)
+}
+
+fn code_token_sequence_position_at_top_level(tokens: &[&str], sequence: &[&str]) -> Option<usize> {
+    if sequence.is_empty() {
+        return None;
+    }
+    let mut delimiters = Vec::new();
+    let mut sequence_position = None;
+    for position in 0..tokens.len() {
+        if sequence_position.is_none()
+            && delimiters.is_empty()
+            && tokens[position..].starts_with(sequence)
+        {
+            sequence_position = Some(position);
+        }
+        if !update_delimiter_stack(&mut delimiters, tokens[position]) {
+            return None;
+        }
+    }
+    delimiters.is_empty().then_some(sequence_position).flatten()
+}
+
+fn top_level_statement_position(tokens: &[&str], statement: &[&str]) -> Option<usize> {
+    if statement.is_empty() {
+        return None;
+    }
+    let mut delimiters = Vec::new();
+    let mut statement_position = None;
+    for position in 0..tokens.len() {
+        if statement_position.is_none()
+            && delimiters.is_empty()
+            && tokens[position..].starts_with(statement)
+            && (position == 0 || tokens[position - 1] == ";")
+        {
+            statement_position = Some(position);
+        }
+        if !update_delimiter_stack(&mut delimiters, tokens[position]) {
+            return None;
+        }
+    }
+    delimiters
+        .is_empty()
+        .then_some(statement_position)
+        .flatten()
+}
+
+fn update_delimiter_stack(delimiters: &mut Vec<&str>, token: &str) -> bool {
+    match token {
+        "{" => delimiters.push("}"),
+        "(" => delimiters.push(")"),
+        "[" => delimiters.push("]"),
+        "}" | ")" | "]" => return delimiters.pop() == Some(token),
+        _ => {}
+    }
+    true
 }
 
 fn rust_literal_end(source: &[u8], cursor: usize) -> Option<usize> {
     let quote = match source.get(cursor..)? {
+        [b'\'', ..] => return rust_character_literal_end(source, cursor),
+        [b'b', b'\'', ..] => return rust_character_literal_end(source, cursor + 1),
         [b'"', ..] => cursor,
         [b'b' | b'c', b'"', ..] => cursor + 1,
         [b'r', rest @ ..] => return rust_raw_literal_end(source, cursor, rest),
@@ -427,6 +684,54 @@ fn rust_literal_end(source: &[u8], cursor: usize) -> Option<usize> {
         }
     }
     Some(source.len())
+}
+
+fn rust_character_literal_end(source: &[u8], quote: usize) -> Option<usize> {
+    debug_assert_eq!(source[quote], b'\'');
+    let character = quote + 1;
+    let character_end = if source.get(character) == Some(&b'\\') {
+        rust_character_escape_end(source, character)?
+    } else {
+        if matches!(source.get(character), Some(b'\'' | b'\n' | b'\r')) {
+            return None;
+        }
+        let width = std::str::from_utf8(source.get(character..)?)
+            .ok()?
+            .chars()
+            .next()?
+            .len_utf8();
+        character + width
+    };
+    (source.get(character_end) == Some(&b'\'')).then_some(character_end + 1)
+}
+
+fn rust_character_escape_end(source: &[u8], escape: usize) -> Option<usize> {
+    match source.get(escape + 1)? {
+        b'\'' | b'"' | b'n' | b'r' | b't' | b'\\' | b'0' => Some(escape + 2),
+        b'x' => source
+            .get(escape + 2..escape + 4)
+            .filter(|digits| digits.iter().all(u8::is_ascii_hexdigit))
+            .map(|_| escape + 4),
+        b'u' if source.get(escape + 2) == Some(&b'{') => {
+            let digits_start = escape + 3;
+            let close = digits_start
+                + source[digits_start..]
+                    .iter()
+                    .position(|byte| *byte == b'}')?;
+            let digits = &source[digits_start..close];
+            let digit_count = digits
+                .iter()
+                .filter(|byte| byte.is_ascii_hexdigit())
+                .count();
+            (digit_count > 0
+                && digit_count <= 6
+                && digits
+                    .iter()
+                    .all(|byte| byte.is_ascii_hexdigit() || *byte == b'_'))
+            .then_some(close + 1)
+        }
+        _ => None,
+    }
 }
 
 fn rust_raw_literal_end(source: &[u8], raw_prefix: usize, rest: &[u8]) -> Option<usize> {
@@ -451,6 +756,15 @@ fn rust_raw_literal_end(source: &[u8], raw_prefix: usize, rest: &[u8]) -> Option
 
 #[test]
 fn interface_inventory_guard_reads_code_identifiers_but_not_prose() {
+    assert!(
+        rust_code_tokens(r#"'}' b'{' '\'' '\x7d' '\u{7b}' b'\x7b'"#).is_empty(),
+        "character and byte-character contents must not become code tokens"
+    );
+    assert_eq!(
+        rust_code_tokens("'a 'static '_ 'label:"),
+        ["a", "static", "_", "label", ":"],
+        "lifetimes and labels must remain code rather than character literals"
+    );
     assert_eq!(
         rust_code_identifiers(
             r###"

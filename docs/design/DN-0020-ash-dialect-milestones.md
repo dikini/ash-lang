@@ -16,10 +16,10 @@ evidence. The `mini-ash` Git tag, closure report, and integration evidence retai
 the historical dialect. The
 [current specification](../../spec/README.md) defines Modular Ash; these
 type-class-like interfaces and `impl` are not module signatures. The final
-cross-cutting independent reviews and root verification still follow task and
-plan cleanup. Those reviews, the closure commit, and the annotated
-`modular-ash` tag are a pending lifecycle gate rather than missing semantics.
-This note records the result but did not authorize that work.
+cross-cutting independent reviews and root verification completed the lifecycle
+gate after task and plan cleanup. The annotated `modular-ash` tag retains the
+final closure commit. Those mechanics did not supply missing semantics, and
+this note records the result but did not authorize that work.
 
 ## Question
 
@@ -126,9 +126,10 @@ The leading trajectory is:
 4. Separately authorize and compare representative core primitives with library
    definitions. This is complete.
 5. Close Modular Ash with its own simplification analysis and final
-   `modular-ash` checkpoint. The dialect and audit checkpoint is complete;
-   lifecycle cleanup, final cross-cutting independent reviews, root
-   verification, the closure commit, and the tag remain task mechanics.
+   `modular-ash` checkpoint. This is complete. Lifecycle cleanup removed the
+   temporary task and plan, final cross-cutting independent reviews and root
+   verification closed the gate, and the annotated tag retains the closure
+   commit.
 
 Keeping both Mini-Ash and Modular Ash runnable in the same current compiler
 would add grammar selection, driver selection, compatibility lowering, and

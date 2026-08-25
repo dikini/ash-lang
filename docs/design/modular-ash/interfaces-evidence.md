@@ -738,6 +738,7 @@ Transition cleanup is complete in this report-and-cleanup commit: the completed
 proposal, task, execution plan, their index entries, and all live links to them
 have been removed. Git retains their history. This cleanup does not move the
 `ee998a0` product boundary. The product remains unmerged into `main`, although
-current `main` at `8f4de9a` is incorporated and remains an ancestor. The retained
-unspecialized trace remains the baseline for a later separately authorized
-comparison; that audit remains separate and has not begun.
+current `main` at `8f4de9a` is incorporated and remains an ancestor. The
+retained unspecialized trace supplied the baseline for the separately
+authorized core-versus-library comparison. That audit is complete and retained
+in the [core-and-library evidence](core-library-evidence.md).

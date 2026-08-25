@@ -2,9 +2,9 @@
 
 This report records the initial core-versus-library audit for Modular Ash. It
 is informative, not normative. The [Ash specification](../../../spec/README.md)
-alone defines the current language and runtime behavior. The active
-[closure task](../../tasks/TASK-0014-finish-modular-ash.md) authorizes this
-bounded audit but does not define semantics.
+alone defines the current language and runtime behavior. A completed
+implementation task authorized this bounded audit but did not define semantics;
+Git history retains that temporary authorization artifact.
 
 ## Scope and representative
 
@@ -297,7 +297,7 @@ cargo test --locked --test architecture --test interfaces --test interface_modul
 cargo test --locked --test interface_corpus --test module_elaboration
 cargo test --locked --lib
 cargo clippy --locked --all-targets -- -D warnings
-markdownlint --disable MD013 -- docs/design/modular-ash/core-library-evidence.md docs/design/modular-ash/evidence.md docs/design/modular-ash/interfaces-evidence.md docs/tasks/TASK-0014-finish-modular-ash.md
+markdownlint --disable MD013 -- README.md spec docs
 git diff --check
 ```
 
@@ -325,5 +325,6 @@ shape or validity, evaluation, or observation rendering.
 The existing [passive-module evidence](evidence.md) and
 [interface evidence](interfaces-evidence.md) retain the broader module and
 interface boundaries. The [Modular Ash closure report](closure.md) records the
-current reviewed result across the paired audit and those retained boundaries.
-Lifecycle cleanup, repeated final verification, and tagging remain.
+reviewed result across the paired audit and those retained boundaries.
+Lifecycle cleanup removed the temporary task and plan, and the annotated
+`modular-ash` tag retains the final verified closure commit.

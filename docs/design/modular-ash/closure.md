@@ -175,11 +175,18 @@ checkpoint. The specification remains the source of current language truth.
 
 ## Verification checkpoint
 
-A fresh pre-cleanup `cargo xtask verify` passed at this closure checkpoint. It
-ran formatting, locked metadata and build checks, denied-warning Clippy, every
-workspace unit and integration test, and denied-warning rustdoc. The exact test
-inventory was 298 library tests, 10 `ash` binary tests, 625 integration tests,
-and one `xtask` test: 934 tests with no failures.
+Lifecycle cleanup removed the completed implementation task and its temporary
+execution plan from the current tree. The initial cleanup gate consisted of
+fresh post-cleanup root verification, an independent specification-and-authority
+review, and an independent code-quality review. Those reviewers inspected the
+cleanup documents as an uncommitted diff while the `modular-ash` tag was absent
+and approved them before the final cross-cutting whole-branch review.
+
+A fresh pre-cleanup `cargo xtask verify` passed at the retained implementation
+checkpoint. It ran formatting, locked metadata and build checks, denied-warning
+Clippy, every workspace unit and integration test with no failures, and
+denied-warning rustdoc. A separate inventory listed 298 library tests, 10 `ash`
+binary tests, 625 integration tests, and one `xtask` test: 934 tests.
 
 The focused architecture target passed all eight tests. The stable equality
 maintenance search returned the recorded 15 production files; the interface
@@ -191,10 +198,50 @@ The documentation checkpoint used this full-tree Markdown command:
 markdownlint --disable MD013 -- README.md spec docs
 ```
 
-It reported no findings and covers all six changed documents. Manual relative-
+It reported no findings and covered all six changed documents. Manual relative-
 link and anchor review, authority review, and `git diff --check` also passed.
-The final lifecycle increment will repeat root verification and independent
-reviews after removing this task and its temporary execution plan.
+
+A fresh initial post-cleanup `cargo xtask verify` passed during uncommitted
+cleanup review, before the final whole-branch guard corrections. It repeated
+formatting, locked metadata and build checks, denied-warning Clippy, every
+workspace unit and integration test with no failures, and denied-warning
+rustdoc. A separate
+`cargo test --locked --workspace --all-targets --all-features -- --list`
+inventory listed 298 library tests, 10 `ash` binary tests, 625 integration
+tests, and one `xtask` test: 934 tests.
+
+The full-tree Markdown command above and `git diff --check` also reported no
+findings. Manual review confirmed every changed relative link and anchor, while
+a current-tree target scan confirmed that all relative links in 80 Markdown
+files point to existing paths. The authority review kept specification claims
+normative, retained reports and design notes informative, and exploratory
+`lib-ash` pressure outside this completed milestone. Stale-reference searches
+found no reference to the removed task or plan and no active or not-begun audit
+wording. The retained maintenance searches returned the exact 15-file direct
+equality path, four equality-specific Core joins, eight-file interface path,
+and no interface-family identifier in `src/core` or `src/eval`.
+
+The final cross-cutting whole-branch review found that the lifetime guard could
+accept aliased or additional wrapper state and could count nested-control-flow
+or macro-contained drop tokens as an executed release. Adversarial tests first
+required the wrapper guard to accept only the exact immediate retained shape,
+then required delimiter-aware matching of the synthesis, top-level drop
+statement, and Core-validation sequence. The corrected guards rejected
+aliases, extra fields, nested or unreachable drops, macro-contained tokens, and
+mismatched delimiters. The same whole-branch reviewer approved the corrected
+branch after these two Minor findings.
+
+After every review approved the exact state, a fresh final `cargo xtask verify`
+passed. It ran formatting, locked metadata and build checks, denied-warning
+Clippy, every workspace unit and integration test with no failures, and
+denied-warning rustdoc. A separate
+`cargo test --locked --workspace --all-targets --all-features -- --list`
+inventory listed 298 library tests, 10 `ash` binary tests, 627 integration
+tests, and one `xtask` test: 936 tests. The focused architecture target ran all
+10 tests with no failures. The `modular-ash` tag remained absent throughout
+uncommitted review; after this final verification, the closure commit recorded
+the exact reviewed state and the annotated unsigned tag was applied to that
+commit. This ordering kept the marker from claiming an unreviewed state.
 
 ## Intentional exclusions and later pressure
 
@@ -212,7 +259,6 @@ elimination; effects and handlers; and a selectable current-tree Mini-Ash
 compiler path. Associated types and specialization remain later design
 pressure, not unresolved Modular Ash semantics.
 
-The final annotated unsigned `modular-ash` tag will retain this final dialect
-checkpoint after lifecycle cleanup and repeated verification. Creating that
-marker is task mechanics; it does not supply missing language semantics or
-change the final state recorded here.
+The annotated unsigned `modular-ash` tag on the final closure commit retains
+this final dialect checkpoint. The tag is lifecycle metadata; it does not
+supply missing language semantics or change the final state recorded here.

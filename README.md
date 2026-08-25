@@ -17,8 +17,11 @@ main () = 42
 The [canonical specification](spec/README.md) defines the current language.
 The [`ash` tool guide](docs/tools/ash.md) explains module roots, invocation,
 output, and failures. The earlier single-file Mini-Ash milestone remains
-available at the `mini-ash` Git tag; it is not a selectable dialect in the
-current source tree.
+available at the annotated `mini-ash` Git tag. The annotated `modular-ash` Git
+tag on the final closure commit retains the completed current milestone with
+passive source modules and method-only interfaces. Current source contains no
+dialect selector; the tags retain historical milestone states rather than
+selectable compiler modes.
 
 Project artifacts answer different questions:
 
