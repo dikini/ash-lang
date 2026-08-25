@@ -35,6 +35,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0024: Executable Learning and Evidence Stream](DN-0024-executable-learning-and-evidence-stream.md)
   — a version-pinned external learning corpus, forward migration, and
   cooperative design-evidence flow.
+- [DN-0025: Library and Package Milestones](DN-0025-library-and-package-milestones.md)
+  — the proposed `modular-ash` closure and separate `lib-ash` language-library
+  and `pack-ash` package-artifact descendants.
 - [Passive-module evidence](modular-ash/evidence.md) — implementation,
   resource, locality, historical-comparison, and verification evidence for the
   first Modular Ash increment.
