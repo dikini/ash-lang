@@ -1132,16 +1132,27 @@ impl Resolver {
                 "implementation selector processing exceeded its work budget",
             )
         })?;
+        self.charge_implementation_selector_summary_probe(selector_span)?;
         let selected_interface = match summary.interface(&interface.text) {
             Some(exported) => exported.id,
-            None if summary.nominal(&interface.text).is_some()
-                || summary.constructor(&interface.text).is_some()
-                || summary.term(&interface.text).is_some()
-                || summary.method(&interface.text).is_some() =>
-            {
-                return Err(interface_kind_error(interface.span, &interface.text));
-            }
             None => {
+                self.charge_implementation_selector_summary_probe(selector_span)?;
+                if summary.nominal(&interface.text).is_some() {
+                    return Err(interface_kind_error(interface.span, &interface.text));
+                }
+                self.charge_implementation_selector_summary_probe(selector_span)?;
+                if summary.constructor(&interface.text).is_some() {
+                    return Err(interface_kind_error(interface.span, &interface.text));
+                }
+                self.charge_implementation_selector_summary_probe(selector_span)?;
+                if summary.term(&interface.text).is_some() {
+                    return Err(interface_kind_error(interface.span, &interface.text));
+                }
+                self.charge_implementation_selector_summary_probe(selector_span)?;
+                if summary.method(&interface.text).is_some() {
+                    return Err(interface_kind_error(interface.span, &interface.text));
+                }
+                self.charge_implementation_selector_summary_probe(selector_span)?;
                 let withheld = summary
                     .withheld_export(WithheldNamespace::Nominal, &interface.text)
                     .map(|withheld| WithheldImport {
@@ -1178,6 +1189,19 @@ impl Resolver {
             }
         }
         Ok(())
+    }
+
+    fn charge_implementation_selector_summary_probe(
+        &mut self,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.constraint_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "implementation selector summary lookup exceeded its work budget",
+            )
+        })
     }
 
     fn clone_summary_namespaces(
@@ -4240,7 +4264,7 @@ mod tests {
     struct ImportBudgetFixture(PathBuf);
 
     impl ImportBudgetFixture {
-        fn create(entry: &str) -> Self {
+        fn create(entry: &str, dependency: &str) -> Self {
             loop {
                 let id = IMPORT_BUDGET_FIXTURE_IDS.fetch_add(1, Ordering::Relaxed);
                 let directory = std::env::temp_dir()
@@ -4249,14 +4273,8 @@ mod tests {
                     Ok(()) => {
                         fs::write(directory.join("entry.ash"), entry)
                             .expect("the import budget entry should be writable");
-                        fs::write(
-                            directory.join("dependency.ash"),
-                            concat!(
-                                "pub interface Equal<A> {\nequal : A -> A\n}\n",
-                                "pub impl Equal<Int> {\nequal value = value\n}\n",
-                            ),
-                        )
-                        .expect("the import budget dependency should be writable");
+                        fs::write(directory.join("dependency.ash"), dependency)
+                            .expect("the import budget dependency should be writable");
                         return Self(directory);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -4276,7 +4294,22 @@ mod tests {
         entry: &str,
         limit: usize,
     ) -> (Result<ResolvedModule, ResolveError>, usize) {
-        let fixture = ImportBudgetFixture::create(entry);
+        resolve_import_fixture_with_dependency_and_limit(
+            entry,
+            concat!(
+                "pub interface Equal<A> {\nequal : A -> A\n}\n",
+                "pub impl Equal<Int> {\nequal value = value\n}\n",
+            ),
+            limit,
+        )
+    }
+
+    fn resolve_import_fixture_with_dependency_and_limit(
+        entry: &str,
+        dependency: &str,
+        limit: usize,
+    ) -> (Result<ResolvedModule, ResolveError>, usize) {
+        let fixture = ImportBudgetFixture::create(entry, dependency);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the import budget graph should load");
         let dependency = graph
@@ -4363,16 +4396,23 @@ mod tests {
 
     #[test]
     fn duplicate_impl_route_charges_lookup_without_retaining_a_second_fact() {
-        let (one, one_used) =
+        let (one_short, one_short_used) =
             resolve_import_fixture_with_limit("import dependency (impl Equal)\n", 24);
+        let error =
+            one_short.expect_err("one missing interface-index probe should reject the selector");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(one_short_used, 24);
+
+        let (one, one_used) =
+            resolve_import_fixture_with_limit("import dependency (impl Equal)\n", 25);
         one.expect("one explicit implementation route should resolve");
         let (two, two_used) = resolve_import_fixture_with_limit(
             "import dependency (impl Equal)\nimport dependency (impl Equal)\n",
-            29,
+            31,
         );
         let two = two.expect("the duplicate implementation route should deduplicate");
-        assert_eq!(two_used, 29);
-        assert_eq!(one_used, 24);
+        assert_eq!(two_used, 31);
+        assert_eq!(one_used, 25);
         let implementation = two
             .imported_facts()
             .implementations()
@@ -4387,11 +4427,73 @@ mod tests {
 
         let (short, short_used) = resolve_import_fixture_with_limit(
             "import dependency (impl Equal)\nimport dependency (impl Equal)\n",
-            28,
+            30,
         );
         let error = short.expect_err("one missing route unit should reject the duplicate edge");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
-        assert_eq!(short_used, 28);
+        assert_eq!(short_used, 30);
+    }
+
+    #[test]
+    fn implementation_selector_index_probes_use_exact_constraint_budgets() {
+        let (nominal_short, nominal_short_used) = resolve_import_fixture_with_dependency_and_limit(
+            "import dependency (impl Nominal)\n",
+            "pub type Nominal = Nominal\n",
+            3,
+        );
+        let error =
+            nominal_short.expect_err("one missing nominal-index probe should reject the selector");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(nominal_short_used, 3);
+
+        let (nominal_exact, nominal_exact_used) = resolve_import_fixture_with_dependency_and_limit(
+            "import dependency (impl Nominal)\n",
+            "pub type Nominal = Nominal\n",
+            4,
+        );
+        let error = nominal_exact.expect_err("a public nominal is not an interface");
+        assert_eq!(error.reason, ResolveReason::InterfaceKind);
+        assert_eq!(nominal_exact_used, 4);
+
+        let (constructor_short, constructor_short_used) =
+            resolve_import_fixture_with_dependency_and_limit(
+                "import dependency (impl Constructor)\n",
+                "pub type Nominal = Constructor\n",
+                4,
+            );
+        let error = constructor_short
+            .expect_err("one missing constructor-index probe should reject the selector");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(constructor_short_used, 4);
+
+        let (constructor_exact, constructor_exact_used) =
+            resolve_import_fixture_with_dependency_and_limit(
+                "import dependency (impl Constructor)\n",
+                "pub type Nominal = Constructor\n",
+                5,
+            );
+        let error = constructor_exact.expect_err("a public constructor is not an interface");
+        assert_eq!(error.reason, ResolveReason::InterfaceKind);
+        assert_eq!(constructor_exact_used, 5);
+
+        let (missing_short, missing_short_used) = resolve_import_fixture_with_dependency_and_limit(
+            "import dependency (impl Missing)\n",
+            "pub type Nominal = Nominal\n",
+            7,
+        );
+        let error =
+            missing_short.expect_err("one missing withheld-index probe should reject the selector");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(missing_short_used, 7);
+
+        let (missing_exact, missing_exact_used) = resolve_import_fixture_with_dependency_and_limit(
+            "import dependency (impl Missing)\n",
+            "pub type Nominal = Nominal\n",
+            8,
+        );
+        let error = missing_exact.expect_err("an absent interface should remain unavailable");
+        assert_eq!(error.reason, ResolveReason::UnavailableExport);
+        assert_eq!(missing_exact_used, 8);
     }
 
     #[test]
