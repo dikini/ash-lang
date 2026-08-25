@@ -61,8 +61,12 @@ or evaluator forms.
   position before kind and determination work.
 - CP-0008 records the accepted syntax, semantic delta, summary and route model,
   error ownership, non-goals, and required evidence.
-- The baseline root verification passes. No production implementation has
-  begun.
+- The dedicated `lib-ash-explicit-imports` worktree starts from authorization
+  checkpoint `4f0541d`; its baseline `cargo xtask verify` passes.
+- Task 2 parses targeted public imports and independent implementation
+  selectors. Focused projection, malformed recovery, token-completeness,
+  parser, formatting, and all-target compilation checks pass. Independent
+  semantic-compliance and code-quality reviews have no open findings.
 - The execution plan defines focused red-green increments, review checkpoints,
   migration, retained evidence, and lifecycle cleanup.
 
