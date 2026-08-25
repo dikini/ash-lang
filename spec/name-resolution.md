@@ -242,6 +242,7 @@ though the importer has no spelling for it:
 
 ```ash
 import carrier as Carrier
+import carrier (impl Transform)
 
 main : Unit -> Int
 main () = Carrier.read(Carrier.transform(Carrier.make(42)))
@@ -276,6 +277,7 @@ access:
 
 ```ash
 import token as Token
+import token (impl Equal)
 
 main : Unit -> Bool
 main () = Token.equal(Token.make(42), Token.make(42))

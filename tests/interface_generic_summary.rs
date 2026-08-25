@@ -81,7 +81,7 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     let tree = ModuleTree::create();
     let graph = load(
         &tree,
-        "import dependency as Dependency\n",
+        "import dependency as Dependency\nimport dependency (impl Equal)\n",
         concat!(
             "pub type Option<A> =\n",
             "    None\n",
@@ -106,13 +106,16 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         panic!("the dependency should retain one checked implementation fact");
     };
     let entry = module_named(&graph, "entry.ash");
-    let [edge] = entry.dependencies() else {
-        panic!("the entry should have one direct dependency edge");
-    };
-    let exports = DependencyExports::new(edge, dependency_checked.exports())
-        .expect("the checked summary should authenticate its direct edge");
-    let resolved_entry = resolve_module(entry, &[exports])
-        .expect("the direct import should retain the checked implementation fact");
+    let dependencies = entry
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            DependencyExports::new(edge, dependency_checked.exports())
+                .expect("the checked summary should authenticate each direct edge")
+        })
+        .collect::<Vec<_>>();
+    let resolved_entry = resolve_module(entry, &dependencies)
+        .expect("the explicit selector should retain the checked implementation fact");
     let imported = resolved_entry
         .imported_facts()
         .implementation(defining_implementation.id)

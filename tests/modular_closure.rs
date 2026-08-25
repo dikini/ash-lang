@@ -26,7 +26,8 @@ use ash::{
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 const ENTRY_SOURCE: &str = concat!(
-    "import equality as Equality\n\n",
+    "import equality as Equality\n",
+    "import equality (impl Equal)\n\n",
     "main : Unit -> (Bool, Bool, Bool)\n",
     "main () = (\n",
     "41 == 41,\n",

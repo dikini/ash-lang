@@ -960,6 +960,16 @@ impl Resolver {
                 }
                 SurfaceImportSelection::Targeted(items) => {
                     for item in items {
+                        if let SurfaceImportItem::Implementation { interface, span } = item {
+                            self.select_imported_implementations(
+                                dependency.summary,
+                                dependency.edge.target(),
+                                interface,
+                                *span,
+                                import.span,
+                            )?;
+                            continue;
+                        }
                         let SurfaceImportItem::Name { name, alias, span } = item else {
                             continue;
                         };
@@ -1102,6 +1112,69 @@ impl Resolver {
                         }
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn select_imported_implementations(
+        &mut self,
+        summary: &ExportSummary,
+        direct_dependency: ModuleId,
+        interface: &crate::surface::SurfaceName,
+        selector_span: crate::source::Span,
+        import_span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.constraint_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                selector_span,
+                "implementation selector processing exceeded its work budget",
+            )
+        })?;
+        let selected_interface = match summary.interface(&interface.text) {
+            Some(exported) => exported.id,
+            None if summary.nominal(&interface.text).is_some()
+                || summary.constructor(&interface.text).is_some()
+                || summary.term(&interface.text).is_some()
+                || summary.method(&interface.text).is_some() =>
+            {
+                return Err(interface_kind_error(interface.span, &interface.text));
+            }
+            None => {
+                let withheld = summary
+                    .withheld_export(WithheldNamespace::Nominal, &interface.text)
+                    .map(|withheld| WithheldImport {
+                        kind: withheld.kind,
+                        declaration: withheld
+                            .origin
+                            .as_ref()
+                            .map(crate::source::Origin::primary_span),
+                    });
+                return Err(withheld_export_error(
+                    interface.span,
+                    &interface.text,
+                    withheld,
+                ));
+            }
+        };
+
+        for implementation in summary.implementations() {
+            self.constraint_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    selector_span,
+                    "implementation selector summary inspection exceeded its work budget",
+                )
+            })?;
+            if implementation.interface == selected_interface {
+                self.retain_imported_implementation_fact(
+                    implementation,
+                    summary,
+                    direct_dependency,
+                    selector_span,
+                    import_span,
+                )?;
             }
         }
         Ok(())
@@ -1273,14 +1346,6 @@ impl Resolver {
             )?;
         }
 
-        for implementation in summary.implementations() {
-            self.retain_imported_implementation_fact(
-                implementation,
-                summary,
-                direct_dependency,
-                import_span,
-            )?;
-        }
         Ok(())
     }
 
@@ -1407,6 +1472,7 @@ impl Resolver {
         summary: &ExportSummary,
         direct_dependency: ModuleId,
         span: crate::source::Span,
+        available_at: crate::source::Span,
     ) -> Result<(), ResolveError> {
         self.constraint_work.charge(1).map_err(|()| {
             error(
@@ -1642,7 +1708,7 @@ impl Resolver {
                 span: exported.span,
             },
             direct_dependency,
-            span,
+            available_at,
         );
         Ok(())
     }
@@ -4298,15 +4364,15 @@ mod tests {
     #[test]
     fn duplicate_impl_route_charges_lookup_without_retaining_a_second_fact() {
         let (one, one_used) =
-            resolve_import_fixture_with_limit("import dependency as Dependency\n", 22);
-        one.expect("one direct implementation route should resolve");
+            resolve_import_fixture_with_limit("import dependency (impl Equal)\n", 24);
+        one.expect("one explicit implementation route should resolve");
         let (two, two_used) = resolve_import_fixture_with_limit(
-            "import dependency as First\nimport dependency as Second\n",
-            25,
+            "import dependency (impl Equal)\nimport dependency (impl Equal)\n",
+            29,
         );
         let two = two.expect("the duplicate implementation route should deduplicate");
-        assert_eq!(two_used, 25);
-        assert_eq!(one_used, 22);
+        assert_eq!(two_used, 29);
+        assert_eq!(one_used, 24);
         let implementation = two
             .imported_facts()
             .implementations()
@@ -4320,12 +4386,12 @@ mod tests {
         assert_eq!(two.imported_facts().implementations().count(), 1);
 
         let (short, short_used) = resolve_import_fixture_with_limit(
-            "import dependency as First\nimport dependency as Second\n",
-            24,
+            "import dependency (impl Equal)\nimport dependency (impl Equal)\n",
+            28,
         );
         let error = short.expect_err("one missing route unit should reject the duplicate edge");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
-        assert_eq!(short_used, 24);
+        assert_eq!(short_used, 28);
     }
 
     #[test]

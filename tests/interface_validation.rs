@@ -82,6 +82,7 @@ fn check_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
 fn validates_cross_module_concrete_selection_before_core() {
     let fixture = ValidationFixture::create(concat!(
         "import dependency as Dependency\n",
+        "import dependency (impl Equal)\n",
         "main : Unit -> Bool\n",
         "main () = Dependency.equal((42, 42))\n",
     ));

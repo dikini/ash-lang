@@ -166,7 +166,7 @@ fn rejects_bare_type_variable_impl_head() {
 fn invalid_bare_variable_head_precedes_imported_implementation_overlap() {
     let error = check_error_with_dependencies(
         concat!(
-            "import equality (Equal, equal)\n",
+            "import equality (Equal, equal, impl Equal)\n",
             "impl Equal<A> {\nequal value = value\n}\n",
         ),
         &[(
@@ -185,7 +185,7 @@ fn invalid_bare_variable_head_precedes_imported_implementation_overlap() {
 fn orphan_header_precedes_imported_implementation_overlap() {
     let error = check_error_with_dependencies(
         concat!(
-            "import equality (Equal, equal)\n",
+            "import equality (Equal, equal, impl Equal)\n",
             "impl Equal<Int> {\nequal value = value\n}\n",
         ),
         &[(

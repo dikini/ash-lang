@@ -101,6 +101,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
         "left.ash",
         concat!(
             "import base as Base\n",
+            "import base (impl Transform)\n",
             "pub left : A -> A where Base.Transform<A>\n",
             "left value = value\n",
         ),
@@ -109,6 +110,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
         "right.ash",
         concat!(
             "import base as Base\n",
+            "import base (impl Transform)\n",
             "pub right : A -> A where Base.Transform<A>\n",
             "right value = value\n",
         ),
@@ -128,8 +130,8 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
             .flat_map(|module| module.dependencies())
             .filter(|edge| edge.target() == base_module.id())
             .count(),
-        2,
-        "left and right should each directly import the shared base",
+        4,
+        "left and right should each retain name and implementation edges to the shared base",
     );
 
     let mut checked = Vec::new();

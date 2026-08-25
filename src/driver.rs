@@ -752,6 +752,7 @@ mod tests {
     fn exact_constraint_budget_persists_through_evidence_validation() {
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
+            "import dependency (impl Equal)\n",
             "main : Unit -> Int\n",
             "main () = Dependency.equal(42)\n",
         ));

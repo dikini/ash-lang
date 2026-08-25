@@ -83,7 +83,8 @@ fn opaque_constructors_remain_available_inside_their_defining_module() {
 #[test]
 fn public_generic_impl_composes_over_an_unnameable_hidden_carrier() {
     let fixture = TempModule::create(concat!(
-        "import carrier as Carrier\n\n",
+        "import carrier as Carrier\n",
+        "import carrier (impl Read)\n\n",
         "main : Unit -> Int\n",
         "main () = Carrier.read(Carrier.make(42))\n",
     ));
@@ -116,7 +117,8 @@ fn public_generic_impl_composes_over_an_unnameable_hidden_carrier() {
 #[test]
 fn public_generic_impl_uses_an_opaque_constructor_only_in_its_defining_module() {
     let fixture = TempModule::create(concat!(
-        "import token as Token\n\n",
+        "import token as Token\n",
+        "import token (impl Read)\n\n",
         "main : Unit -> Int\n",
         "main () = Token.read(Token.make(42))\n",
     ));

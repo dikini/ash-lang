@@ -4016,6 +4016,7 @@ mod tests {
     fn rejects_imported_implementation_route_without_its_exact_direct_edge() {
         let fixture = ValidationFixture::create(concat!(
             "import dependency as Dependency\n",
+            "import dependency (impl Equal)\n",
             "main : Unit -> Bool\nmain () = Dependency.equal((1, 1))\n",
         ));
         fixture.write(
@@ -4054,6 +4055,7 @@ mod tests {
     fn rejects_dependency_private_implementation_forged_into_importer_availability() {
         let fixture = ValidationFixture::create(concat!(
             "import dependency as Dependency\n",
+            "import dependency (impl Equal)\n",
             "main : Unit -> Unit\nmain () = ()\n",
         ));
         fixture.write(
@@ -4278,6 +4280,7 @@ mod tests {
     fn one_direct_dependency_visit_requires_exactly_one_unit() {
         let fixture = ValidationFixture::create(concat!(
             "import dependency as Dependency\n",
+            "import dependency (impl Equal)\n",
             "main : Unit -> Bool\nmain () = Dependency.equal((1, 1))\n",
         ));
         fixture.write(
@@ -4295,8 +4298,8 @@ mod tests {
             .iter()
             .find(|group| group.module() == graph.entry())
             .expect("the entry group should remain linked");
-        let [route] = entry.direct_dependencies() else {
-            panic!("the entry should retain one authenticated direct edge");
+        let [route, _selector_route] = entry.direct_dependencies() else {
+            panic!("the entry should retain its name and implementation edges");
         };
 
         assert_eq!(

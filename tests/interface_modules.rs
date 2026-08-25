@@ -466,11 +466,11 @@ fn hidden_interface_metadata_in_a_constrained_summary_is_not_reexported() {
 }
 
 #[test]
-fn public_impl_fact_is_available_on_a_targeted_direct_import_edge() {
+fn public_impl_fact_is_available_on_an_explicit_selector_edge() {
     let tree = ModuleTree::create();
     let graph = load(
         &tree,
-        "import dependency (marker)\n",
+        "import dependency (marker, impl Equal)\n",
         &[(
             "dependency.ash",
             concat!(
@@ -495,12 +495,12 @@ fn public_impl_fact_is_available_on_a_targeted_direct_import_edge() {
         .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
         .collect::<Vec<_>>();
     let resolved = resolve_module(entry, &dependencies)
-        .expect("a targeted edge should retain its dependency's public impl facts");
+        .expect("the explicit selector should retain matching public implementation facts");
 
     let imported = resolved
         .imported_facts()
         .implementation(implementation.id)
-        .expect("the direct edge should retain the implementation fact");
+        .expect("the selector edge should retain the implementation fact");
     assert_eq!(imported, implementation);
 }
 
@@ -509,7 +509,7 @@ fn private_impl_fact_remains_local_to_its_defining_module() {
     let tree = ModuleTree::create();
     let graph = load(
         &tree,
-        "import dependency (Equal, equal)\n",
+        "import dependency (Equal, equal, impl Equal)\n",
         &[(
             "dependency.ash",
             concat!(
@@ -548,7 +548,7 @@ fn public_impl_retains_its_private_head_identity_as_hidden_metadata() {
     let tree = ModuleTree::create();
     let graph = load(
         &tree,
-        "import dependency (Equal, equal)\n",
+        "import dependency (Equal, equal, impl Equal)\n",
         &[(
             "dependency.ash",
             concat!(
@@ -586,7 +586,7 @@ fn private_impl_head_spelling_and_constructor_remain_unavailable() {
     let tree = ModuleTree::create();
     let graph = load(
         &tree,
-        "import dependency (Hidden)\n",
+        "import dependency (impl Equal)\nimport dependency (Hidden)\n",
         &[(
             "dependency.ash",
             concat!(
@@ -631,7 +631,10 @@ fn public_impls_are_not_reexported_through_an_intermediary() {
                     "pub impl Equal<Int> {\nequal value = value\n}\n",
                 ),
             ),
-            ("middle.ash", "import implementation as Implementation\n"),
+            (
+                "middle.ash",
+                "import implementation as Implementation\npub import implementation (impl Equal)\n",
+            ),
         ],
     );
     let mut checked: Vec<CheckedModule> = Vec::new();
@@ -649,14 +652,23 @@ fn public_impls_are_not_reexported_through_an_intermediary() {
             })
             .collect::<Vec<_>>();
         let resolved = resolve_module(module, &dependencies).expect("module should resolve");
-        if Path::new(module.source().display_path()).file_name() == Some("entry.ash".as_ref()) {
+        let file_name = Path::new(module.source().display_path()).file_name();
+        if file_name == Some("middle.ash".as_ref()) {
             let id = implementation_id.expect("implementation module should have checked first");
-            assert!(resolved.imported_facts().implementation(id).is_none());
+            assert!(
+                resolved.imported_facts().implementation(id).is_some(),
+                "the public selector should affect the intermediary's environment"
+            );
+        }
+        if file_name == Some("entry.ash".as_ref()) {
+            let id = implementation_id.expect("implementation module should have checked first");
+            assert!(
+                resolved.imported_facts().implementation(id).is_none(),
+                "the public selector should not publish an imported implementation summary"
+            );
         }
         let module_checked = check_module(resolved).expect("module should check");
-        if Path::new(module.source().display_path()).file_name()
-            == Some("implementation.ash".as_ref())
-        {
+        if file_name == Some("implementation.ash".as_ref()) {
             implementation_id = Some(module_checked.implementation_facts()[0].id);
         }
         checked.push(module_checked);
@@ -668,7 +680,7 @@ fn alternate_direct_routes_to_one_impl_identity_do_not_self_overlap() {
     let tree = ModuleTree::create();
     let graph = load(
         &tree,
-        "import dependency as First\nimport dependency as Second\n",
+        "import dependency (impl Equal)\nimport dependency (impl Equal)\n",
         &[(
             "dependency.ash",
             concat!(

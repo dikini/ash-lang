@@ -66,7 +66,8 @@ const LOCAL_INTERFACE_EVIDENCE_MODULE: &str = concat!(
     "main () = equal(1, 1)\n",
 );
 const CONSTRAINED_IMPORT_ENTRY_MODULE: &str = concat!(
-    "import equality as Equality\n\n",
+    "import equality as Equality\n",
+    "import equality (impl Equal)\n\n",
     "main : Unit -> Bool\n",
     "main () = Equality.same((1, 1))\n",
 );
@@ -99,7 +100,8 @@ const GENERIC_PREREQUISITE_EVIDENCE_MODULE: &str = concat!(
     "main () = equal(Some(1), Some(1))\n",
 );
 const INTERFACE_HIDDEN_ENTRY_MODULE: &str = concat!(
-    "import carrier as Carrier\n\n",
+    "import carrier as Carrier\n",
+    "import carrier (impl Transform)\n\n",
     "main : Unit -> Int\n",
     "main () = Carrier.read(Carrier.transform(Carrier.make(42)))\n",
 );
@@ -117,7 +119,8 @@ const INTERFACE_HIDDEN_CARRIER_MODULE: &str = concat!(
     "read (Hidden value) = value\n",
 );
 const INTERFACE_OPAQUE_ENTRY_MODULE: &str = concat!(
-    "import token as Token\n\n",
+    "import token as Token\n",
+    "import token (impl Equal)\n\n",
     "main : Unit -> Bool\n",
     "main () = Token.equal(Token.make(42), Token.make(42))\n",
 );

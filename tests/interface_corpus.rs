@@ -84,7 +84,8 @@ fn cross_module_constrained_equal_observes_true() {
     let entry = tree.write(
         "entry.ash",
         concat!(
-            "import equality as Equality\n\n",
+            "import equality as Equality\n",
+            "import equality (impl Equal)\n\n",
             "main : Unit -> Bool\n",
             "main () = Equality.same((1, 1))\n",
         ),
@@ -107,13 +108,13 @@ fn cross_module_constrained_equal_observes_true() {
 }
 
 #[test]
-fn complete_and_targeted_imports_observe_the_same_evidence() {
+fn qualified_and_targeted_names_share_explicitly_selected_evidence() {
     let tree = TempTree::create();
     let entry = tree.write(
         "entry.ash",
         concat!(
             "import equality as Complete\n",
-            "import equality (equal)\n\n",
+            "import equality (equal, impl Equal)\n\n",
             "main : Unit -> (Bool, Bool)\n",
             "main () = (Complete.equal(1, 1), equal(1, 1))\n",
         ),
@@ -193,7 +194,8 @@ fn hidden_carrier_composes_to_forty_two() {
     let entry = tree.write(
         "entry.ash",
         concat!(
-            "import carrier as Carrier\n\n",
+            "import carrier as Carrier\n",
+            "import carrier (impl Transform)\n\n",
             "main : Unit -> Int\n",
             "main () = Carrier.read(Carrier.transform(Carrier.make(42)))\n",
         ),
@@ -224,7 +226,8 @@ fn opaque_carrier_uses_public_operations() {
     let entry = tree.write(
         "entry.ash",
         concat!(
-            "import token as Token\n\n",
+            "import token as Token\n",
+            "import token (impl Equal)\n\n",
             "main : Unit -> Bool\n",
             "main () = Token.equal(Token.make(42), Token.make(42))\n",
         ),

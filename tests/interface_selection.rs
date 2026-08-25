@@ -67,6 +67,7 @@ impl SelectionFixture {
 fn imported_implementation_route_retains_its_exact_direct_dependency_identity() {
     let fixture = SelectionFixture::create(concat!(
         "import dependency as Dependency\n",
+        "import dependency (impl Render)\n",
         "main : Unit -> Int\n",
         "main () = Dependency.render(42)\n",
     ));
@@ -87,27 +88,31 @@ fn imported_implementation_route_retains_its_exact_direct_dependency_identity() 
     let loaded_entry = graph
         .module(graph.entry())
         .expect("the loaded graph should retain its entry module");
-    let [dependency_edge] = loaded_entry.dependencies() else {
-        panic!("the entry should retain exactly one direct dependency edge");
+    let [qualified_edge, selector_edge] = loaded_entry.dependencies() else {
+        panic!("the entry should retain its name and implementation dependency edges");
     };
     let [available] = entry.available_implementations() else {
         panic!("the entry should retain exactly one available implementation");
     };
-    let [direct_dependency] = entry.direct_dependencies() else {
-        panic!("the checked entry should retain exactly one authenticated direct edge");
+    let [qualified_dependency, selector_dependency] = entry.direct_dependencies() else {
+        panic!("the checked entry should retain both authenticated direct edges");
     };
-
-    assert_eq!(direct_dependency.target(), dependency_edge.target());
+    assert_eq!(qualified_dependency.target(), qualified_edge.target());
     assert_eq!(
-        direct_dependency.import_span(),
-        dependency_edge.import_span()
+        qualified_dependency.import_span(),
+        qualified_edge.import_span()
     );
-    assert_eq!(available.id(), ImplId::new(dependency_edge.target(), 0),);
+    assert_eq!(selector_dependency.target(), selector_edge.target());
+    assert_eq!(
+        selector_dependency.import_span(),
+        selector_edge.import_span()
+    );
+    assert_eq!(available.id(), ImplId::new(selector_edge.target(), 0),);
     assert_eq!(
         available.route(),
         ImplementationRoute::DirectImport {
-            direct_dependency: dependency_edge.target(),
-            available_at: dependency_edge.import_span(),
+            direct_dependency: selector_edge.target(),
+            available_at: selector_edge.import_span(),
         },
     );
 }
@@ -569,6 +574,7 @@ fn implementation_method_selects_exact_current_impl_and_retains_ordered_prerequi
 fn link_modules_retains_the_checked_occurrences_evidence_selection() {
     let fixture = SelectionFixture::create(concat!(
         "import dependency as Dependency\n",
+        "import dependency (impl Render)\n",
         "main : Unit -> Int\n",
         "main () = Dependency.render(42)\n",
     ));

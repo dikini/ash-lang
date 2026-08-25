@@ -252,6 +252,7 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
 fn cross_module_constraint_lowers_to_method_evidence() {
     let fixture = InterfaceFixture::create(concat!(
         "import library as Library\n",
+        "import library (impl Equal)\n",
         "main : Unit -> Bool\n",
         "main () = Library.same((1, 1))\n",
     ));

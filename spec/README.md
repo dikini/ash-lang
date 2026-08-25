@@ -99,6 +99,7 @@ In the following sibling-file program, `main.ash` imports `./equality.ash`:
 
 ```ash
 import equality as Equality
+import equality (impl Equal)
 
 main : Unit -> Bool
 main () = Equality.same((1, 1))

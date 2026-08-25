@@ -306,7 +306,8 @@ fn targeted_global_failure_relates_the_import_binding_used_by_the_occurrence() {
 fn nested_unsatisfied_failure_retains_the_selected_implementation_chain() {
     let tree = ModuleTree::create();
     let entry_text = concat!(
-        "import dependency as Dependency\n\n",
+        "import dependency as Dependency\n",
+        "import dependency (impl First)\n\n",
         "main : Unit -> Int\n",
         "main () = Dependency.first(1)\n",
     );
@@ -347,7 +348,7 @@ fn nested_unsatisfied_failure_retains_the_selected_implementation_chain() {
         .related
         .iter()
         .position(|label| {
-            span_matches(label.span(), entry, "import dependency as Dependency")
+            span_matches(label.span(), entry, "import dependency (impl First)")
                 && label.message() == "this import made the selected implementation available"
         })
         .expect("the direct import should authenticate the selected public implementation");
