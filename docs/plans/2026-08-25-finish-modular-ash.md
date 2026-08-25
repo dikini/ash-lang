@@ -18,6 +18,9 @@ If the audit finds a semantic discrepancy, stop that line of work and return to
 proposal or design work. Do not add `lib-ash` or `pack-ash` mechanisms, a
 prelude or implicit imports, an operator rewrite, module signatures, reexports,
 packages, caches, object linking, or interface extensions.
+Product changes are limited to reconciliation that evidence proves unused or
+stale. Return any semantic or broader finding to design, proposal, or new
+authorization.
 
 ### Task 1: Establish paired audit witnesses
 
@@ -32,22 +35,23 @@ Record why each is representative and which existing specification obligations
 govern it. Do not choose a case that requires new syntax or interface
 mechanisms.
 
-**Step 2: Write the focused failing behavioral witness.**
+**Step 2: Establish the new focused witness target.**
 
-Add paired positive and negative cases that expose the same intended
-observation and preserve the existing admission, typing, and diagnostic
-boundaries.
+Show that the paired positive and negative case is absent from the focused
+target, then add it to expose the existing intended observation without
+changing admission, typing, or diagnostic boundaries.
 
-**Step 3: Run the focused witness to confirm the expected failure.**
+**Step 3: Run the new retained witness against current behavior.**
 
-Run the smallest owning Rust test command. Record whether the failure exposes
-missing evidence or an unauthorized semantic discrepancy.
+Run the smallest owning Rust test command. Record the paired observations and
+return any mismatch to proposal or design work; new evidence for behavior
+already implemented need not fail first.
 
-**Step 4: Make the minimum authorized implementation or evidence change.**
+**Step 4: Retain the audit evidence.**
 
-Do not change `spec/` or decide new semantics. If current behavior already
-satisfies the witness, retain the witness and report without changing product
-code.
+Add only the witness and supporting report material. Do not change product code
+unless a later audit step proves stale or unused material eligible for
+reconciliation.
 
 **Step 5: Rerun focused checks.**
 
@@ -58,7 +62,8 @@ structured diagnostics, Core validation, and evaluator observations.
 
 Perform an independent specification review against `spec/`, then an
 independent code-quality review of the changed implementation and evidence.
-Correct only confirmed non-semantic defects.
+Correct only findings within the bounded audit scope; return semantic or
+broader findings to design, proposal, or new authorization.
 
 ### Task 2: Compare boundaries and reconcile proven stale material
 
@@ -84,13 +89,17 @@ to establish the failure before editing implementation.
 
 **Step 4: Apply the smallest reconciliation and rerun focused checks.**
 
-Remove or simplify only the proven candidate. Recheck the witness, affected
-validation, diagnostics, and evaluation paths.
+Remove or simplify only the proven unused or stale candidate. For any cleanup
+that changes behavior, use the RED witness from the preceding step before the
+change. Recheck the witness, affected validation, diagnostics, and evaluation
+paths.
 
 **Step 5: Review this increment.**
 
 Perform an independent specification review, then an independent code-quality
-review. Return any semantic discrepancy to proposal or design work.
+review. Correct only findings within the proven stale-or-unused reconciliation
+scope; return semantic or broader findings to design, proposal, or new
+authorization.
 
 ### Task 3: Retain closure evidence and complete verification
 
@@ -119,7 +128,9 @@ manual relative-link inspection, and `git diff --check`.
 **Step 4: Conduct final reviews.**
 
 Conduct an independent specification review of the reports and a separate
-code-quality review of all changes. Resolve only non-semantic findings.
+code-quality review of all changes. Correct findings only within the bounded
+audit or proven stale-or-unused reconciliation scope; return semantic or
+broader findings to design, proposal, or new authorization.
 
 ### Task 4: Clean up and retain the milestone checkpoint
 

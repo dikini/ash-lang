@@ -10,10 +10,10 @@
 
 ## Dependencies
 
-The current specification defines Modular Ash. DN-0020 authorizes a separate
-core-versus-library audit before Modular Ash closes, and DN-0025 keeps stronger
-library and package mechanisms in later milestones. The user has authorized
-this task to finish the Modular Ash milestone. The temporary
+The current specification defines Modular Ash. DN-0020 defines the comparison
+and closure criteria, and DN-0025 records descendant pressure and exclusions
+for later library and package milestones. The user's explicit request
+authorizes this task to finish the Modular Ash milestone. The temporary
 [execution plan](../plans/2026-08-25-finish-modular-ash.md) owns the ordered
 work and leaves the current tree when this task finishes.
 
@@ -42,13 +42,16 @@ review, verification, cleanup, commits, and tag remain.
 
 ## Verification
 
-- Use test-driven development for every new behavioral witness: add a focused
-  failing witness, confirm the failure, make the minimum authorized change, and
-  rerun the focused check.
+- Establish that the focused target or case for each new audit witness was
+  absent, then run the retained witness against current behavior. Use RED only
+  before a cleanup that changes behavior.
 - For each increment, perform focused checks, then an independent specification
   review followed by an independent code-quality review.
 - Before closure, review the retained reports and run the full required
   verification suite.
+- Correct review findings only when they are within this task's bounded audit
+  and proven stale-or-unused reconciliation scope. Return semantic or broader
+  findings to design, proposal, or new authorization.
 - Check changed Markdown with the available Markdown linter, inspect every
   changed relative link manually, and run `git diff --check`.
 - Confirm the closure commit and annotated `modular-ash` tag are unsigned and
