@@ -93,6 +93,18 @@ or evaluator forms.
   have exact graph-budget boundaries and flat small-stack destruction. Focused
   tests, the full workspace, and independent semantic and code-quality reviews
   have no open findings.
+- Task 6 moves each frozen summary's public implementation identities and flat
+  authorization routes into a lightweight linked table without retaining
+  imported facts, source bodies, method facts, or the complete summary. Linked
+  validation authenticates every local inventory, then every dependency-ordered
+  public table, then every effective inventory before inspecting occurrences.
+  Each imported route must match its exact direct edge and an already
+  authenticated dependency suffix; occurrence validation reuses the same
+  predicate and never reselects. The three-module facade succeeds through the
+  public driver, and independently validated Core still applies the original
+  defining method binder. Exact retention preflight, forged-route, unused-table,
+  failure-ownership, and 0/1/2-hop structural witnesses pass. The full workspace
+  and independent semantic and resource-quality reviews have no open findings.
 - The execution plan defines focused red-green increments, review checkpoints,
   migration, retained evidence, and lifecycle cleanup.
 
@@ -178,3 +190,18 @@ structurally assembled effective-closure test without changing orphan
 ownership. Review added explicit charges for complete diagnostic routes,
 summary storage and inspection, and equal-rank route comparison; it also
 removed implicit cloning from allocation-owning authorization routes.
+
+Task 6 drains frozen public authorization entries during the fallible
+`CheckedModule::into_group` transition instead of storing a second copy on the
+checked module. This preserves the required post-freeze boundary, moves route
+storage without cloning, and assigns retention charges to linking. The complete
+summary is still discarded before the linked program becomes observable.
+
+Forged linked-state cases remain crate unit tests because `#[cfg(test)]`
+mutation hooks are unavailable to integration crates. Public integration tests
+cover source-level success and the body-free linked shape. The unchanged-Core
+proof lives in `tests/interfaces.rs`, which owns the existing independent Core
+inspection harness. `src/evidence_audit.rs` and `tests/interface_selection.rs`
+required no change: the former authenticates occurrence slots before summary
+freeze, and the latter remains a passing selection regression suite rather than
+acquiring linked-table policy.
