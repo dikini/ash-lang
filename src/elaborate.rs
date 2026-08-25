@@ -7012,6 +7012,14 @@ pub(crate) fn link_modules_with_budget(
             .and_then(|total| total.checked_add(module.interface_facts().len()))
             .and_then(|total| total.checked_add(module.implementation_facts().len()))
             .and_then(|total| total.checked_add(module.available_implementations().len()))
+            .and_then(|total| {
+                module.available_implementations().iter().try_fold(
+                    total,
+                    |total, implementation| {
+                        total.checked_add(implementation.authorization().hops().len())
+                    },
+                )
+            })
             .and_then(|total| total.checked_add(module.schemes().len()))
     });
     constraint_work
@@ -7090,7 +7098,13 @@ pub(crate) fn link_modules_with_budget(
     groups
         .try_reserve(modules.len())
         .map_err(|_| constraint_resource())?;
-    groups.extend(modules.into_iter().map(CheckedModule::into_group));
+    for module in modules {
+        groups.push(
+            module
+                .into_group(constraint_work)
+                .map_err(|()| constraint_resource())?,
+        );
+    }
     Ok(ResolvedModuleProgram::new(
         registry,
         groups.into_boxed_slice(),

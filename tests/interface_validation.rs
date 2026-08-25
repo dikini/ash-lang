@@ -104,3 +104,47 @@ fn validates_cross_module_concrete_selection_before_core() {
     assert_eq!(validated.entry(), graph.entry());
     assert_eq!(validated.groups().len(), graph.modules().len());
 }
+
+#[test]
+fn linked_groups_retain_only_public_implementation_authorization_routes() {
+    let fixture = ValidationFixture::create(concat!(
+        "pub import facade (Equal, equal, impl Equal)\n",
+        "main : Unit -> Bool\n",
+        "main () = equal((42, 42))\n",
+    ));
+    fixture.write(
+        "base.ash",
+        concat!(
+            "pub interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\n",
+            "pub impl Equal<Int> {\nequal (left, right) = left == right\n}\n",
+        ),
+    );
+    fixture.write("facade.ash", "pub import base (Equal, equal, impl Equal)\n");
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the transitive validation graph should load");
+    let linked =
+        link_modules(check_graph(&graph), graph.entry()).expect("the checked graph should link");
+    let [base, facade, entry] = linked.groups() else {
+        panic!("the linked graph should retain three dependency-ordered groups");
+    };
+
+    assert_eq!(base.implementations().len(), 1);
+    assert_eq!(base.checked_implementations().len(), 1);
+    assert_eq!(base.implementation_facts().len(), 1);
+    assert_eq!(base.implementation_facts()[0].methods.len(), 1);
+    assert_eq!(facade.implementations().len(), 0);
+    assert_eq!(facade.checked_implementations().len(), 0);
+    assert_eq!(facade.implementation_facts().len(), 0);
+    assert_eq!(entry.implementations().len(), 0);
+    assert_eq!(entry.checked_implementations().len(), 0);
+    assert_eq!(entry.implementation_facts().len(), 0);
+
+    let implementation = base.implementation_facts()[0].id;
+    for (group, expected_hops) in [(base, 0), (facade, 1), (entry, 2)] {
+        let [published] = group.public_implementation_authorizations() else {
+            panic!("each publisher should retain one lightweight public authorization");
+        };
+        assert_eq!(published.id(), implementation);
+        assert_eq!(published.authorization().hops().len(), expected_hops);
+    }
+}

@@ -15,10 +15,11 @@ use crate::{
     },
     module::ModuleId,
     resolved::{
-        BinderId, CheckedImplementationFact, CheckedInterfaceFact, ImplementationRoute,
-        ResolvedBlock, ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr,
-        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModuleGroup, ResolvedModuleProgram,
-        ResolvedOccurrence, ResolvedRegistry, ResolvedTermName,
+        AvailableImplementation, BinderId, CheckedImplementationFact, CheckedInterfaceFact,
+        ImplementationAuthorization, PublicImplementationAuthorization, ResolvedBlock,
+        ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
+        ResolvedLocalDeclaration, ResolvedModuleGroup, ResolvedModuleProgram, ResolvedOccurrence,
+        ResolvedRegistry, ResolvedTermName,
     },
     source::{Origin, Span},
     types::{NominalTypeId, Type, TypeVariableId, discard_type_iteratively},
@@ -105,6 +106,12 @@ struct ImplementationMethodLocation {
     method: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PublicImplementationLocation {
+    group: usize,
+    authorization: usize,
+}
+
 /// Owned identity locations into the checked facts retained by module groups.
 #[derive(Debug)]
 struct LinkedInterfaceRegistry {
@@ -113,6 +120,8 @@ struct LinkedInterfaceRegistry {
     methods: HashMap<MethodId, MethodLocation>,
     implementations: HashMap<ImplId, FactLocation>,
     implementation_methods: HashMap<ImplMethodId, ImplementationMethodLocation>,
+    public_implementations: HashMap<(ModuleId, ImplId), PublicImplementationLocation>,
+    authenticated_public_implementations: HashSet<(ModuleId, ImplId)>,
     schemes: HashMap<BinderId, SchemeLocation>,
     binders: HashMap<BinderId, ()>,
 }
@@ -128,6 +137,8 @@ impl LinkedInterfaceRegistry {
             methods: HashMap::new(),
             implementations: HashMap::new(),
             implementation_methods: HashMap::new(),
+            public_implementations: HashMap::new(),
+            authenticated_public_implementations: HashSet::new(),
             schemes: HashMap::new(),
             binders: HashMap::new(),
         };
@@ -306,8 +317,35 @@ impl LinkedInterfaceRegistry {
                     return Err(unknown(scheme_span));
                 }
             }
+            for authorization_index in 0..group.public_implementation_authorizations().len() {
+                charge(budget, 1, span)?;
+                let authorization = group
+                    .public_implementation_authorizations()
+                    .get(authorization_index)
+                    .ok_or_else(|| unknown(span))?;
+                charge(budget, 1, span)?;
+                registry
+                    .public_implementations
+                    .try_reserve(1)
+                    .map_err(|_| resource(span))?;
+                if registry
+                    .public_implementations
+                    .insert(
+                        (group.module(), authorization.id()),
+                        PublicImplementationLocation {
+                            group: group_index,
+                            authorization: authorization_index,
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(unknown(span));
+                }
+            }
         }
         registry.validate_references(program, budget)?;
+        registry.authenticate_public_implementations(program, budget)?;
+        registry.authenticate_available_implementations(program, budget)?;
         Ok(registry)
     }
 
@@ -430,52 +468,222 @@ impl LinkedInterfaceRegistry {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn public_implementation<'a>(
+        &self,
+        program: &'a ResolvedModuleProgram,
+        publisher: ModuleId,
+        id: ImplId,
+    ) -> Option<&'a PublicImplementationAuthorization> {
+        let location = self.public_implementations.get(&(publisher, id))?;
+        let group = program.groups().get(location.group)?;
+        if group.module() != publisher {
+            return None;
+        }
+        group
+            .public_implementation_authorizations()
+            .get(location.authorization)
+            .filter(|authorization| authorization.id() == id)
+    }
+
+    fn authenticate_public_implementations(
+        &mut self,
+        program: &ResolvedModuleProgram,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<(), EvidenceValidationFailure> {
+        for group_index in 0..program.groups().len() {
+            let group = program
+                .groups()
+                .get(group_index)
+                .ok_or_else(|| unknown(program.result().span))?;
+            for authorization_index in 0..group.public_implementation_authorizations().len() {
+                charge(budget, 1, group.span())?;
+                let authorization = group
+                    .public_implementation_authorizations()
+                    .get(authorization_index)
+                    .ok_or_else(|| unknown(group.span()))?;
+                let indexed = self
+                    .public_implementations
+                    .get(&(group.module(), authorization.id()))
+                    .is_some_and(|location| {
+                        location.group == group_index
+                            && location.authorization == authorization_index
+                    });
+                if !indexed
+                    || !self.authenticate_public_implementation(
+                        program,
+                        group_index,
+                        group,
+                        authorization,
+                        budget,
+                    )?
+                {
+                    return Err(unknown(group.span()));
+                }
+                charge(budget, 1, group.span())?;
+                self.authenticated_public_implementations
+                    .try_reserve(1)
+                    .map_err(|_| resource(group.span()))?;
+                if !self
+                    .authenticated_public_implementations
+                    .insert((group.module(), authorization.id()))
+                {
+                    return Err(unknown(group.span()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn authenticate_public_implementation(
+        &self,
+        program: &ResolvedModuleProgram,
+        group_index: usize,
+        group: &ResolvedModuleGroup,
+        authorization: &PublicImplementationAuthorization,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<bool, EvidenceValidationFailure> {
+        if authorization.authorization().is_local() {
+            charge(budget, 1, group.span())?;
+            let Some(location) = self.implementations.get(&authorization.id()).copied() else {
+                return Ok(false);
+            };
+            charge(budget, 2, group.span())?;
+            let Some(fact) = group.implementation_facts().get(location.fact) else {
+                return Ok(false);
+            };
+            let Some(body) = group.implementations().get(location.fact) else {
+                return Ok(false);
+            };
+            if location.group != group_index
+                || authorization.id().module() != group.module()
+                || fact.id != authorization.id()
+                || body.id() != authorization.id()
+                || !body.source().public
+            {
+                return Ok(false);
+            }
+            for method in &fact.methods {
+                charge(budget, 1, group.span())?;
+                if method.id.implementation() != fact.id
+                    || method.binder.module() != Some(group.module())
+                {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        self.authenticate_imported_authorization(
+            program,
+            group_index,
+            group,
+            authorization.id(),
+            authorization.authorization(),
+            budget,
+        )
+    }
+
+    fn authenticate_available_implementations(
+        &self,
+        program: &ResolvedModuleProgram,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<(), EvidenceValidationFailure> {
+        for group_index in 0..program.groups().len() {
+            let group = program
+                .groups()
+                .get(group_index)
+                .ok_or_else(|| unknown(program.result().span))?;
             for available_index in 0..group.available_implementations().len() {
                 charge(budget, 1, group.span())?;
                 let available = group
                     .available_implementations()
                     .get(available_index)
                     .ok_or_else(|| unknown(group.span()))?;
-                let Some(location) = self.implementations.get(&available.id()).copied() else {
+                if !self.authenticate_available_implementation(
+                    program,
+                    group_index,
+                    group,
+                    available,
+                    budget,
+                )? {
                     return Err(unknown(group.span()));
-                };
-                let defining_group = program
-                    .groups()
-                    .get(location.group)
-                    .ok_or_else(|| unknown(group.span()))?;
-                let defining_module = defining_group.module();
-                match available.route() {
-                    ImplementationRoute::Local if defining_module == group.module() => {}
-                    ImplementationRoute::DirectImport {
-                        direct_dependency,
-                        available_at,
-                    } => {
-                        charge(budget, 1, group.span())?;
-                        let published = defining_group
-                            .implementations()
-                            .get(location.fact)
-                            .is_some_and(|body| {
-                                body.id() == available.id() && body.source().public
-                            });
-                        if defining_module != direct_dependency
-                            || available.id().module() != direct_dependency
-                            || !self.modules.contains_key(&direct_dependency)
-                            || !published
-                            || !has_direct_dependency(
-                                group,
-                                direct_dependency,
-                                available_at,
-                                budget,
-                            )?
-                        {
-                            return Err(unknown(group.span()));
-                        }
-                    }
-                    ImplementationRoute::Local => return Err(unknown(group.span())),
                 }
             }
         }
         Ok(())
+    }
+
+    fn authenticate_available_implementation(
+        &self,
+        program: &ResolvedModuleProgram,
+        group_index: usize,
+        group: &ResolvedModuleGroup,
+        available: &AvailableImplementation,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<bool, EvidenceValidationFailure> {
+        if available.authorization().is_local() {
+            charge(budget, 1, group.span())?;
+            return Ok(self
+                .implementations
+                .get(&available.id())
+                .is_some_and(|location| {
+                    location.group == group_index && available.id().module() == group.module()
+                }));
+        }
+        self.authenticate_imported_authorization(
+            program,
+            group_index,
+            group,
+            available.id(),
+            available.authorization(),
+            budget,
+        )
+    }
+
+    fn authenticate_imported_authorization(
+        &self,
+        program: &ResolvedModuleProgram,
+        group_index: usize,
+        group: &ResolvedModuleGroup,
+        implementation: ImplId,
+        authorization: &ImplementationAuthorization,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<bool, EvidenceValidationFailure> {
+        charge(budget, 1, group.span())?;
+        let Some(first) = authorization.hops().first() else {
+            return Ok(false);
+        };
+        charge(budget, 1, group.span())?;
+        let Some(dependency_index) = self.modules.get(&first.to).copied() else {
+            return Ok(false);
+        };
+        if first.from != group.module()
+            || dependency_index >= group_index
+            || !has_direct_dependency(group, first.to, first.import_span, budget, group.span())?
+        {
+            return Ok(false);
+        }
+        charge(budget, 2, group.span())?;
+        if !self
+            .authenticated_public_implementations
+            .contains(&(first.to, implementation))
+        {
+            return Ok(false);
+        }
+        let Some(dependency_authorization) =
+            self.public_implementation(program, first.to, implementation)
+        else {
+            return Ok(false);
+        };
+        authorization_suffix_matches(
+            authorization,
+            dependency_authorization.authorization(),
+            budget,
+            group.span(),
+        )
     }
 
     fn interface<'a>(
@@ -1642,7 +1850,8 @@ fn validate_evidence_node(
             if fact.interface != expected_interface {
                 return Err(invalid_root(span));
             }
-            if !implementation_is_available(group, implementation, budget, span)? {
+            if !implementation_is_available(program, registry, group, implementation, budget, span)?
+            {
                 return Err(unavailable(span));
             }
             if methods.len() != fact.methods.len()
@@ -2188,6 +2397,8 @@ fn reserve_rebuilt_type(
 }
 
 fn implementation_is_available(
+    program: &ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
     group: &ResolvedModuleGroup,
     implementation: ImplId,
     budget: &mut InterfaceConstraintBudget,
@@ -2199,18 +2410,50 @@ fn implementation_is_available(
             .available_implementations()
             .get(index)
             .ok_or_else(|| unknown(span))?;
-        if available.id() == implementation
-            && match available.route() {
-                ImplementationRoute::Local => implementation.module() == group.module(),
-                ImplementationRoute::DirectImport {
-                    direct_dependency, ..
-                } => direct_dependency == implementation.module(),
+        if available.id() == implementation {
+            let group_index = registry
+                .modules
+                .get(&group.module())
+                .copied()
+                .ok_or_else(|| unknown(span))?;
+            if registry.authenticate_available_implementation(
+                program,
+                group_index,
+                group,
+                available,
+                budget,
+            )? {
+                return Ok(true);
             }
-        {
-            return Ok(true);
+            return Err(unknown(group.span()));
         }
     }
     Ok(false)
+}
+
+fn authorization_suffix_matches(
+    authorization: &ImplementationAuthorization,
+    dependency: &ImplementationAuthorization,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<bool, EvidenceValidationFailure> {
+    let Some(suffix_length) = authorization.hops().len().checked_sub(1) else {
+        return Ok(false);
+    };
+    charge(budget, 1, span)?;
+    if suffix_length != dependency.hops().len() {
+        return Ok(false);
+    }
+    for (actual, expected) in authorization.hops()[1..].iter().zip(dependency.hops()) {
+        charge(budget, 1, span)?;
+        if actual.from != expected.from
+            || actual.to != expected.to
+            || actual.import_span != expected.import_span
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn has_direct_dependency(
@@ -2218,9 +2461,10 @@ fn has_direct_dependency(
     target: ModuleId,
     import_span: Span,
     budget: &mut InterfaceConstraintBudget,
+    span: Span,
 ) -> Result<bool, EvidenceValidationFailure> {
     for index in 0..group.direct_dependencies().len() {
-        charge(budget, 1, import_span)?;
+        charge(budget, 1, span)?;
         let route = group
             .direct_dependencies()
             .get(index)
@@ -2366,7 +2610,7 @@ mod tests {
         interface::{EvidenceSelectionBuilder, match_implementation_head},
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
-        resolved::CheckedModule,
+        resolved::{CheckedModule, ImplementationRoute, ImplementationRouteHop},
         types::{InferenceVariableId, Type, TypeVariableId, TypeWorkBudget},
     };
 
@@ -2454,6 +2698,69 @@ mod tests {
         let fixture = ValidationFixture::create(source);
         let graph = fixture.graph();
         link_modules(check_graph(&graph), graph.entry()).expect("the entry fixture should link")
+    }
+
+    fn reexport_program() -> ResolvedModuleProgram {
+        let fixture = ValidationFixture::create(concat!(
+            "pub import facade (Equal, equal, impl Equal)\n",
+            "main : Unit -> Bool\nmain () = equal((1, 1))\n",
+        ));
+        fixture.write(
+            "base.ash",
+            concat!(
+                "pub interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\n",
+                "pub impl Equal<Int> {\nequal (left, right) = left == right\n}\n",
+            ),
+        );
+        fixture.write("facade.ash", "pub import base (Equal, equal, impl Equal)\n");
+        let graph = fixture.graph();
+        link_modules(check_graph(&graph), graph.entry())
+            .expect("the transitive public fixture should link")
+    }
+
+    fn dual_reexport_program() -> ResolvedModuleProgram {
+        let fixture = ValidationFixture::create(concat!(
+            "import facade (Equal, equal, impl Equal)\n",
+            "main : Unit -> ((Int, Int) -> Bool)\nmain () = equal\n",
+        ));
+        fixture.write(
+            "base.ash",
+            concat!(
+                "pub interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\n",
+                "pub interface Keep<A> {\nkeep : A -> A\n}\n\n",
+                "pub impl Equal<Int> {\nequal (left, right) = left == right\n}\n\n",
+                "pub impl Keep<Int> {\nkeep value = value\n}\n",
+            ),
+        );
+        fixture.write(
+            "facade.ash",
+            "pub import base (Equal, equal, Keep, keep, impl Equal, impl Keep)\n",
+        );
+        let graph = fixture.graph();
+        link_modules(check_graph(&graph), graph.entry())
+            .expect("the dual transitive fixture should link")
+    }
+
+    fn deep_reexport_program() -> ResolvedModuleProgram {
+        let fixture = ValidationFixture::create(concat!(
+            "pub import facade (Equal, equal, impl Equal)\n",
+            "main : Unit -> Bool\nmain () = equal((1, 1))\n",
+        ));
+        fixture.write(
+            "base.ash",
+            concat!(
+                "pub interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\n",
+                "pub impl Equal<Int> {\nequal (left, right) = left == right\n}\n",
+            ),
+        );
+        fixture.write("inner.ash", "pub import base (Equal, equal, impl Equal)\n");
+        fixture.write(
+            "facade.ash",
+            "pub import inner (Equal, equal, impl Equal)\n",
+        );
+        let graph = fixture.graph();
+        link_modules(check_graph(&graph), graph.entry())
+            .expect("the deep transitive fixture should link")
     }
 
     fn implementation_selection(
@@ -3531,7 +3838,7 @@ mod tests {
         .expect("exact current authentication should fit the default budget");
         let exact = measured.used();
         assert_eq!(
-            exact, 73,
+            exact, 74,
             "exact-current relationships and the mandated abstract prerequisite are charged"
         );
 
@@ -4052,6 +4359,220 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_forged_reexport_authorization_hop() {
+        let mut program = reexport_program();
+        let [base, _facade, entry] = program.groups() else {
+            panic!("the re-export fixture should retain three groups");
+        };
+        let base_module = base.module();
+        let entry_module = entry.module();
+        let entry_span = entry.span();
+        let [available] = entry.available_implementations() else {
+            panic!("the entry should retain one selected implementation");
+        };
+        let implementation = available.id();
+        let import_span = available.authorization().hops()[0].import_span;
+
+        assert!(program.replace_available_authorization_hops_for_test(
+            entry_module,
+            implementation,
+            vec![ImplementationRouteHop {
+                from: entry_module,
+                to: base_module,
+                import_span,
+            }],
+        ));
+        let failure = validate_interface_evidence(program)
+            .expect_err("availability cannot skip its immediate publishing dependency");
+        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+        assert_eq!(failure.primary(), entry_span);
+    }
+
+    #[test]
+    fn rejects_a_forged_intermediate_public_authorization_suffix() {
+        let mut program = deep_reexport_program();
+        let [_base, _inner, facade, _entry] = program.groups() else {
+            panic!("the deep re-export fixture should retain four groups");
+        };
+        let facade_module = facade.module();
+        let facade_span = facade.span();
+        let [published] = facade.public_implementation_authorizations() else {
+            panic!("the facade should publish one implementation");
+        };
+        let implementation = published.id();
+        let mut forged = published.authorization().hops().to_vec();
+        assert_eq!(forged.len(), 2);
+        forged[1].import_span = facade_span;
+
+        assert!(program.replace_public_authorization_hops_for_test(
+            facade_module,
+            implementation,
+            forged,
+        ));
+        let failure = validate_interface_evidence(program)
+            .expect_err("an intermediate public suffix must match the authenticated dependency");
+        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+        assert_eq!(failure.primary(), facade_span);
+    }
+
+    #[test]
+    fn rejects_a_forged_public_authorization_hop_span() {
+        let mut program = reexport_program();
+        let [_base, _facade, entry] = program.groups() else {
+            panic!("the re-export fixture should retain three groups");
+        };
+        let entry_module = entry.module();
+        let entry_span = entry.span();
+        let [published] = entry.public_implementation_authorizations() else {
+            panic!("the entry should publish one implementation");
+        };
+        let implementation = published.id();
+        let mut hops = published.authorization().hops().to_vec();
+        hops[0].import_span = entry_span;
+
+        assert!(program.replace_public_authorization_hops_for_test(
+            entry_module,
+            implementation,
+            hops,
+        ));
+        let failure = validate_interface_evidence(program)
+            .expect_err("a public route must retain the exact first-hop import span");
+        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+        assert_eq!(failure.primary(), entry_span);
+    }
+
+    #[test]
+    fn rejects_a_public_authorization_with_a_forged_final_owner() {
+        let mut program = reexport_program();
+        let [_base, facade, entry] = program.groups() else {
+            panic!("the re-export fixture should retain three groups");
+        };
+        let entry_module = entry.module();
+        let entry_span = entry.span();
+        let facade_module = facade.module();
+        let [published] = entry.public_implementation_authorizations() else {
+            panic!("the entry should publish one implementation");
+        };
+        let implementation = published.id();
+        let mut hops = published.authorization().hops().to_vec();
+        hops[1].to = facade_module;
+
+        assert!(program.replace_public_authorization_hops_for_test(
+            entry_module,
+            implementation,
+            hops,
+        ));
+        let failure = validate_interface_evidence(program)
+            .expect_err("the complete public route must terminate at the defining owner");
+        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+        assert_eq!(failure.primary(), entry_span);
+    }
+
+    #[test]
+    fn rejects_a_disconnected_public_authorization_route() {
+        let mut program = reexport_program();
+        let [_base, _facade, entry] = program.groups() else {
+            panic!("the re-export fixture should retain three groups");
+        };
+        let entry_module = entry.module();
+        let entry_span = entry.span();
+        let [published] = entry.public_implementation_authorizations() else {
+            panic!("the entry should publish one implementation");
+        };
+        let implementation = published.id();
+        let mut hops = published.authorization().hops().to_vec();
+        hops[1].from = entry_module;
+
+        assert!(program.replace_public_authorization_hops_for_test(
+            entry_module,
+            implementation,
+            hops,
+        ));
+        let failure = validate_interface_evidence(program)
+            .expect_err("a public authorization route must remain connected");
+        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+        assert_eq!(failure.primary(), entry_span);
+    }
+
+    #[test]
+    fn rejects_a_repeated_public_authorization_route() {
+        let mut program = reexport_program();
+        let [_base, _facade, entry] = program.groups() else {
+            panic!("the re-export fixture should retain three groups");
+        };
+        let entry_module = entry.module();
+        let entry_span = entry.span();
+        let [published] = entry.public_implementation_authorizations() else {
+            panic!("the entry should publish one implementation");
+        };
+        let implementation = published.id();
+        let mut hops = published.authorization().hops().to_vec();
+        hops[1].to = entry_module;
+
+        assert!(program.replace_public_authorization_hops_for_test(
+            entry_module,
+            implementation,
+            hops,
+        ));
+        let failure = validate_interface_evidence(program)
+            .expect_err("a public authorization route cannot return to a later group");
+        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+        assert_eq!(failure.primary(), entry_span);
+    }
+
+    #[test]
+    fn changed_available_identity_is_reported_as_occurrence_unavailability() {
+        let mut program = dual_reexport_program();
+        let [base, _facade, entry] = program.groups() else {
+            panic!("the re-export fixture should retain three groups");
+        };
+        let entry_module = entry.module();
+        let [equal] = entry.available_implementations() else {
+            panic!("the entry should retain only its explicitly selected implementation");
+        };
+        let keep = &base.implementation_facts()[1];
+        assert!(program.replace_available_implementation_id_for_test(
+            entry_module,
+            equal.id(),
+            keep.id,
+        ));
+
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("the validator must not reselect after effective availability changes")
+                .reason(),
+            EvidenceValidationReason::UnavailableImplementation,
+        );
+    }
+
+    #[test]
+    fn changed_selected_identity_is_reported_as_an_invalid_evidence_root() {
+        let mut program = dual_reexport_program();
+        let [base, _facade, entry] = program.groups() else {
+            panic!("the re-export fixture should retain three groups");
+        };
+        let entry_module = entry.module();
+        let keep = &base.implementation_facts()[1];
+        let forged = implementation_selection(
+            keep.id,
+            keep.interface,
+            &keep
+                .methods
+                .iter()
+                .map(|method| method.id)
+                .collect::<Vec<_>>(),
+        );
+        assert!(program.replace_direct_equation_body_selection_for_test(entry_module, forged));
+
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("an occurrence cannot change to a different selected interface")
+                .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
     fn rejects_dependency_private_implementation_forged_into_importer_availability() {
         let fixture = ValidationFixture::create(concat!(
             "import dependency as Dependency\n",
@@ -4134,7 +4655,10 @@ mod tests {
                 .expect("the linked registry should fit the default budget"),
         );
         let limit = measured.used();
-        assert_eq!(limit, 99, "every retained registry relationship is charged");
+        assert_eq!(
+            limit, 100,
+            "every retained registry relationship is charged"
+        );
 
         assert_eq!(
             LinkedInterfaceRegistry::build(
@@ -4217,7 +4741,7 @@ mod tests {
         .expect("the valid selected node should authenticate");
         let limit = measured.used();
         assert_eq!(
-            limit, 15,
+            limit, 16,
             "root goal, type, node, exact head, method slot, and availability are charged"
         );
 
@@ -4248,31 +4772,38 @@ mod tests {
     }
 
     #[test]
-    fn one_available_implementation_visit_requires_exactly_one_unit() {
+    fn local_availability_authentication_requires_exactly_two_units() {
         let program = local_program();
         let group = &program.groups()[0];
         let implementation = group.implementation_facts()[0].id;
         assert_eq!(group.available_implementations().len(), 1);
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the valid local inventory should authenticate");
 
         assert_eq!(
             implementation_is_available(
-                group,
-                implementation,
-                &mut InterfaceConstraintBudget::with_limit(0),
-                group.span(),
-            )
-            .expect_err("the first availability visit must charge before inspection")
-            .reason(),
-            EvidenceValidationReason::ConstraintResourceExhausted,
-        );
-        assert!(
-            implementation_is_available(
+                &program,
+                &registry,
                 group,
                 implementation,
                 &mut InterfaceConstraintBudget::with_limit(1),
                 group.span(),
             )
-            .expect("one exact availability unit should fit")
+            .expect_err("the local inventory lookup must charge after the record visit")
+            .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert!(
+            implementation_is_available(
+                &program,
+                &registry,
+                group,
+                implementation,
+                &mut InterfaceConstraintBudget::with_limit(2),
+                group.span(),
+            )
+            .expect("the wrapper and local inventory lookup should fit")
         );
     }
 
@@ -4308,6 +4839,7 @@ mod tests {
                 route.target(),
                 route.import_span(),
                 &mut InterfaceConstraintBudget::with_limit(0),
+                entry.span(),
             )
             .expect_err("the first direct-edge visit must charge before inspection")
             .reason(),
@@ -4319,6 +4851,7 @@ mod tests {
                 route.target(),
                 route.import_span(),
                 &mut InterfaceConstraintBudget::with_limit(1),
+                entry.span(),
             )
             .expect("one exact direct-edge unit should fit")
         );

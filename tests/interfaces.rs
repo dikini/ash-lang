@@ -424,6 +424,162 @@ fn cross_module_constraint_lowers_to_method_evidence() {
 }
 
 #[test]
+fn facade_selection_lowers_through_the_original_core_binder() {
+    let fixture = InterfaceFixture::create(concat!(
+        "import facade (Equal, equal, same, impl Equal)\n",
+        "main : Unit -> Bool\n",
+        "main () = same((1, 1))\n",
+    ));
+    let directory = fixture.0.parent().expect("entry fixture has a parent");
+    fs::write(
+        directory.join("library.ash"),
+        concat!(
+            "pub interface Equal<A> {\n",
+            "equal : (A, A) -> Bool\n",
+            "}\n",
+            "pub impl Equal<Int> {\n",
+            "equal (left, right) = left == right\n",
+            "}\n",
+            "pub same : (A, A) -> Bool where Equal<A>\n",
+            "same pair = equal pair\n",
+        ),
+    )
+    .expect("the defining fixture should be writable");
+    fs::write(
+        directory.join("facade.ash"),
+        "pub import library (Equal, equal, same, impl Equal)\n",
+    )
+    .expect("the facade fixture should be writable");
+
+    let observation = run_path(RunConfiguration {
+        entry: fixture.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the facade program should complete the public pipeline");
+    assert_eq!(observation.value_display(), "true");
+    assert_eq!(observation.ty, Type::Bool);
+
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the facade interface graph should load");
+    let checked = checked_graph(&graph);
+    let library = checked
+        .iter()
+        .find(|module| !module.implementation_facts().is_empty())
+        .expect("the defining module should retain the implementation");
+    let implementation_method = library.implementation_facts()[0].methods[0].binder;
+    let main = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .and_then(|module| {
+            module
+                .schemes()
+                .iter()
+                .find(|scheme| scheme.spelling == "main")
+        })
+        .expect("the entry main should remain checked")
+        .binder;
+    let linked =
+        link_modules(checked, graph.entry()).expect("the checked facade graph should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("the complete facade authorization should authenticate before Core");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the graph namespace should reserve");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("facade evidence should lower through ordinary Core");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the final Core builder should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let core = validate_modules(unchecked, &sources, &module_sources)
+        .expect("facade lowering should pass the independent Core validator");
+
+    let PureExprKind::Computation(PureComputation::RecursiveBind(library_group)) = &core
+        .node(core.root())
+        .expect("the defining Core group should exist")
+        .kind
+    else {
+        panic!("the defining module should lower to an ordinary recursive group");
+    };
+    assert!(
+        library_group
+            .members()
+            .iter()
+            .any(|member| member.binder().id() == implementation_method),
+        "the original implementation-method binder should remain the sole evidence body",
+    );
+    let PureExprKind::Computation(PureComputation::RecursiveBind(entry_group)) = &core
+        .node(library_group.body())
+        .expect("the entry Core group should follow the defining group")
+        .kind
+    else {
+        panic!("the body-free facade should add no runtime or Core group");
+    };
+    let main_initializer = entry_group
+        .members()
+        .iter()
+        .find(|member| member.binder().id() == main)
+        .expect("main should remain an entry group member")
+        .initializer();
+    let PureExprKind::Value(PureValue::Function(main_function)) = &core
+        .node(main_initializer)
+        .expect("main initializer should exist")
+        .kind
+    else {
+        panic!("main should lower to a source function");
+    };
+    let main_body = match &core
+        .node(main_function.body())
+        .expect("main body should exist")
+        .kind
+    {
+        PureExprKind::Computation(PureComputation::Match(group)) => group
+            .arms()
+            .first()
+            .expect("the checked Unit equation should retain one arm")
+            .body(),
+        _ => main_function.body(),
+    };
+    let PureExprKind::Computation(PureComputation::Apply(source_application)) = &core
+        .node(main_body)
+        .expect("main equation body should exist")
+        .kind
+    else {
+        panic!("the source argument should remain an ordinary term application");
+    };
+    let PureExprKind::Computation(PureComputation::Apply(evidence_application)) = &core
+        .node(source_application.function())
+        .expect("the source application function should exist")
+        .kind
+    else {
+        panic!("selected evidence should remain an ordinary term application");
+    };
+    assert!(matches!(
+        core.node(evidence_application.function())
+            .expect("the constrained global function should exist")
+            .kind,
+        PureExprKind::Computation(PureComputation::TypeApplication(_))
+    ));
+    let PureExprKind::Variable(evidence_method) = core
+        .node(evidence_application.argument())
+        .expect("the evidence argument should exist")
+        .kind
+    else {
+        panic!("facade evidence should lower to the defining implementation method");
+    };
+    assert_eq!(evidence_method.binder(), implementation_method);
+}
+
+#[test]
 fn generic_option_impl_constructs_prerequisite_evidence() {
     observe_source(
         concat!(

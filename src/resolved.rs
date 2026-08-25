@@ -624,6 +624,36 @@ pub struct AvailableImplementation {
     authorization: ImplementationAuthorization,
 }
 
+/// One body-free public implementation authorization retained through linking.
+///
+/// The defining implementation body and method facts remain owned only by the
+/// defining module group. Allocation-owning routes are moved into this record
+/// and cannot be copied implicitly.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<ash::resolved::PublicImplementationAuthorization>();
+/// ```
+#[derive(Debug, Eq, PartialEq)]
+pub struct PublicImplementationAuthorization {
+    id: ImplId,
+    authorization: ImplementationAuthorization,
+}
+
+impl PublicImplementationAuthorization {
+    /// Returns the stable defining implementation identity.
+    #[must_use]
+    pub const fn id(&self) -> ImplId {
+        self.id
+    }
+
+    /// Returns the complete route published by this module.
+    #[must_use]
+    pub const fn authorization(&self) -> &ImplementationAuthorization {
+        &self.authorization
+    }
+}
+
 impl AvailableImplementation {
     pub(crate) fn local(id: ImplId) -> Self {
         Self {
@@ -802,8 +832,14 @@ impl CheckedModule {
         self.span
     }
 
-    pub(crate) fn into_group(mut self) -> ResolvedModuleGroup {
-        ResolvedModuleGroup {
+    pub(crate) fn into_group(
+        mut self,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<ResolvedModuleGroup, ()> {
+        let public_implementations = self
+            .exports
+            .take_public_implementation_authorizations(constraint_work)?;
+        Ok(ResolvedModuleGroup {
             module: self.module,
             direct_dependencies: std::mem::take(&mut self.direct_dependencies),
             declaration_order: std::mem::take(&mut self.declaration_order),
@@ -811,13 +847,14 @@ impl CheckedModule {
             implementations: std::mem::take(&mut self.implementations),
             definitions: std::mem::take(&mut self.definitions),
             available_implementations: std::mem::take(&mut self.available_implementations),
+            public_implementations,
             schemes: std::mem::take(&mut self.schemes).into_boxed_slice(),
             checked_interfaces: std::mem::take(&mut self.checked_interfaces),
             checked_implementations: std::mem::take(&mut self.checked_implementations),
             interface_facts: std::mem::take(&mut self.interface_facts),
             implementation_facts: std::mem::take(&mut self.implementation_facts),
             span: self.span,
-        }
+        })
     }
 }
 
@@ -840,6 +877,7 @@ pub struct ResolvedModuleGroup {
     implementations: Box<[CheckedImplementationBody]>,
     definitions: Box<[CheckedDefinition]>,
     available_implementations: Box<[AvailableImplementation]>,
+    public_implementations: Box<[PublicImplementationAuthorization]>,
     schemes: Box<[CheckedGlobalScheme]>,
     checked_interfaces: Box<[CheckedInterface]>,
     checked_implementations: Box<[CheckedImplementation]>,
@@ -889,6 +927,14 @@ impl ResolvedModuleGroup {
     #[must_use]
     pub const fn available_implementations(&self) -> &[AvailableImplementation] {
         &self.available_implementations
+    }
+
+    /// Returns lightweight public implementation authorizations in summary order.
+    #[must_use]
+    pub const fn public_implementation_authorizations(
+        &self,
+    ) -> &[PublicImplementationAuthorization] {
+        &self.public_implementations
     }
 
     /// Returns checked global schemes in definition order.
@@ -1054,6 +1100,54 @@ impl ResolvedModuleProgram {
                 import_span: available_at,
             }]),
         };
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_available_authorization_hops_for_test(
+        &mut self,
+        module: ModuleId,
+        implementation: ImplId,
+        hops: Vec<ImplementationRouteHop>,
+    ) -> bool {
+        let Some(available) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == module)
+            .and_then(|group| {
+                group
+                    .available_implementations
+                    .iter_mut()
+                    .find(|available| available.id == implementation)
+            })
+        else {
+            return false;
+        };
+        available.authorization = ImplementationAuthorization::from_hops(hops);
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_public_authorization_hops_for_test(
+        &mut self,
+        module: ModuleId,
+        implementation: ImplId,
+        hops: Vec<ImplementationRouteHop>,
+    ) -> bool {
+        let Some(authorization) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == module)
+            .and_then(|group| {
+                group
+                    .public_implementations
+                    .iter_mut()
+                    .find(|authorization| authorization.id == implementation)
+            })
+        else {
+            return false;
+        };
+        authorization.authorization = ImplementationAuthorization::from_hops(hops);
         true
     }
 
@@ -2612,6 +2706,38 @@ impl ExportSummary {
     #[must_use]
     pub const fn module(&self) -> ModuleId {
         self.module
+    }
+
+    fn take_public_implementation_authorizations(
+        &mut self,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<Box<[PublicImplementationAuthorization]>, ()> {
+        let mut total_hops = 0usize;
+        for implementation in &self.implementations {
+            constraint_work.charge(1)?;
+            total_hops = total_hops
+                .checked_add(implementation.authorization.hops().len())
+                .ok_or(())?;
+        }
+        let retained_work = self
+            .implementations
+            .len()
+            .checked_add(total_hops)
+            .ok_or(())?;
+        constraint_work.charge(retained_work)?;
+        let mut retained = Vec::new();
+        retained
+            .try_reserve_exact(self.implementations.len())
+            .map_err(|_| ())?;
+        for implementation in self.implementations.drain(..) {
+            retained.push(PublicImplementationAuthorization {
+                id: implementation.fact.id,
+                authorization: implementation.authorization,
+            });
+            drop(implementation.fact);
+        }
+        self.implementation_positions.clear();
+        Ok(retained.into_boxed_slice())
     }
 
     pub(crate) fn freeze(
@@ -5306,7 +5432,9 @@ mod tests {
         let implementation_address =
             checked.implementations()[0].source() as *const ResolvedImplementation;
 
-        let group = checked.into_group();
+        let group = checked
+            .into_group(&mut crate::interface::InterfaceConstraintBudget::default())
+            .expect("the checked module should retain its empty public authorization table");
         assert_eq!(group.direct_dependencies(), &[authenticated_dependency]);
         assert_ne!(
             group.direct_dependencies()[0].target(),
@@ -5723,6 +5851,36 @@ mod tests {
         assert_eq!(exact_used, 12);
         assert_eq!(summary.implementations().count(), 1);
         assert_eq!(summary.hidden_interfaces().count(), 1);
+    }
+
+    #[test]
+    fn linked_public_authorization_move_has_an_exact_preflight_budget() {
+        let (short_summary, _) = freeze_public_implementation_summary_with_limit(true, 12);
+        let mut short_summary = short_summary.expect("the public summary should freeze");
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(2);
+        assert_eq!(
+            short_summary.take_public_implementation_authorizations(&mut short),
+            Err(()),
+        );
+        assert_eq!(short.used(), 1, "the record visit precedes aggregate work");
+        assert_eq!(
+            short_summary.implementations().count(),
+            1,
+            "failed preflight must not drain the frozen summary",
+        );
+
+        let (exact_summary, _) = freeze_public_implementation_summary_with_limit(true, 12);
+        let mut exact_summary = exact_summary.expect("the public summary should freeze");
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(3);
+        let retained = exact_summary
+            .take_public_implementation_authorizations(&mut exact)
+            .expect("one record, one hop, and one storage slot should fit exactly");
+        let [retained] = retained.as_ref() else {
+            panic!("the linked table should retain one lightweight authorization");
+        };
+        assert_eq!(retained.authorization().hops().len(), 1);
+        assert_eq!(exact.used(), 3);
+        assert!(exact_summary.implementations().next().is_none());
     }
 
     fn freeze_transparent_constructor_aliases_with_limit(

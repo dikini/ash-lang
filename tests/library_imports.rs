@@ -432,15 +432,13 @@ fn public_implementation_selector_crosses_a_three_module_facade() {
         implementation
     );
 
-    let linked_failure = run_path(RunConfiguration {
+    let output = run_path(RunConfiguration {
         entry: tree.0.join("entry.ash"),
         roots: ModuleRoots::empty(),
     })
-    .expect_err("Task 6 must retain and authenticate the intermediate public route");
-    assert_eq!(
-        linked_failure.reason_code(),
-        "evidence.validation.unknown-identity",
-    );
+    .expect("the linked validator should authenticate the complete facade route");
+    assert_eq!(output.value_display(), "true");
+    assert_eq!(output.type_display(), "Bool");
 }
 
 #[test]
