@@ -175,6 +175,8 @@ fn is_forbidden_interface_identifier(identifier: &str) -> bool {
         && ["registry", "lookup", "dispatch"]
             .iter()
             .any(|mechanism| identifier.contains(mechanism));
+    let combines_authorization_route =
+        identifier.contains("authorization") && identifier.contains("route");
     let combines_requirement_mechanism = identifier
         .split('_')
         .any(|component| component == "requirement")
@@ -194,6 +196,7 @@ fn is_forbidden_interface_identifier(identifier: &str) -> bool {
     names_interface_abstraction
         || carries_interface_vocabulary
         || combines_runtime_or_method_dispatch
+        || combines_authorization_route
         || combines_requirement_mechanism
 }
 
@@ -419,6 +422,8 @@ fn interface_inventory_guard_reads_code_identifiers_but_not_prose() {
         "RuntimeLookup",
         "dispatch_runtime",
         "registry_interface",
+        "AuthorizationRoute",
+        "authorization_route",
     ] {
         assert!(is_forbidden_interface_identifier(forbidden));
     }

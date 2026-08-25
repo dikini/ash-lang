@@ -68,6 +68,24 @@ fn ash(arguments: impl IntoIterator<Item = OsString>) -> Output {
         .expect("the Ash executable should start")
 }
 
+fn canonicalize_source_ids(rendered: &str) -> String {
+    rendered
+        .split_inclusive('\n')
+        .map(|line| {
+            let Some(marker) = line.find("source ") else {
+                return line.to_owned();
+            };
+            let id_start = marker + "source ".len();
+            let id_end = id_start
+                + line[id_start..]
+                    .bytes()
+                    .take_while(u8::is_ascii_digit)
+                    .count();
+            format!("{}_{}", &line[..id_start], &line[id_end..])
+        })
+        .collect()
+}
+
 #[test]
 fn evaluates_an_entry_through_a_named_absolute_import() {
     let tree = TempTree::create();
@@ -335,5 +353,64 @@ fn cli_renders_the_structured_interface_diagnostic_without_reclassifying_it() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert_eq!(output.stderr, expected.as_bytes());
+    let actual = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
+    assert_eq!(
+        canonicalize_source_ids(&actual),
+        canonicalize_source_ids(&expected)
+    );
+}
+
+#[test]
+fn cli_renders_a_selected_facade_prerequisite_route_without_reclassifying_it() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "import facade as Facade\n",
+            "import facade (impl First)\n\n",
+            "main : Unit -> Int\n",
+            "main () = Facade.first(1)\n",
+        ),
+    );
+    tree.write(
+        "facade.ash",
+        "pub import dependency (First, first, impl First)\n",
+    );
+    tree.write(
+        "dependency.ash",
+        concat!(
+            "pub interface First<A> {\n",
+            "first : A -> A\n",
+            "}\n\n",
+            "pub interface Second<A> {\n",
+            "second : A -> A\n",
+            "}\n\n",
+            "pub impl First<Int> where Second<Int> {\n",
+            "first value = value\n",
+            "}\n",
+        ),
+    );
+    let structured = run_path(RunConfiguration {
+        entry: entry.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("the selected implementation prerequisite should remain unsatisfied");
+    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(diagnostic))) =
+        &structured
+    else {
+        panic!("the programmatic boundary should retain the facade prerequisite diagnostic");
+    };
+    assert_eq!(diagnostic.reason, InterfaceReason::Unsatisfied);
+    assert_eq!(diagnostic.related.len(), 8);
+    let expected = format!("{}\n", diagnostic.render_plain());
+
+    let output = ash([entry.into_os_string()]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let actual = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
+    assert_eq!(
+        canonicalize_source_ids(&actual),
+        canonicalize_source_ids(&expected)
+    );
 }

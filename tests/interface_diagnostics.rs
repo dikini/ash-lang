@@ -342,46 +342,79 @@ fn nested_unsatisfied_failure_retains_the_selected_implementation_chain() {
         entry,
         "Facade.first"
     ));
-    let first_interface = label_index(
-        &diagnostic.related,
-        dependency,
-        "pub interface First<A> {\nfirst : A -> A\n}",
+    assert_eq!(
+        diagnostic.primary.message(),
+        "no available implementation satisfies this interface obligation"
     );
-    let implementation_import = diagnostic
-        .related
-        .iter()
-        .position(|label| {
-            span_matches(label.span(), entry, "import facade (impl First)")
-                && label.message() == "this import made the selected implementation available"
-        })
-        .expect("the entry import should start the selected implementation route");
-    let facade_implementation_import = diagnostic
-        .related
-        .iter()
-        .position(|label| {
-            span_matches(
-                label.span(),
-                facade,
-                "pub import dependency (First, first, impl First)",
-            ) && label.message() == "this import made the selected implementation available"
-        })
-        .expect("the facade import should complete the selected implementation route");
-    let first_implementation = label_index(
-        &diagnostic.related,
-        dependency,
-        "pub impl First<Int> where Second<Int> {\nfirst value = value\n}",
-    );
-    let first_method = label_index(&diagnostic.related, dependency, "first value = value");
-    let second_interface = label_index(
-        &diagnostic.related,
-        dependency,
-        "pub interface Second<A> {\nsecond : A -> A\n}",
-    );
-    assert!(first_interface < implementation_import);
-    assert!(implementation_import < facade_implementation_import);
-    assert!(facade_implementation_import < first_implementation);
-    assert!(first_implementation < first_method);
-    assert!(first_method < second_interface);
+    let [
+        declaration,
+        declaration_import,
+        first_interface,
+        entry_route,
+        facade_route,
+        implementation,
+        method,
+        second_interface,
+    ] = diagnostic.related.as_slice()
+    else {
+        panic!("the failing prerequisite should retain its complete ordered cause chain")
+    };
+    for (label, source, needle, message) in [
+        (
+            declaration,
+            dependency,
+            "first : A -> A",
+            "this declaration introduced the interface obligation",
+        ),
+        (
+            declaration_import,
+            entry,
+            "import facade as Facade",
+            "this import made the declaration available",
+        ),
+        (
+            first_interface,
+            dependency,
+            "pub interface First<A> {\nfirst : A -> A\n}",
+            "this interface declaration participates in the failing selection",
+        ),
+        (
+            entry_route,
+            entry,
+            "import facade (impl First)",
+            "this import made the selected implementation available",
+        ),
+        (
+            facade_route,
+            facade,
+            "pub import dependency (First, first, impl First)",
+            "this import made the selected implementation available",
+        ),
+        (
+            implementation,
+            dependency,
+            "pub impl First<Int> where Second<Int> {\nfirst value = value\n}",
+            "selection followed this available implementation",
+        ),
+        (
+            method,
+            dependency,
+            "first value = value",
+            "this implementation method supplies the selected evidence",
+        ),
+        (
+            second_interface,
+            dependency,
+            "pub interface Second<A> {\nsecond : A -> A\n}",
+            "this interface declaration participates in the failing selection",
+        ),
+    ] {
+        assert!(span_matches(label.span(), source, needle), "{needle}");
+        assert_eq!(label.message(), message, "{needle}");
+    }
+    assert!(diagnostic.expected.is_none());
+    assert!(diagnostic.found.is_none());
+    assert!(diagnostic.help.is_none());
 }
 
 #[test]

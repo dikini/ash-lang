@@ -13,6 +13,8 @@ use ash::{
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveReason, resolve_module},
     resolved::{ImportedTypeAccess, ResolvedDefinitionKind, ResolvedExprKind, ResolvedTermName},
+    source::{SourceFile, Span},
+    surface::{SurfaceImportItem, SurfaceImportSelection},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -65,6 +67,46 @@ fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule
             Path::new(module.source().display_path()).file_name() == Some(file_name.as_ref())
         })
         .expect("fixture module should be present")
+}
+
+fn exact_span(source: &SourceFile, needle: &str) -> (u32, u32) {
+    let start = source
+        .text()
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} should occur in the fixture source"));
+    let end = start + needle.len();
+    (
+        u32::try_from(start).expect("fixture offset should fit the source model"),
+        u32::try_from(end).expect("fixture offset should fit the source model"),
+    )
+}
+
+fn span_matches(span: Span, source: &SourceFile, needle: &str) -> bool {
+    let (start, end) = exact_span(source, needle);
+    span.source() == source.id() && span.range().start() == start && span.range().end() == end
+}
+
+fn span_matches_last(span: Span, source: &SourceFile, needle: &str) -> bool {
+    let start = source
+        .text()
+        .rfind(needle)
+        .unwrap_or_else(|| panic!("{needle:?} should occur in the fixture source"));
+    let end = start + needle.len();
+    span.source() == source.id()
+        && span.range().start() == u32::try_from(start).expect("fixture offset should fit")
+        && span.range().end() == u32::try_from(end).expect("fixture offset should fit")
+}
+
+fn assert_no_label_overlaps(
+    labels: &[ash::diagnostic::SourceLabel],
+    source: &SourceFile,
+    needle: &str,
+) {
+    let (start, end) = exact_span(source, needle);
+    assert!(labels.iter().all(|label| {
+        let span = label.span();
+        span.source() != source.id() || span.range().end() <= start || end <= span.range().start()
+    }));
 }
 
 fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
@@ -201,22 +243,53 @@ fn name_only_import_does_not_select_implementation() {
     let TypeError::Interface(diagnostic) = error else {
         panic!("the method occurrence should retain an interface diagnostic");
     };
-    let occurrence_start = entry
-        .source()
-        .text()
-        .rfind("equal")
-        .expect("the entry should contain the method occurrence");
-
     assert_eq!(diagnostic.reason, InterfaceReason::Unsatisfied);
     assert_eq!(diagnostic.reason.to_string(), "constraint.unsatisfied");
-    assert_eq!(diagnostic.primary.span().source(), entry.source().id());
+    assert!(span_matches_last(
+        diagnostic.primary.span(),
+        entry.source(),
+        "equal"
+    ));
     assert_eq!(
-        diagnostic.primary.span().range().start(),
-        u32::try_from(occurrence_start).expect("the fixture offset should fit")
+        diagnostic.primary.message(),
+        "no available implementation satisfies this interface obligation"
     );
-    assert_eq!(diagnostic.primary.span().range().end(), {
-        u32::try_from(occurrence_start + "equal".len()).expect("the fixture offset should fit")
-    });
+    let [declaration, import, interface_cause] = diagnostic.related.as_slice() else {
+        panic!("the name-only failure should retain exactly three ordered causes")
+    };
+    assert_eq!(declaration.span(), interface.methods[0].span);
+    assert_eq!(
+        declaration.message(),
+        "this declaration introduced the interface obligation"
+    );
+    let SurfaceImportSelection::Targeted(items) = &entry.surface().imports[0].selection else {
+        panic!("the name-only fixture should retain one targeted import")
+    };
+    let SurfaceImportItem::Name {
+        span: equal_selector,
+        ..
+    } = &items[1]
+    else {
+        panic!("the second import item should select the method name")
+    };
+    assert_eq!(import.span(), *equal_selector);
+    assert_eq!(
+        import.message(),
+        "this import made the declaration available"
+    );
+    assert_eq!(interface_cause.span(), interface.span);
+    assert_eq!(
+        interface_cause.message(),
+        "this interface declaration participates in the failing selection"
+    );
+    assert_no_label_overlaps(
+        &diagnostic.related,
+        equality.source(),
+        "pub impl Equal<Int> {\nequal (left, right) = left == right\n}",
+    );
+    assert!(diagnostic.expected.is_none());
+    assert!(diagnostic.found.is_none());
+    assert!(diagnostic.help.is_none());
     assert!(retained_interface);
     assert!(!retained_implementation);
 }
@@ -304,14 +377,21 @@ fn implementation_only_import_selects_evidence_without_binding_names() {
 
 #[test]
 fn implementation_selector_rejects_an_unavailable_interface() {
-    for (selected, dependency) in [
+    for (selected, dependency, primary_message, related) in [
         (
             "Missing",
             "pub interface Equal<A> {\nequal : (A, A) -> Bool\n}\n",
+            "the dependency exports no declaration with this spelling",
+            None,
         ),
         (
             "Private",
             "interface Private<A> {\nprivate : (A, A) -> Bool\n}\n",
+            "this declaration is private to its defining module",
+            Some((
+                "interface Private<A> {\nprivate : (A, A) -> Bool\n}",
+                "the inaccessible declaration is here",
+            )),
         ),
     ] {
         let tree = ModuleTree::create();
@@ -322,14 +402,62 @@ fn implementation_selector_rejects_an_unavailable_interface() {
         );
 
         let error = resolve_entry_error(&graph);
+        let entry = module_named(&graph, "entry.ash").source();
+        let dependency = module_named(&graph, "dependency.ash").source();
+        let diagnostic = error.diagnostic();
 
         assert_eq!(error.reason, ResolveReason::UnavailableExport, "{selected}");
-        assert_eq!(
-            error.diagnostic().primary.span().source(),
-            module_named(&graph, "entry.ash").source().id(),
-            "{selected}"
-        );
+        assert!(span_matches(diagnostic.primary.span(), entry, selected));
+        assert_eq!(diagnostic.primary.message(), primary_message);
+        assert_eq!(diagnostic.found.as_deref(), Some(selected));
+        assert!(diagnostic.expected.is_none());
+        assert!(diagnostic.help.is_none());
+        match related {
+            Some((declaration, message)) => {
+                let [label] = diagnostic.related.as_slice() else {
+                    panic!("the private selector should retain one declaration label")
+                };
+                assert!(span_matches(label.span(), dependency, declaration));
+                assert_eq!(label.message(), message);
+            }
+            None => assert!(diagnostic.related.is_empty()),
+        }
     }
+}
+
+#[test]
+fn conflicting_public_name_import_retains_the_second_selector() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "pub import first (answer as shared)\n",
+            "pub import second (answer as shared)\n",
+        ),
+        &[
+            ("first.ash", "pub answer : Unit -> Int\nanswer () = 1\n"),
+            ("second.ash", "pub answer : Unit -> Int\nanswer () = 2\n"),
+        ],
+    );
+
+    let error = resolve_entry_error(&graph);
+    let entry = module_named(&graph, "entry.ash").source();
+    let diagnostic = error.diagnostic();
+
+    assert_eq!(error.reason, ResolveReason::ImportConflict);
+    assert!(span_matches_last(
+        diagnostic.primary.span(),
+        entry,
+        "shared"
+    ));
+    assert_eq!(
+        diagnostic.primary.message(),
+        "this file-wide name is already bound"
+    );
+    assert!(diagnostic.related.is_empty());
+    assert!(diagnostic.expected.is_none());
+    assert_eq!(diagnostic.found.as_deref(), Some("shared"));
+    assert!(diagnostic.help.is_none());
 }
 
 #[test]
