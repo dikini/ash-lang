@@ -73,6 +73,16 @@ or evaluator forms.
   deduplication, direct-route provenance, and exact index/summary budget probes
   pass focused and full-workspace verification. Independent semantic and code-
   quality reviews have no open findings.
+- Task 4 re-exports selected global, nominal, constructor, interface, and method
+  names under facade spellings without creating declarations or changing their
+  defining identities. Summary closure preserves privacy, opacity, complete
+  constructor families, constrained schemes, and method-only interfaces.
+  Owner-indexed withheld facts keep same-spelling opaque constructors from
+  distinct dependencies separate while preserving deterministic diagnostics.
+  Candidate staging and summary closure use fallible, graph-budgeted, linear
+  storage and iterative destruction. Focused resource, visibility, resolution,
+  and diamond checks, the full workspace, and independent semantic and code-
+  quality reviews have no open findings.
 - The execution plan defines focused red-green increments, review checkpoints,
   migration, retained evidence, and lifecycle cleanup.
 
@@ -127,3 +137,10 @@ Task 3 mechanically migrated three executable specification examples and their
 exact paired source snippets so the full workspace stayed green. Task 8 still
 owns the complete normative grammar, semantics, validation, and explanatory
 reconciliation; no broader specification claim moved forward.
+
+Task 4 required no elaboration, Core, or runtime change. Existing linked
+identity validation already distinguishes the publishing summary from each
+fact's defining owner. The new facade, closure, opacity, alias, and resource
+evidence therefore lives in resolver and library-import tests; the existing
+visibility, resolution, and diamond suites remain unchanged and pass as
+regression witnesses.
