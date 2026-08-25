@@ -136,10 +136,13 @@ forall parameters.
 ```
 
 Each `type(s_j)` is the corresponding declared method type after substituting
-its requirement argument for the interface parameter. The initializer contains
-one outer type abstraction when `parameters` is nonempty, then one ordinary
-unary function binder for every flattened evidence method, then the source
-function. An unconstrained global retains its existing Core shape.
+its requirement argument for the interface parameter. Substitution preserves
+the declared method type's top-level `Function` constructor, so each evidence
+slot remains a function and uses the existing ordinary function Core form. The
+initializer contains one outer type abstraction when `parameters` is nonempty,
+then one ordinary unary function binder for every flattened evidence method,
+then the source function. An unconstrained global retains its existing Core
+shape.
 
 A constrained-global occurrence starts from its ordinary Core binder. Core
 type application, when needed, precedes the ordered evidence applications.

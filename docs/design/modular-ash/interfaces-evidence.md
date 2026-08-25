@@ -13,9 +13,9 @@ module boundary on which this increment depends.
 The comparison baseline is commit
 `ca7932877df3553cbb2325c7a73a0b38812b5db8`, which accepts the interface
 transition.
-The current normative checkpoint is unsigned commit
-`f783271dab81db382e0fdcc1c8a1fe4abb12cea3`. The principal checkpoints between
-them are:
+The original increment's normative checkpoint is unsigned commit
+`f783271dab81db382e0fdcc1c8a1fe4abb12cea3`. The principal checkpoints from the
+accepted transition through the current corrective product work are:
 
 - `ff2ea36`, which authorizes the interface implementation work;
 - `3d53619`, which admits interface and implementation syntax;
@@ -34,9 +34,13 @@ them are:
   unspecialized trace;
 - `6f36d77`, which closes diagnostic evidence;
 - `a93bdbb`, which establishes graph-wide resource boundaries;
-- `301de2a`, which admits the specified nested-arrow interface-method shape;
-  and
-- `f783271`, which replaces the normative interface specification.
+- `301de2a`, which historically admits an interface method when an arrow occurs
+  anywhere inside its type;
+- `f783271`, which replaces the normative interface specification;
+- `364c736`, whose corrective product work narrows the former rule to require
+  `Function` as the method type's outermost constructor; and
+- `18c04fd`, which rebaselines the affected resource evidence and makes rejected
+  resolved interface payloads safe to destroy iteratively.
 
 All intermediate implementation checkpoints are unsigned. The work remains on
 the unmerged `feature/modular-ash` branch. The final product review and
@@ -52,16 +56,19 @@ slot for each resolved constrained-global or interface-method occurrence and
 retains the exact complete-import declaration or targeted selector used by an
 imported occurrence.
 
-Checking authenticates interface shapes, constrained schemes, implementation
-ownership, prerequisite decrease, effective-environment non-overlap,
-membership, method types, and bodies. Evidence selection then resolves each
-rigid obligation from lexical abstract requirements, the exact current
-implementation, or concrete available implementations, in that order. The
-owning obligation-closure boundary fills each structural slot exactly once.
-This includes an eligible unannotated anonymous-function initializer before
-local generalization, as well as constrained globals and implementation
-methods. Checked definitions retain the filled occurrence with their checked
-group through linking; no later stage joins spans or repeats selection.
+Checking authenticates top-level function interface shapes, constrained
+schemes, implementation ownership, prerequisite decrease,
+effective-environment non-overlap, membership, method types, and bodies.
+Substituting an implementation or requirement argument preserves each method's
+outer `Function`, so implementation equations and flattened evidence slots
+remain callable. Evidence selection then resolves each rigid obligation from
+lexical abstract requirements, the exact current implementation, or concrete
+available implementations, in that order. The owning obligation-closure
+boundary fills each structural slot exactly once. This includes an eligible
+unannotated anonymous-function initializer before local generalization, as well
+as constrained globals and implementation methods. Checked definitions retain
+the filled occurrence with their checked group through linking; no later stage
+joins spans or repeats selection.
 
 A module publishes a body-free immutable summary only after all its declarations
 and bodies check. The summary preserves public interface and method facts,
@@ -249,12 +256,20 @@ the ones named here.
 - [`tests/interfaces.rs`](../../../tests/interfaces.rs):
   `tests/interfaces.rs::rejects_public_global_requirement_on_private_interface`,
   `tests/interfaces.rs::accepts_private_global_requirement_on_private_interface`,
-  and `tests/interfaces.rs::accepts_interface_method_with_nested_function_arrow`.
+  `tests/interfaces.rs::rejects_interface_method_without_function_arrow`,
+  `tests/interfaces.rs::rejects_interface_method_with_only_nested_function_arrow`,
+  `tests/interfaces.rs::rejects_invalid_parameter_before_nested_function_shape`,
+  `tests/interfaces.rs::accepts_top_level_function_with_nested_function_domain`,
+  `tests/interfaces.rs::accepts_top_level_function_with_function_valued_codomain`,
+  and
+  `tests/interfaces.rs::top_level_function_with_nested_function_domain_completes_the_pipeline`.
 - [`tests/implementations.rs`](../../../tests/implementations.rs):
-  `tests/implementations.rs::rejects_public_impl_for_private_interface` and
-  `tests/implementations.rs::rejects_public_impl_with_private_prerequisite`.
+  `tests/implementations.rs::rejects_public_impl_for_private_interface`,
+  `tests/implementations.rs::rejects_public_impl_with_private_prerequisite`,
+  and
+  `tests/implementations.rs::rejects_invalid_interface_method_shape_before_impl_equation_arity`.
 - [`src/elaborate.rs`](../../../src/elaborate.rs):
-  `src/elaborate.rs::tests::nested_method_arrow_traversal_has_an_exact_constraint_boundary`.
+  `src/elaborate.rs::tests::invalid_outer_method_shape_has_an_exact_stack_safe_constraint_boundary`.
 - [`tests/module_entry.rs`](../../../tests/module_entry.rs):
   `tests/module_entry.rs::rejects_a_constrained_main_before_lowering_entry_evidence`
   and
@@ -376,6 +391,10 @@ the ones named here.
   `tests/interface_corpus.rs::opaque_carrier_uses_public_operations`,
   `tests/interface_corpus.rs::recursive_impl_method_computes_forty_two`, and
   `tests/interface_corpus.rs::mutual_impl_methods_compute_forty_two`.
+- [`tests/interfaces.rs`](../../../tests/interfaces.rs):
+  `tests/interfaces.rs::top_level_function_with_nested_function_domain_completes_the_pipeline`
+  observes `42 : Int` after implementation checking, selection, lowering,
+  validation, and evaluation.
 
 ### Deterministic diagnostics, causal labels, and no private leak
 
@@ -399,9 +418,10 @@ the ones named here.
 - [`src/elaborate.rs`](../../../src/elaborate.rs):
   `src/elaborate.rs::tests::one_type_budget_spans_all_checked_modules`,
   `src/elaborate.rs::tests::one_constraint_budget_spans_all_checked_modules`,
+  `src/elaborate.rs::tests::impl_method_substitution_uses_the_exact_constraint_budget`,
   `src/elaborate.rs::tests::imported_overlap_uses_retained_route_order_and_exact_budget`,
   and
-  `src/elaborate.rs::tests::nested_method_arrow_traversal_has_an_exact_constraint_boundary`.
+  `src/elaborate.rs::tests::invalid_outer_method_shape_has_an_exact_stack_safe_constraint_boundary`.
 - [`src/evidence.rs`](../../../src/evidence.rs):
   `src/evidence.rs::tests::every_same_interface_candidate_inspection_is_constraint_bounded`,
   `src/evidence.rs::tests::ground_prerequisite_reentry_is_a_cycle_before_resource_exhaustion`,
@@ -482,6 +502,15 @@ stacks. Evidence plans, deep substitutions, checked-body audits, selection
 chains, validator worklists, rejected payloads, and replacement paths have
 small-stack destruction witnesses. These cases make the bound graph-wide and
 independent of module partitioning or recursive Rust call depth.
+
+Removing recursive nested-arrow search changes the exact checker boundaries.
+One interface exhausts the shared constraint budget at 36 units and succeeds at
+37. An implementation-method substitution exhausts it at 76 and succeeds at
+77. The 10,000-level invalid outer-method fixture exhausts its local check at 7
+and reaches `interface.method-not-function` at 8 on a 64 KiB stack. Dropping
+that fixture also exercises `ResolvedModule::drop` and
+`discard_resolved_interface_iteratively`, so the rejected resolved type is not
+destroyed through recursive Rust calls.
 
 ## Facts retained and released
 

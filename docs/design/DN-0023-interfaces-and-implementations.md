@@ -190,9 +190,10 @@ direction is rejected for the Modular Ash interface increment.
 ### Declarations and constraints
 
 An interface has one parameter of kind `Type` and one or more required method
-signatures. Every method type contains that parameter and exposes at least one
-function arrow, so ordinary typing determines the requested interface argument
-and every evidence slot is a function. A method introduces no additional type
+signatures. Every method type contains that parameter and has `Function` as its
+outermost constructor, so ordinary typing determines the requested interface
+argument and every evidence slot is a function. Function types may also occur
+inside the method domain or codomain. A method introduces no additional type
 parameters or constraints. Methods have no default bodies in the first
 increment.
 

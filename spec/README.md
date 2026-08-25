@@ -24,10 +24,11 @@ becoming nameable. A `pub opaque type` exports a name without constructors, and
 a `pub type` exports its name and complete constructor family.
 
 An interface declares one type parameter and an ordered set of method
-signatures. Its methods are constrained terms. An implementation supplies the
-complete method set for one interface argument but introduces no source name.
-Private implementations remain available only in their defining module;
-`pub impl` publishes a body-free fact to direct dependents.
+signatures. Every method type has `Function` as its top-level constructor. Its
+methods are constrained terms. An implementation supplies the complete method
+set for one interface argument but introduces no source name. Private
+implementations remain available only in their defining module; `pub impl`
+publishes a body-free fact to direct dependents.
 
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.

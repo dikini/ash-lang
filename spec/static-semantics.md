@@ -478,20 +478,22 @@ main () = true + 1
 ## Interfaces and constrained schemes
 
 An interface has one parameter of kind `Type` and a nonempty ordered method
-list. Every method type contains that parameter, contains at least one function
-arrow, and has no other free type variable. Interface declaration order fixes
-the order of the method positions used by checked evidence.
+list. Every method type contains that parameter, has `Function` as its
+outermost constructor, and has no other free type variable. Interface
+declaration order fixes the order of the method positions used by checked
+evidence.
 
 The following judgments check an interface method and then the complete
 interface. `free_type_variables` compares resolved binder identities, not
-spellings. `function_arrow_count` counts arrows anywhere in the method type.
-Resolution has already established method-name freshness.
+spellings. The equation `method_type = domain -> codomain` decomposes only the
+outermost constructor; it does not search `domain` or `codomain` for another
+arrow. Resolution has already established method-name freshness.
 
 ```sequent
 family interface-well-formedness:
   WF-Interface-Method :=
     free_type_variables(method_type) = {parameter}
-    function_arrow_count(method_type) >= 1
+    method_type = domain -> codomain
     ===>
     interface<parameter> |-method method_name : method_type ok
 
@@ -549,11 +551,13 @@ Equational and operational presentations with the same value type and
 requirements produce the same constrained scheme.
 
 A method type that omits the interface parameter or introduces another free
-type variable is `interface.method-parameter`; a method type with no arrow is
-`interface.method-not-function`. Duplicate identity-equal global requirements
-are `constraint.duplicate-requirement`, requirement-only parameters are
-`constraint.undetermined-parameter`, and a public signature that exposes a
-private interface is `constraint.private-interface`.
+type variable is `interface.method-parameter`. This check precedes the outer
+decomposition. If it succeeds but the method type's outermost constructor is
+not `Function`, the failure is `interface.method-not-function`. Duplicate
+identity-equal global requirements are `constraint.duplicate-requirement`,
+requirement-only parameters are `constraint.undetermined-parameter`, and a
+public signature that exposes a private interface is
+`constraint.private-interface`.
 
 ## Implementations
 
@@ -601,6 +605,10 @@ against its interface method type after substituting the head argument for the
 interface parameter. The implementation head parameters stay rigid. All
 ordinary globals and implementation methods in one module share one
 simultaneous recursive scope.
+
+Substitution acts on occurrences inside the method domain and codomain without
+changing the outer `Function` constructor. The resulting `expected` type is
+therefore callable when the positive-pattern equation group checks against it.
 
 A generic implementation method has the conceptual checked scheme shown below.
 Each prerequisite contributes its interface's method positions in prerequisite
