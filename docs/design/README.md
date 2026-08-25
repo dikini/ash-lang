@@ -26,6 +26,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md) —
   declarations-only modules, rooted imports, visibility, opacity, generated
   export summaries, and single-program Core assembly.
+- [DN-0024: Executable Learning and Evidence Stream](DN-0024-executable-learning-and-evidence-stream.md)
+  — a version-pinned external learning corpus, forward migration, and
+  cooperative design-evidence flow.
 - [Mini-Ash closure report](mini-ash/closure.md) — retained dialect inventory,
   simplification audit, budgets, ownership boundaries, and exclusions.
 - [Rank-1 integration evidence](mini-ash/rank-1-polymorphism/evidence.md) —
