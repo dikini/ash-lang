@@ -1,4 +1,5 @@
-{
+main : Unit -> Int
+main () = {
     let rec first : Unit -> Int = fn(ignored) {
         second ()
     }

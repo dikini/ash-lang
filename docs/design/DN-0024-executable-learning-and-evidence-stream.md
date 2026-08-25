@@ -6,7 +6,8 @@
   [DN-0016: First Mini-Ash Corpus Stratum](DN-0016-first-mini-ash-corpus.md),
   [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md),
   [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md),
-  [CP-0005: Passive Static Modules](../proposals/CP-0005-passive-static-modules.md)
+  [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md),
+  [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md)
 
 > This design note is informative. It governs the initial experiment with a
 > separate executable learning and evidence stream under the scope and
@@ -23,17 +24,16 @@ imposing backward-compatibility work on Ash?
 
 ## Context
 
-The [current specification](../../spec/README.md) defines one implemented
-Mini-Ash dialect. The `mini-ash` Git tag retains that completed milestone, while
-current source evolves toward Modular Ash as described by
-[DN-0020](DN-0020-ash-dialect-milestones.md). The compiler does not keep old
-dialects selectable merely to preserve earlier source programs.
+The `mini-ash` Git tag at commit `d62d3ba` retains the completed historical
+Mini-Ash milestone. The [current specification](../../spec/README.md) defines
+Modular Ash with passive source modules, a `main` entrypoint, and method-only
+interfaces and implementations. Current source keeps no Mini-Ash dialect
+selector merely to preserve earlier source programs.
 
-The accepted [CP-0005](../proposals/CP-0005-passive-static-modules.md) proposes
-replacing the single-file program root with passive modules and a `main`
-entrypoint. That behavior is not current Ash until its implementation, tests,
-and specification land together. The pending source-shape transition makes a
-small, migratable pilot more useful than a large Mini-Ash translation effort.
+The completed passive-module and interface increments make a small, migratable
+pilot more useful than a large Mini-Ash translation effort. A first edition can
+target the historical tag, then exercise forward migration against current
+Modular Ash without requiring compiler compatibility or tutorial backports.
 
 Ash already uses executable examples in the specification and tool guide. The
 first Mini-Ash corpus also showed that a shared set of programs can pressure

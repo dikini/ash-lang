@@ -1,4 +1,4 @@
-//! Runtime values for the retained Mini-Ash evaluator.
+//! Runtime values for the Ash evaluator.
 
 use std::{collections::HashSet, fmt, sync::Arc};
 
@@ -208,7 +208,7 @@ impl fmt::Debug for Closure {
     }
 }
 
-/// A fully evaluated Mini-Ash value.
+/// A fully evaluated Ash value.
 ///
 /// Values intentionally do not implement host equality because Ash functions
 /// have no equality operation or observable identity.

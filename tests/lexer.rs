@@ -32,6 +32,32 @@ fn recognizes_recursion_reserved_words() {
 }
 
 #[test]
+fn recognizes_interface_reserved_words_without_stealing_identifier_boundaries() {
+    let source = SourceFile::new(
+        "interface-keywords.ash",
+        "interface impl where interface_ implement whereupon",
+    )
+    .expect("the keyword fixture should fit");
+    let lexed = lex(&source).expect("the keyword fixture should lex");
+    let expected = [
+        (TokenKind::Interface, 0, 9),
+        (TokenKind::Impl, 10, 14),
+        (TokenKind::Where, 15, 20),
+        (TokenKind::Identifier("interface_".into()), 21, 31),
+        (TokenKind::Identifier("implement".into()), 32, 41),
+        (TokenKind::Identifier("whereupon".into()), 42, 51),
+        (TokenKind::EndOfFile, 51, 51),
+    ];
+
+    assert!(lexed.diagnostics.is_empty());
+    assert_eq!(lexed.tokens.len(), expected.len());
+    for (token, (kind, start, end)) in lexed.tokens.iter().zip(expected) {
+        assert_eq!(token.kind, kind);
+        assert_range(token, start, end);
+    }
+}
+
+#[test]
 fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
     let source = SourceFile::new(
         "data-pattern-tokens.ash",
@@ -53,6 +79,38 @@ fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
             TokenKind::EndOfFile,
         ]
     );
+}
+
+#[test]
+fn recognizes_module_tokens_with_exact_spans_and_reserved_word_boundaries() {
+    let source = SourceFile::new(
+        "module-tokens.ash",
+        "import as pub opaque importable as_ pubx opaque_ @ .\n",
+    )
+    .expect("the token source should fit");
+    let lexed = lex(&source).expect("the source should remain representable while lexing");
+    let expected = [
+        (TokenKind::Import, 0, 6),
+        (TokenKind::As, 7, 9),
+        (TokenKind::Pub, 10, 13),
+        (TokenKind::Opaque, 14, 20),
+        (TokenKind::Identifier("importable".into()), 21, 31),
+        (TokenKind::Identifier("as_".into()), 32, 35),
+        (TokenKind::Identifier("pubx".into()), 36, 40),
+        (TokenKind::Identifier("opaque_".into()), 41, 48),
+        (TokenKind::At, 49, 50),
+        (TokenKind::Dot, 51, 52),
+        (TokenKind::LineEnd, 52, 53),
+        (TokenKind::EndOfFile, 53, 53),
+    ];
+
+    assert!(lexed.diagnostics.is_empty());
+    assert_eq!(lexed.tokens.len(), expected.len());
+    for (token, (kind, start, end)) in lexed.tokens.iter().zip(expected) {
+        assert_eq!(token.kind, kind);
+        assert_range(token, start, end);
+        assert_eq!(token.span.source(), source.id());
+    }
 }
 
 fn assert_range(token: &Token, start: u32, end: u32) {
@@ -247,7 +305,7 @@ fn reports_each_excluded_lexical_form_with_its_exact_span() {
         ("/* no */", LexReason::Comment, 8),
         ("-123", LexReason::NegativeLiteral, 4),
         ("01", LexReason::InvalidIntegerLiteral, 2),
-        ("@", LexReason::UnknownCharacter, 1),
+        ("$", LexReason::UnknownCharacter, 1),
         ("😀", LexReason::UnknownCharacter, 4),
     ];
 
@@ -292,7 +350,7 @@ fn lexical_errors_keep_expected_and_found_forms_as_structured_fields() {
 
 #[test]
 fn collects_independent_lexical_errors_while_always_making_progress() {
-    let source = SourceFile::new("errors.ash", "@\r$😀").expect("the error source should fit");
+    let source = SourceFile::new("errors.ash", "?\r$😀").expect("the error source should fit");
     let lexed = lex(&source).expect("the source should remain representable while lexing");
 
     assert_eq!(

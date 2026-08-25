@@ -5,7 +5,12 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use ash::{driver::run_source, eval::Value, source::SourceFile, types::Type};
+use ash::{
+    driver::{RunConfiguration, run_path},
+    eval::Value,
+    module::ModuleRoots,
+    types::Type,
+};
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -67,8 +72,10 @@ fn ash(arguments: &[&Path]) -> Output {
 
 #[test]
 fn v001_fixture_prints_exactly_one_value_and_type_line() {
-    let fixture = Path::new("tests/fixtures/first-stratum/valid/v001-precedence.ash");
-    let output = ash(&[fixture]);
+    let source = TempFile::write(include_bytes!(
+        "fixtures/first-stratum/valid/v001-precedence.ash"
+    ));
+    let output = ash(&[source.path()]);
 
     assert!(output.status.success());
     assert_eq!(output.stdout, b"7 : Int\n");
@@ -77,14 +84,15 @@ fn v001_fixture_prints_exactly_one_value_and_type_line() {
 
 #[test]
 fn false_literal_has_exact_library_and_cli_observations() {
-    let observation = run_source(
-        SourceFile::new("false-literal.ash", "false\n").expect("test source should fit"),
-    )
+    let source = TempFile::write(b"main : Unit -> Bool\nmain () = false\n");
+    let observation = run_path(RunConfiguration {
+        entry: source.path().to_path_buf(),
+        roots: ModuleRoots::empty(),
+    })
     .expect("false should run end to end");
     assert!(matches!(observation.value, Value::Boolean(false)));
     assert_eq!(observation.ty, Type::Bool);
 
-    let source = TempFile::write(b"false\n");
     let output = ash(&[source.path()]);
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"false : Bool\n");
@@ -96,14 +104,20 @@ fn invocation_requires_exactly_one_source_path() {
     let none = ash(&[]);
     assert_eq!(none.status.code(), Some(2));
     assert!(none.stdout.is_empty());
-    assert_eq!(none.stderr, b"usage: ash <source-file>\n");
+    assert_eq!(
+        none.stderr,
+        b"usage: ash [--root name=path]... <entry-file>\n"
+    );
 
-    let first = TempFile::write(b"1\n");
-    let second = TempFile::write(b"2\n");
+    let first = TempFile::write(b"main : Unit -> Int\nmain () = 1\n");
+    let second = TempFile::write(b"main : Unit -> Int\nmain () = 2\n");
     let many = ash(&[first.path(), second.path()]);
     assert_eq!(many.status.code(), Some(2));
     assert!(many.stdout.is_empty());
-    assert_eq!(many.stderr, b"usage: ash <source-file>\n");
+    assert_eq!(
+        many.stderr,
+        b"usage: ash [--root name=path]... <entry-file>\n"
+    );
 }
 
 #[test]
@@ -124,7 +138,7 @@ fn missing_and_invalid_utf8_inputs_are_invocation_failures() {
 
 #[test]
 fn excluded_bare_carriage_return_is_a_source_rejection() {
-    let bare_cr = TempFile::write(b"1\r2");
+    let bare_cr = TempFile::write(b"main : Unit -> Int\nmain () = 1\r2");
     let output = ash(&[bare_cr.path()]);
 
     assert_eq!(output.status.code(), Some(1));
@@ -134,7 +148,7 @@ fn excluded_bare_carriage_return_is_a_source_rejection() {
 
 #[test]
 fn rejected_ash_source_uses_status_one_without_success_output() {
-    let source = TempFile::write(b"true + 1\n");
+    let source = TempFile::write(b"main : Unit -> Int\nmain () = true + 1\n");
     let output = ash(&[source.path()]);
 
     assert_eq!(output.status.code(), Some(1));
@@ -149,19 +163,21 @@ fn rejected_ash_source_uses_status_one_without_success_output() {
 fn recursive_source_rejections_use_stable_cli_categories() {
     for (text, category) in [
         (
-            b"{\nlet rec value : Int = 1\nand\nvalue\n}\n".as_slice(),
+            b"main : Unit -> Int\nmain () = {\nlet rec value : Int = 1\nand\nvalue\n}\n"
+                .as_slice(),
             "parse.expected-recursive-member",
         ),
         (
-            b"{\nand stray : Int = 1\n42\n}\n".as_slice(),
+            b"main : Unit -> Int\nmain () = {\nand stray : Int = 1\n42\n}\n".as_slice(),
             "parse.unexpected-and",
         ),
         (
-            b"{\nlet rec same : Unit -> Int = fn(value) {\n1\n}\nand same : Unit -> Int = fn(value) {\n2\n}\nsame ()\n}\n".as_slice(),
+            b"main : Unit -> Int\nmain () = {\nlet rec same : Unit -> Int = fn(value) {\n1\n}\nand same : Unit -> Int = fn(value) {\n2\n}\nsame ()\n}\n".as_slice(),
             "resolve.duplicate-recursive-member",
         ),
         (
-            b"{\nlet rec value : Int = 1\nvalue\n}\n".as_slice(),
+            b"main : Unit -> Int\nmain () = {\nlet rec value : Int = 1\nvalue\n}\n"
+                .as_slice(),
             "recursion.unsafe-root",
         ),
     ] {
@@ -177,8 +193,9 @@ fn recursive_source_rejections_use_stable_cli_categories() {
     }
 }
 
-fn assert_source_failure(path: &Path, category: &str, labels: &[&str]) {
-    let output = ash(&[path]);
+fn assert_source_failure(source: &[u8], category: &str, labels: &[&str]) {
+    let source = TempFile::write(source);
+    let output = ash(&[source.path()]);
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -195,7 +212,7 @@ fn assert_source_failure(path: &Path, category: &str, labels: &[&str]) {
 #[test]
 fn parse_failure_reports_the_primary_and_recovery_labels() {
     assert_source_failure(
-        Path::new("tests/fixtures/first-stratum/parse/p003-independent-recovery.ash"),
+        include_bytes!("fixtures/first-stratum/parse/p003-independent-recovery.ash"),
         "parse.expected-operand",
         &[
             "the operator requires a right operand",
@@ -209,7 +226,7 @@ fn parse_failure_reports_the_primary_and_recovery_labels() {
 #[test]
 fn resolution_failure_reports_both_duplicate_definitions() {
     assert_source_failure(
-        Path::new("tests/fixtures/first-stratum/resolve/r002-duplicate-global.ash"),
+        include_bytes!("fixtures/first-stratum/resolve/r002-duplicate-global.ash"),
         "resolve.duplicate-global",
         &[
             "this global name is already defined",
@@ -222,7 +239,7 @@ fn resolution_failure_reports_both_duplicate_definitions() {
 #[test]
 fn type_failure_reports_the_argument_and_declared_domain() {
     assert_source_failure(
-        Path::new("tests/fixtures/first-stratum/type/t004-argument.ash"),
+        include_bytes!("fixtures/first-stratum/type/t004-argument.ash"),
         "type.argument",
         &[
             "this argument does not match the function domain",
@@ -236,7 +253,7 @@ fn type_failure_reports_the_argument_and_declared_domain() {
 #[test]
 fn annotated_binding_failure_reports_the_initializer_and_annotation() {
     assert_source_failure(
-        Path::new("tests/fixtures/first-stratum/type/binding-initializer.ash"),
+        include_bytes!("fixtures/first-stratum/type/binding-initializer.ash"),
         "type.binding-initializer",
         &[
             "this initializer has type Int",

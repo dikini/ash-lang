@@ -5,11 +5,20 @@ lessons from historical Ash while rebuilding the language from a small,
 coherent base. Historical Ash is evidence for design work, not authority for
 this project.
 
-The first retained milestone, Mini-Ash, is an executable single-file, rank-1,
-pure-functional language. The
-[canonical specification](spec/README.md) defines its current syntax and
-semantics. The [`ash` tool guide](docs/tools/ash.md) explains how to run a
-source file.
+Ash is currently a pure, rank-1 language whose programs are acyclic graphs of
+passive source modules. Each `.ash` file contains imports and declarations. The
+entry module supplies a local `main` function:
+
+```ash
+main : Unit -> Int
+main () = 42
+```
+
+The [canonical specification](spec/README.md) defines the current language.
+The [`ash` tool guide](docs/tools/ash.md) explains module roots, invocation,
+output, and failures. The earlier single-file Mini-Ash milestone remains
+available at the `mini-ash` Git tag; it is not a selectable dialect in the
+current source tree.
 
 Project artifacts answer different questions:
 
@@ -23,4 +32,6 @@ Project artifacts answer different questions:
 - [tool documentation](docs/tools/README.md) describes the retained Ash
   executables.
 
-Human contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md). Agents should start with [AGENTS.md](AGENTS.md) and reconstruct only the context needed for their task.
+Human contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md). Agents
+should start with [AGENTS.md](AGENTS.md) and reconstruct only the context needed
+for their task.

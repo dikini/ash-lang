@@ -6,11 +6,11 @@ use std::{
 };
 
 use ash::{
-    driver::{PipelineFailure, run_source},
+    driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
     elaborate::{TypeError, TypeReason},
     lexer::LexReason,
+    module::{LoadGraphError, ModuleRoots},
     resolve::ResolveReason,
-    source::SourceFile,
 };
 
 const V001: &str = include_str!("fixtures/first-stratum/valid/v001-precedence.ash");
@@ -23,22 +23,130 @@ const RECURSIVE_GLOBAL: &str = include_str!("fixtures/recursion/valid/global-mut
 const RECURSIVE_LOCAL: &str = include_str!("fixtures/recursion/valid/local-mutual.ash");
 const UNSAFE_RECURSIVE_INITIALIZER: &str =
     include_str!("fixtures/recursion/type/unsafe-initializer.ash");
-const CURRIED_EQUATIONAL: &str =
-    "add : Int -> Int -> Int\nadd left = fn(right) {\n    left + right\n}\n\nadd 20 22\n";
-const CONTEXTUAL_BLOCK: &str = "{\n    let constant : Unit -> Int = {\n        fn(ignored) {\n            1\n        }\n    }\n    constant ()\n}\n";
-const HIGHER_ORDER_OPERATIONAL: &str = "fn add(left : Int) -> Int -> Int {\n    fn(right) {\n        left + right\n    }\n}\n\nadd 20 22\n";
-const FUNCTION_RESULT: &str = "identity : Int -> Int\nidentity value = value\n\nidentity\n";
-const COMMENT_REJECTION: &str = "// comments are not in Mini-Ash\n1\n";
-const UNKNOWN_NAME_REJECTION: &str = "missing 1\n";
-const TYPE_REJECTION: &str = "true + 1\n";
-const IRREFUTABLE_TUPLE: &str = "{\n    let (left, right) = (20, 22)\n    left + right\n}\n";
-const OPERATIONAL_TUPLE_PATTERN: &str =
-    "fn add((left, right) : (Int, Int)) -> Int {\n    left + right\n}\n\nadd(20, 22)\n";
-const CONTEXTUAL_MATCH: &str = "fn choose(flag : Bool) -> Int -> Int {\n    match flag {\n        true => fn(value) {\n            value + 1\n        }\n        false => fn(value) {\n            value * 2\n        }\n    }\n}\n\nchoose true 41\n";
-const TREE_PRESENTATIONS: &str = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn size_match(tree : Tree) -> Int {\n    match tree {\n        Tip(value) => 1\n        Fork(left, right) => size_match left + size_match right\n    }\n}\n\nsize (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))\n";
-const HIGHER_ORDER_CONSTRUCTOR: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmatch build Wrap {\n    Wrap(value) => value\n}\n";
-const CYCLIC_STREAM: &str = "type Stream =\n    Next(Int, Stream)\n\n{\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
-const RANK_ONE_POLYMORPHISM: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\n{\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
+
+const CURRIED_EQUATIONAL_MODULE: &str = "add : Int -> Int -> Int\nadd left = fn(right) {\n    left + right\n}\n\nmain : Unit -> Int\nmain () = add 20 22\n";
+const CONTEXTUAL_BLOCK_MODULE: &str = "main : Unit -> Int\nmain () = {\n    let constant : Unit -> Int = {\n        fn(ignored) {\n            1\n        }\n    }\n    constant ()\n}\n";
+const HIGHER_ORDER_OPERATIONAL_MODULE: &str = "fn add(left : Int) -> Int -> Int {\n    fn(right) {\n        left + right\n    }\n}\n\nmain : Unit -> Int\nmain () = add 20 22\n";
+const FUNCTION_RESULT_MODULE: &str = "identity : Int -> Int\nidentity value = value\n\nmain : Unit -> (Int -> Int)\nmain () = identity\n";
+const COMMENT_REJECTION_MODULE: &str =
+    "// comments are not in Ash\nmain : Unit -> Int\nmain () = 1\n";
+const UNKNOWN_NAME_REJECTION_MODULE: &str = "main : Unit -> Int\nmain () = missing 1\n";
+const TYPE_REJECTION_MODULE: &str = "main : Unit -> Int\nmain () = true + 1\n";
+const IRREFUTABLE_TUPLE_MODULE: &str =
+    "main : Unit -> Int\nmain () = {\n    let (left, right) = (20, 22)\n    left + right\n}\n";
+const OPERATIONAL_TUPLE_PATTERN_MODULE: &str = "fn add((left, right) : (Int, Int)) -> Int {\n    left + right\n}\n\nmain : Unit -> Int\nmain () = add(20, 22)\n";
+const CONTEXTUAL_MATCH_MODULE: &str = "fn choose(flag : Bool) -> Int -> Int {\n    match flag {\n        true => fn(value) {\n            value + 1\n        }\n        false => fn(value) {\n            value * 2\n        }\n    }\n}\n\nmain : Unit -> Int\nmain () = choose true 41\n";
+const TREE_PRESENTATIONS_MODULE: &str = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn size_match(tree : Tree) -> Int {\n    match tree {\n        Tip(value) => 1\n        Fork(left, right) => size_match left + size_match right\n    }\n}\n\nmain : Unit -> Int\nmain () = size (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))\n";
+const HIGHER_ORDER_CONSTRUCTOR_MODULE: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmain : Unit -> Int\nmain () = match build Wrap {\n    Wrap(value) => value\n}\n";
+const CYCLIC_STREAM_MODULE: &str = "type Stream =\n    Next(Int, Stream)\n\nmain : Unit -> Stream\nmain () = {\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
+const RANK_ONE_POLYMORPHISM_MODULE: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\nmain : Unit -> (Option<Int>, Bool)\nmain () = {\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
+
+const MAIN_MODULE: &str = "main : Unit -> Int\nmain () = 42\n";
+const SIBLING_ENTRY_MODULE: &str =
+    "import arithmetic as Arithmetic\n\nmain : Unit -> Int\nmain () = Arithmetic.answer(())\n";
+const SIBLING_ARITHMETIC_MODULE: &str = "pub answer : Unit -> Int\nanswer () = 42\n";
+const NAMED_ROOT_ENTRY_MODULE: &str =
+    "import @std.answer as Answer\n\nmain : Unit -> Int\nmain () = Answer.value(())\n";
+const NAMED_ROOT_ANSWER_MODULE: &str = "pub value : Unit -> Int\nvalue () = 42\n";
+const TARGETED_ENTRY_MODULE: &str = "import arithmetic (answer as imported_answer)\n\nmain : Unit -> Int\nmain () = imported_answer(())\n";
+const OPAQUE_ENTRY_MODULE: &str = "import token as Token\n\nmain : Unit -> Int\nmain () = {\n    let token : Token.Token = Token.make(41)\n    Token.read(Token.step(token))\n}\n";
+const OPAQUE_TOKEN_MODULE: &str = "pub opaque type Token = Token(Int)\n\npub make : Int -> Token\nmake value = Token(value)\n\npub step : Token -> Token\nstep (Token value) = Token(value + 1)\n\npub read : Token -> Int\nread (Token value) = value\n";
+const HIDDEN_ENTRY_MODULE: &str = "import carrier as Carrier\n\nmain : Unit -> Int\nmain () = {\n    let hidden = Carrier.make(41)\n    Carrier.read(Carrier.step(hidden))\n}\n";
+const HIDDEN_CARRIER_MODULE: &str = "type Hidden = Hidden(Int)\n\npub make : Int -> Hidden\nmake value = Hidden(value)\n\npub step : Hidden -> Hidden\nstep (Hidden value) = Hidden(value + 1)\n\npub read : Hidden -> Int\nread (Hidden value) = value\n";
+const TRANSPARENT_ENTRY_MODULE: &str = "import choice as Choice\n\nmain : Unit -> Int\nmain () = match Choice.sample(()) {\n    Choice.First(value) => value\n    Choice.Second(value) => value + 1\n}\n";
+const TRANSPARENT_CHOICE_MODULE: &str = "pub type Choice =\n    First(Int)\n    | Second(Int)\n\npub sample : Unit -> Choice\nsample () = First(42)\n";
+const LOCAL_INTERFACE_EVIDENCE_MODULE: &str = concat!(
+    "interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "impl Equal<Int> {\n",
+    "    equal (left, right) = left == right\n",
+    "}\n\n",
+    "main : Unit -> Bool\n",
+    "main () = equal(1, 1)\n",
+);
+const CONSTRAINED_IMPORT_ENTRY_MODULE: &str = concat!(
+    "import equality as Equality\n\n",
+    "main : Unit -> Bool\n",
+    "main () = Equality.same((1, 1))\n",
+);
+const CONSTRAINED_IMPORT_LIBRARY_MODULE: &str = concat!(
+    "pub interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "pub impl Equal<Int> {\n",
+    "    equal (left, right) = left == right\n",
+    "}\n\n",
+    "pub same : (A, A) -> Bool where Equal<A>\n",
+    "same pair = equal pair\n",
+);
+const GENERIC_PREREQUISITE_EVIDENCE_MODULE: &str = concat!(
+    "type Option<A> =\n",
+    "    None\n",
+    "    | Some(A)\n\n",
+    "interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "impl Equal<Int> {\n",
+    "    equal (left, right) = left == right\n",
+    "}\n\n",
+    "impl Equal<Option<A>> where Equal<A> {\n",
+    "    equal (None, None) = true\n",
+    "    equal (Some(left), Some(right)) = equal(left, right)\n",
+    "    equal _ = false\n",
+    "}\n\n",
+    "main : Unit -> Bool\n",
+    "main () = equal(Some(1), Some(1))\n",
+);
+const INTERFACE_HIDDEN_ENTRY_MODULE: &str = concat!(
+    "import carrier as Carrier\n\n",
+    "main : Unit -> Int\n",
+    "main () = Carrier.read(Carrier.transform(Carrier.make(42)))\n",
+);
+const INTERFACE_HIDDEN_CARRIER_MODULE: &str = concat!(
+    "type Hidden = Hidden(Int)\n\n",
+    "pub interface Transform<A> {\n",
+    "    transform : A -> A\n",
+    "}\n\n",
+    "pub impl Transform<Hidden> {\n",
+    "    transform value = value\n",
+    "}\n\n",
+    "pub make : Int -> Hidden\n",
+    "make value = Hidden(value)\n\n",
+    "pub read : Hidden -> Int\n",
+    "read (Hidden value) = value\n",
+);
+const INTERFACE_OPAQUE_ENTRY_MODULE: &str = concat!(
+    "import token as Token\n\n",
+    "main : Unit -> Bool\n",
+    "main () = Token.equal(Token.make(42), Token.make(42))\n",
+);
+const INTERFACE_OPAQUE_TOKEN_MODULE: &str = concat!(
+    "pub opaque type Token = Token(Int)\n\n",
+    "pub interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "pub impl Equal<Token> {\n",
+    "    equal (Token(left), Token(right)) = left == right\n",
+    "}\n\n",
+    "pub make : Int -> Token\n",
+    "make value = Token(value)\n",
+);
+const CONSTRAINED_PRESENTATIONS_MODULE: &str = concat!(
+    "interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "impl Equal<Int> {\n",
+    "    equal (left, right) = left == right\n",
+    "}\n\n",
+    "same_equational : (A, A) -> Bool where Equal<A>\n",
+    "same_equational pair = equal pair\n\n",
+    "fn same_operational(pair : (A, A)) -> Bool where Equal<A> {\n",
+    "    equal pair\n",
+    "}\n\n",
+    "main : Unit -> (Bool, Bool)\n",
+    "main () = (same_equational (1, 1), same_operational (1, 1))\n",
+);
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -57,11 +165,26 @@ impl TempDirectory {
             }
         }
     }
+
+    fn write(&self, relative: &str, text: &str) -> PathBuf {
+        let path = self.0.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("the example parent should be creatable");
+        }
+        fs::write(&path, text).expect("the module example should be writable");
+        path
+    }
+
+    fn directory(&self, relative: &str) -> PathBuf {
+        let path = self.0.join(relative);
+        fs::create_dir_all(&path).expect("the module-root example should be creatable");
+        path
+    }
 }
 
 impl Drop for TempDirectory {
     fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.0);
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -72,8 +195,12 @@ struct TempFile {
 
 impl TempFile {
     fn write(text: &str) -> Self {
+        Self::write_named("source.ash", text)
+    }
+
+    fn write_named(name: &str, text: &str) -> Self {
         let directory = TempDirectory::create();
-        let path = directory.0.join("source.ash");
+        let path = directory.0.join(name);
         let owned = Self {
             _directory: directory,
             path,
@@ -94,8 +221,27 @@ impl Drop for TempFile {
 }
 
 fn run(name: &str, text: &str) -> Result<ash::driver::Observation, PipelineFailure> {
-    let source = SourceFile::new(name, text).expect("a specification example should fit");
-    run_source(source)
+    let source = TempFile::write_named(name, text);
+    match run_path(RunConfiguration {
+        entry: source.path.clone(),
+        roots: ModuleRoots::empty(),
+    }) {
+        Ok(observation) => Ok(observation),
+        Err(FileFailure::Pipeline(failure)) => Err(failure),
+        Err(FileFailure::Graph(LoadGraphError::Syntax(failure))) => {
+            Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
+                lexical: failure.lexical,
+                parser: failure.parser,
+                resource: failure.resource,
+            })))
+        }
+        Err(FileFailure::Graph(LoadGraphError::Projection { error, .. })) => {
+            Err(PipelineFailure::Projection(error))
+        }
+        Err(FileFailure::Graph(LoadGraphError::SourceModel { error, .. }))
+        | Err(FileFailure::Source(error)) => Err(PipelineFailure::SourceModel(error)),
+        Err(failure) => panic!("the specification module reached an input failure: {failure}"),
+    }
 }
 
 fn assert_observation(name: &str, text: &str, value: &str, ty: &str) {
@@ -111,6 +257,183 @@ fn assert_documented(path: &str, source: &str) {
         document.contains(source.trim_end()),
         "{path} must contain its executable source example"
     );
+}
+
+fn assert_module_tree(
+    entry_text: &str,
+    dependencies: &[(&str, &str)],
+    roots: ModuleRoots,
+) -> ash::driver::Observation {
+    let tree = TempDirectory::create();
+    let entry = tree.write("app/main.ash", entry_text);
+    for (path, text) in dependencies {
+        tree.write(path, text);
+    }
+    run_path(RunConfiguration { entry, roots })
+        .expect("the documented module tree should be accepted")
+}
+
+#[test]
+fn overview_main_application_example_is_executable() {
+    assert_observation("main.ash", MAIN_MODULE, "42", "Int");
+    assert_documented("README.md", MAIN_MODULE);
+}
+
+#[test]
+fn overview_sibling_import_example_is_executable() {
+    let observation = assert_module_tree(
+        SIBLING_ENTRY_MODULE,
+        &[("app/arithmetic.ash", SIBLING_ARITHMETIC_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+    assert_documented("spec/README.md", SIBLING_ENTRY_MODULE);
+    assert_documented("spec/README.md", SIBLING_ARITHMETIC_MODULE);
+}
+
+#[test]
+fn tool_named_root_example_has_exact_cli_observation() {
+    let tree = TempDirectory::create();
+    tree.write("app/main.ash", NAMED_ROOT_ENTRY_MODULE);
+    tree.directory("standard");
+    tree.write("standard/answer.ash", NAMED_ROOT_ANSWER_MODULE);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .current_dir(&tree.0)
+        .arg("--root")
+        .arg("std=standard")
+        .arg("app/main.ash")
+        .output()
+        .expect("the documented executable should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : Int\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", NAMED_ROOT_ENTRY_MODULE);
+    assert_documented("docs/tools/ash.md", NAMED_ROOT_ANSWER_MODULE);
+}
+
+#[test]
+fn overview_targeted_import_example_is_executable() {
+    let observation = assert_module_tree(
+        TARGETED_ENTRY_MODULE,
+        &[("app/arithmetic.ash", SIBLING_ARITHMETIC_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_documented("spec/README.md", TARGETED_ENTRY_MODULE);
+}
+
+#[test]
+fn overview_opaque_smart_constructor_example_is_executable() {
+    let observation = assert_module_tree(
+        OPAQUE_ENTRY_MODULE,
+        &[("app/token.ash", OPAQUE_TOKEN_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_documented("spec/README.md", OPAQUE_ENTRY_MODULE);
+    assert_documented("spec/README.md", OPAQUE_TOKEN_MODULE);
+}
+
+#[test]
+fn overview_hidden_carrier_example_is_executable() {
+    let observation = assert_module_tree(
+        HIDDEN_ENTRY_MODULE,
+        &[("app/carrier.ash", HIDDEN_CARRIER_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_documented("spec/README.md", HIDDEN_ENTRY_MODULE);
+    assert_documented("spec/README.md", HIDDEN_CARRIER_MODULE);
+}
+
+#[test]
+fn overview_transparent_matching_example_is_executable() {
+    let observation = assert_module_tree(
+        TRANSPARENT_ENTRY_MODULE,
+        &[("app/choice.ash", TRANSPARENT_CHOICE_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_documented("spec/README.md", TRANSPARENT_ENTRY_MODULE);
+    assert_documented("spec/README.md", TRANSPARENT_CHOICE_MODULE);
+}
+
+#[test]
+fn overview_local_interface_evidence_example_is_executable() {
+    assert_observation(
+        "local-interface-evidence.ash",
+        LOCAL_INTERFACE_EVIDENCE_MODULE,
+        "true",
+        "Bool",
+    );
+    assert_documented("spec/README.md", LOCAL_INTERFACE_EVIDENCE_MODULE);
+}
+
+#[test]
+fn overview_cross_module_constrained_example_is_executable() {
+    let observation = assert_module_tree(
+        CONSTRAINED_IMPORT_ENTRY_MODULE,
+        &[("app/equality.ash", CONSTRAINED_IMPORT_LIBRARY_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "true");
+    assert_eq!(observation.type_display(), "Bool");
+    assert_documented("spec/README.md", CONSTRAINED_IMPORT_ENTRY_MODULE);
+    assert_documented("spec/README.md", CONSTRAINED_IMPORT_LIBRARY_MODULE);
+}
+
+#[test]
+fn static_semantics_generic_prerequisite_evidence_example_is_executable() {
+    assert_observation(
+        "generic-prerequisite-evidence.ash",
+        GENERIC_PREREQUISITE_EVIDENCE_MODULE,
+        "true",
+        "Bool",
+    );
+    assert_documented(
+        "spec/static-semantics.md",
+        GENERIC_PREREQUISITE_EVIDENCE_MODULE,
+    );
+}
+
+#[test]
+fn resolution_hidden_carrier_interface_example_uses_public_operations() {
+    let observation = assert_module_tree(
+        INTERFACE_HIDDEN_ENTRY_MODULE,
+        &[("app/carrier.ash", INTERFACE_HIDDEN_CARRIER_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+    assert_documented("spec/name-resolution.md", INTERFACE_HIDDEN_ENTRY_MODULE);
+    assert_documented("spec/name-resolution.md", INTERFACE_HIDDEN_CARRIER_MODULE);
+}
+
+#[test]
+fn resolution_opaque_carrier_interface_example_uses_public_operations() {
+    let observation = assert_module_tree(
+        INTERFACE_OPAQUE_ENTRY_MODULE,
+        &[("app/token.ash", INTERFACE_OPAQUE_TOKEN_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "true");
+    assert_eq!(observation.type_display(), "Bool");
+    assert_documented("spec/name-resolution.md", INTERFACE_OPAQUE_ENTRY_MODULE);
+    assert_documented("spec/name-resolution.md", INTERFACE_OPAQUE_TOKEN_MODULE);
+}
+
+#[test]
+fn syntax_constrained_global_presentations_are_executable() {
+    assert_observation(
+        "constrained-presentations.ash",
+        CONSTRAINED_PRESENTATIONS_MODULE,
+        "(true, true)",
+        "(Bool, Bool)",
+    );
+    assert_documented("spec/syntax.md", CONSTRAINED_PRESENTATIONS_MODULE);
 }
 
 #[test]
@@ -170,16 +493,16 @@ fn tool_recursive_example_has_exact_cli_observation() {
 fn syntax_curried_equational_example_is_executable() {
     assert_observation(
         "spec-curried-equational.ash",
-        CURRIED_EQUATIONAL,
+        CURRIED_EQUATIONAL_MODULE,
         "42",
         "Int",
     );
-    assert_documented("spec/elaboration.md", CURRIED_EQUATIONAL);
+    assert_documented("spec/elaboration.md", CURRIED_EQUATIONAL_MODULE);
 }
 
 #[test]
 fn lexical_comment_rejection_example_has_its_documented_reason() {
-    let failure = run("spec-comment-rejection.ash", COMMENT_REJECTION)
+    let failure = run("spec-comment-rejection.ash", COMMENT_REJECTION_MODULE)
         .expect_err("comments are outside this lexical structure");
     let PipelineFailure::Syntax(actual) = failure else {
         panic!("the comment example should fail during syntax processing");
@@ -192,113 +515,128 @@ fn lexical_comment_rejection_example_has_its_documented_reason() {
             .collect::<Vec<_>>(),
         vec![LexReason::Comment]
     );
-    assert_documented("spec/lexical-structure.md", COMMENT_REJECTION);
+    assert_documented("spec/lexical-structure.md", COMMENT_REJECTION_MODULE);
 }
 
 #[test]
 fn resolution_unknown_name_example_has_its_documented_reason() {
-    let failure = run("spec-unknown-name.ash", UNKNOWN_NAME_REJECTION)
+    let failure = run("spec-unknown-name.ash", UNKNOWN_NAME_REJECTION_MODULE)
         .expect_err("an unresolved occurrence should be rejected");
     let PipelineFailure::Resolution(actual) = failure else {
         panic!("the unknown-name example should fail during resolution");
     };
     assert_eq!(actual.reason, ResolveReason::UnknownName);
-    assert_documented("spec/name-resolution.md", UNKNOWN_NAME_REJECTION);
+    assert_documented("spec/name-resolution.md", UNKNOWN_NAME_REJECTION_MODULE);
 }
 
 #[test]
 fn static_semantics_operand_example_has_its_documented_reason() {
-    let failure = run("spec-operator-operand.ash", TYPE_REJECTION)
+    let failure = run("spec-operator-operand.ash", TYPE_REJECTION_MODULE)
         .expect_err("a Boolean addition operand should be rejected");
     let PipelineFailure::Typing(TypeError::Source(actual)) = failure else {
         panic!("the operand example should fail during typing");
     };
     assert_eq!(actual.reason, TypeReason::OperatorOperand);
-    assert_documented("spec/static-semantics.md", TYPE_REJECTION);
+    assert_documented("spec/static-semantics.md", TYPE_REJECTION_MODULE);
 }
 
 #[test]
 fn static_semantics_contextual_block_example_is_executable() {
-    assert_observation("spec-contextual-block.ash", CONTEXTUAL_BLOCK, "1", "Int");
-    assert_documented("spec/static-semantics.md", CONTEXTUAL_BLOCK);
+    assert_observation(
+        "spec-contextual-block.ash",
+        CONTEXTUAL_BLOCK_MODULE,
+        "1",
+        "Int",
+    );
+    assert_documented("spec/static-semantics.md", CONTEXTUAL_BLOCK_MODULE);
 }
 
 #[test]
 fn static_semantics_higher_order_operational_example_is_executable() {
     assert_observation(
         "spec-higher-order-operational.ash",
-        HIGHER_ORDER_OPERATIONAL,
+        HIGHER_ORDER_OPERATIONAL_MODULE,
         "42",
         "Int",
     );
-    assert_documented("spec/static-semantics.md", HIGHER_ORDER_OPERATIONAL);
+    assert_documented("spec/static-semantics.md", HIGHER_ORDER_OPERATIONAL_MODULE);
 }
 
 #[test]
 fn static_semantics_irrefutable_tuple_binding_is_executable() {
-    assert_observation("spec-irrefutable-tuple.ash", IRREFUTABLE_TUPLE, "42", "Int");
-    assert_documented("spec/static-semantics.md", IRREFUTABLE_TUPLE);
+    assert_observation(
+        "spec-irrefutable-tuple.ash",
+        IRREFUTABLE_TUPLE_MODULE,
+        "42",
+        "Int",
+    );
+    assert_documented("spec/static-semantics.md", IRREFUTABLE_TUPLE_MODULE);
 }
 
 #[test]
 fn static_semantics_operational_tuple_pattern_is_executable() {
     assert_observation(
         "spec-operational-tuple-pattern.ash",
-        OPERATIONAL_TUPLE_PATTERN,
+        OPERATIONAL_TUPLE_PATTERN_MODULE,
         "42",
         "Int",
     );
-    assert_documented("spec/static-semantics.md", OPERATIONAL_TUPLE_PATTERN);
+    assert_documented("spec/static-semantics.md", OPERATIONAL_TUPLE_PATTERN_MODULE);
 }
 
 #[test]
 fn static_semantics_contextual_match_checks_function_arms() {
-    assert_observation("spec-contextual-match.ash", CONTEXTUAL_MATCH, "42", "Int");
-    assert_documented("spec/static-semantics.md", CONTEXTUAL_MATCH);
+    assert_observation(
+        "spec-contextual-match.ash",
+        CONTEXTUAL_MATCH_MODULE,
+        "42",
+        "Int",
+    );
+    assert_documented("spec/static-semantics.md", CONTEXTUAL_MATCH_MODULE);
 }
 
 #[test]
 fn static_semantics_rank_one_polymorphism_is_executable() {
     assert_observation(
         "spec-rank-one-polymorphism.ash",
-        RANK_ONE_POLYMORPHISM,
+        RANK_ONE_POLYMORPHISM_MODULE,
         "(Some(42), false)",
         "(Option<Int>, Bool)",
     );
-    assert_documented("spec/static-semantics.md", RANK_ONE_POLYMORPHISM);
+    assert_documented("spec/static-semantics.md", RANK_ONE_POLYMORPHISM_MODULE);
 }
 
 #[test]
 fn elaboration_tree_presentations_are_equivalent() {
     assert_observation(
         "spec-tree-presentations.ash",
-        TREE_PRESENTATIONS,
+        TREE_PRESENTATIONS_MODULE,
         "4",
         "Int",
     );
-    assert_documented("spec/elaboration.md", TREE_PRESENTATIONS);
+    assert_documented("spec/elaboration.md", TREE_PRESENTATIONS_MODULE);
 }
 
 #[test]
 fn elaboration_payload_constructor_is_higher_order() {
     assert_observation(
         "spec-higher-order-constructor.ash",
-        HIGHER_ORDER_CONSTRUCTOR,
+        HIGHER_ORDER_CONSTRUCTOR_MODULE,
         "42",
         "Int",
     );
-    assert_documented("spec/elaboration.md", HIGHER_ORDER_CONSTRUCTOR);
+    assert_documented("spec/elaboration.md", HIGHER_ORDER_CONSTRUCTOR_MODULE);
 }
 
 #[test]
 fn dynamic_cyclic_data_observation_is_finite() {
     assert_observation(
         "spec-cyclic-stream.ash",
-        CYCLIC_STREAM,
+        CYCLIC_STREAM_MODULE,
         "Next(1, <cycle>)",
         "Stream",
     );
-    assert_documented("spec/dynamic-semantics.md", CYCLIC_STREAM);
+    assert_documented("spec/dynamic-semantics.md", CYCLIC_STREAM_MODULE);
 }
 
 #[test]
@@ -372,7 +710,7 @@ fn tool_example_temp_source_requires_exclusive_directory_ownership() {
 
 #[test]
 fn tool_function_result_uses_opaque_rendering() {
-    let source = TempFile::write(FUNCTION_RESULT);
+    let source = TempFile::write(FUNCTION_RESULT_MODULE);
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
         .arg(source.path())
         .output()
@@ -381,12 +719,12 @@ fn tool_function_result_uses_opaque_rendering() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"<function> : Int -> Int\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", FUNCTION_RESULT);
+    assert_documented("docs/tools/ash.md", FUNCTION_RESULT_MODULE);
 }
 
 #[test]
 fn tool_cyclic_data_uses_structural_rendering() {
-    let source = TempFile::write(CYCLIC_STREAM);
+    let source = TempFile::write(CYCLIC_STREAM_MODULE);
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
         .arg(source.path())
         .output()
@@ -395,12 +733,12 @@ fn tool_cyclic_data_uses_structural_rendering() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"Next(1, <cycle>) : Stream\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", CYCLIC_STREAM);
+    assert_documented("docs/tools/ash.md", CYCLIC_STREAM_MODULE);
 }
 
 #[test]
 fn tool_rank_one_example_has_exact_cli_observation() {
-    let source = TempFile::write(RANK_ONE_POLYMORPHISM);
+    let source = TempFile::write(RANK_ONE_POLYMORPHISM_MODULE);
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
         .arg(source.path())
         .output()
@@ -409,7 +747,7 @@ fn tool_rank_one_example_has_exact_cli_observation() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"(Some(42), false) : (Option<Int>, Bool)\n");
     assert!(output.stderr.is_empty());
-    assert_documented("docs/tools/ash.md", RANK_ONE_POLYMORPHISM);
+    assert_documented("docs/tools/ash.md", RANK_ONE_POLYMORPHISM_MODULE);
 }
 
 #[test]
@@ -423,7 +761,7 @@ fn tool_source_rejection_uses_status_one_and_stderr() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).starts_with("type.operator-operand\n"));
-    assert_documented("docs/tools/ash.md", TYPE_REJECTION);
+    assert_documented("docs/tools/ash.md", TYPE_REJECTION_MODULE);
 }
 
 #[test]

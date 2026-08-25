@@ -1,3 +1,4 @@
-match value {
+main : Unit -> Bool
+main () = match true {
     true
 }

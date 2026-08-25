@@ -5,4 +5,5 @@ fn double(value : Int) -> Int {
     value * 2
 }
 
-double (increment 20)
+main : Unit -> Int
+main () = double (increment 20)

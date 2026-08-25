@@ -1,4 +1,4 @@
-//! Delimiter-aware lexical analysis for the Mini-Ash token family.
+//! Delimiter-aware lexical analysis for the Ash token family.
 
 mod token;
 
@@ -22,7 +22,7 @@ pub enum LexReason {
     ByteOrderMark,
     /// An identifier contains a non-ASCII character.
     UnicodeIdentifier,
-    /// The source uses comment syntax excluded from Mini-Ash.
+    /// The source uses comment syntax excluded from Ash.
     Comment,
     /// A minus sign prefixes decimal digits.
     NegativeLiteral,
@@ -30,7 +30,7 @@ pub enum LexReason {
     InvalidIntegerLiteral,
     /// An ASCII word does not match a reserved word or identifier grammar.
     InvalidIdentifier,
-    /// No Mini-Ash token begins with the source character.
+    /// No Ash token begins with the source character.
     UnknownCharacter,
 }
 
@@ -40,11 +40,11 @@ impl LexReason {
             Self::BareCarriageReturn => "bare carriage return is not a line break",
             Self::ByteOrderMark => "byte order marks are not accepted",
             Self::UnicodeIdentifier => "identifiers use ASCII characters",
-            Self::Comment => "comments are not available in Mini-Ash",
-            Self::NegativeLiteral => "negative integer literals are not available in Mini-Ash",
+            Self::Comment => "comments are not available in Ash",
+            Self::NegativeLiteral => "negative integer literals are not available in Ash",
             Self::InvalidIntegerLiteral => "integer literal does not match the decimal grammar",
             Self::InvalidIdentifier => "word is not an ASCII identifier or reserved word",
-            Self::UnknownCharacter => "character does not begin a Mini-Ash token",
+            Self::UnknownCharacter => "character does not begin an Ash token",
         }
     }
 
@@ -136,6 +136,14 @@ impl DelimiterContext {
 /// Returns a source-model error only if the admitted source's stored invariants
 /// cannot produce checked token spans.
 pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
+    let mut syntax_budget = SyntaxBudget::default();
+    lex_with_budget(source, &mut syntax_budget)
+}
+
+pub(crate) fn lex_with_budget(
+    source: &SourceFile,
+    syntax_budget: &mut SyntaxBudget,
+) -> Result<Lexed, SourceError> {
     let text = source.text();
     let bytes = text.as_bytes();
     let mut offset = 0;
@@ -143,15 +151,13 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
     let mut diagnostics = Vec::new();
     let mut contexts = vec![DelimiterContext::File];
     let mut logical_line_has_token = false;
-    let mut syntax_budget = SyntaxBudget::default();
-
     macro_rules! charge_syntax {
         () => {
             if let Err(resource_failure) = syntax_budget.charge() {
                 return Ok(Lexed {
                     tokens,
                     diagnostics,
-                    syntax_budget,
+                    syntax_budget: syntax_budget.clone(),
                     resource_failure: Some(resource_failure),
                 });
             }
@@ -293,6 +299,8 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
             b')' => single(&mut offset, TokenKind::RightParen),
             b'{' => single(&mut offset, TokenKind::LeftBrace),
             b'}' => single(&mut offset, TokenKind::RightBrace),
+            b'@' => single(&mut offset, TokenKind::At),
+            b'.' => single(&mut offset, TokenKind::Dot),
             b':' => single(&mut offset, TokenKind::Colon),
             b'+' => single(&mut offset, TokenKind::Plus),
             b'*' => single(&mut offset, TokenKind::Star),
@@ -359,7 +367,7 @@ pub fn lex(source: &SourceFile) -> Result<Lexed, SourceError> {
     Ok(Lexed {
         tokens,
         diagnostics,
-        syntax_budget,
+        syntax_budget: syntax_budget.clone(),
         resource_failure: None,
     })
 }
@@ -433,6 +441,13 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "and" => Some(TokenKind::And),
         "type" => Some(TokenKind::Type),
         "match" => Some(TokenKind::Match),
+        "import" => Some(TokenKind::Import),
+        "as" => Some(TokenKind::As),
+        "pub" => Some(TokenKind::Pub),
+        "opaque" => Some(TokenKind::Opaque),
+        "interface" => Some(TokenKind::Interface),
+        "impl" => Some(TokenKind::Impl),
+        "where" => Some(TokenKind::Where),
         "_" => Some(TokenKind::Wildcard),
         "Int" => Some(TokenKind::IntType),
         "Bool" => Some(TokenKind::BoolType),

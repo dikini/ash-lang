@@ -22,6 +22,17 @@ pub enum ResourceFailure {
     },
 }
 
+impl ResourceFailure {
+    /// Returns the stable reason code owned by this resource failure.
+    #[must_use]
+    pub const fn reason_code(self) -> &'static str {
+        match self {
+            Self::StructuralDepth { .. } => "internal.resource.structural-depth",
+            Self::SyntaxWork { .. } => "internal.resource.syntax-work",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SyntaxBudget {
     remaining: usize,
@@ -47,7 +58,7 @@ impl SyntaxBudget {
     }
 
     #[cfg(test)]
-    const fn with_limit(limit: usize) -> Self {
+    pub(crate) const fn with_limit(limit: usize) -> Self {
         Self {
             remaining: limit,
             limit,

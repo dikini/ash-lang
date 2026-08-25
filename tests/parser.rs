@@ -2,16 +2,25 @@ use ash::{
     lexer::{TokenKind, lex},
     parser::{
         Event, NodeKind, ParseContext, ParseReason, ProjectionError, ResourceFailure,
-        STRUCTURAL_DEPTH_LIMIT, SYNTAX_WORK_LIMIT, SynchronizationBoundary, parse, project,
+        STRUCTURAL_DEPTH_LIMIT, SYNTAX_WORK_LIMIT, SynchronizationBoundary, parse,
+        project_module as project,
     },
     source::{ByteRange, SourceFile},
     surface::{
         SurfaceBinding, SurfaceBlock, SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind,
-        SurfaceLocalDeclaration, SurfaceTypeKind,
+        SurfaceLocalDeclaration, SurfaceReference, SurfaceTypeKind,
     },
 };
 
-fn parse_valid(text: &str) -> (ash::parser::ConcreteTree, ash::surface::SurfaceProgram) {
+struct ProjectedModuleFixture {
+    type_declarations: Vec<ash::surface::SurfaceTypeDeclaration>,
+    definitions: Vec<ash::surface::SurfaceDefinition>,
+    main_body: SurfaceExpr,
+    span: ash::source::Span,
+}
+
+fn parse_valid(text: &str) -> (ash::parser::ConcreteTree, ProjectedModuleFixture) {
+    let text = module_fixture(text);
     let source = SourceFile::new("parser.ash", text).expect("the parser fixture should fit");
     let lexed = lex(&source).expect("lexing should preserve source invariants");
     assert!(lexed.diagnostics.is_empty());
@@ -21,8 +30,57 @@ fn parse_valid(text: &str) -> (ash::parser::ConcreteTree, ash::surface::SurfaceP
         "unexpected parse diagnostics: {:?}",
         tree.parse_diagnostics()
     );
-    let program = project(&source, &tree).expect("the fixture should project");
-    (tree, program)
+    let mut module = project(&source, &tree).expect("the fixture should project");
+    let main = module
+        .definitions
+        .pop()
+        .expect("the fixture adapter adds a local main definition");
+    let SurfaceDefinitionKind::Equational(main) = main.kind else {
+        panic!("the fixture adapter adds an equational main definition");
+    };
+    let result = main
+        .equations
+        .into_iter()
+        .next()
+        .expect("the fixture adapter adds one main equation")
+        .body;
+    (
+        tree,
+        ProjectedModuleFixture {
+            type_declarations: module.type_declarations,
+            definitions: module.definitions,
+            main_body: result,
+            span: module.span,
+        },
+    )
+}
+
+fn module_fixture(text: &str) -> String {
+    if text.contains("\nmain : ") || text.starts_with("main : ") {
+        let mut module = text.to_owned();
+        if !module.ends_with('\n') {
+            module.push('\n');
+        }
+        return module;
+    }
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    let split = text
+        .rsplit_once("\n\n")
+        .or_else(|| text.rsplit_once("\r\n\r\n"));
+    let mut module = if let Some((declarations, result)) = split {
+        format!("{declarations}\n\nmain : Unit\nmain () = {result}")
+    } else {
+        format!("main : Unit\nmain () = {text}")
+    };
+    module.push('\n');
+    module
+}
+
+fn expression_fixture_slice<'a>(text: &'a str, span: &ash::source::Span) -> &'a str {
+    const PREFIX_LEN: usize = "main : Unit\nmain () = ".len();
+    let start = span.range().start() as usize - PREFIX_LEN;
+    let end = span.range().end() as usize - PREFIX_LEN;
+    &text[start..end]
 }
 
 fn assert_integer(expression: &SurfaceExpr, expected: &str) {
@@ -33,14 +91,15 @@ fn assert_integer(expression: &SurfaceExpr, expected: &str) {
 }
 
 fn parse_tree(text: &str) -> (SourceFile, ash::parser::ConcreteTree) {
-    let source = SourceFile::new("parser.ash", text).expect("the parser fixture should fit");
+    let source =
+        SourceFile::new("parser.ash", module_fixture(text)).expect("the parser fixture should fit");
     let lexed = lex(&source).expect("lexing should preserve source invariants");
     let tree = parse(lexed);
     (source, tree)
 }
 
 fn assert_name(expression: &SurfaceExpr, expected: &str) {
-    let SurfaceExprKind::Name(name) = &expression.kind else {
+    let SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) = &expression.kind else {
         panic!("expected name expression, found {expression:?}");
     };
     assert_eq!(name.text, expected);
@@ -70,7 +129,6 @@ fn concrete_kinds(tree: &ash::parser::ConcreteTree) -> Vec<NodeKind> {
 
 fn retained_reason_code(reason: ParseReason) -> &'static str {
     match reason {
-        ParseReason::ExpectedResult => "parse.expected-result",
         ParseReason::ExpectedForm => "parse.expected-form",
         ParseReason::ExpectedOperand => "parse.expected-operand",
         ParseReason::UnclosedGroup => "parse.unclosed-group",
@@ -86,7 +144,6 @@ fn retained_reason_code(reason: ParseReason) -> &'static str {
 #[test]
 fn public_parse_reasons_describe_only_retained_diagnostics() {
     for reason in [
-        ParseReason::ExpectedResult,
         ParseReason::ExpectedForm,
         ParseReason::ExpectedOperand,
         ParseReason::UnclosedGroup,
@@ -200,7 +257,7 @@ fn projects_data_declarations_tuples_matches_and_pattern_vectors() {
         definition.equations[0].patterns[0].kind,
         ash::surface::SurfacePatternKind::Constructor { .. }
     ));
-    let SurfaceExprKind::Match(match_expression) = &program.result.kind else {
+    let SurfaceExprKind::Match(match_expression) = &program.main_body.kind else {
         panic!("expected structured match");
     };
     assert!(matches!(
@@ -214,7 +271,7 @@ fn projects_data_declarations_tuples_matches_and_pattern_vectors() {
 fn projects_recursive_group() {
     let source_text = "{\nlet rec first : Unit -> Int = fn(ignored) {\nsecond ()\n}\nand second : Unit -> Int = fn(ignored) {\n42\n}\nfirst ()\n}\n";
     let (_, program) = parse_valid(source_text);
-    let SurfaceExprKind::Block(block) = &program.result.kind else {
+    let SurfaceExprKind::Block(block) = &program.main_body.kind else {
         panic!("expected block");
     };
     assert_eq!(block.declarations.len(), 1);
@@ -225,39 +282,35 @@ fn projects_recursive_group() {
 
     let first = &group.members[0];
     assert_eq!(
-        &source_text[first.introducer_span.range().start() as usize
-            ..first.introducer_span.range().end() as usize],
+        expression_fixture_slice(source_text, &first.introducer_span),
         "let rec"
     );
     assert_eq!(first.binder.name.text, "first");
     assert_eq!(
-        &source_text[first.annotation.span.range().start() as usize
-            ..first.annotation.span.range().end() as usize],
+        expression_fixture_slice(source_text, &first.annotation.span),
         "Unit -> Int"
     );
     assert_eq!(
-        &source_text[first.initializer.span.range().start() as usize
-            ..first.initializer.span.range().end() as usize],
+        expression_fixture_slice(source_text, &first.initializer.span),
         "fn(ignored) {\nsecond ()\n}"
     );
     assert_eq!(
-        &source_text[first.span.range().start() as usize..first.span.range().end() as usize],
+        expression_fixture_slice(source_text, &first.span),
         "first : Unit -> Int = fn(ignored) {\nsecond ()\n}"
     );
 
     let second = &group.members[1];
     assert_eq!(
-        &source_text[second.introducer_span.range().start() as usize
-            ..second.introducer_span.range().end() as usize],
+        expression_fixture_slice(source_text, &second.introducer_span),
         "and"
     );
     assert_eq!(second.binder.name.text, "second");
     assert_eq!(
-        &source_text[second.span.range().start() as usize..second.span.range().end() as usize],
+        expression_fixture_slice(source_text, &second.span),
         "second : Unit -> Int = fn(ignored) {\n42\n}"
     );
     assert_eq!(
-        &source_text[group.span.range().start() as usize..group.span.range().end() as usize],
+        expression_fixture_slice(source_text, &group.span),
         "let rec first : Unit -> Int = fn(ignored) {\nsecond ()\n}\nand second : Unit -> Int = fn(ignored) {\n42\n}"
     );
 }
@@ -266,7 +319,7 @@ fn projects_recursive_group() {
 fn projects_one_member_recursive_group() {
     let (_, program) =
         parse_valid("{\nlet rec answer : Unit -> Int = fn(ignored) {\n42\n}\nanswer ()\n}\n");
-    let SurfaceExprKind::Block(block) = &program.result.kind else {
+    let SurfaceExprKind::Block(block) = &program.main_body.kind else {
         panic!("expected block");
     };
     let [SurfaceLocalDeclaration::Recursive(group)] = block.declarations.as_slice() else {
@@ -346,8 +399,8 @@ fn recursive_group_recovery() {
         .iter()
         .find(|diagnostic| diagnostic.reason == ParseReason::ExpectedRecursiveMember)
         .expect("missing member diagnostic");
-    assert_eq!(diagnostic.primary.span().range().start(), 29);
-    assert_eq!(diagnostic.primary.span().range().end(), 30);
+    assert_eq!(diagnostic.primary.span().range().start(), 51);
+    assert_eq!(diagnostic.primary.span().range().end(), 52);
     assert!(matches!(
         diagnostic.context.as_slice(),
         [ParseContext::Synchronization {
@@ -361,7 +414,7 @@ fn recursive_group_recovery() {
 fn precedence_builds_a_token_complete_tree_and_surface_expression() {
     let (tree, program) = parse_valid("1 + 2 * 3");
 
-    assert_eq!(tree.root().map(|root| root.kind), Some(NodeKind::Program));
+    assert_eq!(tree.root().map(|root| root.kind), Some(NodeKind::Module));
 
     let consumed = tree
         .events()
@@ -373,8 +426,8 @@ fn precedence_builds_a_token_complete_tree_and_surface_expression() {
         .collect::<Vec<_>>();
     assert_eq!(consumed, (0..tree.tokens().len()).collect::<Vec<_>>());
 
-    let SurfaceExprKind::Add(add) = &program.result.kind else {
-        panic!("expected addition, found {:?}", program.result);
+    let SurfaceExprKind::Add(add) = &program.main_body.kind else {
+        panic!("expected addition, found {:?}", program.main_body);
     };
     assert_integer(&add.left, "1");
     let SurfaceExprKind::Multiply(multiply) = &add.right.kind else {
@@ -387,7 +440,7 @@ fn precedence_builds_a_token_complete_tree_and_surface_expression() {
 #[test]
 fn application_multiplication_and_addition_associate_to_the_left() {
     let (_, application) = parse_valid("f a b");
-    let SurfaceExprKind::Apply(outer) = &application.result.kind else {
+    let SurfaceExprKind::Apply(outer) = &application.main_body.kind else {
         panic!("expected outer application");
     };
     assert_name(&outer.argument, "b");
@@ -398,14 +451,14 @@ fn application_multiplication_and_addition_associate_to_the_left() {
     assert_name(&inner.argument, "a");
 
     let (_, multiplication) = parse_valid("1 * 2 * 3");
-    let SurfaceExprKind::Multiply(outer) = &multiplication.result.kind else {
+    let SurfaceExprKind::Multiply(outer) = &multiplication.main_body.kind else {
         panic!("expected outer multiplication");
     };
     assert_integer(&outer.right, "3");
     assert!(matches!(outer.left.kind, SurfaceExprKind::Multiply(_)));
 
     let (_, addition) = parse_valid("1 + 2 + 3");
-    let SurfaceExprKind::Add(outer) = &addition.result.kind else {
+    let SurfaceExprKind::Add(outer) = &addition.main_body.kind else {
         panic!("expected outer addition");
     };
     assert_integer(&outer.right, "3");
@@ -433,35 +486,35 @@ fn equality_is_non_associative() {
 fn grouping_erases_to_the_inner_surface_kind_but_retains_the_group_span() {
     let (_, program) = parse_valid("(1 + 2)");
 
-    assert!(matches!(program.result.kind, SurfaceExprKind::Add(_)));
-    assert_eq!(program.result.span.range().start(), 0);
-    assert_eq!(program.result.span.range().end(), 7);
+    assert!(matches!(program.main_body.kind, SurfaceExprKind::Add(_)));
+    assert_eq!(program.main_body.span.range().start(), 22);
+    assert_eq!(program.main_body.span.range().end(), 29);
 }
 
 #[test]
 fn grouped_name_retains_the_identifier_token_span_inside_the_group_span() {
     let (_, program) = parse_valid("(unknown)");
 
-    assert_eq!(program.result.span.range().start(), 0);
-    assert_eq!(program.result.span.range().end(), 9);
-    let SurfaceExprKind::Name(name) = &program.result.kind else {
+    assert_eq!(program.main_body.span.range().start(), 22);
+    assert_eq!(program.main_body.span.range().end(), 31);
+    let SurfaceExprKind::Name(SurfaceReference::Unqualified(name)) = &program.main_body.kind else {
         panic!("expected a grouped name");
     };
     assert_eq!(name.text, "unknown");
-    assert_eq!(name.span.range().start(), 1);
-    assert_eq!(name.span.range().end(), 8);
+    assert_eq!(name.span.range().start(), 23);
+    assert_eq!(name.span.range().end(), 30);
 }
 
 #[test]
 fn primitive_expression_forms_project_without_semantic_group_nodes() {
     let (_, boolean) = parse_valid("true");
-    assert_eq!(boolean.result.kind, SurfaceExprKind::Boolean(true));
+    assert_eq!(boolean.main_body.kind, SurfaceExprKind::Boolean(true));
 
     let (_, unit) = parse_valid("()");
-    assert_eq!(unit.result.kind, SurfaceExprKind::Unit);
+    assert_eq!(unit.main_body.kind, SurfaceExprKind::Unit);
 
     let (_, name) = parse_valid("value");
-    assert_name(&name.result, "value");
+    assert_name(&name.main_body, "value");
 }
 
 #[test]
@@ -596,7 +649,7 @@ fn both_v002_presentations_preserve_their_distinct_source_structure() {
 fn blocks_bindings_annotations_and_anonymous_functions_project() {
     let (_, shadowing) =
         parse_valid("{\n    let value = 1\n    let value = value + 1\n    value\n}\n");
-    let SurfaceExprKind::Block(block) = &shadowing.result.kind else {
+    let SurfaceExprKind::Block(block) = &shadowing.main_body.kind else {
         panic!("expected block");
     };
     assert_eq!(block.declarations.len(), 2);
@@ -608,7 +661,7 @@ fn blocks_bindings_annotations_and_anonymous_functions_project() {
     let (_, capture) = parse_valid(
         "{\n    let offset = 40\n    let add_offset : Int -> Int = fn(value) {\n        value + offset\n    }\n    add_offset 2\n}\n",
     );
-    let SurfaceExprKind::Block(block) = &capture.result.kind else {
+    let SurfaceExprKind::Block(block) = &capture.main_body.kind else {
         panic!("expected capture block");
     };
     let SurfaceLocalDeclaration::Binding(binding) = &block.declarations[1] else {
@@ -636,7 +689,7 @@ fn mixed_globals_and_nested_application_project_in_program_order() {
         program.definitions[1].kind,
         SurfaceDefinitionKind::InlineOperational(_)
     ));
-    let SurfaceExprKind::Apply(outer) = &program.result.kind else {
+    let SurfaceExprKind::Apply(outer) = &program.main_body.kind else {
         panic!("expected outer application");
     };
     assert_name(&outer.function, "double");
@@ -656,7 +709,7 @@ fn higher_order_operational_parameter_and_parenthesized_function_argument_projec
         definition.header.parameters[0].annotation.kind,
         SurfaceTypeKind::Function(_)
     ));
-    let SurfaceExprKind::Apply(application) = &program.result.kind else {
+    let SurfaceExprKind::Apply(application) = &program.main_body.kind else {
         panic!("expected application");
     };
     assert!(matches!(
@@ -706,17 +759,15 @@ fn excluded_structural_forms_report_owned_reasons_and_never_project() {
 }
 
 #[test]
-fn missing_final_result_and_lexical_errors_are_hard_projection_boundaries() {
-    let (source, tree) = parse_tree("increment : Int -> Int\nincrement value = value + 1\n");
-    assert!(
-        tree.parse_diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.reason == ParseReason::ExpectedResult)
-    );
-    assert_eq!(
-        project(&source, &tree),
-        Err(ProjectionError::RecoveryNodesPresent)
-    );
+fn declarations_only_modules_project_and_lexical_errors_remain_a_hard_boundary() {
+    let source = SourceFile::new(
+        "declarations.ash",
+        "increment : Int -> Int\nincrement value = value + 1\n",
+    )
+    .expect("the declaration module should fit");
+    let tree = parse(lex(&source).expect("the declaration module should lex"));
+    assert!(tree.parse_diagnostics().is_empty());
+    project(&source, &tree).expect("a declarations-only module should project");
 
     let (source, lexical_tree) = parse_tree("1 /* excluded */");
     assert!(!lexical_tree.lexical_diagnostics().is_empty());
@@ -779,34 +830,11 @@ fn every_surface_construct_retains_its_complete_accepted_span() {
     assert_eq!(binding(&definition.body, 0).span.range().start(), 39);
     assert_eq!(binding(&definition.body, 0).span.range().end(), 56);
     assert_eq!(program.span.range().start(), 0);
-    assert_eq!(program.span.range().end(), 89);
+    assert_eq!(program.span.range().end(), 111);
 }
 
 #[test]
 fn accepted_parser_cases_have_focused_reasons_and_primary_spans() {
-    let (_source, missing_result) =
-        parse_tree("fn increment(value : Int) -> Int {\n    value + 1\n}\n");
-    let diagnostic = &missing_result.parse_diagnostics()[0];
-    assert_eq!(diagnostic.reason, ParseReason::ExpectedResult);
-    assert_eq!(diagnostic.primary.span().range().start(), 51);
-    assert_eq!(diagnostic.primary.span().range().end(), 51);
-    let [
-        ParseContext::PrecedingGlobalComplete {
-            starting_at,
-            ending_at,
-            line_end,
-        },
-    ] = diagnostic.context.as_slice()
-    else {
-        panic!("expected one completed-global context: {diagnostic:?}");
-    };
-    assert_eq!(starting_at.range().start(), 0);
-    assert_eq!(starting_at.range().end(), 2);
-    assert_eq!(ending_at.range().start(), 49);
-    assert_eq!(ending_at.range().end(), 50);
-    assert_eq!(line_end.range().start(), 50);
-    assert_eq!(line_end.range().end(), 51);
-
     let (_source, unclosed) =
         parse_tree("increment : Int -> Int\nincrement value = value + 1\n\nincrement (41");
     let diagnostic = unclosed
@@ -814,11 +842,11 @@ fn accepted_parser_cases_have_focused_reasons_and_primary_spans() {
         .iter()
         .find(|diagnostic| diagnostic.reason == ParseReason::UnclosedGroup)
         .expect("the unclosed group should be diagnosed");
-    assert_eq!(diagnostic.primary.span().range().start(), 62);
-    assert_eq!(diagnostic.primary.span().range().end(), 63);
+    assert_eq!(diagnostic.primary.span().range().start(), 84);
+    assert_eq!(diagnostic.primary.span().range().end(), 85);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span().range().start(), 65);
-    assert_eq!(diagnostic.related[0].span().range().end(), 65);
+    assert_eq!(diagnostic.related[0].span().range().start(), 88);
+    assert_eq!(diagnostic.related[0].span().range().end(), 88);
     assert_eq!(diagnostic.expected.as_deref(), Some(")"));
     assert_eq!(diagnostic.found.as_deref(), Some("end of input"));
 
@@ -877,14 +905,14 @@ fn accepted_parser_cases_have_focused_reasons_and_primary_spans() {
             .span()
             .range()
             .start(),
-        60
+        82
     );
 }
 
 #[test]
 fn logical_line_ends_stop_unparenthesized_infix_but_not_grouped_syntax() {
     let (_, grouped) = parse_valid("(1 +\n 2)");
-    assert!(matches!(grouped.result.kind, SurfaceExprKind::Add(_)));
+    assert!(matches!(grouped.main_body.kind, SurfaceExprKind::Add(_)));
 
     let (source, split) = parse_tree("1 +\n2");
     assert!(
@@ -945,7 +973,7 @@ fn parameterized_declarations_and_type_applications_project() {
     else {
         panic!("expected applied nominal domain");
     };
-    assert_eq!(constructor.text, "Option");
+    assert_eq!(constructor.member().text, "Option");
     assert!(matches!(arguments[0].kind, SurfaceTypeKind::Int));
 }
 
@@ -1046,22 +1074,22 @@ fn projection_rejects_an_eof_token_away_from_the_source_end() {
 fn v007_retains_single_equality_and_primitive_operator_spans() {
     let (_, program) = parse_valid("(20 + 1) == 21");
 
-    let SurfaceExprKind::Equal(equality) = &program.result.kind else {
+    let SurfaceExprKind::Equal(equality) = &program.main_body.kind else {
         panic!("expected equality");
     };
-    assert_eq!(equality.operator_span.range().start(), 9);
-    assert_eq!(equality.operator_span.range().end(), 11);
+    assert_eq!(equality.operator_span.range().start(), 31);
+    assert_eq!(equality.operator_span.range().end(), 33);
     let SurfaceExprKind::Add(addition) = &equality.left.kind else {
         panic!("expected grouped addition on the left");
     };
-    assert_eq!(addition.operator_span.range().start(), 4);
-    assert_eq!(addition.operator_span.range().end(), 5);
+    assert_eq!(addition.operator_span.range().start(), 26);
+    assert_eq!(addition.operator_span.range().end(), 27);
     assert_integer(&equality.right, "21");
 }
 
 #[test]
-fn crlf_programs_retain_two_byte_boundaries_and_surface_spans() {
-    let text = "increment : Int -> Int\r\nincrement value = value + 1\r\n\r\nincrement 41\r\n";
+fn crlf_modules_retain_two_byte_boundaries_and_surface_spans() {
+    let text = "increment : Int -> Int\r\nincrement value = value + 1\r\n\r\nmain : Unit\r\nmain () = increment 41\r\n";
     let (tree, program) = parse_valid(text);
     let line_ends = tree
         .tokens()
@@ -1069,7 +1097,7 @@ fn crlf_programs_retain_two_byte_boundaries_and_surface_spans() {
         .filter(|token| matches!(token.kind, ash::lexer::TokenKind::LineEnd))
         .map(|token| (token.span.range().start(), token.span.range().end()))
         .collect::<Vec<_>>();
-    assert_eq!(line_ends, vec![(22, 24), (51, 53), (67, 69)]);
+    assert_eq!(line_ends, vec![(22, 24), (51, 53), (66, 68), (90, 92)]);
 
     let SurfaceDefinitionKind::Equational(definition) = &program.definitions[0].kind else {
         panic!("expected equational definition");
@@ -1083,9 +1111,9 @@ fn crlf_programs_retain_two_byte_boundaries_and_surface_spans() {
     };
     assert_eq!(addition.operator_span.range().start(), 48);
     assert_eq!(addition.operator_span.range().end(), 49);
-    assert_eq!(program.result.span.range().start(), 55);
-    assert_eq!(program.result.span.range().end(), 67);
-    assert_eq!(program.span.range().end(), 69);
+    assert_eq!(program.main_body.span.range().start(), 78);
+    assert_eq!(program.main_body.span.range().end(), 90);
+    assert_eq!(program.span.range().end(), 92);
 }
 
 #[test]
@@ -1099,18 +1127,18 @@ fn local_binding_missing_operand_synchronizes_at_its_line_end() {
     assert_eq!(diagnostics.len(), 1);
     let diagnostic = diagnostics[0];
 
-    assert_eq!(diagnostic.primary.span().range().start(), 20);
-    assert_eq!(diagnostic.primary.span().range().end(), 21);
+    assert_eq!(diagnostic.primary.span().range().start(), 42);
+    assert_eq!(diagnostic.primary.span().range().end(), 43);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span().range().start(), 21);
-    assert_eq!(diagnostic.related[0].span().range().end(), 22);
+    assert_eq!(diagnostic.related[0].span().range().start(), 43);
+    assert_eq!(diagnostic.related[0].span().range().end(), 44);
     let [ParseContext::Synchronization { boundary, span }] = diagnostic.context.as_slice() else {
         panic!("the initializer diagnostic needs one synchronization context");
     };
     assert_eq!(*boundary, SynchronizationBoundary::LogicalLineEnd);
-    assert_eq!(span.range().start(), 21);
-    assert_eq!(span.range().end(), 22);
-    assert_ne!(span.range().start(), 32);
+    assert_eq!(span.range().start(), 43);
+    assert_eq!(span.range().end(), 44);
+    assert_ne!(span.range().start(), 54);
 }
 
 #[test]
@@ -1126,19 +1154,19 @@ fn nested_local_binding_missing_operand_does_not_leak_to_an_outer_brace() {
     assert_eq!(diagnostics.len(), 1);
     let diagnostic = diagnostics[0];
 
-    assert_eq!(diagnostic.primary.span().range().start(), 42);
-    assert_eq!(diagnostic.primary.span().range().end(), 43);
+    assert_eq!(diagnostic.primary.span().range().start(), 64);
+    assert_eq!(diagnostic.primary.span().range().end(), 65);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span().range().start(), 43);
-    assert_eq!(diagnostic.related[0].span().range().end(), 44);
+    assert_eq!(diagnostic.related[0].span().range().start(), 65);
+    assert_eq!(diagnostic.related[0].span().range().end(), 66);
     let [ParseContext::Synchronization { boundary, span }] = diagnostic.context.as_slice() else {
         panic!("the nested initializer needs one synchronization context");
     };
     assert_eq!(*boundary, SynchronizationBoundary::LogicalLineEnd);
-    assert_eq!(span.range().start(), 43);
-    assert_eq!(span.range().end(), 44);
-    assert_ne!(span.range().start(), 62);
-    assert_ne!(span.range().start(), 74);
+    assert_eq!(span.range().start(), 65);
+    assert_eq!(span.range().end(), 66);
+    assert_ne!(span.range().start(), 84);
+    assert_ne!(span.range().start(), 96);
 }
 
 fn assert_depth_boundary(make_source: fn(usize) -> String) {
@@ -1146,9 +1174,11 @@ fn assert_depth_boundary(make_source: fn(usize) -> String) {
         std::thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn_scoped(scope, move || {
-                let accepted_source =
-                    SourceFile::new("depth-boundary.ash", make_source(STRUCTURAL_DEPTH_LIMIT))
-                        .expect("the boundary source should fit");
+                let accepted_source = SourceFile::new(
+                    "depth-boundary.ash",
+                    module_fixture(&make_source(STRUCTURAL_DEPTH_LIMIT)),
+                )
+                .expect("the boundary source should fit");
                 let accepted =
                     parse(lex(&accepted_source).expect("the boundary source should lex"));
                 assert_eq!(accepted.resource_failure(), None);
@@ -1156,7 +1186,7 @@ fn assert_depth_boundary(make_source: fn(usize) -> String) {
 
                 let rejected_source = SourceFile::new(
                     "depth-overflow.ash",
-                    make_source(STRUCTURAL_DEPTH_LIMIT + 1),
+                    module_fixture(&make_source(STRUCTURAL_DEPTH_LIMIT + 1)),
                 )
                 .expect("the overflow source should fit");
                 let rejected =
@@ -1227,8 +1257,8 @@ fn structural_depth_parser_stage_fits_the_small_stack_at_the_budget() {
                     "(".repeat(STRUCTURAL_DEPTH_LIMIT),
                     ")".repeat(STRUCTURAL_DEPTH_LIMIT)
                 );
-                let source =
-                    SourceFile::new("parse-depth.ash", text).expect("the source should fit");
+                let source = SourceFile::new("parse-depth.ash", module_fixture(&text))
+                    .expect("the source should fit");
                 let tree = parse(lex(&source).expect("the source should lex"));
                 assert_eq!(tree.resource_failure(), None);
                 assert_eq!(
@@ -1281,7 +1311,7 @@ fn structural_depth_budget_bounds_nested_constructor_patterns() {
                 let accepted_depth = STRUCTURAL_DEPTH_LIMIT / 8 - 4;
                 let accepted_source = SourceFile::new(
                     "pattern-depth-boundary.ash",
-                    nested_constructor_pattern_source(accepted_depth),
+                    module_fixture(&nested_constructor_pattern_source(accepted_depth)),
                 )
                 .expect("the boundary source should fit");
                 let accepted = parse(lex(&accepted_source).expect("the boundary should lex"));
@@ -1290,7 +1320,7 @@ fn structural_depth_budget_bounds_nested_constructor_patterns() {
 
                 let rejected_source = SourceFile::new(
                     "pattern-depth-overflow.ash",
-                    nested_constructor_pattern_source(accepted_depth + 1),
+                    module_fixture(&nested_constructor_pattern_source(accepted_depth + 1)),
                 )
                 .expect("the overflow source should fit");
                 let rejected = parse(lex(&rejected_source).expect("the overflow should lex"));
@@ -1311,7 +1341,7 @@ fn structural_depth_budget_bounds_nested_constructor_patterns() {
 
                 let far_source = SourceFile::new(
                     "pattern-depth-far-overflow.ash",
-                    nested_constructor_pattern_source(1_000),
+                    module_fixture(&nested_constructor_pattern_source(1_000)),
                 )
                 .expect("the far-overflow source should fit");
                 let far = parse(lex(&far_source).expect("the far overflow should lex"));
@@ -1345,7 +1375,7 @@ fn structural_depth_budget_bounds_nested_matches() {
                 let accepted_depth = STRUCTURAL_DEPTH_LIMIT / 32;
                 let accepted_source = SourceFile::new(
                     "match-depth-boundary.ash",
-                    nested_match_source(accepted_depth),
+                    module_fixture(&nested_match_source(accepted_depth)),
                 )
                 .expect("the boundary source should fit");
                 let accepted = parse(lex(&accepted_source).expect("the boundary should lex"));
@@ -1354,7 +1384,7 @@ fn structural_depth_budget_bounds_nested_matches() {
 
                 let rejected_source = SourceFile::new(
                     "match-depth-overflow.ash",
-                    nested_match_source(accepted_depth + 1),
+                    module_fixture(&nested_match_source(accepted_depth + 1)),
                 )
                 .expect("the overflow source should fit");
                 let rejected = parse(lex(&rejected_source).expect("the overflow should lex"));
@@ -1373,9 +1403,11 @@ fn structural_depth_budget_bounds_nested_matches() {
                     ))
                 );
 
-                let far_source =
-                    SourceFile::new("match-depth-far-overflow.ash", nested_match_source(1_000))
-                        .expect("the far-overflow source should fit");
+                let far_source = SourceFile::new(
+                    "match-depth-far-overflow.ash",
+                    module_fixture(&nested_match_source(1_000)),
+                )
+                .expect("the far-overflow source should fit");
                 let far = parse(lex(&far_source).expect("the far overflow should lex"));
                 assert_eq!(
                     far.resource_failure(),
@@ -1422,7 +1454,8 @@ fn structural_depth_budget_bounds_left_associated_applications() {
 #[test]
 fn far_over_budget_operator_input_has_linear_bounded_construction() {
     let text = format!("1{}", " + 1".repeat(10_000));
-    let source = SourceFile::new("scaling.ash", text).expect("the scaling source should fit");
+    let source = SourceFile::new("scaling.ash", module_fixture(&text))
+        .expect("the scaling source should fit");
     let tree = parse(lex(&source).expect("the scaling source should lex"));
 
     assert_eq!(
@@ -1438,7 +1471,7 @@ fn far_over_budget_operator_input_has_linear_bounded_construction() {
         .count();
     assert_eq!(retained, tree.tokens().len());
     assert!(
-        tree.events().len() <= tree.tokens().len() + 4 * STRUCTURAL_DEPTH_LIMIT + 16,
+        tree.events().len() <= tree.tokens().len() + 4 * STRUCTURAL_DEPTH_LIMIT + 64,
         "event construction must remain token-linear after the bounded prefix"
     );
 }
@@ -1462,8 +1495,8 @@ fn cumulative_syntax_work_stops_before_constructing_an_oversized_tree() {
         text.push('_');
     }
     text.push_str(") => 0\n}\n");
-    let source =
-        SourceFile::new("syntax-work-limit.ash", text).expect("the syntax work fixture should fit");
+    let source = SourceFile::new("syntax-work-limit.ash", module_fixture(&text))
+        .expect("the syntax work fixture should fit");
 
     let tree = parse(lex(&source).expect("the syntax work fixture should lex"));
 

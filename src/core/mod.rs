@@ -14,12 +14,12 @@ pub mod variable;
 
 pub use data::{ConstructorNode, CoreMatchArm, CorePattern, CorePatternKind, MatchNode, TupleNode};
 pub use dialect::{
-    BuildError, CORE_PATTERN_DEPTH_LIMIT, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder,
-    MiniAshPureDialect, NodeId, PureComputation, PureExprKind, PureProgram, PureValue, TypedExpr,
-    UnvalidatedProgram, ValidatedProgram,
+    AshPureDialect, BuildError, CORE_PATTERN_DEPTH_LIMIT, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder,
+    NodeId, PureComputation, PureExprKind, PureProgram, PureValue, TypedExpr, UnvalidatedProgram,
+    ValidatedProgram,
 };
 pub use primitive::Primitive;
 pub use recursion::{RecursiveBindingMember, RecursiveBindingNode};
 pub use type_ops::{TypeAbstractionNode, TypeApplicationNode};
-pub use validate::{ValidationError, ValidationReason, validate};
+pub use validate::{ValidationError, ValidationReason, validate, validate_modules};
 pub use variable::TypedBinder;

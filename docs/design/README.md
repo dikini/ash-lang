@@ -20,15 +20,27 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   corpus, component experiments, and retained product increments.
 - [DN-0016: First Mini-Ash Corpus Stratum](DN-0016-first-mini-ash-corpus.md) —
   shared evidence for the initial monomorphic functional nucleus.
-- [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md) — Mini-Ash
-  closure through rank-1 polymorphism, followed by an evolving Modular Ash
-  milestone and core-versus-library analysis.
+- [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md) — retained
+  Mini-Ash history, the completed passive-module and method-only interface
+  increments, and the next separately authorized
+  core-versus-library audit.
 - [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md) —
-  declarations-only modules, rooted imports, visibility, opacity, generated
-  export summaries, and single-program Core assembly.
+  retained design exploration for the implemented declarations-only modules,
+  rooted imports, visibility, opacity, generated export summaries, and
+  single-program Core assembly.
+- [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md)
+  — retained exploration for the completed method-only type-class-like
+  interfaces, scoped implementations, constrained rank-1 schemes, and explicit
+  Core evidence.
 - [DN-0024: Executable Learning and Evidence Stream](DN-0024-executable-learning-and-evidence-stream.md)
   — a version-pinned external learning corpus, forward migration, and
   cooperative design-evidence flow.
+- [Passive-module evidence](modular-ash/evidence.md) — implementation,
+  resource, locality, historical-comparison, and verification evidence for the
+  first Modular Ash increment.
+- [Interface implementation evidence](modular-ash/interfaces-evidence.md) —
+  implementation, diagnostic, resource, Core locality, runtime, and
+  unspecialized trace evidence for the method-only interface increment.
 - [Mini-Ash closure report](mini-ash/closure.md) — retained dialect inventory,
   simplification audit, budgets, ownership boundaries, and exclusions.
 - [Rank-1 integration evidence](mini-ash/rank-1-polymorphism/evidence.md) —

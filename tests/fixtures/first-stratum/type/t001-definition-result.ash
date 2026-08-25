@@ -1,4 +1,5 @@
 answer : Int -> Bool
 answer value = value
 
-answer 42
+main : Unit -> Bool
+main () = answer 42

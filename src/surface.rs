@@ -2,22 +2,102 @@
 
 use crate::{integer::Integer, source::Span};
 
-/// One parsed Mini-Ash source file.
+/// One parsed Ash module source.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SurfaceProgram {
+pub struct SurfaceModule {
+    /// Imports in source order.
+    pub imports: Vec<SurfaceImport>,
+    /// Cross-family declaration order using category-local indices.
+    pub declaration_order: Vec<SurfaceDeclarationIndex>,
     /// Nominal type declarations in source order.
     pub type_declarations: Vec<SurfaceTypeDeclaration>,
+    /// Interface declarations in source order.
+    pub interfaces: Vec<SurfaceInterfaceDeclaration>,
+    /// Implementation declarations in source order.
+    pub implementations: Vec<SurfaceImplementation>,
     /// Global definitions in source order.
     pub definitions: Vec<SurfaceDefinition>,
-    /// The required final result expression.
-    pub result: SurfaceExpr,
     /// The complete accepted source span.
     pub span: Span,
+}
+
+/// One source declaration's category and category-local position.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceDeclarationIndex {
+    /// A nominal type declaration.
+    Type(usize),
+    /// An interface declaration.
+    Interface(usize),
+    /// A global definition.
+    Global(usize),
+    /// An implementation declaration.
+    Implementation(usize),
+}
+
+/// One source import declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceImport {
+    /// The relative or named-root module path.
+    pub path: SurfaceModulePath,
+    /// The names made visible by the import.
+    pub selection: SurfaceImportSelection,
+    /// The complete import declaration span.
+    pub span: Span,
+}
+
+/// A source module path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceModulePath {
+    /// A path resolved from the importing module's directory.
+    Relative(Vec<SurfaceName>),
+    /// A path resolved from a configured named root.
+    Absolute {
+        /// The configured root name, excluding the leading `@`.
+        root: SurfaceName,
+        /// The nonempty path beneath the named root.
+        segments: Vec<SurfaceName>,
+    },
+}
+
+/// The local names introduced by an import.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceImportSelection {
+    /// The dependency's public namespaces under one module alias.
+    Qualified {
+        /// The local module alias.
+        alias: SurfaceName,
+    },
+    /// Selected public spellings imported without module qualification.
+    Targeted(Vec<SurfaceImportItem>),
+}
+
+/// One selected public spelling and its optional local alias.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceImportItem {
+    /// The spelling selected from the dependency's public namespaces.
+    pub name: SurfaceName,
+    /// The replacement local spelling, when present.
+    pub alias: Option<SurfaceName>,
+    /// The complete selector item span.
+    pub span: Span,
+}
+
+/// Source visibility for one nominal type declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceTypeVisibility {
+    /// Neither the nominal name nor its constructors are exported.
+    Private,
+    /// The nominal name is exported, but its constructors are hidden.
+    PublicOpaque,
+    /// The nominal name and its complete constructor set are exported.
+    PublicTransparent,
 }
 
 /// One source nominal type declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceTypeDeclaration {
+    /// The declaration's module export mode.
+    pub visibility: SurfaceTypeVisibility,
     /// The declared type spelling.
     pub name: SurfaceName,
     /// Ordered type parameters, each of kind `Type`.
@@ -39,16 +119,61 @@ pub struct SurfaceConstructorDeclaration {
     pub span: Span,
 }
 
+/// One method-only interface declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceInterfaceDeclaration {
+    /// Whether the interface and its methods are exported.
+    pub public: bool,
+    /// The declared interface spelling.
+    pub name: SurfaceName,
+    /// The interface's single type parameter.
+    pub parameter: SurfaceName,
+    /// The nonempty ordered method signatures.
+    pub methods: Vec<SurfaceInterfaceMethod>,
+    /// The complete interface declaration span.
+    pub span: Span,
+}
+
+/// One signature-only interface method declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceInterfaceMethod {
+    /// The file-wide method spelling.
+    pub name: SurfaceName,
+    /// The declared source value type.
+    pub annotation: SurfaceType,
+    /// The complete method signature span.
+    pub span: Span,
+}
+
+/// One source implementation declaration with flat method equations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceImplementation {
+    /// Whether the anonymous implementation fact is exported.
+    pub public: bool,
+    /// The implemented interface reference.
+    pub interface: SurfaceReference,
+    /// The interface's single head type argument.
+    pub argument: SurfaceType,
+    /// Ordered implementation prerequisites.
+    pub prerequisites: Vec<SurfaceRequirement>,
+    /// Flat method equations in source order.
+    pub equations: Vec<SurfaceEquation>,
+    /// The complete implementation declaration span.
+    pub span: Span,
+}
+
 /// A source global definition and its presentation-specific payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceDefinition {
+    /// Whether the global is exported from its defining module.
+    pub public: bool,
     /// The definition presentation.
     pub kind: SurfaceDefinitionKind,
     /// The complete definition span.
     pub span: Span,
 }
 
-/// The closed Mini-Ash global-definition family.
+/// The closed Ash global-definition family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceDefinitionKind {
     /// An external interface followed by an equation.
@@ -73,6 +198,8 @@ pub struct SurfaceExternalInterface {
     pub name: SurfaceName,
     /// The declared type.
     pub annotation: SurfaceType,
+    /// Ordered explicit interface requirements.
+    pub requirements: Vec<SurfaceRequirement>,
     /// The complete interface span.
     pub span: Span,
 }
@@ -108,7 +235,20 @@ pub struct SurfaceInlineOperationalHeader {
     pub parameters: Vec<SurfaceTypedPattern>,
     /// The declared result type.
     pub result_type: SurfaceType,
+    /// Ordered explicit interface requirements.
+    pub requirements: Vec<SurfaceRequirement>,
     /// The complete header span, excluding the body.
+    pub span: Span,
+}
+
+/// One explicit interface requirement outside the ordinary type algebra.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceRequirement {
+    /// The unqualified or module-qualified interface reference.
+    pub interface: SurfaceReference,
+    /// The interface's single type argument.
+    pub argument: SurfaceType,
+    /// The complete interface application span.
     pub span: Span,
 }
 
@@ -121,7 +261,7 @@ pub struct SurfaceExpr {
     pub span: Span,
 }
 
-/// The closed expression family accepted by Mini-Ash.
+/// The closed Ash expression family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceExprKind {
     /// An arbitrary-precision integer literal.
@@ -130,8 +270,8 @@ pub enum SurfaceExprKind {
     Boolean(bool),
     /// The unit value.
     Unit,
-    /// An unresolved source name.
-    Name(SurfaceName),
+    /// An unresolved unqualified or module-qualified source name.
+    Name(SurfaceReference),
     /// A strict structural tuple.
     Tuple(Vec<SurfaceExpr>),
     /// Strict unary application.
@@ -201,7 +341,7 @@ pub struct SurfaceBlock {
     pub span: Span,
 }
 
-/// The closed local-declaration family accepted by Mini-Ash.
+/// The closed Ash local-declaration family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceLocalDeclaration {
     /// A sequential nonrecursive binding.
@@ -265,6 +405,55 @@ pub struct SurfaceName {
     pub span: Span,
 }
 
+/// An unresolved source reference, with qualification retained structurally.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceReference {
+    /// A name resolved in the current lexical and imported namespaces.
+    Unqualified(SurfaceName),
+    /// A member selected through one imported module alias.
+    Qualified(SurfaceQualifiedName),
+}
+
+impl SurfaceReference {
+    /// Returns the referenced member spelling.
+    #[must_use]
+    pub const fn member(&self) -> &SurfaceName {
+        match self {
+            Self::Unqualified(name) => name,
+            Self::Qualified(name) => &name.member,
+        }
+    }
+
+    /// Returns the module alias for a qualified reference.
+    #[must_use]
+    pub const fn qualifier(&self) -> Option<&SurfaceName> {
+        match self {
+            Self::Unqualified(_) => None,
+            Self::Qualified(name) => Some(&name.qualifier),
+        }
+    }
+
+    /// Returns the complete reference span.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Unqualified(name) => name.span,
+            Self::Qualified(name) => name.span,
+        }
+    }
+}
+
+/// One module-qualified source reference.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceQualifiedName {
+    /// The imported module alias before the dot.
+    pub qualifier: SurfaceName,
+    /// The selected member after the dot.
+    pub member: SurfaceName,
+    /// The complete qualifier, dot, and member span.
+    pub span: Span,
+}
+
 /// A binder retained separately from later binder identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceBinder {
@@ -320,8 +509,8 @@ pub enum SurfacePatternKind {
     Tuple(Vec<SurfacePattern>),
     /// A nominal constructor pattern with an optional semantic payload.
     Constructor {
-        /// The unresolved constructor spelling.
-        name: SurfaceName,
+        /// The unresolved unqualified or module-qualified constructor reference.
+        name: SurfaceReference,
         /// Its optional payload pattern.
         payload: Option<Box<SurfacePattern>>,
     },
@@ -336,7 +525,7 @@ pub struct SurfaceType {
     pub span: Span,
 }
 
-/// The closed Mini-Ash type family.
+/// The closed Ash type family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceTypeKind {
     /// Arbitrary-precision integers.
@@ -345,12 +534,12 @@ pub enum SurfaceTypeKind {
     Bool,
     /// The unit value.
     Unit,
-    /// An unresolved nominal type spelling.
-    Named(SurfaceName),
+    /// An unresolved unqualified or module-qualified nominal type reference.
+    Named(SurfaceReference),
     /// A named type constructor applied to one or more arguments.
     Application {
-        /// The constructor spelling.
-        constructor: SurfaceName,
+        /// The unqualified or module-qualified type-constructor reference.
+        constructor: SurfaceReference,
         /// Nonempty arguments in source order.
         arguments: Vec<SurfaceType>,
     },

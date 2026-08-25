@@ -1,1 +1,3 @@
-1;
+;
+main : Unit -> Int
+main () = 1

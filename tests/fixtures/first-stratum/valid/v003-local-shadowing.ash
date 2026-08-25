@@ -1,4 +1,5 @@
-{
+main : Unit -> Int
+main () = {
     let value = 1
     let value = value + 1
     value

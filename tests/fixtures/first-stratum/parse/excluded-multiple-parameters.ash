@@ -2,4 +2,5 @@ fn add(left : Int, right : Int) -> Int {
     left
 }
 
-add
+main : Unit -> Int
+main () = add(1, 2)

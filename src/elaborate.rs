@@ -13,15 +13,31 @@ use crate::{
         CorePatternKind, NodeId, Primitive, TypedBinder, UnvalidatedProgram,
     },
     diagnostic::{Diagnostic, SourceLabel},
+    evidence::{
+        EvidenceSelector, SelectionCauseKind, SelectionError, SelectionFailure, SelectionSite,
+    },
+    evidence_audit::{EvidenceAuditFailure, audit_checked_body_evidence},
+    evidence_validation::ValidatedInterfaceProgram,
+    interface::{
+        CheckedImplMethod, CheckedImplementation, CheckedInterface, CheckedRequirement,
+        ConstrainedScheme, EvidenceNode, EvidenceSelection, ImplId, ImplMethodId,
+        InterfaceConstraintBudget, InterfaceId, InterfaceReason, MethodId, OverlapFailure,
+        RequirementId, implementation_heads_overlap, implementation_prerequisite_terminates,
+        same_type_with_constraint_budget,
+    },
     pattern::{
-        UsefulnessBudget, UsefulnessError, display_witness, missing_witness_for_types,
-        missing_witness_for_types_with_budget, usefulness_with_budget,
+        UsefulnessBudget, UsefulnessError, display_witness, missing_witness_for_types_with_budget,
+        usefulness_with_budget,
     },
     resolved::{
-        BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
-        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedPattern, ResolvedPatternKind,
-        ResolvedProgram, ResolvedRecursiveGroup, ResolvedRegistry, ResolvedType,
-        ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        AvailableImplementation, BinderId, CheckedDefinition, CheckedGlobalScheme,
+        CheckedImplementationBody, CheckedImplementationFact, CheckedImplementationMethodFact,
+        CheckedInterfaceFact, CheckedInterfaceMethodFact, CheckedModule, CheckedModuleParts,
+        ExportSummary, ResolvedBinding, ResolvedBlock, ResolvedBuildFailure,
+        ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
+        ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleGroup, ResolvedModuleProgram,
+        ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry,
+        ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
@@ -150,6 +166,22 @@ pub enum ElaborationFailure {
     CoverageResourceExhausted,
     /// Cumulative inference and type construction exceeded its work budget.
     TypeResourceExhausted,
+    /// Graph-wide interface and constraint processing exceeded its work budget.
+    ConstraintResourceExhausted,
+}
+
+impl ElaborationFailure {
+    /// Returns the stable reason code owned by this elaboration failure.
+    #[must_use]
+    pub const fn reason_code(&self) -> &'static str {
+        match self {
+            Self::Core(_) => "internal.core-build",
+            Self::InvalidState => "type.internal",
+            Self::CoverageResourceExhausted => "internal.resource.coverage",
+            Self::TypeResourceExhausted => "internal.resource.type-work",
+            Self::ConstraintResourceExhausted => "internal.resource.constraint-work",
+        }
+    }
 }
 
 impl fmt::Display for ElaborationFailure {
@@ -161,6 +193,9 @@ impl fmt::Display for ElaborationFailure {
                 formatter.write_str("pattern coverage resource limit exceeded")
             }
             Self::TypeResourceExhausted => formatter.write_str("type work resource limit exceeded"),
+            Self::ConstraintResourceExhausted => {
+                formatter.write_str("interface and constraint work resource limit exceeded")
+            }
         }
     }
 }
@@ -182,6 +217,8 @@ impl From<BuildError> for ElaborationFailure {
 pub enum TypeError {
     /// A categorized Ash source rejection.
     Source(Box<Diagnostic<TypeReason>>),
+    /// A categorized interface or implementation source rejection.
+    Interface(Box<Diagnostic<InterfaceReason>>),
     /// The general checking rule found structurally unequal types.
     Mismatch(TypeMismatch),
     /// Typed elaboration could not preserve its compiler invariants.
@@ -192,6 +229,7 @@ impl fmt::Display for TypeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Source(diagnostic) => formatter.write_str(&diagnostic.render_plain()),
+            Self::Interface(diagnostic) => formatter.write_str(&diagnostic.render_plain()),
             Self::Mismatch(mismatch) => write!(
                 formatter,
                 "type mismatch: expected {}, found {}",
@@ -244,6 +282,70 @@ struct TypeFact {
     quantified: Box<[TypeVariableId]>,
 }
 
+#[derive(Debug)]
+struct LoweredInterfaceMethod {
+    interface: InterfaceId,
+    parameter: TypeVariableId,
+    value_type: Type,
+    declaration_span: Span,
+}
+
+#[derive(Debug)]
+struct LoweredRequirementMethod {
+    method: MethodId,
+    ty: Type,
+}
+
+#[derive(Debug)]
+struct LoweredRequirement {
+    id: RequirementId,
+    methods: Box<[LoweredRequirementMethod]>,
+}
+
+#[derive(Debug)]
+struct LoweredScheme {
+    source_type_parameters: Option<Box<[TypeVariableId]>>,
+    type_parameters: Box<[TypeVariableId]>,
+    requirements: Box<[LoweredRequirement]>,
+    value_type: Type,
+    core_scheme: Type,
+}
+
+#[derive(Debug)]
+struct LoweredImplementationMethod {
+    binder: BinderId,
+    scheme: LoweredScheme,
+    span: Span,
+}
+
+#[derive(Clone, Debug)]
+struct ActiveEvidenceBinder {
+    binder: BinderId,
+    ty: Type,
+}
+
+#[derive(Clone, Debug)]
+struct LoweredEvidenceMethod {
+    method: MethodId,
+    node: NodeId,
+    ty: Type,
+}
+
+struct ScopedEvidenceBinder {
+    requirement: RequirementId,
+    method: MethodId,
+    binder: TypedBinder,
+}
+
+#[derive(Debug)]
+struct EvidenceLowering {
+    interfaces: HashMap<InterfaceId, Box<[MethodId]>>,
+    interface_methods: HashMap<MethodId, LoweredInterfaceMethod>,
+    global_schemes: HashMap<BinderId, LoweredScheme>,
+    implementation_methods: HashMap<ImplMethodId, LoweredImplementationMethod>,
+    active_binders: HashMap<(RequirementId, MethodId), ActiveEvidenceBinder>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum TypeProvenance {
     Built {
@@ -282,6 +384,14 @@ impl TypeProvenance {
     }
 
     fn unknown(ty: &Type) -> Self {
+        Self::uniform(ty, None)
+    }
+
+    fn at_span(ty: &Type, span: Span) -> Self {
+        Self::uniform(ty, Some(span))
+    }
+
+    fn uniform(ty: &Type, span: Option<Span>) -> Self {
         let mut tasks = vec![(ty, false)];
         let mut nodes = Vec::new();
         let mut roots = Vec::new();
@@ -296,7 +406,7 @@ impl TypeProvenance {
                     let codomain = roots.pop().unwrap_or(0);
                     let domain = roots.pop().unwrap_or(0);
                     nodes.push(TypeProvenanceNode::Function {
-                        span: None,
+                        span,
                         domain,
                         codomain,
                     });
@@ -311,7 +421,7 @@ impl TypeProvenance {
                 | Type::Inference(_)
                 | Type::AppliedNominal(_, _)
                 | Type::Forall(_, _) => {
-                    nodes.push(TypeProvenanceNode::Fact(None));
+                    nodes.push(TypeProvenanceNode::Fact(span));
                     roots.push(nodes.len() - 1);
                 }
             }
@@ -593,25 +703,132 @@ pub struct TypedNode {
     provenance: TypeProvenance,
 }
 
-/// The one bidirectional typed elaborator for resolved Mini-Ash syntax.
+struct CheckedSchemeBuffer(Vec<CheckedGlobalScheme>);
+
+impl CheckedSchemeBuffer {
+    fn into_vec(mut self) -> Vec<CheckedGlobalScheme> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+struct CheckedImplementationFactBuffer(Vec<CheckedImplementationFact>);
+
+impl CheckedImplementationFactBuffer {
+    fn into_boxed_slice(mut self) -> Box<[CheckedImplementationFact]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for CheckedImplementationFactBuffer {
+    fn drop(&mut self) {
+        for fact in self.0.drain(..) {
+            drop(fact);
+        }
+    }
+}
+
+impl Drop for CheckedSchemeBuffer {
+    fn drop(&mut self) {
+        for checked in self.0.drain(..) {
+            drop(checked.scheme);
+            discard_origin_iteratively(checked.origin);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CheckedBodyBuffers {
+    definitions: Vec<CheckedDefinition>,
+    implementations: Vec<CheckedImplementationBody>,
+}
+
+fn reserve_checked_body_buffers(
+    definition_count: usize,
+    implementation_count: usize,
+) -> Result<CheckedBodyBuffers, TypeError> {
+    let mut definitions = Vec::new();
+    definitions
+        .try_reserve_exact(definition_count)
+        .map_err(|_| constraint_resource())?;
+    let mut implementations = Vec::new();
+    implementations
+        .try_reserve_exact(implementation_count)
+        .map_err(|_| constraint_resource())?;
+    Ok(CheckedBodyBuffers {
+        definitions,
+        implementations,
+    })
+}
+
+struct TypeReplacementBuffer(HashMap<TypeVariableId, Type>);
+
+impl Drop for TypeReplacementBuffer {
+    fn drop(&mut self) {
+        for (_, ty) in self.0.drain() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+trait DefinitionView {
+    fn kind(&self) -> &ResolvedDefinitionKind;
+    fn span(&self) -> Span;
+}
+
+impl DefinitionView for crate::resolved::ResolvedDefinition {
+    fn kind(&self) -> &ResolvedDefinitionKind {
+        &self.kind
+    }
+
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl DefinitionView for CheckedDefinition {
+    fn kind(&self) -> &ResolvedDefinitionKind {
+        self.kind()
+    }
+
+    fn span(&self) -> Span {
+        self.span()
+    }
+}
+
+/// The one bidirectional typed elaborator for resolved Ash syntax.
 #[derive(Debug)]
 #[must_use]
 pub struct Elaborator {
     builder: CoreBuilder,
     registry: Arc<ResolvedRegistry>,
+    purpose: ElaborationPurpose,
     state: ElaboratorState,
+    final_root: Option<NodeId>,
     next_inference: u32,
     inference_origins: Vec<Span>,
     next_generated_type_variable: u32,
     inference_solutions: HashMap<InferenceVariableId, Type>,
     monomorphic_recursive: HashSet<BinderId>,
+    method_binders: HashMap<MethodId, BinderId>,
+    selection: Option<EvidenceSelector>,
+    evidence_lowering: Option<EvidenceLowering>,
     type_work: TypeWorkBudget,
+    constraint_work: InterfaceConstraintBudget,
+    coverage_work: UsefulnessBudget,
+    base_context: TypeContext,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ElaboratorState {
     Ready,
     Poisoned,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ElaborationPurpose {
+    Standalone,
+    ModuleCheck,
+    FinalSynthesis,
 }
 
 impl Elaborator {
@@ -621,36 +838,430 @@ impl Elaborator {
         Self {
             builder: CoreBuilder::with_registry(Arc::clone(&registry)),
             registry,
+            purpose: ElaborationPurpose::Standalone,
             state: ElaboratorState::Ready,
+            final_root: None,
             next_inference: 0,
             inference_origins: Vec::new(),
             next_generated_type_variable: u32::MAX,
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
+            method_binders: HashMap::new(),
+            selection: None,
+            evidence_lowering: None,
             type_work: TypeWorkBudget::default(),
+            constraint_work: InterfaceConstraintBudget::default(),
+            coverage_work: UsefulnessBudget::default(),
+            base_context: TypeContext::new(),
         }
     }
 
-    /// Starts an elaborator after reserving every resolver-assigned binder.
-    ///
-    /// # Errors
-    ///
-    /// Returns a Core construction failure if the complete namespace cannot be
-    /// reserved before elaboration starts.
-    pub fn for_program(program: &ResolvedProgram) -> Result<Self, ElaborationFailure> {
-        let registry = Arc::clone(&program.registry);
+    #[cfg(test)]
+    fn for_module(module: &ResolvedModule) -> Result<Self, TypeError> {
+        let mut elaborator = Self::for_module_with_work(
+            module,
+            TypeWorkBudget::default(),
+            UsefulnessBudget::default(),
+        )?;
+        elaborator.purpose = ElaborationPurpose::Standalone;
+        Ok(elaborator)
+    }
+
+    fn for_module_with_work(
+        module: &ResolvedModule,
+        mut type_work: TypeWorkBudget,
+        coverage_work: UsefulnessBudget,
+    ) -> Result<Self, TypeError> {
+        let registry = Arc::new(
+            module
+                .registry()
+                .checker_view(module.imported_facts(), &mut type_work)
+                .map_err(resolved_build_error)?,
+        );
         let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
-        builder.reserve_resolved_binders(resolved_binders(program))?;
+        builder
+            .reserve_resolved_binders(resolved_module_binders(module))
+            .map_err(TypeError::from)?;
+        let mut base_context = TypeContext::new();
+        for imported in module.imported_facts().globals() {
+            type_work
+                .charge(imported.scheme.type_parameters.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut quantified = Vec::new();
+            quantified
+                .try_reserve(imported.scheme.type_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            quantified.extend_from_slice(&imported.scheme.type_parameters);
+            let quantified = quantified.into_boxed_slice();
+            let body = clone_type_with_budget(&imported.scheme.value_type, &mut type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let provenance = TypeProvenance::at_span(&body, imported.origin.primary_span());
+            if base_context
+                .insert_with_provenance(imported.binder, body, provenance)?
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+            base_context.set_quantified(imported.binder, quantified)?;
+        }
         Ok(Self {
             builder,
             registry,
+            purpose: ElaborationPurpose::ModuleCheck,
             state: ElaboratorState::Ready,
+            final_root: None,
             next_inference: 0,
             inference_origins: Vec::new(),
             next_generated_type_variable: u32::MAX,
             inference_solutions: HashMap::new(),
             monomorphic_recursive: HashSet::new(),
+            method_binders: HashMap::new(),
+            selection: None,
+            evidence_lowering: None,
+            type_work,
+            constraint_work: InterfaceConstraintBudget::default(),
+            coverage_work,
+            base_context,
+        })
+    }
+
+    /// Starts the one final elaborator for a dependency-ordered module graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns a construction failure if any resolved binder identity is
+    /// duplicated or cannot be reserved before lowering begins.
+    pub fn for_module_program(
+        program: &ValidatedInterfaceProgram,
+    ) -> Result<Self, ElaborationFailure> {
+        let registry = Arc::clone(program.registry());
+        let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+        let mut binders = Vec::new();
+        let mut expressions = vec![program.result()];
+        for group in program.groups() {
+            for definition in group.definitions() {
+                collect_definition_kind_binders(definition.kind(), &mut binders, &mut expressions);
+            }
+            for implementation in group.implementations() {
+                collect_implementation_binders(
+                    std::slice::from_ref(implementation.source()),
+                    &mut binders,
+                    &mut expressions,
+                );
+            }
+        }
+        collect_expression_binders(&mut binders, expressions);
+        builder.reserve_resolved_binders(binders)?;
+        let mut elaborator = Self {
+            builder,
+            registry,
+            purpose: ElaborationPurpose::FinalSynthesis,
+            state: ElaboratorState::Ready,
+            final_root: None,
+            next_inference: 0,
+            inference_origins: Vec::new(),
+            next_generated_type_variable: u32::MAX,
+            inference_solutions: HashMap::new(),
+            monomorphic_recursive: HashSet::new(),
+            method_binders: HashMap::new(),
+            selection: None,
+            evidence_lowering: None,
             type_work: TypeWorkBudget::default(),
+            constraint_work: InterfaceConstraintBudget::default(),
+            coverage_work: UsefulnessBudget::default(),
+            base_context: TypeContext::new(),
+        };
+        elaborator.evidence_lowering = Some(elaborator.build_evidence_lowering(program).map_err(
+            |error| match error {
+                TypeError::Internal(failure) => failure,
+                TypeError::Source(_) | TypeError::Interface(_) | TypeError::Mismatch(_) => {
+                    ElaborationFailure::InvalidState
+                }
+            },
+        )?);
+        Ok(elaborator)
+    }
+
+    fn build_evidence_lowering(
+        &mut self,
+        program: &ValidatedInterfaceProgram,
+    ) -> Result<EvidenceLowering, TypeError> {
+        let interface_count: usize = program
+            .groups()
+            .iter()
+            .map(|group| group.interface_facts().len())
+            .sum();
+        let method_count: usize = program
+            .groups()
+            .iter()
+            .flat_map(|group| group.interface_facts())
+            .map(|interface| interface.methods.len())
+            .sum();
+        let global_count: usize = program
+            .groups()
+            .iter()
+            .map(|group| group.schemes().len())
+            .sum();
+        let implementation_method_count: usize = program
+            .groups()
+            .iter()
+            .flat_map(|group| group.implementation_facts())
+            .map(|implementation| implementation.methods.len())
+            .sum();
+        self.type_work
+            .charge(
+                interface_count
+                    .saturating_add(method_count)
+                    .saturating_add(global_count)
+                    .saturating_add(implementation_method_count),
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut interfaces = HashMap::new();
+        interfaces
+            .try_reserve(interface_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut interface_methods = HashMap::new();
+        interface_methods
+            .try_reserve(method_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for group in program.groups() {
+            for interface in group.interface_facts() {
+                let mut methods = Vec::new();
+                methods
+                    .try_reserve(interface.methods.len())
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                for method in &interface.methods {
+                    methods.push(method.id);
+                    let lowered = LoweredInterfaceMethod {
+                        interface: interface.id,
+                        parameter: interface.parameter.id,
+                        value_type: self.clone_type(&method.value_type)?,
+                        declaration_span: method.span,
+                    };
+                    if interface_methods.insert(method.id, lowered).is_some() {
+                        return Err(invalid_state());
+                    }
+                }
+                if interfaces
+                    .insert(interface.id, methods.into_boxed_slice())
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+        }
+
+        let mut lowering = EvidenceLowering {
+            interfaces,
+            interface_methods,
+            global_schemes: HashMap::new(),
+            implementation_methods: HashMap::new(),
+            active_binders: HashMap::new(),
+        };
+        lowering
+            .global_schemes
+            .try_reserve(global_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        lowering
+            .implementation_methods
+            .try_reserve(implementation_method_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for group in program.groups() {
+            for checked in group.schemes() {
+                let scheme = self.lower_constrained_scheme(&checked.scheme, &lowering, false)?;
+                if lowering
+                    .global_schemes
+                    .insert(checked.binder, scheme)
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+            for implementation in group.implementation_facts() {
+                for method in &implementation.methods {
+                    let scheme = self.lower_constrained_scheme(&method.scheme, &lowering, true)?;
+                    let lowered = LoweredImplementationMethod {
+                        binder: method.binder,
+                        scheme,
+                        span: method.span,
+                    };
+                    if lowering
+                        .implementation_methods
+                        .insert(method.id, lowered)
+                        .is_some()
+                    {
+                        return Err(invalid_state());
+                    }
+                }
+            }
+        }
+        Ok(lowering)
+    }
+
+    fn lower_constrained_scheme(
+        &mut self,
+        scheme: &ConstrainedScheme,
+        lowering: &EvidenceLowering,
+        freshen_core_parameters: bool,
+    ) -> Result<LoweredScheme, TypeError> {
+        self.type_work
+            .charge(
+                scheme
+                    .type_parameters
+                    .len()
+                    .saturating_add(scheme.requirements.len()),
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let original_type_parameters =
+            clone_type_variables_with_budget(&scheme.type_parameters, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                .into_boxed_slice();
+        let value_type = self.clone_type(&scheme.value_type)?;
+        let mut parameter_replacements = TypeReplacementBuffer(HashMap::new());
+        let (source_type_parameters, type_parameters) = if freshen_core_parameters {
+            parameter_replacements
+                .0
+                .try_reserve(original_type_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut type_parameters = Vec::new();
+            type_parameters
+                .try_reserve(original_type_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for source in &original_type_parameters {
+                let core = self.fresh_type_variable()?;
+                type_parameters.push(core);
+                parameter_replacements
+                    .0
+                    .insert(*source, Type::Variable(core));
+            }
+            (
+                Some(original_type_parameters),
+                type_parameters.into_boxed_slice(),
+            )
+        } else {
+            (None, original_type_parameters)
+        };
+        let mut requirements = Vec::new();
+        requirements
+            .try_reserve(scheme.requirements.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for requirement in &scheme.requirements {
+            let method_order = lowering
+                .interfaces
+                .get(&requirement.interface)
+                .ok_or_else(invalid_state)?;
+            let mut methods = Vec::new();
+            methods
+                .try_reserve(method_order.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for method in method_order {
+                let method_fact = lowering
+                    .interface_methods
+                    .get(method)
+                    .ok_or_else(invalid_state)?;
+                if method_fact.interface != requirement.interface {
+                    return Err(invalid_state());
+                }
+                let mut replacement = HashMap::new();
+                replacement
+                    .try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                replacement.insert(
+                    method_fact.parameter,
+                    self.clone_type(&requirement.argument)?,
+                );
+                let ty = substitute_type_variables_with(
+                    &method_fact.value_type,
+                    &replacement,
+                    |cells| self.type_work.charge(cells),
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                for (_, replacement) in replacement {
+                    discard_type_iteratively(replacement);
+                }
+                methods.push(LoweredRequirementMethod {
+                    method: *method,
+                    ty,
+                });
+            }
+            requirements.push(LoweredRequirement {
+                id: requirement.id,
+                methods: methods.into_boxed_slice(),
+            });
+        }
+
+        let mut core_body = self.clone_type(&value_type)?;
+        for requirement in requirements.iter().rev() {
+            for method in requirement.methods.iter().rev() {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                core_body =
+                    Type::Function(Box::new(self.clone_type(&method.ty)?), Box::new(core_body));
+            }
+        }
+        if !parameter_replacements.0.is_empty() {
+            let renamed =
+                substitute_type_variables_with(&core_body, &parameter_replacements.0, |cells| {
+                    self.type_work.charge(cells)
+                })
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            discard_type_iteratively(core_body);
+            core_body = renamed;
+        }
+        let core_scheme = if type_parameters.is_empty() {
+            core_body
+        } else {
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            Type::Forall(
+                clone_type_variables_with_budget(&type_parameters, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                    .into_boxed_slice(),
+                Box::new(core_body),
+            )
+        };
+        Ok(LoweredScheme {
+            source_type_parameters,
+            type_parameters,
+            requirements: requirements.into_boxed_slice(),
+            value_type,
+            core_scheme,
+        })
+    }
+
+    /// Starts a standalone elaborator for one resolved expression probe.
+    ///
+    /// This entry point reserves binders reachable from the expression but does
+    /// not accept module definitions or construct a linked module program.
+    pub fn for_resolved_expression(
+        module: &ResolvedModule,
+        expression: &ResolvedExpr,
+    ) -> Result<Self, ElaborationFailure> {
+        let registry = Arc::clone(module.registry());
+        let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+        let mut binders = Vec::new();
+        collect_expression_binders(&mut binders, vec![expression]);
+        builder.reserve_resolved_binders(binders)?;
+        Ok(Self {
+            builder,
+            registry,
+            purpose: ElaborationPurpose::Standalone,
+            state: ElaboratorState::Ready,
+            final_root: None,
+            next_inference: 0,
+            inference_origins: Vec::new(),
+            next_generated_type_variable: u32::MAX,
+            inference_solutions: HashMap::new(),
+            monomorphic_recursive: HashSet::new(),
+            method_binders: HashMap::new(),
+            selection: None,
+            evidence_lowering: None,
+            type_work: TypeWorkBudget::default(),
+            constraint_work: InterfaceConstraintBudget::default(),
+            coverage_work: UsefulnessBudget::default(),
+            base_context: TypeContext::new(),
         })
     }
 
@@ -669,7 +1280,8 @@ impl Elaborator {
         expression: &ResolvedExpr,
         context: &TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        if self.state == ElaboratorState::Poisoned {
+        if self.state == ElaboratorState::Poisoned || self.purpose != ElaborationPurpose::Standalone
+        {
             return Err(invalid_state());
         }
         if let Err(error) = self.admit_public_context(context) {
@@ -704,7 +1316,8 @@ impl Elaborator {
         expected: &Type,
         context: &TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        if self.state == ElaboratorState::Poisoned {
+        if self.state == ElaboratorState::Poisoned || self.purpose != ElaborationPurpose::Standalone
+        {
             return Err(invalid_state());
         }
         if let Err(error) = self
@@ -739,29 +1352,412 @@ impl Elaborator {
         result
     }
 
-    /// Elaborates file-wide recursive global definitions and the required result.
-    ///
-    /// Every declared global monotype enters the typing context before any body
-    /// is checked. The resulting functions form one recursive Core group around
-    /// the file result.
+    /// Lowers checked modules into nested ordinary Core recursive groups.
     ///
     /// # Errors
     ///
-    /// Returns a structured source typing error or Core construction failure.
-    /// Any failure poisons the elaborator so partially emitted global Core
-    /// cannot be selected as a program root.
-    pub fn synthesize_program(
+    /// Returns a source typing error or Core construction failure and poisons
+    /// the elaborator on failure.
+    pub fn synthesize_module_program(
         &mut self,
-        program: &ResolvedProgram,
+        program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
-        if self.state == ElaboratorState::Poisoned {
+        if self.state == ElaboratorState::Poisoned
+            || self.purpose != ElaborationPurpose::FinalSynthesis
+            || self.final_root.is_some()
+        {
             return Err(invalid_state());
         }
-        let result = self.elaborate_program(program);
-        if result.is_err() {
-            self.state = ElaboratorState::Poisoned;
+        let result = self.elaborate_module_program(program);
+        match result {
+            Ok(typed) => {
+                self.final_root = Some(typed.node);
+                Ok(typed)
+            }
+            Err(error) => {
+                self.state = ElaboratorState::Poisoned;
+                Err(error)
+            }
         }
+    }
+
+    fn check_module_bodies(
+        &mut self,
+        module: &ResolvedModule,
+        checked_schemes: &[CheckedGlobalScheme],
+        checked_interfaces: &[CheckedInterface],
+        checked_implementations: &[CheckedImplementation],
+        constraint_work: &mut InterfaceConstraintBudget,
+    ) -> Result<Box<[CheckedImplementationFact]>, TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return Err(invalid_state());
+        }
+        std::mem::swap(&mut self.constraint_work, constraint_work);
+        let result = self.check_module_bodies_with_owned_budget(
+            module,
+            checked_schemes,
+            checked_interfaces,
+            checked_implementations,
+        );
+        std::mem::swap(&mut self.constraint_work, constraint_work);
         result
+    }
+
+    fn check_module_bodies_with_owned_budget(
+        &mut self,
+        module: &ResolvedModule,
+        checked_schemes: &[CheckedGlobalScheme],
+        checked_interfaces: &[CheckedInterface],
+        checked_implementations: &[CheckedImplementation],
+    ) -> Result<Box<[CheckedImplementationFact]>, TypeError> {
+        let base_context = self.base_context.clone();
+        let mut globals = self.prepare_definition_views(
+            module.definitions().iter(),
+            Some(checked_schemes),
+            base_context,
+        )?;
+        let mut facts = CheckedImplementationFactBuffer(Vec::new());
+        let mut facts_reserved = false;
+        let mut next_global = 0;
+        let mut next_implementation = 0;
+        for declaration in module.declaration_order() {
+            match *declaration {
+                ResolvedDeclarationIndex::Global(source_index) => {
+                    if source_index != next_global {
+                        return Err(invalid_state());
+                    }
+                    let definition = module
+                        .definitions()
+                        .get(source_index)
+                        .ok_or_else(invalid_state)?;
+                    self.elaborate_prepared_definition(definition, &mut globals)?;
+                    next_global = next_global.checked_add(1).ok_or_else(invalid_state)?;
+                }
+                ResolvedDeclarationIndex::Implementation(source_index) => {
+                    if source_index != next_implementation {
+                        return Err(invalid_state());
+                    }
+                    if !facts_reserved {
+                        self.constraint_work
+                            .charge(checked_implementations.len())
+                            .map_err(|()| constraint_resource())?;
+                        facts
+                            .0
+                            .try_reserve(checked_implementations.len())
+                            .map_err(|_| constraint_resource())?;
+                        facts_reserved = true;
+                    }
+                    let checked = checked_implementations
+                        .get(source_index)
+                        .ok_or_else(invalid_state)?;
+                    if checked.source_index != source_index {
+                        return Err(invalid_state());
+                    }
+                    facts.0.push(self.check_implementation_body(
+                        module,
+                        checked_interfaces,
+                        checked,
+                        &mut globals.context,
+                    )?);
+                    next_implementation = next_implementation
+                        .checked_add(1)
+                        .ok_or_else(invalid_state)?;
+                }
+                ResolvedDeclarationIndex::Type(_) | ResolvedDeclarationIndex::Interface(_) => {}
+            }
+        }
+        if next_global != module.definitions().len()
+            || next_implementation != module.implementations().len()
+            || next_implementation != checked_implementations.len()
+        {
+            return Err(invalid_state());
+        }
+
+        let (_, mut context) = self.finish_prepared_definitions(globals)?;
+        let result = ResolvedExpr {
+            kind: ResolvedExprKind::Unit,
+            span: module.span(),
+        };
+        self.elaborate_result(&result, &mut context)?;
+        Ok(facts.into_boxed_slice())
+    }
+
+    fn check_implementation_body(
+        &mut self,
+        module: &ResolvedModule,
+        checked_interfaces: &[CheckedInterface],
+        checked: &CheckedImplementation,
+        context: &mut TypeContext,
+    ) -> Result<CheckedImplementationFact, TypeError> {
+        let implementation = module
+            .implementations()
+            .get(checked.source_index)
+            .ok_or_else(invalid_state)?;
+        if implementation.id != checked.id || implementation.interface.id != checked.interface {
+            return Err(invalid_state());
+        }
+        let interface = checked_interface(
+            module,
+            checked_interfaces,
+            checked.interface,
+            &mut self.constraint_work,
+        )?
+        .ok_or_else(invalid_state)?;
+
+        self.type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut replacements = TypeReplacementBuffer(HashMap::new());
+        replacements
+            .0
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        replacements.0.insert(
+            interface.parameter(),
+            self.clone_type(&implementation.argument.ty)?,
+        );
+
+        if checked.methods.len() != interface.method_count() {
+            return Err(invalid_state());
+        }
+        self.constraint_work
+            .charge(
+                implementation
+                    .head_parameters
+                    .len()
+                    .saturating_add(implementation.prerequisites.len())
+                    .saturating_add(checked.methods.len())
+                    .saturating_add(1),
+            )
+            .map_err(|()| constraint_resource())?;
+        let mut method_facts = Vec::new();
+        method_facts
+            .try_reserve(checked.methods.len())
+            .map_err(|_| constraint_resource())?;
+        for (method_index, checked_method) in checked.methods.iter().enumerate() {
+            let method = interface.method(method_index).ok_or_else(invalid_state)?;
+            let group = implementation
+                .method_groups
+                .get(checked_method.source_group)
+                .ok_or_else(invalid_state)?;
+            if method.id() != checked_method.method
+                || group.method != Some(method.id())
+                || group.identity != Some(checked_method.id)
+                || group.binder.id != checked_method.binder
+                || checked_method.id.implementation() != implementation.id
+            {
+                return Err(invalid_state());
+            }
+            let method_type =
+                substitute_type_variables_with(method.value_type(), &replacements.0, |cells| {
+                    self.constraint_work
+                        .charge(cells)
+                        .map_err(|()| constraint_resource())?;
+                    self.type_work.charge(cells).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })
+                })?;
+            charge_type_provenance_nodes(&method_type, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let provenance = TypeProvenance::at_span(&method_type, method.annotation_span());
+            let presentation = implementation_method_origin(
+                implementation,
+                group,
+                method.span(),
+                method.annotation_span(),
+            );
+            let evidence_marker = self.enter_implementation_evidence_scope(implementation.id)?;
+            let body_result = self.elaborate_equations(
+                &group.equations,
+                ProvenancedType {
+                    ty: method_type,
+                    provenance,
+                },
+                context,
+                group.span,
+                &presentation,
+            );
+            let close_result = if body_result.is_ok() {
+                self.close_evidence_obligations(evidence_marker)
+            } else {
+                Ok(())
+            };
+            let leave_result = self.leave_evidence_scope();
+            let checked_body = body_result?;
+            close_result?;
+            leave_result?;
+            let scheme =
+                self.checked_implementation_method_scheme(implementation, &checked_body.ty)?;
+            method_facts.push(CheckedImplementationMethodFact {
+                id: checked_method.id,
+                method: checked_method.method,
+                binder: checked_method.binder,
+                scheme,
+                origin: presentation,
+                span: group.span,
+            });
+        }
+
+        let mut head_parameters = Vec::new();
+        head_parameters
+            .try_reserve(implementation.head_parameters.len())
+            .map_err(|_| constraint_resource())?;
+        head_parameters.extend(implementation.head_parameters.iter().cloned());
+        let prerequisites =
+            self.clone_implementation_requirements(&implementation.prerequisites)?;
+        self.constraint_work
+            .charge_type(&implementation.argument.ty)
+            .map_err(|()| constraint_resource())?;
+        Ok(CheckedImplementationFact {
+            id: implementation.id,
+            interface: implementation.interface.id,
+            head_parameters: head_parameters.into_boxed_slice(),
+            argument: self.clone_type(&implementation.argument.ty)?,
+            prerequisites,
+            methods: method_facts.into_boxed_slice(),
+            origin: Origin::Source(implementation.span),
+            span: implementation.span,
+        })
+    }
+
+    fn checked_implementation_method_scheme(
+        &mut self,
+        implementation: &crate::resolved::ResolvedImplementation,
+        value_type: &Type,
+    ) -> Result<ConstrainedScheme, TypeError> {
+        self.constraint_work
+            .charge(
+                implementation
+                    .head_parameters
+                    .len()
+                    .saturating_add(implementation.prerequisites.len())
+                    .saturating_add(1),
+            )
+            .map_err(|()| constraint_resource())?;
+        self.constraint_work
+            .charge_type(value_type)
+            .map_err(|()| constraint_resource())?;
+        self.type_work
+            .charge(implementation.head_parameters.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut type_parameters = Vec::new();
+        type_parameters
+            .try_reserve(implementation.head_parameters.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        type_parameters.extend(
+            implementation
+                .head_parameters
+                .iter()
+                .map(|parameter| parameter.id),
+        );
+        Ok(ConstrainedScheme {
+            type_parameters: type_parameters.into_boxed_slice(),
+            requirements: self.clone_implementation_requirements(&implementation.prerequisites)?,
+            value_type: self.clone_type(value_type)?,
+        })
+    }
+
+    fn clone_implementation_requirements(
+        &mut self,
+        requirements: &[crate::resolved::ResolvedRequirement],
+    ) -> Result<Box<[CheckedRequirement]>, TypeError> {
+        self.constraint_work
+            .charge(requirements.len())
+            .map_err(|()| constraint_resource())?;
+        let mut checked = Vec::new();
+        checked
+            .try_reserve(requirements.len())
+            .map_err(|_| constraint_resource())?;
+        for requirement in requirements {
+            self.constraint_work
+                .charge_type(&requirement.argument.ty)
+                .map_err(|()| constraint_resource())?;
+            checked.push(CheckedRequirement {
+                id: requirement.id,
+                interface: requirement.interface.id,
+                argument: self.clone_type(&requirement.argument.ty)?,
+                origin: Origin::Source(requirement.span),
+                span: requirement.span,
+            });
+        }
+        Ok(checked.into_boxed_slice())
+    }
+
+    fn checked_module_schemes(
+        &mut self,
+        definitions: &[crate::resolved::ResolvedDefinition],
+    ) -> Result<Vec<CheckedGlobalScheme>, TypeError> {
+        let mut checked = CheckedSchemeBuffer(Vec::with_capacity(definitions.len()));
+        for definition in definitions {
+            let (name, parameters, requirements) = match &definition.kind {
+                ResolvedDefinitionKind::Equational(equational) => (
+                    &equational.interface.name,
+                    equational.interface.type_parameters.as_ref(),
+                    equational.interface.requirements.as_ref(),
+                ),
+                ResolvedDefinitionKind::InlineOperational(operational) => (
+                    &operational.header.name,
+                    operational.header.type_parameters.as_ref(),
+                    operational.header.requirements.as_ref(),
+                ),
+            };
+            self.type_work
+                .charge(parameters.len().saturating_add(requirements.len()))
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut type_parameters = Vec::new();
+            type_parameters
+                .try_reserve(parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            type_parameters.extend(parameters.iter().map(|parameter| parameter.id));
+            let mut checked_requirements = Vec::new();
+            checked_requirements
+                .try_reserve(requirements.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for requirement in requirements {
+                checked_requirements.push(CheckedRequirement {
+                    id: requirement.id,
+                    interface: requirement.interface.id,
+                    argument: self.clone_type(&requirement.argument.ty)?,
+                    origin: Origin::Source(requirement.span),
+                    span: requirement.span,
+                });
+            }
+            let body = match &definition.kind {
+                ResolvedDefinitionKind::Equational(equational) => {
+                    self.clone_type(&equational.interface.annotation.ty)?
+                }
+                ResolvedDefinitionKind::InlineOperational(operational) => {
+                    let domain = operational_domain(
+                        &operational.header.parameters,
+                        operational.header.span,
+                        &mut self.type_work,
+                    )?;
+                    let codomain = ProvenancedType::from_resolved_with_budget(
+                        &operational.header.result_type,
+                        &mut self.type_work,
+                    )?;
+                    let function = ProvenancedType::function_with_budget(
+                        domain,
+                        codomain,
+                        Some(operational.header.span),
+                        &mut self.type_work,
+                    )?;
+                    function.ty
+                }
+            };
+            let scheme = ConstrainedScheme {
+                type_parameters: type_parameters.into_boxed_slice(),
+                requirements: checked_requirements.into_boxed_slice(),
+                value_type: body,
+            };
+            checked.0.push(CheckedGlobalScheme {
+                binder: name.id,
+                spelling: name.spelling.clone(),
+                scheme,
+                origin: name.origin.clone(),
+            });
+        }
+        Ok(checked.into_vec())
     }
 
     /// Consumes the elaborator and selects the program root for validation.
@@ -773,7 +1769,12 @@ impl Elaborator {
     /// [`ElaborationFailure::InvalidState`] if an earlier public synthesis or
     /// checking call failed.
     pub fn finish(mut self, root: NodeId) -> Result<UnvalidatedProgram, ElaborationFailure> {
-        if self.state == ElaboratorState::Poisoned {
+        let root_is_authorized = match self.purpose {
+            ElaborationPurpose::Standalone => self.final_root.is_none(),
+            ElaborationPurpose::FinalSynthesis => self.final_root == Some(root),
+            ElaborationPurpose::ModuleCheck => false,
+        };
+        if self.state == ElaboratorState::Poisoned || !root_is_authorized {
             return Err(ElaborationFailure::InvalidState);
         }
         if self.builder.requires_type_rewrite() {
@@ -816,7 +1817,7 @@ impl Elaborator {
     }
 
     fn fresh_type_variable(&mut self) -> Result<TypeVariableId, TypeError> {
-        let identity = TypeVariableId::new(self.next_generated_type_variable);
+        let identity = TypeVariableId::generated(self.next_generated_type_variable);
         self.next_generated_type_variable = self
             .next_generated_type_variable
             .checked_sub(1)
@@ -868,6 +1869,751 @@ impl Elaborator {
         })
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         Ok((instantiated, arguments))
+    }
+
+    fn enter_global_evidence_scope(&mut self, binder: BinderId) -> Result<usize, TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return Err(invalid_state());
+        }
+        let selector = self.selection.as_mut().ok_or_else(invalid_state)?;
+        selector
+            .enter_global_scope(binder, &mut self.constraint_work, &mut self.type_work)
+            .map_err(|failure| selection_failure(failure, None))?;
+        Ok(selector.pending_marker())
+    }
+
+    fn enter_implementation_evidence_scope(
+        &mut self,
+        implementation: ImplId,
+    ) -> Result<usize, TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return Err(invalid_state());
+        }
+        let selector = self.selection.as_mut().ok_or_else(invalid_state)?;
+        selector
+            .enter_implementation_scope(
+                implementation,
+                &mut self.constraint_work,
+                &mut self.type_work,
+            )
+            .map_err(|failure| selection_failure(failure, None))?;
+        Ok(selector.pending_marker())
+    }
+
+    fn evidence_marker(&self) -> Result<usize, TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return Err(invalid_state());
+        }
+        self.selection
+            .as_ref()
+            .map(EvidenceSelector::pending_marker)
+            .ok_or_else(invalid_state)
+    }
+
+    fn leave_evidence_scope(&mut self) -> Result<(), TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return Err(invalid_state());
+        }
+        self.selection
+            .as_mut()
+            .ok_or_else(invalid_state)?
+            .clear_scope();
+        Ok(())
+    }
+
+    fn close_evidence_obligations(&mut self, marker: usize) -> Result<(), TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return Err(invalid_state());
+        }
+        let mut selector = self.selection.take().ok_or_else(invalid_state)?;
+        let solutions = &self.inference_solutions;
+        let result = selector.close(
+            marker,
+            |argument, type_work| {
+                let zonked =
+                    zonk_type_with_status(&argument, solutions, |cells| type_work.charge(cells));
+                discard_type_iteratively(argument);
+                zonked
+                    .map(|(ty, _)| ty)
+                    .map_err(|()| SelectionFailure::TypeResource)
+            },
+            &mut self.constraint_work,
+            &mut self.type_work,
+        );
+        self.selection = Some(selector);
+        result.map_err(selected_obligation_error)
+    }
+
+    fn record_global_obligations(
+        &mut self,
+        binder: BinderId,
+        occurrence: &crate::resolved::ResolvedOccurrence,
+        arguments: &[Type],
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return if occurrence.evidence.is_empty() {
+                Ok(())
+            } else {
+                Err(invalid_state())
+            };
+        }
+        if self.selection.is_none() {
+            return if occurrence.evidence.is_empty() {
+                Ok(())
+            } else {
+                Err(invalid_state())
+            };
+        }
+        let mut selector = self.selection.take().ok_or_else(invalid_state)?;
+        let result = (|| {
+            let mut replacements = TypeReplacementBuffer(HashMap::new());
+            let requirement_count = {
+                let Some(scheme) = selector.scheme(binder) else {
+                    return if occurrence.evidence.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(invalid_state())
+                    };
+                };
+                if scheme.type_parameters.len() != arguments.len()
+                    || scheme.requirements.len() != occurrence.evidence.len()
+                {
+                    return Err(invalid_state());
+                }
+                self.type_work
+                    .charge(scheme.type_parameters.len())
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                replacements
+                    .0
+                    .try_reserve(scheme.type_parameters.len())
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                for (parameter, argument) in scheme.type_parameters.iter().zip(arguments) {
+                    if replacements
+                        .0
+                        .insert(*parameter, self.clone_type(argument)?)
+                        .is_some()
+                    {
+                        return Err(invalid_state());
+                    }
+                }
+                scheme.requirements.len()
+            };
+            let declaration_span = selector
+                .scheme_declaration_span(binder)
+                .ok_or_else(invalid_state)?;
+            for (index, slot) in occurrence.evidence.iter().enumerate() {
+                if index >= requirement_count {
+                    return Err(invalid_state());
+                }
+                let (interface, argument) = {
+                    let scheme = selector.scheme(binder).ok_or_else(invalid_state)?;
+                    let requirement = scheme.requirements.get(index).ok_or_else(invalid_state)?;
+                    let argument = substitute_type_variables_with(
+                        &requirement.argument,
+                        &replacements.0,
+                        |cells| self.type_work.charge(cells),
+                    )
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                    (requirement.interface, argument)
+                };
+                selector
+                    .push_owned_obligation(
+                        interface,
+                        argument,
+                        SelectionSite::contextual(
+                            slot.handle(),
+                            span,
+                            declaration_span,
+                            occurrence.import_span(),
+                        ),
+                        &mut self.constraint_work,
+                    )
+                    .map_err(|failure| selection_failure(failure, Some(span)))?;
+            }
+            Ok(())
+        })();
+        self.selection = Some(selector);
+        result
+    }
+
+    fn synthesize_method_occurrence(
+        &mut self,
+        method: MethodId,
+        occurrence: &crate::resolved::ResolvedOccurrence,
+        span: Span,
+    ) -> Result<TypedNode, TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck || occurrence.evidence.len() != 1 {
+            return Err(invalid_state());
+        }
+        let mut selector = self.selection.take().ok_or_else(invalid_state)?;
+        let result = (|| {
+            let method_fact = selector.method(method).ok_or_else(invalid_state)?;
+            let interface = method_fact.interface();
+            let parameter = method_fact.interface_parameter();
+            let value_type = self.clone_type(method_fact.value_type())?;
+            let method_span = method_fact.declaration_span();
+            let fact = TypeFact {
+                provenance: TypeProvenance::at_span(&value_type, method_span),
+                ty: value_type,
+                quantified: vec![parameter].into_boxed_slice(),
+            };
+            let (ty, arguments) = self.instantiate(&fact, false, span)?;
+            let [argument] = arguments.as_slice() else {
+                return Err(invalid_state());
+            };
+            selector
+                .push_cloned_obligation(
+                    interface,
+                    argument,
+                    SelectionSite::contextual(
+                        occurrence.evidence[0].handle(),
+                        span,
+                        method_span,
+                        occurrence.import_span(),
+                    ),
+                    &mut self.constraint_work,
+                    &mut self.type_work,
+                )
+                .map_err(|failure| selection_failure(failure, Some(span)))?;
+
+            self.type_work
+                .charge(2)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let core_scheme = Type::Forall(
+                vec![parameter].into_boxed_slice(),
+                Box::new(self.clone_type(&fact.ty)?),
+            );
+            let binder = if let Some(binder) = self.method_binders.get(&method).copied() {
+                binder
+            } else {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                self.method_binders
+                    .try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let binder_type = self.clone_type(&core_scheme)?;
+                let typed = self.builder.binder(
+                    binder_type,
+                    Origin::Generated {
+                        cause: Box::new(occurrence.origin.clone()),
+                        reason: GeneratedReason::TypeChecking,
+                    },
+                )?;
+                let binder = typed.id();
+                if self.method_binders.insert(method, binder).is_some() {
+                    return Err(invalid_state());
+                }
+                binder
+            };
+            let mut node = self
+                .builder
+                .variable(binder, core_scheme, occurrence.origin.clone())?;
+            let core_ty = self.clone_type(&ty)?;
+            node = self.builder.type_application(
+                node,
+                arguments,
+                core_ty,
+                occurrence.origin.clone(),
+            )?;
+            Ok(TypedNode {
+                node,
+                ty,
+                provenance: fact.provenance,
+            })
+        })();
+        self.selection = Some(selector);
+        result
+    }
+
+    fn synthesize_lowered_method_occurrence(
+        &mut self,
+        method: MethodId,
+        occurrence: &crate::resolved::ResolvedOccurrence,
+    ) -> Result<TypedNode, TypeError> {
+        let [slot] = occurrence.evidence.as_ref() else {
+            return Err(invalid_state());
+        };
+        let selection = slot.selection().ok_or_else(invalid_state)?;
+        if selection.interface() != method.interface() {
+            return Err(invalid_state());
+        }
+        let mut lowering = self.evidence_lowering.take().ok_or_else(invalid_state)?;
+        let result = (|| {
+            let method_fact = lowering
+                .interface_methods
+                .get(&method)
+                .ok_or_else(invalid_state)?;
+            let parameter = method_fact.parameter;
+            let declaration_span = method_fact.declaration_span;
+            let value_type = self.clone_type(&method_fact.value_type)?;
+            let mut replacement = TypeReplacementBuffer(HashMap::new());
+            replacement
+                .0
+                .try_reserve(1)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            replacement
+                .0
+                .insert(parameter, self.clone_type(selection.argument())?);
+            let expected = substitute_type_variables_with(&value_type, &replacement.0, |cells| {
+                self.type_work.charge(cells)
+            })
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            discard_type_iteratively(value_type);
+            let mut methods = self.lower_evidence_selection(
+                selection,
+                &mut lowering,
+                &occurrence.origin,
+                Some(method),
+            )?;
+            if methods.len() != 1 {
+                return Err(invalid_state());
+            }
+            let selected = methods.pop().ok_or_else(invalid_state)?;
+            if selected.method != method {
+                return Err(invalid_state());
+            }
+            if !same_type(&selected.ty, &expected) {
+                discard_type_iteratively(expected);
+                return Err(invalid_state());
+            }
+            discard_type_iteratively(expected);
+            Ok(TypedNode {
+                node: selected.node,
+                provenance: TypeProvenance::at_span(&selected.ty, declaration_span),
+                ty: selected.ty,
+            })
+        })();
+        self.evidence_lowering = Some(lowering);
+        result
+    }
+
+    fn enter_lowered_global_evidence_scope(
+        &mut self,
+        binder: BinderId,
+        cause: &Origin,
+    ) -> Result<Vec<ScopedEvidenceBinder>, TypeError> {
+        let lowering = self.evidence_lowering.as_ref().ok_or_else(invalid_state)?;
+        let scheme = lowering
+            .global_schemes
+            .get(&binder)
+            .ok_or_else(invalid_state)?;
+        let mut specifications = Vec::new();
+        let method_count = scheme
+            .requirements
+            .iter()
+            .map(|requirement| requirement.methods.len())
+            .sum();
+        specifications
+            .try_reserve(method_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for requirement in &scheme.requirements {
+            for method in &requirement.methods {
+                specifications.push((
+                    requirement.id,
+                    method.method,
+                    clone_type_with_budget(&method.ty, &mut self.type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+                ));
+            }
+        }
+        self.enter_lowered_evidence_specifications(specifications, cause)
+    }
+
+    fn enter_lowered_implementation_evidence_scope(
+        &mut self,
+        method: ImplMethodId,
+        cause: &Origin,
+    ) -> Result<Vec<ScopedEvidenceBinder>, TypeError> {
+        let lowering = self.evidence_lowering.as_ref().ok_or_else(invalid_state)?;
+        let scheme = &lowering
+            .implementation_methods
+            .get(&method)
+            .ok_or_else(invalid_state)?
+            .scheme;
+        let mut specifications = Vec::new();
+        let method_count = scheme
+            .requirements
+            .iter()
+            .map(|requirement| requirement.methods.len())
+            .sum();
+        specifications
+            .try_reserve(method_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for requirement in &scheme.requirements {
+            for method in &requirement.methods {
+                specifications.push((
+                    requirement.id,
+                    method.method,
+                    clone_type_with_budget(&method.ty, &mut self.type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+                ));
+            }
+        }
+        self.enter_lowered_evidence_specifications(specifications, cause)
+    }
+
+    fn enter_lowered_evidence_specifications(
+        &mut self,
+        specifications: Vec<(RequirementId, MethodId, Type)>,
+        cause: &Origin,
+    ) -> Result<Vec<ScopedEvidenceBinder>, TypeError> {
+        {
+            let lowering = self.evidence_lowering.as_mut().ok_or_else(invalid_state)?;
+            if !lowering.active_binders.is_empty() {
+                return Err(invalid_state());
+            }
+            lowering
+                .active_binders
+                .try_reserve(specifications.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        }
+        let mut binders = Vec::new();
+        binders
+            .try_reserve(specifications.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (requirement, method, ty) in specifications {
+            let binder_ty = self.clone_type(&ty)?;
+            let binder = self.builder.binder(
+                binder_ty,
+                Origin::Generated {
+                    cause: Box::new(cause.clone()),
+                    reason: GeneratedReason::TypeChecking,
+                },
+            )?;
+            let active = ActiveEvidenceBinder {
+                binder: binder.id(),
+                ty,
+            };
+            if self
+                .evidence_lowering
+                .as_mut()
+                .ok_or_else(invalid_state)?
+                .active_binders
+                .insert((requirement, method), active)
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+            binders.push(ScopedEvidenceBinder {
+                requirement,
+                method,
+                binder,
+            });
+        }
+        Ok(binders)
+    }
+
+    fn wrap_lowered_evidence_scope(
+        &mut self,
+        mut function: TypedNode,
+        binders: Vec<ScopedEvidenceBinder>,
+        cause: &Origin,
+    ) -> Result<TypedNode, TypeError> {
+        for scoped in binders.into_iter().rev() {
+            let active = self
+                .evidence_lowering
+                .as_mut()
+                .ok_or_else(invalid_state)?
+                .active_binders
+                .remove(&(scoped.requirement, scoped.method))
+                .ok_or_else(invalid_state)?;
+            if active.binder != scoped.binder.id() || !same_type(&active.ty, scoped.binder.ty()) {
+                return Err(invalid_state());
+            }
+            let domain = self.clone_type(scoped.binder.ty())?;
+            let codomain = self.clone_type(&function.ty)?;
+            let ty = Type::Function(Box::new(domain), Box::new(codomain));
+            let core_ty = self.clone_type(&ty)?;
+            function.node = self.builder.function(
+                scoped.binder,
+                function.node,
+                core_ty,
+                Origin::Generated {
+                    cause: Box::new(cause.clone()),
+                    reason: GeneratedReason::TypeChecking,
+                },
+            )?;
+            function.ty = ty;
+            function.provenance = TypeProvenance::at_span(&function.ty, cause.primary_span());
+        }
+        if !self
+            .evidence_lowering
+            .as_ref()
+            .ok_or_else(invalid_state)?
+            .active_binders
+            .is_empty()
+        {
+            return Err(invalid_state());
+        }
+        Ok(function)
+    }
+
+    fn clear_lowered_evidence_scope(
+        &mut self,
+        binders: Vec<ScopedEvidenceBinder>,
+    ) -> Result<(), TypeError> {
+        let lowering = self.evidence_lowering.as_mut().ok_or_else(invalid_state)?;
+        for scoped in binders {
+            let active = lowering
+                .active_binders
+                .remove(&(scoped.requirement, scoped.method))
+                .ok_or_else(invalid_state)?;
+            if active.binder != scoped.binder.id() {
+                return Err(invalid_state());
+            }
+        }
+        if lowering.active_binders.is_empty() {
+            Ok(())
+        } else {
+            Err(invalid_state())
+        }
+    }
+
+    fn instantiate_lowered_core_body(
+        &mut self,
+        scheme: &LoweredScheme,
+        arguments: &[Type],
+    ) -> Result<Type, TypeError> {
+        if scheme.type_parameters.len() != arguments.len() {
+            return Err(invalid_state());
+        }
+        if arguments.is_empty() {
+            return self.clone_type(&scheme.core_scheme);
+        }
+        let Type::Forall(parameters, body) = &scheme.core_scheme else {
+            return Err(invalid_state());
+        };
+        if parameters.as_ref() != scheme.type_parameters.as_ref() {
+            return Err(invalid_state());
+        }
+        self.type_work
+            .charge(arguments.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut replacements = TypeReplacementBuffer(HashMap::new());
+        replacements
+            .0
+            .try_reserve(arguments.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (parameter, argument) in parameters.iter().zip(arguments) {
+            if replacements
+                .0
+                .insert(*parameter, self.clone_type(argument)?)
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+        }
+        substitute_type_variables_with(body, &replacements.0, |cells| self.type_work.charge(cells))
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn apply_lowered_argument(
+        &mut self,
+        function: TypedNode,
+        argument: &LoweredEvidenceMethod,
+        origin: &Origin,
+    ) -> Result<TypedNode, TypeError> {
+        let Type::Function(domain, codomain) = &function.ty else {
+            return Err(invalid_state());
+        };
+        match self.unify(domain, &argument.ty) {
+            Ok(()) => {}
+            Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                return Err(invalid_state());
+            }
+            Err(UnificationFailure::Resource) => {
+                return Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted,
+                ));
+            }
+        }
+        let ty = self.clone_type(codomain)?;
+        let core_ty = self.clone_type(&ty)?;
+        let node =
+            self.builder
+                .application(function.node, argument.node, core_ty, origin.clone())?;
+        let provenance = TypeProvenance::at_span(&ty, origin.primary_span());
+        Ok(TypedNode {
+            node,
+            ty,
+            provenance,
+        })
+    }
+
+    fn lower_evidence_selection(
+        &mut self,
+        selection: &EvidenceSelection,
+        lowering: &mut EvidenceLowering,
+        origin: &Origin,
+        root_method: Option<MethodId>,
+    ) -> Result<Vec<LoweredEvidenceMethod>, TypeError> {
+        enum Task {
+            Visit(crate::interface::EvidenceNodeId),
+            Build(crate::interface::EvidenceNodeId),
+        }
+
+        let mut tasks = vec![Task::Visit(selection.root())];
+        let mut values: HashMap<crate::interface::EvidenceNodeId, Vec<LoweredEvidenceMethod>> =
+            HashMap::new();
+        values
+            .try_reserve(selection.node_count())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        while let Some(task) = tasks.pop() {
+            match task {
+                Task::Visit(node) => {
+                    if values.contains_key(&node) {
+                        continue;
+                    }
+                    let evidence = selection.node(node).ok_or_else(invalid_state)?;
+                    tasks.push(Task::Build(node));
+                    if let EvidenceNode::Implementation { prerequisites, .. } = evidence {
+                        tasks.try_reserve(prerequisites.len()).map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        tasks.extend(prerequisites.iter().rev().copied().map(Task::Visit));
+                    }
+                }
+                Task::Build(node) => {
+                    if values.contains_key(&node) {
+                        continue;
+                    }
+                    let methods = match selection.node(node).ok_or_else(invalid_state)? {
+                        EvidenceNode::Abstract {
+                            requirement,
+                            methods,
+                        } => {
+                            let requested =
+                                (node == selection.root()).then_some(root_method).flatten();
+                            let mut results = Vec::new();
+                            results
+                                .try_reserve(requested.map_or(methods.len(), |_| 1))
+                                .map_err(|_| {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                })?;
+                            for method in methods {
+                                if requested.is_some_and(|requested| requested != *method) {
+                                    continue;
+                                }
+                                let active = lowering
+                                    .active_binders
+                                    .get(&(requirement, *method))
+                                    .ok_or_else(invalid_state)?;
+                                let ty = self.clone_type(&active.ty)?;
+                                let core_ty = self.clone_type(&ty)?;
+                                let node = self.builder.variable(
+                                    active.binder,
+                                    core_ty,
+                                    origin.clone(),
+                                )?;
+                                results.push(LoweredEvidenceMethod {
+                                    method: *method,
+                                    node,
+                                    ty,
+                                });
+                            }
+                            results
+                        }
+                        EvidenceNode::Implementation {
+                            implementation: _,
+                            substitution,
+                            prerequisites,
+                            methods,
+                        } => {
+                            let requested =
+                                (node == selection.root()).then_some(root_method).flatten();
+                            let mut results = Vec::new();
+                            results
+                                .try_reserve(requested.map_or(methods.len(), |_| 1))
+                                .map_err(|_| {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                })?;
+                            for method in methods {
+                                if requested.is_some_and(|requested| requested != method.method()) {
+                                    continue;
+                                }
+                                let lowered = lowering
+                                    .implementation_methods
+                                    .get(method)
+                                    .ok_or_else(invalid_state)?;
+                                let source_parameters = lowered
+                                    .scheme
+                                    .source_type_parameters
+                                    .as_deref()
+                                    .ok_or_else(invalid_state)?;
+                                if source_parameters.len() != substitution.len()
+                                    || source_parameters.iter().zip(substitution).any(
+                                        |(parameter, substitution)| {
+                                            *parameter != substitution.parameter()
+                                        },
+                                    )
+                                {
+                                    return Err(invalid_state());
+                                }
+                                let core_scheme = self.clone_type(&lowered.scheme.core_scheme)?;
+                                let variable_ty = self.clone_type(&core_scheme)?;
+                                let mut current = TypedNode {
+                                    node: self.builder.variable(
+                                        lowered.binder,
+                                        variable_ty,
+                                        origin.clone(),
+                                    )?,
+                                    ty: core_scheme,
+                                    provenance: TypeProvenance::at_span(
+                                        &lowered.scheme.value_type,
+                                        lowered.span,
+                                    ),
+                                };
+                                if !substitution.is_empty() {
+                                    let mut arguments = Vec::new();
+                                    arguments.try_reserve(substitution.len()).map_err(|_| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?;
+                                    for substitution in substitution {
+                                        arguments.push(self.clone_type(substitution.argument())?);
+                                    }
+                                    let instantiated = self.instantiate_lowered_core_body(
+                                        &lowered.scheme,
+                                        &arguments,
+                                    )?;
+                                    let core_ty = self.clone_type(&instantiated)?;
+                                    current.node = self.builder.type_application(
+                                        current.node,
+                                        arguments,
+                                        core_ty,
+                                        origin.clone(),
+                                    )?;
+                                    current.ty = instantiated;
+                                }
+                                for prerequisite in prerequisites {
+                                    let prerequisite_methods =
+                                        values.get(prerequisite).ok_or_else(invalid_state)?;
+                                    for argument in prerequisite_methods {
+                                        current =
+                                            self.apply_lowered_argument(current, argument, origin)?;
+                                    }
+                                }
+                                results.push(LoweredEvidenceMethod {
+                                    method: method.method(),
+                                    node: current.node,
+                                    ty: current.ty,
+                                });
+                            }
+                            results
+                        }
+                    };
+                    if values.insert(node, methods).is_some() {
+                        return Err(invalid_state());
+                    }
+                }
+            }
+        }
+        values.remove(&selection.root()).ok_or_else(invalid_state)
     }
 
     fn zonk(&mut self, ty: &Type) -> Result<Type, TypeError> {
@@ -1132,14 +2878,409 @@ impl Elaborator {
         }
     }
 
-    fn elaborate_program(&mut self, program: &ResolvedProgram) -> Result<TypedNode, TypeError> {
+    fn elaborate_module_program(
+        &mut self,
+        program: &ValidatedInterfaceProgram,
+    ) -> Result<TypedNode, TypeError> {
         let mut context = TypeContext::new();
-        let mut globals = Vec::with_capacity(program.definitions.len());
-        let mut global_binders = HashMap::with_capacity(program.definitions.len());
-        let mut global_quantifiers = Vec::with_capacity(program.definitions.len());
+        let mut groups = Vec::with_capacity(program.groups().len());
+        for group in program.groups() {
+            let (members, next_context) = self.elaborate_checked_module_group(group, context)?;
+            context = next_context;
+            groups.push((members, group.span()));
+        }
+        let mut result = self.elaborate_result(program.result(), &mut context)?;
+        for (members, span) in groups.into_iter().rev() {
+            if members.is_empty() {
+                continue;
+            }
+            let members = members
+                .into_iter()
+                .map(|member| (member.binder, member.initializer))
+                .collect();
+            let result_type = self.clone_type(&result.ty)?;
+            result.node = self.builder.recursive_binding(
+                members,
+                result.node,
+                result_type,
+                Origin::Generated {
+                    cause: Box::new(Origin::Source(span)),
+                    reason: GeneratedReason::RecursiveBindingLowering,
+                },
+            )?;
+        }
+        Ok(result)
+    }
 
-        for definition in &program.definitions {
-            let (name, function_type, type_parameters) = match &definition.kind {
+    fn elaborate_checked_module_group(
+        &mut self,
+        group: &ResolvedModuleGroup,
+        context: TypeContext,
+    ) -> Result<(Vec<ElaboratedBinding>, TypeContext), TypeError> {
+        let mut prepared = self.prepare_definition_views(
+            group.definitions().iter(),
+            Some(group.schemes()),
+            context,
+        )?;
+        self.prepare_implementation_method_views(group, &mut prepared)?;
+        let mut next_global = 0usize;
+        let mut next_implementation = 0usize;
+        for declaration in group.declaration_order() {
+            match *declaration {
+                ResolvedDeclarationIndex::Global(index) if index == next_global => {
+                    let definition = group.definitions().get(index).ok_or_else(invalid_state)?;
+                    self.elaborate_prepared_definition(definition, &mut prepared)?;
+                    next_global = next_global.checked_add(1).ok_or_else(invalid_state)?;
+                }
+                ResolvedDeclarationIndex::Implementation(index) if index == next_implementation => {
+                    self.elaborate_prepared_implementation(group, index, &mut prepared)?;
+                    next_implementation = next_implementation
+                        .checked_add(1)
+                        .ok_or_else(invalid_state)?;
+                }
+                ResolvedDeclarationIndex::Type(_) | ResolvedDeclarationIndex::Interface(_) => {}
+                ResolvedDeclarationIndex::Global(_)
+                | ResolvedDeclarationIndex::Implementation(_) => return Err(invalid_state()),
+            }
+        }
+        if next_global != group.definitions().len()
+            || next_implementation != group.implementations().len()
+        {
+            return Err(invalid_state());
+        }
+        self.finish_prepared_definitions(prepared)
+    }
+
+    fn prepare_implementation_method_views(
+        &mut self,
+        group: &ResolvedModuleGroup,
+        prepared: &mut PreparedGlobals,
+    ) -> Result<(), TypeError> {
+        if group.implementations().len() != group.implementation_facts().len() {
+            return Err(invalid_state());
+        }
+        let method_count: usize = group
+            .implementation_facts()
+            .iter()
+            .map(|implementation| implementation.methods.len())
+            .sum();
+        prepared
+            .globals
+            .try_reserve(method_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        prepared
+            .binders
+            .try_reserve(method_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        prepared
+            .quantifiers
+            .try_reserve(method_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (implementation, fact) in group
+            .implementations()
+            .iter()
+            .zip(group.implementation_facts())
+        {
+            if implementation.id() != fact.id {
+                return Err(invalid_state());
+            }
+            for method in &fact.methods {
+                let lowered = self
+                    .evidence_lowering
+                    .as_ref()
+                    .and_then(|lowering| lowering.implementation_methods.get(&method.id))
+                    .ok_or_else(invalid_state)?;
+                if lowered.binder != method.binder
+                    || lowered.scheme.source_type_parameters.as_deref()
+                        != Some(method.scheme.type_parameters.as_ref())
+                    || !same_type(&lowered.scheme.value_type, &method.scheme.value_type)
+                {
+                    return Err(invalid_state());
+                }
+                let binder_ty =
+                    clone_type_with_budget(&lowered.scheme.core_scheme, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                let binder = self.builder.resolved_binder(
+                    method.binder,
+                    binder_ty,
+                    method.origin.clone(),
+                )?;
+                let source_ty =
+                    clone_type_with_budget(&lowered.scheme.value_type, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                let provenance = TypeProvenance::at_span(&source_ty, method.span);
+                if prepared
+                    .context
+                    .insert_with_provenance(method.binder, source_ty, provenance)?
+                    .is_some()
+                    || prepared.binders.insert(method.binder, binder).is_some()
+                {
+                    return Err(invalid_state());
+                }
+                let source_quantified = clone_type_variables_with_budget(
+                    lowered
+                        .scheme
+                        .source_type_parameters
+                        .as_deref()
+                        .ok_or_else(invalid_state)?,
+                    &mut self.type_work,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                .into_boxed_slice();
+                prepared
+                    .context
+                    .set_quantified(method.binder, source_quantified.clone())?;
+                if prepared
+                    .quantifiers
+                    .insert(method.binder, source_quantified)
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn elaborate_prepared_implementation(
+        &mut self,
+        group: &ResolvedModuleGroup,
+        implementation_index: usize,
+        prepared: &mut PreparedGlobals,
+    ) -> Result<(), TypeError> {
+        let implementation = group
+            .implementations()
+            .get(implementation_index)
+            .ok_or_else(invalid_state)?;
+        let checked = group
+            .checked_implementations()
+            .get(implementation_index)
+            .ok_or_else(invalid_state)?;
+        let fact = group
+            .implementation_facts()
+            .get(implementation_index)
+            .ok_or_else(invalid_state)?;
+        if implementation.id() != checked.id
+            || implementation.id() != fact.id
+            || checked.methods.len() != fact.methods.len()
+        {
+            return Err(invalid_state());
+        }
+        for (checked_method, fact_method) in checked.methods.iter().zip(&fact.methods) {
+            let source = implementation
+                .method_groups()
+                .get(checked_method.source_group)
+                .ok_or_else(invalid_state)?;
+            if checked_method.id != fact_method.id
+                || checked_method.binder != fact_method.binder
+                || source.identity != Some(fact_method.id)
+                || source.binder.id != fact_method.binder
+            {
+                return Err(invalid_state());
+            }
+            self.elaborate_prepared_implementation_method(source, fact_method, prepared)?;
+        }
+        Ok(())
+    }
+
+    fn elaborate_prepared_implementation_method(
+        &mut self,
+        source: &crate::resolved::ResolvedImplementationMethodGroup,
+        fact: &CheckedImplementationMethodFact,
+        prepared: &mut PreparedGlobals,
+    ) -> Result<(), TypeError> {
+        if !self.monomorphic_recursive.insert(fact.binder) {
+            return Err(invalid_state());
+        }
+        let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
+        let mut core_type_replacements = TypeReplacementBuffer(HashMap::new());
+        {
+            let lowered = self
+                .evidence_lowering
+                .as_ref()
+                .and_then(|lowering| lowering.implementation_methods.get(&fact.id))
+                .ok_or_else(invalid_state)?;
+            let source_type_parameters = lowered
+                .scheme
+                .source_type_parameters
+                .as_deref()
+                .ok_or_else(invalid_state)?;
+            if source_type_parameters.len() != lowered.scheme.type_parameters.len() {
+                return Err(invalid_state());
+            }
+            self.type_work
+                .charge(lowered.scheme.type_parameters.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            core_type_replacements
+                .0
+                .try_reserve(lowered.scheme.type_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for (source, core) in source_type_parameters
+                .iter()
+                .zip(&lowered.scheme.type_parameters)
+            {
+                if core_type_replacements
+                    .0
+                    .insert(*source, Type::Variable(*core))
+                    .is_some()
+                {
+                    return Err(invalid_state());
+                }
+            }
+        }
+        let evidence = self.enter_lowered_implementation_evidence_scope(fact.id, &fact.origin)?;
+        let source_ty = self
+            .evidence_lowering
+            .as_ref()
+            .and_then(|lowering| lowering.implementation_methods.get(&fact.id))
+            .map(|method| &method.scheme.value_type)
+            .ok_or_else(invalid_state)?;
+        let function_type = clone_type_with_budget(source_ty, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let body_result = self.elaborate_equations(
+            &source.equations,
+            ProvenancedType {
+                provenance: TypeProvenance::at_span(&function_type, fact.span),
+                ty: function_type,
+            },
+            &mut prepared.context,
+            source.span,
+            &fact.origin,
+        );
+        let mut function = match body_result {
+            Ok(function) => function,
+            Err(error) => {
+                self.clear_lowered_evidence_scope(evidence)?;
+                self.monomorphic_recursive.remove(&fact.binder);
+                return Err(error);
+            }
+        };
+        function = self.wrap_lowered_evidence_scope(function, evidence, &fact.origin)?;
+        if !core_type_replacements.0.is_empty() {
+            let inference_solutions = &self.inference_solutions;
+            let type_work = &mut self.type_work;
+            self.builder.rewrite_types_since(rewrite_checkpoint, |ty| {
+                let (zonked, _) = zonk_type_with_status(ty, inference_solutions, |cells| {
+                    type_work
+                        .charge(cells)
+                        .map_err(|()| BuildError::TypeWorkExceeded)
+                })?;
+                let renamed =
+                    substitute_type_variables_with(&zonked, &core_type_replacements.0, |cells| {
+                        type_work
+                            .charge(cells)
+                            .map_err(|()| BuildError::TypeWorkExceeded)
+                    });
+                discard_type_iteratively(zonked);
+                renamed
+            })?;
+            let zonked_function_type = self.zonk(&function.ty)?;
+            let renamed_function_type = substitute_type_variables_with(
+                &zonked_function_type,
+                &core_type_replacements.0,
+                |cells| self.type_work.charge(cells),
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            discard_type_iteratively(zonked_function_type);
+            let source_function_type = std::mem::replace(&mut function.ty, renamed_function_type);
+            discard_type_iteratively(source_function_type);
+        }
+        if !self.monomorphic_recursive.remove(&fact.binder) {
+            return Err(invalid_state());
+        }
+        let lowered = self
+            .evidence_lowering
+            .as_ref()
+            .and_then(|lowering| lowering.implementation_methods.get(&fact.id))
+            .ok_or_else(invalid_state)?;
+        if lowered.scheme.type_parameters.is_empty() {
+            if !same_type(&function.ty, &lowered.scheme.core_scheme) {
+                return Err(invalid_state());
+            }
+        } else {
+            let Type::Forall(_, expected_body) = &lowered.scheme.core_scheme else {
+                return Err(invalid_state());
+            };
+            if !same_type(&function.ty, expected_body) {
+                return Err(invalid_state());
+            }
+            let parameters = clone_type_variables_with_budget(
+                &lowered.scheme.type_parameters,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let core_scheme =
+                clone_type_with_budget(&lowered.scheme.core_scheme, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            function.node = self.builder.type_abstraction(
+                parameters,
+                function.node,
+                core_scheme,
+                fact.origin.clone(),
+            )?;
+            function.ty = clone_type_with_budget(&lowered.scheme.core_scheme, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        }
+        let binder = prepared
+            .binders
+            .remove(&fact.binder)
+            .ok_or_else(invalid_state)?;
+        prepared.globals.push(ElaboratedBinding {
+            binder,
+            initializer: function.node,
+        });
+        Ok(())
+    }
+
+    fn prepare_definition_views<'a, I, D>(
+        &mut self,
+        definitions: I,
+        checked_schemes: Option<&[CheckedGlobalScheme]>,
+        mut context: TypeContext,
+    ) -> Result<PreparedGlobals, TypeError>
+    where
+        I: Clone + ExactSizeIterator<Item = &'a D>,
+        D: DefinitionView + 'a,
+    {
+        let checked_by_binder = if let Some(checked) = checked_schemes {
+            self.type_work
+                .charge(checked.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut by_binder = HashMap::new();
+            by_binder
+                .try_reserve(checked.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for scheme in checked {
+                if by_binder.insert(scheme.binder, scheme).is_some() {
+                    return Err(invalid_state());
+                }
+            }
+            Some(by_binder)
+        } else {
+            None
+        };
+        self.type_work
+            .charge(definitions.len().saturating_mul(3))
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut globals = Vec::new();
+        globals
+            .try_reserve(definitions.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut global_binders = HashMap::new();
+        global_binders
+            .try_reserve(definitions.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut global_quantifiers = HashMap::new();
+        global_quantifiers
+            .try_reserve(definitions.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+
+        for definition in definitions.clone() {
+            let (name, function_type, type_parameters, requirements) = match definition.kind() {
                 ResolvedDefinitionKind::Equational(equational) => {
                     let function_type = ProvenancedType::from_resolved_with_budget(
                         &equational.interface.annotation,
@@ -1156,6 +3297,7 @@ impl Elaborator {
                         &equational.interface.name,
                         function_type,
                         equational.interface.type_parameters.as_ref(),
+                        equational.interface.requirements.as_ref(),
                     )
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
@@ -1177,6 +3319,7 @@ impl Elaborator {
                             &mut self.type_work,
                         )?,
                         operational.header.type_parameters.as_ref(),
+                        operational.header.requirements.as_ref(),
                     )
                 }
             };
@@ -1204,6 +3347,45 @@ impl Elaborator {
                         .into_boxed_slice();
                 Type::Forall(binder_parameters, Box::new(binder_body))
             };
+            let binder_type = if let Some(checked) = &checked_by_binder {
+                let checked = checked.get(&name.id).ok_or_else(invalid_state)?;
+                let requirements_match = checked.scheme.requirements.len() == requirements.len()
+                    && checked.scheme.requirements.iter().zip(requirements).all(
+                        |(checked, resolved)| {
+                            checked.id == resolved.id
+                                && checked.interface == resolved.interface.id
+                                && same_type(&checked.argument, &resolved.argument.ty)
+                        },
+                    );
+                if checked.spelling != name.spelling
+                    || checked.scheme.type_parameters.as_ref() != quantified.as_ref()
+                    || !same_type(&checked.scheme.value_type, &function_type.ty)
+                    || !requirements_match
+                {
+                    discard_type_iteratively(binder_type);
+                    return Err(invalid_state());
+                }
+                binder_type
+            } else {
+                binder_type
+            };
+            let binder_type = if self.purpose == ElaborationPurpose::FinalSynthesis {
+                discard_type_iteratively(binder_type);
+                let lowered = self
+                    .evidence_lowering
+                    .as_ref()
+                    .and_then(|lowering| lowering.global_schemes.get(&name.id))
+                    .ok_or_else(invalid_state)?;
+                if lowered.type_parameters.as_ref() != quantified.as_ref()
+                    || !same_type(&lowered.value_type, &function_type.ty)
+                {
+                    return Err(invalid_state());
+                }
+                clone_type_with_budget(&lowered.core_scheme, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            } else {
+                binder_type
+            };
             let binder = self.builder.resolved_binder(
                 name.id,
                 binder_type,
@@ -1224,20 +3406,53 @@ impl Elaborator {
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
                     .into_boxed_slice();
             context.set_quantified(name.id, context_quantified)?;
-            global_quantifiers.push((name.id, quantified));
-        }
-
-        for definition in &program.definitions {
-            let recursive_binder = match &definition.kind {
-                ResolvedDefinitionKind::Equational(equational) => equational.interface.name.id,
-                ResolvedDefinitionKind::InlineOperational(operational) => {
-                    operational.header.name.id
-                }
-            };
-            if !self.monomorphic_recursive.insert(recursive_binder) {
+            if global_quantifiers.insert(name.id, quantified).is_some() {
                 return Err(invalid_state());
             }
-            let (name, mut function) = match &definition.kind {
+        }
+
+        Ok(PreparedGlobals {
+            context,
+            globals,
+            binders: global_binders,
+            quantifiers: global_quantifiers,
+        })
+    }
+
+    fn elaborate_prepared_definition<D>(
+        &mut self,
+        definition: &D,
+        prepared: &mut PreparedGlobals,
+    ) -> Result<(), TypeError>
+    where
+        D: DefinitionView,
+    {
+        let recursive_binder = match definition.kind() {
+            ResolvedDefinitionKind::Equational(equational) => equational.interface.name.id,
+            ResolvedDefinitionKind::InlineOperational(operational) => operational.header.name.id,
+        };
+        if !self.monomorphic_recursive.insert(recursive_binder) {
+            return Err(invalid_state());
+        }
+        let evidence_marker =
+            if self.purpose == ElaborationPurpose::ModuleCheck && self.selection.is_some() {
+                Some(self.enter_global_evidence_scope(recursive_binder)?)
+            } else {
+                None
+            };
+        let mut lowered_evidence = if self.purpose == ElaborationPurpose::FinalSynthesis {
+            let cause = match definition.kind() {
+                ResolvedDefinitionKind::Equational(equational) => &equational.interface.name.origin,
+                ResolvedDefinitionKind::InlineOperational(operational) => {
+                    &operational.header.name.origin
+                }
+            };
+            Some(self.enter_lowered_global_evidence_scope(recursive_binder, cause)?)
+        } else {
+            None
+        };
+        let definition_result: Result<_, TypeError> = (|| {
+            Ok(match definition.kind() {
                 ResolvedDefinitionKind::Equational(equational) => {
                     let function_type = ProvenancedType::from_resolved_with_budget(
                         &equational.interface.annotation,
@@ -1255,8 +3470,8 @@ impl Elaborator {
                         self.elaborate_equation_group(
                             equational,
                             function_type,
-                            &mut context,
-                            definition.span,
+                            &mut prepared.context,
+                            definition.span(),
                         )?,
                     )
                 }
@@ -1281,72 +3496,116 @@ impl Elaborator {
                         self.elaborate_operational_function(
                             operational,
                             function_type,
-                            &mut context,
-                            definition.span,
+                            &mut prepared.context,
+                            definition.span(),
                         )?,
                     )
                 }
-            };
-            if !self.monomorphic_recursive.remove(&recursive_binder) {
-                return Err(invalid_state());
-            }
-            if !function.provenance.aligns(&function.ty) {
-                return Err(invalid_state());
-            }
-            let binder = global_binders.remove(&name.id).ok_or_else(invalid_state)?;
-            let quantified = global_quantifiers
-                .iter()
-                .find_map(|(binder, quantified)| (*binder == name.id).then_some(quantified))
-                .ok_or_else(invalid_state)?;
-            if !quantified.is_empty() {
-                self.type_work
-                    .charge(1)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let scheme_parameters =
-                    clone_type_variables_with_budget(quantified, &mut self.type_work)
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?
-                        .into_boxed_slice();
-                let scheme_body = self.clone_type(&function.ty)?;
-                let scheme = Type::Forall(scheme_parameters, Box::new(scheme_body));
-                let abstraction_parameters =
-                    clone_type_variables_with_budget(quantified, &mut self.type_work).map_err(
-                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
-                    )?;
-                function.node = self.builder.type_abstraction(
-                    abstraction_parameters,
-                    function.node,
-                    scheme,
-                    Origin::Generated {
-                        cause: Box::new(name.origin.clone()),
-                        reason: GeneratedReason::TypeChecking,
-                    },
-                )?;
-            }
-            globals.push(ElaboratedBinding {
-                binder,
-                initializer: function.node,
-            });
+            })
+        })();
+        let close_result = if definition_result.is_ok() {
+            evidence_marker
+                .map(|marker| self.close_evidence_obligations(marker))
+                .unwrap_or(Ok(()))
+        } else {
+            Ok(())
+        };
+        let leave_result = if evidence_marker.is_some() {
+            self.leave_evidence_scope()
+        } else {
+            Ok(())
+        };
+        let lowered_clear_result = if definition_result.is_err() {
+            lowered_evidence
+                .take()
+                .map(|binders| self.clear_lowered_evidence_scope(binders))
+                .unwrap_or(Ok(()))
+        } else {
+            Ok(())
+        };
+        if !self.monomorphic_recursive.remove(&recursive_binder) {
+            return Err(invalid_state());
         }
+        let (name, mut function) = definition_result?;
+        close_result?;
+        leave_result?;
+        lowered_clear_result?;
+        if let Some(binders) = lowered_evidence {
+            function = self.wrap_lowered_evidence_scope(function, binders, &name.origin)?;
+        }
+        if !function.provenance.aligns(&function.ty) {
+            return Err(invalid_state());
+        }
+        let binder = prepared
+            .binders
+            .remove(&name.id)
+            .ok_or_else(invalid_state)?;
+        let quantified = prepared
+            .quantifiers
+            .get(&name.id)
+            .ok_or_else(invalid_state)?;
+        if !quantified.is_empty() {
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let scheme_parameters =
+                clone_type_variables_with_budget(quantified, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                    .into_boxed_slice();
+            let scheme_body = self.clone_type(&function.ty)?;
+            let scheme = Type::Forall(scheme_parameters, Box::new(scheme_body));
+            let abstraction_parameters =
+                clone_type_variables_with_budget(quantified, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            function.node = self.builder.type_abstraction(
+                abstraction_parameters,
+                function.node,
+                scheme,
+                Origin::Generated {
+                    cause: Box::new(name.origin.clone()),
+                    reason: GeneratedReason::TypeChecking,
+                },
+            )?;
+        }
+        prepared.globals.push(ElaboratedBinding {
+            binder,
+            initializer: function.node,
+        });
+        Ok(())
+    }
 
-        for (binder, quantified) in global_quantifiers {
-            context.set_quantified(binder, quantified)?;
+    fn finish_prepared_definitions(
+        &mut self,
+        mut prepared: PreparedGlobals,
+    ) -> Result<(Vec<ElaboratedBinding>, TypeContext), TypeError> {
+        if !prepared.binders.is_empty() || prepared.globals.len() != prepared.quantifiers.len() {
+            return Err(invalid_state());
+        }
+        for (binder, quantified) in prepared.quantifiers {
+            prepared.context.set_quantified(binder, quantified)?;
         }
         self.monomorphic_recursive.clear();
 
+        Ok((prepared.globals, prepared.context))
+    }
+
+    fn elaborate_result(
+        &mut self,
+        result_expression: &ResolvedExpr,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
         let mut result = self.elaborate_expression_with_context(
             ElaborationTask::Synthesize {
-                expression: &program.result,
-                cause: Some(SynthesisCause::ProgramResult(program.result.span)),
+                expression: result_expression,
+                cause: Some(SynthesisCause::ProgramResult(result_expression.span)),
             },
-            &mut context,
+            context,
         )?;
         let (zonked_result, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
         if result_is_ambiguous {
             return Err(inference_failure(
                 TypeReason::AmbiguousType,
-                program.result.span,
+                result_expression.span,
                 "this result does not determine every inferred type",
             ));
         }
@@ -1371,27 +3630,6 @@ impl Elaborator {
                 origin,
                 "this expression does not determine every inferred type",
             ));
-        }
-        if !globals.is_empty() {
-            let members = globals
-                .into_iter()
-                .map(|global| (global.binder, global.initializer))
-                .collect();
-            let core_result_type = self.clone_type(&result.ty)?;
-            let node = self.builder.recursive_binding(
-                members,
-                result.node,
-                core_result_type,
-                Origin::Generated {
-                    cause: Box::new(Origin::Source(program.span)),
-                    reason: GeneratedReason::RecursiveBindingLowering,
-                },
-            )?;
-            result = TypedNode {
-                node,
-                ty: result.ty,
-                provenance: result.provenance,
-            };
         }
         Ok(result)
     }
@@ -1456,43 +3694,133 @@ impl Elaborator {
                     ResolvedExprKind::Equal(binary) => {
                         schedule_left(Primitive::Equal, current.span, binary, &mut tasks)
                     }
-                    ResolvedExprKind::Occurrence(occurrence) => {
-                        let fact = context.fact(occurrence.binder).ok_or_else(invalid_state)?;
-                        let rigid = self.monomorphic_recursive.contains(&occurrence.binder);
-                        let (ty, arguments) = self.instantiate(fact, rigid, current.span)?;
-                        let provenance = fact.provenance.clone();
-                        let scheme =
-                            clone_scheme_with_budget(fact, &mut self.type_work).map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                        let mut node = self.builder.variable(
-                            occurrence.binder,
-                            scheme,
-                            occurrence.origin.clone(),
-                        )?;
-                        if !arguments.is_empty() {
-                            let core_ty = clone_type_with_budget(&ty, &mut self.type_work)
-                                .map_err(|()| {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                })?;
-                            node = self.builder.type_application(
-                                node,
-                                arguments,
-                                core_ty,
-                                occurrence.origin.clone(),
-                            )?;
+                    ResolvedExprKind::Occurrence(occurrence) => match occurrence.term {
+                        crate::resolved::ResolvedTermName::Global(binder) => {
+                            let fact = context.fact(binder).ok_or_else(invalid_state)?;
+                            let rigid = self.monomorphic_recursive.contains(&binder);
+                            let (ty, arguments) = self.instantiate(fact, rigid, current.span)?;
+                            let provenance = fact.provenance.clone();
+                            let has_lowered_global_scheme =
+                                self.evidence_lowering.as_ref().is_some_and(|lowering| {
+                                    lowering.global_schemes.contains_key(&binder)
+                                });
+                            if self.purpose == ElaborationPurpose::FinalSynthesis
+                                && has_lowered_global_scheme
+                            {
+                                let mut lowering =
+                                    self.evidence_lowering.take().ok_or_else(invalid_state)?;
+                                let result = (|| {
+                                    let scheme = lowering
+                                        .global_schemes
+                                        .get(&binder)
+                                        .ok_or_else(invalid_state)?;
+                                    let core_scheme = self.clone_type(&scheme.core_scheme)?;
+                                    let variable_ty = self.clone_type(&core_scheme)?;
+                                    let mut current = TypedNode {
+                                        node: self.builder.variable(
+                                            binder,
+                                            variable_ty,
+                                            occurrence.origin.clone(),
+                                        )?,
+                                        ty: core_scheme,
+                                        provenance: provenance.clone(),
+                                    };
+                                    if !arguments.is_empty() {
+                                        let core_ty =
+                                            self.instantiate_lowered_core_body(scheme, &arguments)?;
+                                        let application_ty = self.clone_type(&core_ty)?;
+                                        current.node = self.builder.type_application(
+                                            current.node,
+                                            arguments,
+                                            application_ty,
+                                            occurrence.origin.clone(),
+                                        )?;
+                                        current.ty = core_ty;
+                                    }
+                                    for slot in &occurrence.evidence {
+                                        let selection =
+                                            slot.selection().ok_or_else(invalid_state)?;
+                                        let methods = self.lower_evidence_selection(
+                                            selection,
+                                            &mut lowering,
+                                            &occurrence.origin,
+                                            None,
+                                        )?;
+                                        for method in &methods {
+                                            current = self.apply_lowered_argument(
+                                                current,
+                                                method,
+                                                &occurrence.origin,
+                                            )?;
+                                        }
+                                    }
+                                    if !same_type(&current.ty, &ty) {
+                                        return Err(invalid_state());
+                                    }
+                                    current.provenance = provenance;
+                                    Ok(current)
+                                })();
+                                self.evidence_lowering = Some(lowering);
+                                values.push(result?);
+                            } else {
+                                self.record_global_obligations(
+                                    binder,
+                                    occurrence,
+                                    &arguments,
+                                    current.span,
+                                )?;
+                                let scheme = clone_scheme_with_budget(fact, &mut self.type_work)
+                                    .map_err(|()| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?;
+                                let mut node = self.builder.variable(
+                                    binder,
+                                    scheme,
+                                    occurrence.origin.clone(),
+                                )?;
+                                if !arguments.is_empty() {
+                                    let core_ty = clone_type_with_budget(&ty, &mut self.type_work)
+                                        .map_err(|()| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        })?;
+                                    node = self.builder.type_application(
+                                        node,
+                                        arguments,
+                                        core_ty,
+                                        occurrence.origin.clone(),
+                                    )?;
+                                }
+                                values.push(TypedNode {
+                                    node,
+                                    ty,
+                                    provenance,
+                                });
+                            }
                         }
-                        values.push(TypedNode {
-                            node,
-                            ty,
-                            provenance,
-                        });
-                    }
+                        crate::resolved::ResolvedTermName::Method(method) => {
+                            if self.purpose == ElaborationPurpose::FinalSynthesis {
+                                values.push(
+                                    self.synthesize_lowered_method_occurrence(method, occurrence)?,
+                                );
+                            } else {
+                                values.push(self.synthesize_method_occurrence(
+                                    method,
+                                    occurrence,
+                                    current.span,
+                                )?);
+                            }
+                        }
+                    },
                     ResolvedExprKind::Constructor(occurrence) => {
                         let constructor = self
                             .registry
                             .constructor(occurrence.constructor)
                             .ok_or_else(invalid_state)?;
+                        let declaration_span = constructor.origin.primary_span();
                         let parameters = self
                             .registry
                             .nominal_parameters(constructor.owner)
@@ -1548,9 +3876,10 @@ impl Elaborator {
                         } else {
                             result
                         };
+                        let scheme_provenance = TypeProvenance::at_span(&scheme, declaration_span);
                         let fact = TypeFact {
                             ty: scheme,
-                            provenance: TypeProvenance::atom(None),
+                            provenance: scheme_provenance,
                             quantified: quantified.into_boxed_slice(),
                         };
                         let (ty, arguments) = self.instantiate(&fact, false, current.span)?;
@@ -1584,7 +3913,7 @@ impl Elaborator {
                                 occurrence.origin.clone(),
                             )?;
                         }
-                        let provenance = self.unknown_provenance(&ty)?;
+                        let provenance = TypeProvenance::at_span(&ty, declaration_span);
                         values.push(TypedNode {
                             node,
                             provenance,
@@ -1610,7 +3939,8 @@ impl Elaborator {
                         let recursive_call = matches!(
                             &application.function.kind,
                             ResolvedExprKind::Occurrence(occurrence)
-                                if self.monomorphic_recursive.contains(&occurrence.binder)
+                                if occurrence.global_binder().is_some_and(|binder|
+                                    self.monomorphic_recursive.contains(&binder))
                         );
                         tasks.push(ElaborationTask::AfterApplicationFunction {
                             whole_span: current.span,
@@ -1821,10 +4151,11 @@ impl Elaborator {
                         let domain = domain.ok_or_else(invalid_state)?;
                         let pattern_span = pattern.origin.primary_span();
                         let mut matrix = vec![vec![pattern]];
-                        if let Some(witness) = missing_witness_for_types(
+                        if let Some(witness) = missing_witness_for_types_with_budget(
                             &matrix,
                             std::slice::from_ref(&domain),
                             &self.registry,
+                            &mut self.coverage_work,
                         )? {
                             return Err(case_error(
                                 TypeReason::RefutableFunctionDomain,
@@ -2023,8 +4354,53 @@ impl Elaborator {
                         provenance: TypeProvenance::atom(Some(operator_span)),
                     });
                 }
-                ElaborationTask::FinishBinding { binding, expected } => {
+                ElaborationTask::BeginBinding {
+                    binding,
+                    expected,
+                    finish_expected,
+                } => {
+                    let evidence_marker = if self.purpose == ElaborationPurpose::ModuleCheck
+                        && self.selection.is_some()
+                        && finish_expected.is_none()
+                        && matches!(binding.pattern.kind, ResolvedPatternKind::Binder(_))
+                        && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
+                    {
+                        Some(self.evidence_marker()?)
+                    } else {
+                        None
+                    };
+                    tasks.push(ElaborationTask::FinishBinding {
+                        binding,
+                        expected: finish_expected,
+                        evidence_marker,
+                    });
+                    match (expected, binding.annotation.as_ref()) {
+                        (Some(expected), Some(annotation)) => {
+                            tasks.push(ElaborationTask::Check {
+                                expression: &binding.initializer,
+                                expected,
+                                kind: CheckKind::BindingInitializer {
+                                    initializer_span: binding.initializer.span,
+                                    annotation_span: annotation.span,
+                                },
+                            });
+                        }
+                        (None, None) => tasks.push(ElaborationTask::Synthesize {
+                            expression: &binding.initializer,
+                            cause: Some(SynthesisCause::Binding(binding.span)),
+                        }),
+                        _ => return Err(invalid_state()),
+                    }
+                }
+                ElaborationTask::FinishBinding {
+                    binding,
+                    expected,
+                    evidence_marker,
+                } => {
                     let mut initializer = values.pop().ok_or_else(invalid_state)?;
+                    if let Some(marker) = evidence_marker {
+                        self.close_evidence_obligations(marker)?;
+                    }
                     let mut generalized = Vec::new();
                     if expected.is_none()
                         && matches!(binding.pattern.kind, ResolvedPatternKind::Binder(_))
@@ -2105,10 +4481,11 @@ impl Elaborator {
                         }
                     }
                     let mut matrix = vec![vec![pattern]];
-                    if let Some(witness) = missing_witness_for_types(
+                    if let Some(witness) = missing_witness_for_types_with_budget(
                         &matrix,
                         std::slice::from_ref(&binding_type.ty),
                         &self.registry,
+                        &mut self.coverage_work,
                     )? {
                         self.remove_pattern_binders(context, &binder_ids)?;
                         return Err(case_error(
@@ -2302,7 +4679,6 @@ impl Elaborator {
                         scrutinee,
                         next_arm: 0,
                         matrix,
-                        coverage_budget: UsefulnessBudget::default(),
                         arm_bodies,
                         result_type: expected
                             .map(|(expected, kind)| (expected.ty, expected.provenance, kind)),
@@ -2486,7 +4862,7 @@ impl Elaborator {
                 &progress.matrix,
                 std::slice::from_ref(&progress.scrutinee.ty),
                 &self.registry,
-                &mut progress.coverage_budget,
+                &mut self.coverage_work,
             )? {
                 return Err(case_error(
                     TypeReason::NonExhaustive,
@@ -2527,7 +4903,7 @@ impl Elaborator {
             &row,
             std::slice::from_ref(&progress.scrutinee.ty),
             &self.registry,
-            &mut progress.coverage_budget,
+            &mut self.coverage_work,
         )?
         .is_none()
         {
@@ -2962,13 +5338,30 @@ impl Elaborator {
         context: &mut TypeContext,
         definition_span: Span,
     ) -> Result<TypedNode, TypeError> {
-        let Some(first) = equational.equations.first() else {
+        let origin = equational_origin(definition_span, equational);
+        self.elaborate_equations(
+            &equational.equations,
+            function_type,
+            context,
+            definition_span,
+            &origin,
+        )
+    }
+
+    fn elaborate_equations(
+        &mut self,
+        equations: &[crate::resolved::ResolvedEquation],
+        function_type: ProvenancedType,
+        context: &mut TypeContext,
+        definition_span: Span,
+        presentation: &Origin,
+    ) -> Result<TypedNode, TypeError> {
+        let Some(first) = equations.first() else {
             return Err(invalid_state());
         };
         let arity = first.patterns.len();
         if arity == 0
-            || equational
-                .equations
+            || equations
                 .iter()
                 .any(|clause| clause.patterns.len() != arity)
         {
@@ -3013,7 +5406,7 @@ impl Elaborator {
             parameters.push(self.builder.binder(
                 parameter_type,
                 Origin::Generated {
-                    cause: Box::new(equational_origin(definition_span, equational)),
+                    cause: Box::new(presentation.clone()),
                     reason: GeneratedReason::FunctionLowering,
                 },
             )?);
@@ -3031,18 +5424,17 @@ impl Elaborator {
         }
 
         self.type_work
-            .charge(equational.equations.len().saturating_mul(2))
+            .charge(equations.len().saturating_mul(2))
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut coverage_matrix = Vec::new();
         coverage_matrix
-            .try_reserve(equational.equations.len())
+            .try_reserve(equations.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut coverage_budget = UsefulnessBudget::default();
         let mut clause_bodies = Vec::new();
         clause_bodies
-            .try_reserve(equational.equations.len())
+            .try_reserve(equations.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for clause in &equational.equations {
+        for clause in equations {
             let mut binder_ids = Vec::new();
             self.type_work
                 .charge(arity)
@@ -3068,7 +5460,7 @@ impl Elaborator {
                 &patterns,
                 &domain_types,
                 &self.registry,
-                &mut coverage_budget,
+                &mut self.coverage_work,
             )?
             .is_none()
             {
@@ -3103,7 +5495,7 @@ impl Elaborator {
             &coverage_matrix,
             &domain_types,
             &self.registry,
-            &mut coverage_budget,
+            &mut self.coverage_work,
         )? {
             return Err(case_error(
                 TypeReason::NonExhaustive,
@@ -3223,7 +5615,7 @@ impl Elaborator {
                 body_node,
                 core_ty,
                 Origin::Generated {
-                    cause: Box::new(equational_origin(definition_span, equational)),
+                    cause: Box::new(presentation.clone()),
                     reason: GeneratedReason::FunctionLowering,
                 },
             )?;
@@ -3334,10 +5726,11 @@ impl Elaborator {
         let mut body = body_result?;
         if let Some(pattern) = retained_pattern {
             let mut matrix = vec![vec![pattern]];
-            if let Some(witness) = missing_witness_for_types(
+            if let Some(witness) = missing_witness_for_types_with_budget(
                 &matrix,
                 std::slice::from_ref(&domain.ty),
                 &self.registry,
+                &mut self.coverage_work,
             )? {
                 return Err(case_error(
                     TypeReason::RefutableFunctionDomain,
@@ -3385,6 +5778,1289 @@ impl Elaborator {
             provenance: function_type.provenance,
         })
     }
+}
+
+fn check_interface_declarations(
+    module: &ResolvedModule,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<Box<[CheckedInterface]>, TypeError> {
+    budget
+        .charge(module.interfaces().len())
+        .map_err(|()| constraint_resource())?;
+    let mut checked = Vec::new();
+    checked
+        .try_reserve(module.interfaces().len())
+        .map_err(|_| constraint_resource())?;
+    for (source_index, interface) in module.interfaces().iter().enumerate() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        for method in &interface.methods {
+            budget
+                .charge(method.type_parameters.len().saturating_add(1))
+                .map_err(|()| constraint_resource())?;
+            let parameter_occurs =
+                type_contains_variable(&method.annotation.ty, interface.parameter.id, budget)
+                    .map_err(|()| constraint_resource())?;
+            if !method.type_parameters.is_empty() || !parameter_occurs {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::MethodParameter,
+                    SourceLabel::new(
+                        method.span,
+                        "this method signature must use only its interface parameter",
+                    ),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    interface.parameter.origin.primary_span(),
+                    "the interface parameter is declared here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+            if !matches!(&method.annotation.ty, Type::Function(_, _)) {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::MethodNotFunction,
+                    SourceLabel::new(
+                        method.annotation.span,
+                        "this method type must have a top-level function arrow",
+                    ),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    method.span,
+                    "the method signature is declared here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+        checked.push(CheckedInterface {
+            source_index,
+            id: interface.id,
+        });
+    }
+    Ok(checked.into_boxed_slice())
+}
+
+fn check_global_requirements(
+    module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    for definition in module.definitions() {
+        let (name, requirements, value_type_count) = match &definition.kind {
+            ResolvedDefinitionKind::Equational(global) => {
+                (&global.interface.name, &global.interface.requirements, 1)
+            }
+            ResolvedDefinitionKind::InlineOperational(global) => (
+                &global.header.name,
+                &global.header.requirements,
+                global.header.parameters.len().saturating_add(1),
+            ),
+        };
+        if requirements.is_empty() {
+            continue;
+        }
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        budget
+            .charge(value_type_count)
+            .map_err(|()| constraint_resource())?;
+        let mut value_types = Vec::new();
+        value_types
+            .try_reserve(value_type_count)
+            .map_err(|_| constraint_resource())?;
+        match &definition.kind {
+            ResolvedDefinitionKind::Equational(global) => {
+                value_types.push(&global.interface.annotation.ty);
+            }
+            ResolvedDefinitionKind::InlineOperational(global) => {
+                value_types.extend(
+                    global
+                        .header
+                        .parameters
+                        .iter()
+                        .map(|parameter| &parameter.annotation.ty),
+                );
+                value_types.push(&global.header.result_type.ty);
+            }
+        }
+        let public = module.export_candidate().term(&name.spelling).is_some();
+        if public {
+            for requirement in requirements.iter() {
+                budget.charge(1).map_err(|()| constraint_resource())?;
+                let private = checked_interface(
+                    module,
+                    checked_interfaces,
+                    requirement.interface.id,
+                    budget,
+                )?
+                .filter(|interface| !interface.is_public());
+                if let Some(interface) = private {
+                    let mut diagnostic = Diagnostic::new(
+                        InterfaceReason::ConstraintPrivateInterface,
+                        SourceLabel::new(
+                            requirement.span,
+                            "a public global cannot expose this private interface",
+                        ),
+                    );
+                    diagnostic.related.push(SourceLabel::new(
+                        interface.span(),
+                        "the private interface is declared here",
+                    ));
+                    return Err(TypeError::Interface(Box::new(diagnostic)));
+                }
+            }
+        }
+        for (index, requirement) in requirements.iter().enumerate() {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            let mut duplicate = None;
+            for first in &requirements[..index] {
+                budget.charge(1).map_err(|()| constraint_resource())?;
+                if first.interface.id == requirement.interface.id
+                    && same_type_with_constraint_budget(
+                        &first.argument.ty,
+                        &requirement.argument.ty,
+                        budget,
+                    )
+                    .map_err(|()| constraint_resource())?
+                {
+                    duplicate = Some(first);
+                    break;
+                }
+            }
+            if let Some(first) = duplicate {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::DuplicateRequirement,
+                    SourceLabel::new(requirement.span, "this requirement is already declared"),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    first.span,
+                    "the first identical requirement is here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+        for requirement in requirements.iter() {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            if let Some(variable) =
+                first_variable_absent_from_types(&requirement.argument.ty, &value_types, budget)
+                    .map_err(|()| constraint_resource())?
+            {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::UndeterminedParameter,
+                    SourceLabel::new(
+                        requirement.span,
+                        "this requirement parameter is not determined by the value type",
+                    ),
+                );
+                if let Some(parameter) = module.registry().type_variable(variable) {
+                    diagnostic.related.push(SourceLabel::new(
+                        parameter.origin.primary_span(),
+                        "this candidate parameter occurs only in a requirement",
+                    ));
+                }
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_implementation_headers_and_membership(
+    module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<Box<[CheckedImplementation]>, TypeError> {
+    for implementation in module.implementations() {
+        check_implementation_header(module, checked_interfaces, implementation, budget)?;
+    }
+    check_effective_implementation_overlap(module, budget)?;
+
+    budget
+        .charge(module.implementations().len())
+        .map_err(|()| constraint_resource())?;
+    let mut checked = Vec::new();
+    checked
+        .try_reserve(module.implementations().len())
+        .map_err(|_| constraint_resource())?;
+    for (source_index, implementation) in module.implementations().iter().enumerate() {
+        checked.push(check_implementation_membership(
+            module,
+            checked_interfaces,
+            source_index,
+            implementation,
+            budget,
+        )?);
+    }
+    Ok(checked.into_boxed_slice())
+}
+
+#[derive(Clone, Copy)]
+enum ImplementationHeadRef<'a> {
+    Imported(&'a crate::resolved::ImportedImplementationFact),
+    Local(&'a crate::resolved::ResolvedImplementation),
+}
+
+impl<'a> ImplementationHeadRef<'a> {
+    const fn id(self) -> crate::interface::ImplId {
+        match self {
+            Self::Imported(implementation) => implementation.fact.id,
+            Self::Local(implementation) => implementation.id,
+        }
+    }
+
+    const fn interface(self) -> crate::interface::InterfaceId {
+        match self {
+            Self::Imported(implementation) => implementation.fact.interface,
+            Self::Local(implementation) => implementation.interface.id,
+        }
+    }
+
+    const fn argument(self) -> &'a Type {
+        match self {
+            Self::Imported(implementation) => &implementation.fact.argument,
+            Self::Local(implementation) => &implementation.argument.ty,
+        }
+    }
+
+    const fn head_parameters(self) -> &'a [crate::resolved::ResolvedTypeVariable] {
+        match self {
+            Self::Imported(implementation) => &implementation.fact.head_parameters,
+            Self::Local(implementation) => &implementation.head_parameters,
+        }
+    }
+
+    const fn primary_span(self) -> Span {
+        match self {
+            Self::Imported(implementation) => implementation.available_at,
+            Self::Local(implementation) => implementation.argument.span,
+        }
+    }
+
+    const fn definition_span(self) -> Span {
+        match self {
+            Self::Imported(implementation) => implementation.fact.span,
+            Self::Local(implementation) => implementation.argument.span,
+        }
+    }
+
+    const fn import_span(self) -> Option<Span> {
+        match self {
+            Self::Imported(implementation) => Some(implementation.available_at),
+            Self::Local(_) => None,
+        }
+    }
+}
+
+fn check_effective_implementation_overlap(
+    module: &ResolvedModule,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    let imported_count = module.imported_facts().implementations().count();
+    budget
+        .charge(imported_count.saturating_add(module.implementations().len()))
+        .map_err(|()| constraint_resource())?;
+    let mut imported = Vec::new();
+    imported
+        .try_reserve(imported_count)
+        .map_err(|_| constraint_resource())?;
+    imported.extend(
+        module
+            .imported_facts()
+            .implementations()
+            .map(ImplementationHeadRef::Imported),
+    );
+    let mut effective = imported;
+    effective
+        .try_reserve(module.implementations().len())
+        .map_err(|_| constraint_resource())?;
+    effective.extend(
+        module
+            .implementations()
+            .iter()
+            .map(ImplementationHeadRef::Local),
+    );
+
+    check_effective_implementation_heads(&effective, budget)
+}
+
+fn check_effective_implementation_heads(
+    effective: &[ImplementationHeadRef<'_>],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    for (index, implementation) in effective.iter().copied().enumerate() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        for previous in effective[..index].iter().copied() {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            if implementation.interface() != previous.interface()
+                || implementation.id() == previous.id()
+            {
+                continue;
+            }
+            let overlaps = implementation_heads_overlap(
+                previous
+                    .head_parameters()
+                    .iter()
+                    .map(|parameter| parameter.id),
+                previous.argument(),
+                implementation
+                    .head_parameters()
+                    .iter()
+                    .map(|parameter| parameter.id),
+                implementation.argument(),
+                budget,
+            );
+            let overlaps = match overlaps {
+                Ok(overlaps) => overlaps,
+                Err(OverlapFailure::Resource) => return Err(constraint_resource()),
+                Err(OverlapFailure::InvalidState) => return Err(invalid_state()),
+            };
+            if overlaps {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::ImplOverlap,
+                    SourceLabel::new(
+                        implementation.primary_span(),
+                        "this implementation overlaps an earlier available implementation",
+                    ),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    previous.definition_span(),
+                    "the earlier overlapping implementation head is here",
+                ));
+                if let Some(span) = previous.import_span() {
+                    diagnostic.related.push(SourceLabel::new(
+                        span,
+                        "the earlier implementation became available through this import",
+                    ));
+                }
+                if implementation.import_span().is_some() {
+                    diagnostic.related.push(SourceLabel::new(
+                        implementation.definition_span(),
+                        "the later implementation is defined here",
+                    ));
+                }
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_implementation_header(
+    module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    implementation: &crate::resolved::ResolvedImplementation,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    budget
+        .charge(
+            implementation
+                .head_parameters
+                .len()
+                .saturating_add(implementation.prerequisite_only_parameters.len())
+                .saturating_add(implementation.prerequisites.len())
+                .saturating_add(1),
+        )
+        .map_err(|()| constraint_resource())?;
+    budget
+        .charge_type(&implementation.argument.ty)
+        .map_err(|()| constraint_resource())?;
+    for prerequisite in &implementation.prerequisites {
+        budget
+            .charge_type(&prerequisite.argument.ty)
+            .map_err(|()| constraint_resource())?;
+    }
+
+    if implementation.public {
+        if let Some(interface) = checked_interface(
+            module,
+            checked_interfaces,
+            implementation.interface.id,
+            budget,
+        )? && !interface.is_public()
+        {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplPrivateInterface,
+                SourceLabel::new(
+                    implementation.interface.origin.primary_span(),
+                    "a public implementation cannot expose this private interface",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                interface.span(),
+                "the private interface is declared here",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        }
+        for prerequisite in &implementation.prerequisites {
+            if let Some(interface) = checked_interface(
+                module,
+                checked_interfaces,
+                prerequisite.interface.id,
+                budget,
+            )? && !interface.is_public()
+            {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::ImplPrivateInterface,
+                    SourceLabel::new(
+                        prerequisite.span,
+                        "a public implementation cannot expose this private prerequisite",
+                    ),
+                );
+                diagnostic.related.push(SourceLabel::new(
+                    interface.span(),
+                    "the private interface is declared here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+
+    if matches!(implementation.argument.ty, Type::Variable(_)) {
+        let mut diagnostic = Diagnostic::new(
+            InterfaceReason::ImplVariableHead,
+            SourceLabel::new(
+                implementation.argument.span,
+                "an implementation head cannot be a bare type variable",
+            ),
+        );
+        diagnostic.related.push(SourceLabel::new(
+            implementation.interface.origin.primary_span(),
+            "this is the implemented interface",
+        ));
+        return Err(TypeError::Interface(Box::new(diagnostic)));
+    }
+
+    if let Some(parameter) = implementation.prerequisite_only_parameters.first() {
+        let mut diagnostic = Diagnostic::new(
+            InterfaceReason::ImplPrerequisiteVariable,
+            SourceLabel::new(
+                parameter.origin.primary_span(),
+                "this prerequisite variable does not occur in the implementation head",
+            ),
+        );
+        diagnostic.related.push(SourceLabel::new(
+            implementation.argument.span,
+            "the implementation head determines every prerequisite variable",
+        ));
+        return Err(TypeError::Interface(Box::new(diagnostic)));
+    }
+
+    let local_interface_owner = implementation.interface.id.module() == module.module();
+    let local_nominal_owner = match implementation.argument.ty {
+        Type::Nominal(id) | Type::AppliedNominal(id, _) => id.module() == module.module(),
+        Type::Int
+        | Type::Bool
+        | Type::Unit
+        | Type::Tuple(_)
+        | Type::Function(_, _)
+        | Type::Forall(_, _)
+        | Type::Variable(_)
+        | Type::Inference(_) => false,
+    };
+    if !local_interface_owner && !local_nominal_owner {
+        let mut diagnostic = Diagnostic::new(
+            InterfaceReason::ImplOrphan,
+            SourceLabel::new(
+                implementation.argument.span,
+                "this module owns neither the interface nor the outer nominal type",
+            ),
+        );
+        diagnostic.related.push(SourceLabel::new(
+            implementation.interface.origin.primary_span(),
+            "the foreign interface is selected here",
+        ));
+        return Err(TypeError::Interface(Box::new(diagnostic)));
+    }
+
+    for prerequisite in &implementation.prerequisites {
+        if !implementation_prerequisite_terminates(
+            &prerequisite.argument.ty,
+            &implementation.argument.ty,
+            budget,
+        )
+        .map_err(|()| constraint_resource())?
+        {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplPrerequisiteNotDecreasing,
+                SourceLabel::new(
+                    prerequisite.span,
+                    "this generic prerequisite does not strictly decrease",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                implementation.argument.span,
+                "the prerequisite must be a strict subterm of this head",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        }
+    }
+    Ok(())
+}
+
+fn check_implementation_membership(
+    module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    source_index: usize,
+    implementation: &crate::resolved::ResolvedImplementation,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<CheckedImplementation, TypeError> {
+    let interface = checked_interface(
+        module,
+        checked_interfaces,
+        implementation.interface.id,
+        budget,
+    )?
+    .ok_or_else(invalid_state)?;
+    budget
+        .charge(implementation.method_groups.len())
+        .map_err(|()| constraint_resource())?;
+    let mut supplied = HashMap::new();
+    supplied
+        .try_reserve(implementation.method_groups.len())
+        .map_err(|_| constraint_resource())?;
+    for (source_group, group) in implementation.method_groups.iter().enumerate() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        let Some(method) = group
+            .method
+            .filter(|method| method.interface() == interface.id())
+        else {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplExtraMethod,
+                SourceLabel::new(
+                    group.span,
+                    "this method is not declared by the implemented interface",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                interface.span(),
+                "the implemented interface is declared here",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        };
+        if let Some((_, first)) = supplied.insert(method, (source_group, group)) {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplDuplicateMethod,
+                SourceLabel::new(group.span, "this interface method is implemented twice"),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                first.span,
+                "the first method group is here",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        }
+    }
+    for method_index in 0..interface.method_count() {
+        let method = interface.method(method_index).ok_or_else(invalid_state)?;
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        if !supplied.contains_key(&method.id()) {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplMissingMethod,
+                SourceLabel::new(
+                    implementation.span,
+                    "this implementation does not supply every interface method",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                method.span(),
+                "this required method is missing",
+            ));
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        }
+    }
+
+    budget
+        .charge(interface.method_count().saturating_add(1))
+        .map_err(|()| constraint_resource())?;
+    let mut methods = Vec::new();
+    methods
+        .try_reserve(interface.method_count())
+        .map_err(|_| constraint_resource())?;
+    for method_index in 0..interface.method_count() {
+        let method = interface.method(method_index).ok_or_else(invalid_state)?;
+        let (source_group, group) = supplied.get(&method.id()).ok_or_else(invalid_state)?;
+        let identity = group.identity.ok_or_else(invalid_state)?;
+        if identity != crate::interface::ImplMethodId::new(implementation.id, method.id()) {
+            return Err(invalid_state());
+        }
+        methods.push(CheckedImplMethod {
+            source_group: *source_group,
+            id: identity,
+            method: method.id(),
+            binder: group.binder.id,
+        });
+    }
+    Ok(CheckedImplementation {
+        source_index,
+        id: implementation.id,
+        interface: implementation.interface.id,
+        methods: methods.into_boxed_slice(),
+    })
+}
+
+#[derive(Clone, Copy)]
+enum CheckedInterfaceRef<'a> {
+    Local(&'a crate::resolved::ResolvedInterfaceDeclaration),
+    Imported(&'a crate::resolved::CheckedInterfaceFact),
+}
+
+impl<'a> CheckedInterfaceRef<'a> {
+    const fn id(self) -> crate::interface::InterfaceId {
+        match self {
+            Self::Local(interface) => interface.id,
+            Self::Imported(interface) => interface.id,
+        }
+    }
+
+    const fn is_public(self) -> bool {
+        match self {
+            Self::Local(interface) => interface.public,
+            Self::Imported(_) => true,
+        }
+    }
+
+    const fn parameter(self) -> TypeVariableId {
+        match self {
+            Self::Local(interface) => interface.parameter.id,
+            Self::Imported(interface) => interface.parameter.id,
+        }
+    }
+
+    const fn span(self) -> Span {
+        match self {
+            Self::Local(interface) => interface.span,
+            Self::Imported(interface) => interface.span,
+        }
+    }
+
+    fn method_count(self) -> usize {
+        match self {
+            Self::Local(interface) => interface.methods.len(),
+            Self::Imported(interface) => interface.methods.len(),
+        }
+    }
+
+    fn method(self, index: usize) -> Option<CheckedInterfaceMethodRef<'a>> {
+        match self {
+            Self::Local(interface) => interface
+                .methods
+                .get(index)
+                .map(CheckedInterfaceMethodRef::Local),
+            Self::Imported(interface) => interface
+                .methods
+                .get(index)
+                .map(CheckedInterfaceMethodRef::Imported),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CheckedInterfaceMethodRef<'a> {
+    Local(&'a crate::resolved::ResolvedInterfaceMethod),
+    Imported(&'a crate::resolved::CheckedInterfaceMethodFact),
+}
+
+impl<'a> CheckedInterfaceMethodRef<'a> {
+    const fn id(self) -> crate::interface::MethodId {
+        match self {
+            Self::Local(method) => method.id,
+            Self::Imported(method) => method.id,
+        }
+    }
+
+    const fn value_type(self) -> &'a Type {
+        match self {
+            Self::Local(method) => &method.annotation.ty,
+            Self::Imported(method) => &method.value_type,
+        }
+    }
+
+    const fn annotation_span(self) -> Span {
+        match self {
+            Self::Local(method) => method.annotation.span,
+            Self::Imported(method) => method.span,
+        }
+    }
+
+    const fn span(self) -> Span {
+        match self {
+            Self::Local(method) => method.span,
+            Self::Imported(method) => method.span,
+        }
+    }
+}
+
+fn checked_interface<'a>(
+    module: &'a ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    id: crate::interface::InterfaceId,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<Option<CheckedInterfaceRef<'a>>, TypeError> {
+    for checked in checked_interfaces {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        let interface = module
+            .interfaces()
+            .get(checked.source_index)
+            .ok_or_else(invalid_state)?;
+        if interface.id != checked.id {
+            return Err(invalid_state());
+        }
+        if checked.id == id {
+            return Ok(Some(CheckedInterfaceRef::Local(interface)));
+        }
+    }
+    budget.charge(1).map_err(|()| constraint_resource())?;
+    Ok(module
+        .imported_facts()
+        .interface(id)
+        .map(CheckedInterfaceRef::Imported))
+}
+
+fn constraint_resource() -> TypeError {
+    TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
+}
+
+fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
+    match error {
+        SelectionFailure::Reason(reason) => {
+            let Some(span) = span else {
+                return invalid_state();
+            };
+            TypeError::Interface(Box::new(Diagnostic::new(
+                reason,
+                SourceLabel::new(span, selection_reason_message(reason)),
+            )))
+        }
+        SelectionFailure::TypeResource => {
+            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+        }
+        SelectionFailure::ConstraintResource => constraint_resource(),
+        SelectionFailure::InvalidState => invalid_state(),
+    }
+}
+
+fn selected_obligation_error(error: SelectionError) -> TypeError {
+    let SelectionFailure::Reason(reason) = error.failure() else {
+        return selection_failure(error.failure(), error.span());
+    };
+    let Some(span) = error.span() else {
+        return invalid_state();
+    };
+    let mut diagnostic = Diagnostic::new(
+        reason,
+        SourceLabel::new(span, selection_reason_message(reason)),
+    );
+    if let Some(declaration_span) = error.declaration_span() {
+        diagnostic.related.push(SourceLabel::new(
+            declaration_span,
+            "this declaration introduced the interface obligation",
+        ));
+    }
+    if let Some(import_span) = error.import_span() {
+        diagnostic.related.push(SourceLabel::new(
+            import_span,
+            "this import made the declaration available",
+        ));
+    }
+    for cause in error.causes() {
+        let message = match cause.kind() {
+            SelectionCauseKind::Interface => {
+                "this interface declaration participates in the failing selection"
+            }
+            SelectionCauseKind::Implementation => {
+                "selection followed this available implementation"
+            }
+            SelectionCauseKind::ImplementationMethod => {
+                "this implementation method supplies the selected evidence"
+            }
+            SelectionCauseKind::ImplementationImport => {
+                "this import made the selected implementation available"
+            }
+        };
+        diagnostic
+            .related
+            .push(SourceLabel::new(cause.span(), message));
+    }
+    TypeError::Interface(Box::new(diagnostic))
+}
+
+const fn selection_reason_message(reason: InterfaceReason) -> &'static str {
+    match reason {
+        InterfaceReason::Unsatisfied => {
+            "no available implementation satisfies this interface obligation"
+        }
+        InterfaceReason::Ambiguous => "this interface obligation's type is not determined",
+        InterfaceReason::Cycle => {
+            "selecting this interface obligation re-enters an active obligation"
+        }
+        _ => "this interface obligation is invalid",
+    }
+}
+
+fn type_contains_variable(
+    root: &Type,
+    needle: TypeVariableId,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    visit_type_variables(root, budget, |variable, _| Ok(variable == needle))
+}
+
+fn first_variable_absent_from_types(
+    root: &Type,
+    value_types: &[&Type],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<Option<TypeVariableId>, ()> {
+    let mut seen = HashSet::new();
+    let mut absent = None;
+    visit_type_variables(root, budget, |variable, budget| {
+        budget.charge(1)?;
+        if seen.contains(&variable) {
+            return Ok(false);
+        }
+        budget.charge(1)?;
+        seen.try_reserve(1).map_err(|_| ())?;
+        seen.insert(variable);
+        for value_type in value_types {
+            budget.charge(1)?;
+            if type_contains_variable(value_type, variable, budget)? {
+                return Ok(false);
+            }
+        }
+        absent = Some(variable);
+        Ok(true)
+    })?;
+    Ok(absent)
+}
+
+fn visit_type_variables<F>(
+    root: &Type,
+    budget: &mut InterfaceConstraintBudget,
+    mut visit: F,
+) -> Result<bool, ()>
+where
+    F: FnMut(TypeVariableId, &mut InterfaceConstraintBudget) -> Result<bool, ()>,
+{
+    budget.charge(1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push(root);
+    while let Some(ty) = pending.pop() {
+        budget.charge(1)?;
+        match ty {
+            Type::Variable(variable) => {
+                if visit(*variable, budget)? {
+                    return Ok(true);
+                }
+            }
+            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                budget.charge(elements.len())?;
+                pending.try_reserve(elements.len()).map_err(|_| ())?;
+                pending.extend(elements.iter().rev());
+            }
+            Type::Function(domain, codomain) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push(codomain);
+                pending.push(domain);
+            }
+            Type::Forall(parameters, body) => {
+                budget.charge(parameters.len().saturating_add(1))?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push(body);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+        }
+    }
+    Ok(false)
+}
+
+/// Checks every local definition and publishes an immutable dependency summary.
+///
+/// No Core program escapes this phase. A summary is created only after all
+/// bodies have checked against their declared interfaces.
+///
+/// # Errors
+///
+/// Returns the first source typing error or bounded internal elaboration
+/// failure. Failed modules do not produce a [`CheckedModule`].
+pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError> {
+    let mut type_work = TypeWorkBudget::default();
+    let mut coverage_work = UsefulnessBudget::default();
+    let mut constraint_work = InterfaceConstraintBudget::default();
+    check_module_with_budget(
+        resolved,
+        &mut type_work,
+        &mut coverage_work,
+        &mut constraint_work,
+    )
+}
+
+/// Checks one module while sharing type-work accounting across a graph pass.
+pub(crate) fn check_module_with_budget(
+    mut resolved: ResolvedModule,
+    type_work: &mut TypeWorkBudget,
+    coverage_work: &mut UsefulnessBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<CheckedModule, TypeError> {
+    let checked_interfaces = check_interface_declarations(&resolved, constraint_work)?;
+    check_global_requirements(&resolved, &checked_interfaces, constraint_work)?;
+    let checked_implementations = check_implementation_headers_and_membership(
+        &resolved,
+        &checked_interfaces,
+        constraint_work,
+    )?;
+    let mut elaborator =
+        Elaborator::for_module_with_work(&resolved, type_work.clone(), coverage_work.clone())?;
+    let result: Result<_, TypeError> = (|| {
+        let interface_facts = checked_interface_facts(
+            &resolved,
+            &checked_interfaces,
+            &mut elaborator.type_work,
+            constraint_work,
+        )?;
+        let schemes = elaborator.checked_module_schemes(resolved.definitions())?;
+        elaborator.selection = Some(build_evidence_selector(
+            &resolved,
+            &schemes,
+            &interface_facts,
+            &checked_implementations,
+            &mut elaborator.type_work,
+            constraint_work,
+        )?);
+        let implementation_facts = elaborator.check_module_bodies(
+            &resolved,
+            &schemes,
+            &checked_interfaces,
+            &checked_implementations,
+            constraint_work,
+        )?;
+        let selector = elaborator.selection.as_ref().ok_or_else(invalid_state)?;
+        audit_checked_body_evidence(
+            resolved.definitions(),
+            resolved.implementations(),
+            |binder| selector.scheme(binder),
+            |method| selector.method(method).is_some(),
+            constraint_work,
+        )
+        .map_err(|failure| match failure {
+            EvidenceAuditFailure::InvalidState => invalid_state(),
+            EvidenceAuditFailure::ConstraintResource => constraint_resource(),
+        })?;
+        let exports = ExportSummary::freeze(
+            &resolved,
+            &schemes,
+            &interface_facts,
+            &checked_implementations,
+            &implementation_facts,
+            &mut elaborator.type_work,
+            constraint_work,
+        )
+        .map_err(resolved_build_error)?;
+        Ok((
+            schemes,
+            checked_implementations,
+            interface_facts,
+            implementation_facts,
+            exports,
+        ))
+    })();
+    *type_work = std::mem::take(&mut elaborator.type_work);
+    *coverage_work = std::mem::take(&mut elaborator.coverage_work);
+    let (schemes, checked_implementations, interface_facts, implementation_facts, exports) =
+        result?;
+    let imported_implementation_count = resolved.imported_facts().implementations().count();
+    let local_implementation_count = resolved.implementations().len();
+    constraint_work
+        .charge(
+            imported_implementation_count
+                .saturating_add(local_implementation_count)
+                .saturating_add(resolved.definitions().len()),
+        )
+        .map_err(|()| constraint_resource())?;
+    let mut available_implementations = Vec::new();
+    available_implementations
+        .try_reserve(imported_implementation_count.saturating_add(local_implementation_count))
+        .map_err(|_| constraint_resource())?;
+    available_implementations.extend(resolved.imported_facts().implementations().map(|imported| {
+        AvailableImplementation::direct_import(
+            imported.fact.id,
+            imported.direct_dependency,
+            imported.available_at,
+        )
+    }));
+    available_implementations.extend(
+        resolved
+            .implementations()
+            .iter()
+            .map(|implementation| AvailableImplementation::local(implementation.id)),
+    );
+    let CheckedBodyBuffers {
+        mut definitions,
+        mut implementations,
+    } = reserve_checked_body_buffers(
+        resolved.definitions().len(),
+        resolved.implementations().len(),
+    )?;
+    definitions.extend(
+        resolved
+            .take_definitions()
+            .into_vec()
+            .into_iter()
+            .map(CheckedDefinition::new),
+    );
+    implementations.extend(
+        resolved
+            .take_implementations()
+            .into_vec()
+            .into_iter()
+            .map(CheckedImplementationBody::new),
+    );
+    Ok(CheckedModule::new(
+        resolved,
+        CheckedModuleParts {
+            definitions: definitions.into_boxed_slice(),
+            implementations: implementations.into_boxed_slice(),
+            available_implementations: available_implementations.into_boxed_slice(),
+            schemes,
+            checked_interfaces,
+            checked_implementations,
+            interface_facts,
+            implementation_facts,
+            exports,
+        },
+    ))
+}
+
+fn build_evidence_selector(
+    resolved: &ResolvedModule,
+    schemes: &[CheckedGlobalScheme],
+    interface_facts: &[CheckedInterfaceFact],
+    checked_implementations: &[CheckedImplementation],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<EvidenceSelector, TypeError> {
+    let mut selector = EvidenceSelector::new();
+    for imported in resolved.imported_facts().interface_imports() {
+        selector
+            .add_imported_interface_fact(&imported.fact, constraint_work, type_work)
+            .map_err(|failure| selection_failure(failure, None))?;
+    }
+    for interface in interface_facts {
+        selector
+            .add_interface_fact(interface, constraint_work, type_work)
+            .map_err(|failure| selection_failure(failure, None))?;
+    }
+    for scheme in resolved.imported_facts().globals() {
+        selector
+            .add_imported_scheme(scheme, constraint_work, type_work)
+            .map_err(|failure| selection_failure(failure, None))?;
+    }
+    for scheme in schemes {
+        selector
+            .add_scheme(scheme, constraint_work, type_work)
+            .map_err(|failure| selection_failure(failure, None))?;
+    }
+    for imported in resolved.imported_facts().implementations() {
+        selector
+            .add_implementation_fact(imported, constraint_work, type_work)
+            .map_err(|failure| selection_failure(failure, None))?;
+    }
+    for checked in checked_implementations {
+        let implementation = resolved
+            .implementations()
+            .get(checked.source_index)
+            .ok_or_else(invalid_state)?;
+        selector
+            .add_local_implementation(implementation, checked, constraint_work, type_work)
+            .map_err(|failure| selection_failure(failure, None))?;
+    }
+    Ok(selector)
+}
+
+fn checked_interface_facts(
+    resolved: &ResolvedModule,
+    checked: &[CheckedInterface],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<Box<[CheckedInterfaceFact]>, TypeError> {
+    constraint_work
+        .charge(checked.len())
+        .map_err(|()| constraint_resource())?;
+    let mut facts = Vec::new();
+    facts
+        .try_reserve(checked.len())
+        .map_err(|_| constraint_resource())?;
+    for token in checked {
+        let interface = resolved
+            .interfaces()
+            .get(token.source_index)
+            .ok_or_else(invalid_state)?;
+        if interface.id != token.id {
+            return Err(invalid_state());
+        }
+        constraint_work
+            .charge(interface.methods.len().saturating_add(1))
+            .map_err(|()| constraint_resource())?;
+        let mut methods = Vec::new();
+        methods
+            .try_reserve(interface.methods.len())
+            .map_err(|_| constraint_resource())?;
+        for method in &interface.methods {
+            constraint_work
+                .charge_type(&method.annotation.ty)
+                .map_err(|()| constraint_resource())?;
+            methods.push(CheckedInterfaceMethodFact {
+                id: method.id,
+                spelling: method.spelling.clone(),
+                value_type: clone_type_with_budget(&method.annotation.ty, type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+                origin: method.origin.clone(),
+                span: method.span,
+            });
+        }
+        facts.push(CheckedInterfaceFact {
+            id: interface.id,
+            spelling: interface.spelling.clone(),
+            parameter: interface.parameter.clone(),
+            methods: methods.into_boxed_slice(),
+            origin: interface.origin.clone(),
+            span: interface.span,
+        });
+    }
+    Ok(facts.into_boxed_slice())
+}
+
+/// Assembles dependency-ordered checked modules for one final Core lowering.
+///
+/// # Errors
+///
+/// Returns an internal failure for duplicate module identities, modules outside
+/// the selected entry's complete dependency closure, misordered dependencies,
+/// a missing or malformed checked entry `main`, or conflicting full-registry
+/// identities.
+pub fn link_modules(
+    modules: Vec<CheckedModule>,
+    entry: crate::module::ModuleId,
+) -> Result<ResolvedModuleProgram, TypeError> {
+    link_modules_with_budget(modules, entry, &mut InterfaceConstraintBudget::default())
+}
+
+/// Links one checked graph while preserving its graph-wide constraint accounting.
+pub(crate) fn link_modules_with_budget(
+    modules: Vec<CheckedModule>,
+    entry: crate::module::ModuleId,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<ResolvedModuleProgram, TypeError> {
+    constraint_work
+        .charge(modules.len())
+        .map_err(|()| constraint_resource())?;
+    let entry_module = modules
+        .iter()
+        .find(|module| module.module() == entry)
+        .ok_or_else(invalid_state)?;
+    constraint_work
+        .charge(entry_module.schemes().len())
+        .map_err(|()| constraint_resource())?;
+    let main = entry_module
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "main")
+        .ok_or_else(invalid_state)?;
+    let Type::Function(domain, _) = &main.scheme.value_type else {
+        return Err(invalid_state());
+    };
+    if !main.scheme.type_parameters.is_empty()
+        || !main.scheme.requirements.is_empty()
+        || !matches!(domain.as_ref(), Type::Unit)
+    {
+        return Err(invalid_state());
+    }
+    let retained = modules.iter().try_fold(modules.len(), |total, module| {
+        total
+            .checked_add(module.direct_dependencies().len())
+            .and_then(|total| total.checked_add(module.interface_facts().len()))
+            .and_then(|total| total.checked_add(module.implementation_facts().len()))
+            .and_then(|total| total.checked_add(module.available_implementations().len()))
+            .and_then(|total| total.checked_add(module.schemes().len()))
+    });
+    constraint_work
+        .charge(retained.ok_or_else(constraint_resource)?)
+        .map_err(|()| constraint_resource())?;
+    let mut module_positions = HashMap::new();
+    module_positions
+        .try_reserve(modules.len())
+        .map_err(|_| constraint_resource())?;
+    for (index, module) in modules.iter().enumerate() {
+        if module_positions.insert(module.module(), index).is_some() {
+            return Err(invalid_state());
+        }
+    }
+    for (index, module) in modules.iter().enumerate() {
+        if module.direct_dependencies().iter().any(|dependency| {
+            module_positions
+                .get(&dependency.target())
+                .is_none_or(|dependency_index| *dependency_index >= index)
+        }) {
+            return Err(invalid_state());
+        }
+    }
+    let entry_index = *module_positions.get(&entry).ok_or_else(invalid_state)?;
+    let mut reachable = Vec::new();
+    reachable
+        .try_reserve(modules.len())
+        .map_err(|_| constraint_resource())?;
+    reachable.resize(modules.len(), false);
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(modules.len())
+        .map_err(|_| constraint_resource())?;
+    reachable[entry_index] = true;
+    pending.push(entry_index);
+    while let Some(index) = pending.pop() {
+        let module = modules.get(index).ok_or_else(invalid_state)?;
+        for dependency in module.direct_dependencies() {
+            let dependency_index = *module_positions
+                .get(&dependency.target())
+                .ok_or_else(invalid_state)?;
+            if !reachable[dependency_index] {
+                reachable[dependency_index] = true;
+                pending.push(dependency_index);
+            }
+        }
+    }
+    if reachable.iter().any(|reached| !reached) {
+        return Err(invalid_state());
+    }
+    let span = main.origin.primary_span();
+    let result = ResolvedExpr {
+        kind: ResolvedExprKind::Apply(crate::resolved::ResolvedApplicationExpr {
+            function: Box::new(ResolvedExpr {
+                kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
+                    term: crate::resolved::ResolvedTermName::Global(main.binder),
+                    spelling: main.spelling.clone(),
+                    origin: main.origin.clone(),
+                    import_span: None,
+                    evidence: Box::new([]),
+                }),
+                span,
+            }),
+            argument: Box::new(ResolvedExpr {
+                kind: ResolvedExprKind::Unit,
+                span,
+            }),
+        }),
+        span,
+    };
+    let mut budget = TypeWorkBudget::default();
+    let registry = Arc::new(
+        ResolvedRegistry::combine_checked(&modules, &mut budget).map_err(resolved_build_error)?,
+    );
+    let mut groups = Vec::new();
+    groups
+        .try_reserve(modules.len())
+        .map_err(|_| constraint_resource())?;
+    groups.extend(modules.into_iter().map(CheckedModule::into_group));
+    Ok(ResolvedModuleProgram::new(
+        registry,
+        groups.into_boxed_slice(),
+        entry,
+        result,
+    ))
 }
 
 impl Default for Elaborator {
@@ -3471,9 +7147,15 @@ enum ElaborationTask<'a> {
         left: TypedNode,
         right_span: Span,
     },
+    BeginBinding {
+        binding: &'a ResolvedBinding,
+        expected: Option<ProvenancedType>,
+        finish_expected: Option<ProvenancedType>,
+    },
     FinishBinding {
         binding: &'a ResolvedBinding,
         expected: Option<ProvenancedType>,
+        evidence_marker: Option<usize>,
     },
     CheckRecursiveMember(&'a crate::resolved::ResolvedRecursiveMember),
     BeginRecursiveGroup(&'a ResolvedRecursiveGroup),
@@ -3492,7 +7174,6 @@ struct MatchProgress<'a> {
     scrutinee: TypedNode,
     next_arm: usize,
     matrix: Vec<Vec<CorePattern>>,
-    coverage_budget: UsefulnessBudget,
     arm_bodies: Vec<(NodeId, Span)>,
     result_type: Option<(Type, TypeProvenance, CheckKind)>,
 }
@@ -3546,6 +7227,13 @@ struct CheckedPattern {
 struct ElaboratedBinding {
     binder: TypedBinder,
     initializer: NodeId,
+}
+
+struct PreparedGlobals {
+    context: TypeContext,
+    globals: Vec<ElaboratedBinding>,
+    binders: HashMap<BinderId, TypedBinder>,
+    quantifiers: HashMap<BinderId, Box<[TypeVariableId]>>,
 }
 
 enum ElaboratedDeclaration {
@@ -3647,25 +7335,11 @@ fn schedule_block<'a>(
                     })
                     .transpose()
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                tasks.push(ElaborationTask::FinishBinding {
+                tasks.push(ElaborationTask::BeginBinding {
                     binding,
-                    expected: finish_expected,
+                    expected,
+                    finish_expected,
                 });
-                match (expected, binding.annotation.as_ref()) {
-                    (Some(expected), Some(annotation)) => tasks.push(ElaborationTask::Check {
-                        expression: &binding.initializer,
-                        expected,
-                        kind: CheckKind::BindingInitializer {
-                            initializer_span: binding.initializer.span,
-                            annotation_span: annotation.span,
-                        },
-                    }),
-                    (None, None) => tasks.push(ElaborationTask::Synthesize {
-                        expression: &binding.initializer,
-                        cause: Some(SynthesisCause::Binding(binding.span)),
-                    }),
-                    _ => return Err(invalid_state()),
-                }
             }
             ResolvedLocalDeclaration::Recursive(group) => {
                 tasks.push(ElaborationTask::BeginRecursiveGroup(group));
@@ -3829,7 +7503,7 @@ fn not_applicable(
 
 fn equation_interface_not_function(
     annotation: &ResolvedType,
-    equation_name: &crate::resolved::ResolvedOccurrence,
+    equation_name: &crate::resolved::ResolvedEquationHead,
     registry: &ResolvedRegistry,
 ) -> TypeError {
     let found = registry.display_source_type(&annotation.ty);
@@ -3870,6 +7544,16 @@ fn schedule_left<'a>(
 
 fn invalid_state() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
+}
+
+fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
+    match error {
+        ResolvedBuildFailure::InvalidState => invalid_state(),
+        ResolvedBuildFailure::TypeResource => {
+            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+        }
+        ResolvedBuildFailure::ConstraintResource => constraint_resource(),
+    }
 }
 
 fn pattern_mismatch(span: Span, expected: &Type, registry: &ResolvedRegistry) -> TypeError {
@@ -3995,7 +7679,11 @@ fn validate_guarded_payload(
         return Ok(());
     }
     match &expression.kind {
-        ResolvedExprKind::Occurrence(occurrence) if recursive.contains(&occurrence.binder) => {
+        ResolvedExprKind::Occurrence(occurrence)
+            if occurrence
+                .global_binder()
+                .is_some_and(|binder| recursive.contains(&binder)) =>
+        {
             Ok(())
         }
         ResolvedExprKind::Tuple(elements) => {
@@ -4024,7 +7712,11 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
     let mut work = vec![expression];
     while let Some(expression) = work.pop() {
         match &expression.kind {
-            ResolvedExprKind::Occurrence(occurrence) if recursive.contains(&occurrence.binder) => {
+            ResolvedExprKind::Occurrence(occurrence)
+                if occurrence
+                    .global_binder()
+                    .is_some_and(|binder| recursive.contains(&binder)) =>
+            {
                 return true;
             }
             ResolvedExprKind::Apply(application) => {
@@ -4147,6 +7839,29 @@ fn equational_origin(
             definition_span,
             equational.interface.span,
             equational.interface.annotation.span,
+        ]
+        .into_iter()
+        .chain(first.map(|equation| equation.body.span))
+        .collect(),
+    }
+}
+
+fn implementation_method_origin(
+    implementation: &crate::resolved::ResolvedImplementation,
+    group: &crate::resolved::ResolvedImplementationMethodGroup,
+    method_span: Span,
+    annotation_span: Span,
+) -> Origin {
+    let first = group.equations.first();
+    Origin::Related {
+        primary: Box::new(Origin::Source(
+            first.map_or(group.span, |equation| equation.span),
+        )),
+        related: [
+            implementation.span,
+            group.span,
+            method_span,
+            annotation_span,
         ]
         .into_iter()
         .chain(first.map(|equation| equation.body.span))
@@ -4654,32 +8369,72 @@ fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError
     )))
 }
 
-fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
+fn resolved_module_binders(module: &ResolvedModule) -> Vec<BinderId> {
     let mut binders = Vec::new();
-    let mut expressions = vec![&program.result];
-    for definition in &program.definitions {
-        match &definition.kind {
-            ResolvedDefinitionKind::Equational(equational) => {
-                binders.push(equational.interface.name.id);
-                for equation in &equational.equations {
-                    for pattern in &equation.patterns {
-                        collect_pattern_binders(pattern, &mut binders);
-                    }
-                    expressions.push(&equation.body);
+    let mut expressions = Vec::new();
+    collect_definition_binders(module.definitions(), &mut binders, &mut expressions);
+    collect_implementation_binders(module.implementations(), &mut binders, &mut expressions);
+    collect_expression_binders(&mut binders, expressions);
+    binders
+}
+
+fn collect_implementation_binders<'a>(
+    implementations: &'a [crate::resolved::ResolvedImplementation],
+    binders: &mut Vec<BinderId>,
+    expressions: &mut Vec<&'a ResolvedExpr>,
+) {
+    for implementation in implementations {
+        for group in &implementation.method_groups {
+            binders.push(group.binder.id);
+            for equation in &group.equations {
+                for pattern in &equation.patterns {
+                    collect_pattern_binders(pattern, binders);
                 }
-            }
-            ResolvedDefinitionKind::InlineOperational(operational) => {
-                binders.push(operational.header.name.id);
-                for parameter in &operational.header.parameters {
-                    collect_pattern_binders(&parameter.pattern, &mut binders);
-                }
-                expressions.push(&operational.body.result);
-                for declaration in &operational.body.declarations {
-                    collect_resolved_declaration(declaration, &mut binders, &mut expressions);
-                }
+                expressions.push(&equation.body);
             }
         }
     }
+}
+
+fn collect_definition_binders<'a>(
+    definitions: &'a [crate::resolved::ResolvedDefinition],
+    binders: &mut Vec<BinderId>,
+    expressions: &mut Vec<&'a ResolvedExpr>,
+) {
+    for definition in definitions {
+        collect_definition_kind_binders(&definition.kind, binders, expressions);
+    }
+}
+
+fn collect_definition_kind_binders<'a>(
+    kind: &'a ResolvedDefinitionKind,
+    binders: &mut Vec<BinderId>,
+    expressions: &mut Vec<&'a ResolvedExpr>,
+) {
+    match kind {
+        ResolvedDefinitionKind::Equational(equational) => {
+            binders.push(equational.interface.name.id);
+            for equation in &equational.equations {
+                for pattern in &equation.patterns {
+                    collect_pattern_binders(pattern, binders);
+                }
+                expressions.push(&equation.body);
+            }
+        }
+        ResolvedDefinitionKind::InlineOperational(operational) => {
+            binders.push(operational.header.name.id);
+            for parameter in &operational.header.parameters {
+                collect_pattern_binders(&parameter.pattern, binders);
+            }
+            expressions.push(&operational.body.result);
+            for declaration in &operational.body.declarations {
+                collect_resolved_declaration(declaration, binders, expressions);
+            }
+        }
+    }
+}
+
+fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<&ResolvedExpr>) {
     while let Some(expression) = expressions.pop() {
         match &expression.kind {
             ResolvedExprKind::Apply(application) => {
@@ -4695,21 +8450,21 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
             ResolvedExprKind::Block(block) => {
                 expressions.push(&block.result);
                 for declaration in &block.declarations {
-                    collect_resolved_declaration(declaration, &mut binders, &mut expressions);
+                    collect_resolved_declaration(declaration, binders, &mut expressions);
                 }
             }
             ResolvedExprKind::Function(function) => {
-                collect_pattern_binders(&function.pattern, &mut binders);
+                collect_pattern_binders(&function.pattern, binders);
                 expressions.push(&function.body.result);
                 for declaration in &function.body.declarations {
-                    collect_resolved_declaration(declaration, &mut binders, &mut expressions);
+                    collect_resolved_declaration(declaration, binders, &mut expressions);
                 }
             }
             ResolvedExprKind::Tuple(elements) => expressions.extend(elements),
             ResolvedExprKind::Match(match_expression) => {
                 expressions.push(&match_expression.scrutinee);
                 for arm in &match_expression.arms {
-                    collect_pattern_binders(&arm.pattern, &mut binders);
+                    collect_pattern_binders(&arm.pattern, binders);
                     expressions.push(&arm.body);
                 }
             }
@@ -4720,7 +8475,6 @@ fn resolved_binders(program: &ResolvedProgram) -> Vec<BinderId> {
             | ResolvedExprKind::Constructor(_) => {}
         }
     }
-    binders
 }
 
 fn collect_resolved_declaration<'a>(
@@ -4765,13 +8519,204 @@ fn collect_pattern_binders(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
     use super::*;
     use crate::{
-        lexer::lex,
-        parser::{parse, project},
-        resolve::resolve,
+        module::{ModuleId, ModuleRoots, load_module_graph},
+        resolve::resolve_module,
+        resolved::{
+            ImportedFacts, ResolvedExportCandidate, ResolvedInterfaceDeclaration,
+            ResolvedInterfaceMethod, ResolvedModuleParts, ResolvedTypeVariable,
+        },
         source::{ByteRange, SourceFile},
     };
+
+    static MODULE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    struct ModuleFixtureFile(PathBuf);
+
+    impl ModuleFixtureFile {
+        fn write(display_path: &str, text: &str) -> Self {
+            let id = MODULE_FIXTURE_IDS.fetch_add(1, Ordering::Relaxed);
+            let label = Path::new(display_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("fixture.ash");
+            let path = std::env::temp_dir()
+                .join(format!("ash-elaborate-{}-{id}-{label}", std::process::id(),));
+            fs::write(&path, text).expect("the module fixture should be writable");
+            Self(path)
+        }
+    }
+
+    impl Drop for ModuleFixtureFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    fn resolved_module_fixture(
+        display_path: &str,
+        declarations: &str,
+        result_type: &str,
+        result: &str,
+    ) -> ResolvedModule {
+        let separator = if !declarations.is_empty() && !declarations.ends_with('\n') {
+            "\n"
+        } else {
+            ""
+        };
+        let text =
+            format!("{declarations}{separator}main : Unit -> {result_type}\nmain () = {result}\n");
+        let file = ModuleFixtureFile::write(display_path, &text);
+        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
+            .expect("the module fixture should load");
+        let loaded = graph
+            .module(graph.entry())
+            .expect("the module fixture should retain its entry");
+        assert!(loaded.dependencies().is_empty());
+        let resolved = resolve_module(loaded, &[]).expect("the module fixture should resolve");
+        let wrapper = resolved
+            .definitions()
+            .last()
+            .expect("the module fixture should retain its result wrapper");
+        let ResolvedDefinitionKind::Equational(wrapper) = &wrapper.kind else {
+            panic!("the module fixture result should be equational");
+        };
+        assert_eq!(wrapper.interface.name.spelling, "main");
+        assert_eq!(wrapper.equations.len(), 1);
+        resolved
+    }
+
+    fn fixture_result(module: &ResolvedModule) -> &ResolvedExpr {
+        let wrapper = module
+            .definitions()
+            .last()
+            .expect("the module fixture should retain its result wrapper");
+        let ResolvedDefinitionKind::Equational(wrapper) = &wrapper.kind else {
+            panic!("the module fixture result should be equational");
+        };
+        &wrapper
+            .equations
+            .first()
+            .expect("the module fixture should retain one result body")
+            .body
+    }
+
+    #[test]
+    fn checked_body_buffers_reserve_before_owning_resolved_bodies() {
+        let resolved = resolved_module_fixture(
+            "checked-body-reservation.ash",
+            "interface Keep<A> {\nkeep : A -> A\n}\n\nimpl Keep<Int> {\nkeep value = value\n}\n",
+            "Unit",
+            "()",
+        );
+
+        let failure = reserve_checked_body_buffers(resolved.definitions().len(), usize::MAX)
+            .expect_err("an impossible implementation capacity should fail before body transfer");
+
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
+        );
+        assert!(!resolved.definitions().is_empty());
+        assert!(!resolved.implementations().is_empty());
+    }
+
+    #[test]
+    fn final_module_lowering_boundary_accepts_validated_checked_groups() {
+        type CheckedLoweringBoundary =
+            fn(
+                &mut Elaborator,
+                &ResolvedModuleGroup,
+                TypeContext,
+            ) -> Result<(Vec<ElaboratedBinding>, TypeContext), TypeError>;
+
+        let boundary: CheckedLoweringBoundary = Elaborator::elaborate_checked_module_group;
+
+        let _ = boundary;
+    }
+
+    #[test]
+    fn module_binder_collection_includes_impl_groups_patterns_and_nested_bodies() {
+        let resolved = resolved_module_fixture(
+            "impl-binder-collection.ash",
+            "interface Convert<A> {\nconvert : A -> A\n}\n\nimpl Convert<Int> {\nconvert value = {\nlet saved = value\nsaved\n}\n}\n",
+            "Unit",
+            "()",
+        );
+        let group = &resolved.implementations()[0].method_groups[0];
+        let ResolvedPatternKind::Binder(parameter) = &group.equations[0].patterns[0].kind else {
+            panic!("the impl equation should retain its parameter binder");
+        };
+        let ResolvedExprKind::Block(body) = &group.equations[0].body.kind else {
+            panic!("the impl equation should retain its block body");
+        };
+        let ResolvedLocalDeclaration::Binding(binding) = &body.declarations[0] else {
+            panic!("the impl body should retain its nested binding");
+        };
+        let ResolvedPatternKind::Binder(nested) = &binding.pattern.kind else {
+            panic!("the nested binding should retain its binder");
+        };
+
+        let binders = resolved_module_binders(&resolved);
+
+        assert!(binders.contains(&group.binder.id));
+        assert!(binders.contains(&parameter.id));
+        assert!(binders.contains(&nested.id));
+    }
+
+    #[test]
+    fn program_elaborator_reserves_hidden_impl_binders() {
+        let resolved = resolved_module_fixture(
+            "impl-program-reservation.ash",
+            "interface Convert<A> {\nconvert : A -> A\n}\n\nimpl Convert<Int> {\nconvert value = value\n}\n",
+            "Unit",
+            "()",
+        );
+        let module = resolved.module();
+        let hidden = resolved.implementations()[0].method_groups[0].binder.id;
+        let checked = check_module(resolved).expect("Task 3 ignores impl bodies while checking");
+        let program = link_modules(vec![checked], module)
+            .expect("the checked fixture should link into one module program");
+        let program = crate::evidence_validation::validate_interface_evidence(program)
+            .expect("the linked fixture evidence should validate");
+        let origin = Origin::Source(program.groups()[0].span());
+        let mut elaborator = Elaborator::for_module_program(&program)
+            .expect("the complete resolved namespace should reserve");
+
+        elaborator
+            .builder
+            .resolved_binder(hidden, Type::Unit, origin)
+            .expect("the hidden impl binder should be reserved before lowering");
+    }
+
+    #[test]
+    fn final_elaborator_requires_the_authorized_module_program_root() {
+        let resolved = resolved_module_fixture("final-root-authorization.ash", "", "Unit", "()");
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("the fixture module should check");
+        let program = link_modules(vec![checked], module)
+            .expect("the checked fixture should link into one module program");
+        let program = crate::evidence_validation::validate_interface_evidence(program)
+            .expect("the linked fixture evidence should validate");
+        let mut elaborator = Elaborator::for_module_program(&program)
+            .expect("the complete resolved namespace should reserve");
+        let unrelated = elaborator
+            .builder
+            .unit(Type::Unit, Origin::Source(program.groups()[0].span()))
+            .expect("the adversarial root should allocate");
+
+        assert!(matches!(
+            elaborator.finish(unrelated),
+            Err(ElaborationFailure::InvalidState)
+        ));
+    }
 
     fn nested_function_type(depth: usize) -> Type {
         let mut ty = Type::Unit;
@@ -4843,6 +8788,365 @@ mod tests {
         assert_eq!(zonked, source);
         assert!(!unresolved);
         assert_eq!(exact_remaining, 0);
+    }
+
+    #[test]
+    fn one_coverage_budget_spans_all_checked_modules() {
+        let first = resolved_module_fixture("first.ash", "", "Unit", "()");
+        let second = resolved_module_fixture("second.ash", "", "Unit", "()");
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::with_limit(20);
+        let mut constraint_work = InterfaceConstraintBudget::default();
+
+        check_module_with_budget(
+            first,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect("the first module should fit the shared coverage budget");
+        let failure = check_module_with_budget(
+            second,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect_err("the second module should exhaust cumulative coverage work");
+
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted)
+        );
+    }
+
+    #[test]
+    fn one_coverage_budget_spans_local_binding_irrefutability() {
+        let body = "{\nlet (left, right) = ((), ())\n()\n}";
+        let first = resolved_module_fixture("first.ash", "", "Unit", body);
+        let second = resolved_module_fixture("second.ash", "", "Unit", body);
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::with_limit(40);
+        let mut constraint_work = InterfaceConstraintBudget::default();
+
+        check_module_with_budget(
+            first,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect("the first local binding should fit the shared coverage budget");
+        let failure = check_module_with_budget(
+            second,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect_err("the second local binding should exhaust cumulative coverage work");
+
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted)
+        );
+    }
+
+    #[test]
+    fn one_type_budget_spans_all_checked_modules() {
+        let first = resolved_module_fixture("first.ash", "", "Unit", "()");
+        let second = resolved_module_fixture("second.ash", "", "Unit", "()");
+        let mut type_work = TypeWorkBudget::with_limit(60);
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut constraint_work = InterfaceConstraintBudget::default();
+
+        check_module_with_budget(
+            first,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect("the first module should fit the shared type budget");
+        let failure = check_module_with_budget(
+            second,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect_err("the second module should exhaust cumulative type work");
+
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+        );
+    }
+
+    #[test]
+    fn one_constraint_budget_spans_all_checked_modules() {
+        let interface = "interface Marker<A> {\nmarker : A -> Bool\n}\n";
+        let short_module = resolved_module_fixture("short-constraint.ash", interface, "Unit", "()");
+        let first = resolved_module_fixture("first-constraint.ash", interface, "Unit", "()");
+        let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut short = InterfaceConstraintBudget::with_limit(36);
+
+        let failure =
+            check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
+                .expect_err("one missing unit should reject one interface");
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
+        );
+        assert_eq!(short.used(), 36);
+
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(37);
+
+        check_module_with_budget(
+            first,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect("one interface should fit the exact constraint budget");
+        assert_eq!(constraint_work.used(), 37);
+        assert_eq!(constraint_work.charge(1), Err(()));
+        let failure = check_module_with_budget(
+            second,
+            &mut type_work,
+            &mut coverage_work,
+            &mut constraint_work,
+        )
+        .expect_err("the second module should exhaust cumulative constraint work");
+
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
+        );
+    }
+
+    #[test]
+    fn impl_method_substitution_uses_the_exact_constraint_budget() {
+        let declarations = concat!(
+            "interface Keep<A> {\nkeep : A -> A\n}\n\n",
+            "impl Keep<Int> {\nkeep value = value\n}\n",
+        );
+        let short_module = resolved_module_fixture(
+            "short-impl-method-constraint.ash",
+            declarations,
+            "Unit",
+            "()",
+        );
+        let exact_module =
+            resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut short = InterfaceConstraintBudget::with_limit(76);
+
+        let failure =
+            check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
+                .expect_err("one missing unit should reject the method substitution");
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
+        );
+
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut exact = InterfaceConstraintBudget::with_limit(77);
+        check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
+            .expect("the exact budget should admit one implementation method");
+
+        assert_eq!(exact.used(), 77);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn invalid_outer_method_shape_has_an_exact_stack_safe_constraint_boundary() {
+        std::thread::Builder::new()
+            .name("interface-method-shape-boundary".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 10_000;
+                let source = SourceFile::new(
+                    "deep-interface-method.ash",
+                    "interface Deep<A> {\ndeep : A\n}\n",
+                )
+                .expect("the interface fixture should fit");
+                let span = source
+                    .span(
+                        ByteRange::new(
+                            0,
+                            u32::try_from(source.text().len())
+                                .expect("the fixture length should fit"),
+                        )
+                        .expect("the span is ordered"),
+                    )
+                    .expect("the span should belong to the fixture");
+                let module_id = ModuleId::new(1);
+                let interface_id = InterfaceId::new(module_id, 0);
+                let parameter_id = TypeVariableId::resolved(module_id, 0);
+                let mut nested_tail = Type::Function(Box::new(Type::Unit), Box::new(Type::Bool));
+                for _ in 0..DEPTH {
+                    nested_tail = Type::Tuple(vec![Type::Unit, nested_tail].into_boxed_slice());
+                }
+                let method_type =
+                    Type::Tuple(vec![Type::Variable(parameter_id), nested_tail].into_boxed_slice());
+                let module = ResolvedModule::new(ResolvedModuleParts {
+                    module: module_id,
+                    registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+                    imported: ImportedFacts::default(),
+                    direct_dependencies: Vec::new(),
+                    declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
+                    interfaces: vec![ResolvedInterfaceDeclaration {
+                        id: interface_id,
+                        public: false,
+                        spelling: "Deep".to_owned(),
+                        parameter: ResolvedTypeVariable {
+                            id: parameter_id,
+                            spelling: "A".to_owned(),
+                            origin: Origin::Source(span),
+                        },
+                        methods: vec![ResolvedInterfaceMethod {
+                            id: MethodId::new(interface_id, 0),
+                            spelling: "deep".to_owned(),
+                            annotation: ResolvedType {
+                                ty: method_type,
+                                provenance: ResolvedTypeProvenance::new(
+                                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                    0,
+                                ),
+                                origin: Origin::Source(span),
+                                span,
+                            },
+                            type_parameters: Box::new([]),
+                            origin: Origin::Source(span),
+                            span,
+                        }]
+                        .into_boxed_slice(),
+                        origin: Origin::Source(span),
+                        span,
+                    }],
+                    implementations: Vec::new(),
+                    definitions: Vec::new(),
+                    export_candidate: ResolvedExportCandidate::default(),
+                    span,
+                });
+
+                let mut short = InterfaceConstraintBudget::with_limit(7);
+                assert_eq!(
+                    check_interface_declarations(&module, &mut short),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::ConstraintResourceExhausted
+                    ))
+                );
+                assert_eq!(short.used(), 7);
+
+                let mut exact = InterfaceConstraintBudget::with_limit(8);
+                let error = check_interface_declarations(&module, &mut exact)
+                    .expect_err("the exact budget should reach the source diagnostic");
+                let TypeError::Interface(diagnostic) = error else {
+                    panic!("the invalid outer method shape should use an interface diagnostic");
+                };
+                assert_eq!(diagnostic.reason, InterfaceReason::MethodNotFunction);
+                assert_eq!(exact.used(), 8);
+                assert_eq!(exact.charge(1), Err(()));
+                drop(module);
+            })
+            .expect("the small-stack method-shape thread should start")
+            .join()
+            .expect("method-shape rejection and destruction must fit the small stack");
+    }
+
+    #[test]
+    fn imported_overlap_uses_retained_route_order_and_exact_budget() {
+        let source = SourceFile::new("import-overlap.ash", "abcdefghijklmnop")
+            .expect("the overlap span fixture should fit");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the span should be ordered"))
+                .expect("the span should belong to the fixture")
+        };
+        let first_definition = span(0, 2);
+        let first_route = span(3, 5);
+        let second_definition = span(6, 8);
+        let second_route = span(9, 11);
+        let interface = crate::interface::InterfaceId::new(ModuleId::new(40), 0);
+        let first = crate::resolved::ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: crate::interface::ImplId::new(ModuleId::new(90), 0),
+                interface,
+                head_parameters: Box::new([]),
+                argument: Type::Int,
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(first_definition),
+                span: first_definition,
+            },
+            direct_dependency: ModuleId::new(90),
+            available_at: first_route,
+        };
+        let second = crate::resolved::ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: crate::interface::ImplId::new(ModuleId::new(10), 0),
+                interface,
+                head_parameters: Box::new([]),
+                argument: Type::Int,
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(second_definition),
+                span: second_definition,
+            },
+            direct_dependency: ModuleId::new(10),
+            available_at: second_route,
+        };
+        let effective = [
+            ImplementationHeadRef::Imported(&first),
+            ImplementationHeadRef::Imported(&second),
+        ];
+
+        let mut short = InterfaceConstraintBudget::with_limit(6);
+        assert_eq!(
+            check_effective_implementation_heads(&effective, &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+
+        let mut exact = InterfaceConstraintBudget::with_limit(7);
+        let error = check_effective_implementation_heads(&effective, &mut exact)
+            .expect_err("the later retained route should expose the overlap");
+        let TypeError::Interface(diagnostic) = error else {
+            panic!("the overlap should use an interface diagnostic");
+        };
+        assert_eq!(diagnostic.primary.span(), second_route);
+        assert_eq!(
+            diagnostic
+                .related
+                .iter()
+                .map(SourceLabel::span)
+                .collect::<Vec<_>>(),
+            vec![first_definition, first_route, second_definition]
+        );
+        assert_eq!(exact.used(), 7);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn impl_head_replacement_storage_drops_iteratively_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut head = Type::Int;
+                for _ in 0..10_000 {
+                    head = Type::Function(Box::new(Type::Unit), Box::new(head));
+                }
+                let mut replacements = TypeReplacementBuffer(HashMap::new());
+                replacements.0.insert(TypeVariableId::generated(0), head);
+                drop(replacements);
+            })
+            .expect("the small-stack replacement drop thread should start")
+            .join()
+            .expect("the replacement buffer should dismantle the deep head iteratively");
     }
 
     #[test]
@@ -4918,14 +9222,10 @@ mod tests {
 
     #[test]
     fn ordinary_tuple_type_wrapper_requires_one_preallocated_unit() {
-        let source = SourceFile::new("ordinary-tuple-budget.ash", "(1, 2)\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved =
+            resolved_module_fixture("ordinary-tuple-budget.ash", "", "(Int, Int)", "(1, 2)");
 
-        let mut short =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         short
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 3)
@@ -4933,7 +9233,7 @@ mod tests {
         assert_eq!(
             short.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
+                    expression: fixture_result(&resolved),
                     cause: None,
                 },
                 &mut TypeContext::new(),
@@ -4943,8 +9243,7 @@ mod tests {
             ))
         );
 
-        let mut exact =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         exact
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 4)
@@ -4952,7 +9251,7 @@ mod tests {
         let typed = exact
             .elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
+                    expression: fixture_result(&resolved),
                     cause: None,
                 },
                 &mut TypeContext::new(),
@@ -4968,17 +9267,14 @@ mod tests {
     #[test]
     fn inferred_anonymous_function_type_precharges_three_cells_before_inference_origins() {
         const EXACT_WORK: usize = 26;
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "inferred-anonymous-function-budget.ash",
-            "fn(value) {\nvalue\n}\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+            "",
+            "A -> A",
+            "fn(value) {\nvalue\n}",
+        );
 
-        let mut short =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         short
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 2)
@@ -4986,8 +9282,8 @@ mod tests {
         assert_eq!(
             short.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
-                    cause: Some(SynthesisCause::Binding(resolved.result.span)),
+                    expression: fixture_result(&resolved),
+                    cause: Some(SynthesisCause::Binding(fixture_result(&resolved).span)),
                 },
                 &mut TypeContext::new(),
             ),
@@ -4998,8 +9294,7 @@ mod tests {
         assert_eq!(short.next_inference, 0);
         assert!(short.inference_origins.is_empty());
 
-        let mut exact =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         exact
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - EXACT_WORK)
@@ -5007,8 +9302,8 @@ mod tests {
         let typed = exact
             .elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
-                    cause: Some(SynthesisCause::Binding(resolved.result.span)),
+                    expression: fixture_result(&resolved),
+                    cause: Some(SynthesisCause::Binding(fixture_result(&resolved).span)),
                 },
                 &mut TypeContext::new(),
             )
@@ -5019,16 +9314,13 @@ mod tests {
 
     #[test]
     fn ordinary_match_precharges_retained_arm_and_matrix_storage() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "ordinary-match-budget.ash",
-            "match true {\ntrue => 1\nfalse => 0\n}\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let mut short =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            "",
+            "Int",
+            "match true {\ntrue => 1\nfalse => 0\n}",
+        );
+        let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         short
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 13)
@@ -5037,7 +9329,7 @@ mod tests {
         assert_eq!(
             short.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
+                    expression: fixture_result(&resolved),
                     cause: None,
                 },
                 &mut TypeContext::new(),
@@ -5047,8 +9339,7 @@ mod tests {
             ))
         );
 
-        let mut exact =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+        let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         exact
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 14)
@@ -5056,7 +9347,7 @@ mod tests {
         let typed = exact
             .elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
-                    expression: &resolved.result,
+                    expression: fixture_result(&resolved),
                     cause: None,
                 },
                 &mut TypeContext::new(),
@@ -5101,15 +9392,13 @@ mod tests {
 
     #[test]
     fn resolved_type_copies_precharge_type_and_provenance_storage() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "resolved-type-copy.ash",
-            "identity : Int -> Bool\nidentity value = false\n\n0\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedDefinitionKind::Equational(equational) = &resolved.definitions[0].kind else {
+            "identity : Int -> Bool\nidentity value = false\n",
+            "Int",
+            "0",
+        );
+        let ResolvedDefinitionKind::Equational(equational) = &resolved.definitions()[0].kind else {
             panic!("the fixture should resolve to an equational definition");
         };
         let annotation = &equational.interface.annotation;
@@ -5202,15 +9491,14 @@ mod tests {
 
     #[test]
     fn tuple_operational_domains_charge_the_provenance_handle_separately() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "tuple-operational-domain-budget.ash",
-            "fn choose(left: Int, right: Bool) -> Int {\nleft\n}\n\nchoose(42, false)\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedDefinitionKind::InlineOperational(operational) = &resolved.definitions[0].kind
+            "fn choose(left: Int, right: Bool) -> Int {\nleft\n}\n",
+            "Int",
+            "choose(42, false)",
+        );
+        let ResolvedDefinitionKind::InlineOperational(operational) =
+            &resolved.definitions()[0].kind
         else {
             panic!("the fixture should resolve to an operational definition");
         };
@@ -5322,12 +9610,13 @@ mod tests {
     #[test]
     fn wide_polymorphic_occurrence_fails_before_instantiation_allocation() {
         const WIDTH: usize = 4_096;
-        let source = SourceFile::new("wide-occurrence-budget.ash", "fn(value) {\nvalue\n}\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedExprKind::Function(function) = &resolved.result.kind else {
+        let resolved = resolved_module_fixture(
+            "wide-occurrence-budget.ash",
+            "",
+            "A -> A",
+            "fn(value) {\nvalue\n}",
+        );
+        let ResolvedExprKind::Function(function) = &fixture_result(&resolved).kind else {
             panic!("the fixture result should be a function");
         };
         let ResolvedPatternKind::Binder(parameter) = &function.pattern.kind else {
@@ -5347,7 +9636,7 @@ mod tests {
             },
         );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         elaborator
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - (WIDTH * 3 - 1))
@@ -5576,18 +9865,16 @@ mod tests {
 
     #[test]
     fn finish_rejects_unresolved_inference_without_core_escape() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "unresolved-finish.ash",
-            "{\nlet _ = fn(value) {\nvalue\n}\n()\n}\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+            "",
+            "Unit",
+            "{\nlet _ = fn(value) {\nvalue\n}\n()\n}",
+        );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         let typed = elaborator
-            .synthesize(&resolved.result, &TypeContext::new())
+            .synthesize(fixture_result(&resolved), &TypeContext::new())
             .expect("standalone synthesis defers whole-program ambiguity");
 
         assert!(matches!(
@@ -5598,28 +9885,28 @@ mod tests {
 
     #[test]
     fn public_synthesis_rejects_unresolved_inference_before_context_clone() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "external-inference-finish.ash",
-            "identity : Int -> Int\nidentity value = value\n\nidentity\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedExprKind::Occurrence(occurrence) = &resolved.result.kind else {
+            "identity : Int -> Int\nidentity value = value\n",
+            "Int -> Int",
+            "identity",
+        );
+        let ResolvedExprKind::Occurrence(occurrence) = &fixture_result(&resolved).kind else {
             panic!("the result should be a resolved occurrence");
         };
         let mut context = TypeContext::new();
         context.insert(
-            occurrence.binder,
+            occurrence
+                .global_binder()
+                .expect("the fixture occurrence should be an ordinary binder"),
             Type::Inference(InferenceVariableId::new(999)),
         );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         assert_eq!(
-            elaborator.synthesize(&resolved.result, &context),
+            elaborator.synthesize(fixture_result(&resolved), &context),
             Err(TypeError::Internal(ElaborationFailure::InvalidState))
         );
         TYPE_CONTEXT_CLONES.with(|clones| assert_eq!(clones.get(), 0));
@@ -5627,15 +9914,13 @@ mod tests {
 
     #[test]
     fn public_context_inference_cannot_alias_a_fresh_private_solution() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "external-inference-collision.ash",
-            "external : Int -> Int\nexternal value = value\n\n{\nlet increment = fn(value) {\nvalue + 1\n}\nexternal\n}\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedExprKind::Block(block) = &resolved.result.kind else {
+            "external : Int -> Int\nexternal value = value\n",
+            "Int -> Int",
+            "{\nlet increment = fn(value) {\nvalue + 1\n}\nexternal\n}",
+        );
+        let ResolvedExprKind::Block(block) = &fixture_result(&resolved).kind else {
             panic!("the result should be a block");
         };
         let ResolvedExprKind::Occurrence(occurrence) = &block.result.kind else {
@@ -5643,42 +9928,44 @@ mod tests {
         };
         let mut context = TypeContext::new();
         context.insert(
-            occurrence.binder,
+            occurrence
+                .global_binder()
+                .expect("the fixture occurrence should be an ordinary binder"),
             Type::Inference(InferenceVariableId::new(0)),
         );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
 
         assert_eq!(
-            elaborator.synthesize(&resolved.result, &context),
+            elaborator.synthesize(fixture_result(&resolved), &context),
             Err(TypeError::Internal(ElaborationFailure::InvalidState))
         );
     }
 
     #[test]
     fn public_synthesis_charges_a_wide_context_type_before_context_clone() {
-        let source = SourceFile::new(
+        let resolved = resolved_module_fixture(
             "external-wide-context.ash",
-            "identity : Int -> Int\nidentity value = value\n\nidentity\n",
-        )
-        .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
-        let ResolvedExprKind::Occurrence(occurrence) = &resolved.result.kind else {
+            "identity : Int -> Int\nidentity value = value\n",
+            "Int -> Int",
+            "identity",
+        );
+        let ResolvedExprKind::Occurrence(occurrence) = &fixture_result(&resolved).kind else {
             panic!("the result should be a resolved occurrence");
         };
         let mut context = TypeContext::new();
         context.insert(
-            occurrence.binder,
+            occurrence
+                .global_binder()
+                .expect("the fixture occurrence should be an ordinary binder"),
             Type::Tuple(vec![Type::Int; crate::types::TYPE_WORK_LIMIT].into_boxed_slice()),
         );
         let mut elaborator =
-            Elaborator::for_program(&resolved).expect("the binder namespace should fit");
+            Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         assert_eq!(
-            elaborator.synthesize(&resolved.result, &context),
+            elaborator.synthesize(fixture_result(&resolved), &context),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             ))
@@ -5688,11 +9975,7 @@ mod tests {
 
     #[test]
     fn public_context_resource_precedes_invalid_type_independent_of_insertion_order() {
-        let source =
-            SourceFile::new("public-context-order.ash", "42\n").expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved = resolved_module_fixture("public-context-order.ash", "", "Int", "42");
 
         for round in 0..16_u32 {
             let first_id = BinderId::new(round * 2);
@@ -5716,7 +9999,7 @@ mod tests {
             TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
             assert_eq!(
-                elaborator.synthesize(&resolved.result, &context),
+                elaborator.synthesize(fixture_result(&resolved), &context),
                 Err(TypeError::Internal(
                     ElaborationFailure::TypeResourceExhausted
                 ))
@@ -5727,11 +10010,8 @@ mod tests {
 
     #[test]
     fn public_context_resource_precedes_invalid_quantification() {
-        let source = SourceFile::new("public-context-quantification.ash", "42\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved =
+            resolved_module_fixture("public-context-quantification.ash", "", "Int", "42");
         let mut context = TypeContext::new();
         context.insert(BinderId::new(0), Type::Unit);
         context.insert(BinderId::new(1), Type::Unit);
@@ -5748,7 +10028,7 @@ mod tests {
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         assert_eq!(
-            elaborator.synthesize(&resolved.result, &context),
+            elaborator.synthesize(fixture_result(&resolved), &context),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             ))
@@ -5758,16 +10038,12 @@ mod tests {
 
     #[test]
     fn public_check_rejects_inference_in_the_expected_type() {
-        let source = SourceFile::new("external-expected-inference.ash", "42\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved = resolved_module_fixture("external-expected-inference.ash", "", "Int", "42");
         let mut elaborator = Elaborator::new();
 
         assert_eq!(
             elaborator.check(
-                &resolved.result,
+                fixture_result(&resolved),
                 &Type::Inference(InferenceVariableId::new(0)),
                 &TypeContext::new(),
             ),
@@ -5777,11 +10053,12 @@ mod tests {
 
     #[test]
     fn public_check_rejects_wide_higher_rank_expected_type_before_clone() {
-        let source = SourceFile::new("external-higher-rank.ash", "fn(value) {\n42\n}\n")
-            .expect("the fixture should fit");
-        let tree = parse(lex(&source).expect("the fixture should lex"));
-        let surface = project(&source, &tree).expect("the fixture should project");
-        let resolved = resolve(&surface).expect("the fixture should resolve");
+        let resolved = resolved_module_fixture(
+            "external-higher-rank.ash",
+            "",
+            "A -> Int",
+            "fn(value) {\n42\n}",
+        );
         let parameters = (0..crate::types::TYPE_WORK_LIMIT)
             .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
             .collect::<Vec<_>>()
@@ -5793,7 +10070,7 @@ mod tests {
         let mut elaborator = Elaborator::new();
 
         assert_eq!(
-            elaborator.check(&resolved.result, &expected, &TypeContext::new()),
+            elaborator.check(fixture_result(&resolved), &expected, &TypeContext::new()),
             Err(TypeError::Internal(ElaborationFailure::InvalidState))
         );
     }
@@ -5805,15 +10082,12 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(|| {
                 const DEPTH: usize = 10_000;
-                let source = SourceFile::new("external-deep-type.ash", "42\n")
-                    .expect("the fixture should fit");
-                let tree = parse(lex(&source).expect("the fixture should lex"));
-                let surface = project(&source, &tree).expect("the fixture should project");
-                let resolved = resolve(&surface).expect("the fixture should resolve");
+                let resolved = resolved_module_fixture("external-deep-type.ash", "", "Int", "42");
 
                 let expected = nested_function_type(DEPTH);
                 let mut checking = Elaborator::new();
-                let check_result = checking.check(&resolved.result, &expected, &TypeContext::new());
+                let check_result =
+                    checking.check(fixture_result(&resolved), &expected, &TypeContext::new());
                 crate::types::discard_type_iteratively(expected);
                 assert_eq!(
                     check_result,
@@ -5825,7 +10099,8 @@ mod tests {
                 context.insert(binder, nested_function_type(DEPTH));
                 let mut synthesizing = Elaborator::new();
                 TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
-                let synthesize_result = synthesizing.synthesize(&resolved.result, &context);
+                let synthesize_result =
+                    synthesizing.synthesize(fixture_result(&resolved), &context);
                 let clone_count = TYPE_CONTEXT_CLONES.with(std::cell::Cell::get);
                 let TypeFact {
                     ty,
@@ -5845,6 +10120,56 @@ mod tests {
             .expect("the depth-boundary thread should start")
             .join()
             .expect("public type depth rejection must fit the small stack");
+    }
+
+    #[test]
+    fn constrained_scheme_construction_has_an_exact_stack_safe_type_budget() {
+        std::thread::Builder::new()
+            .name("constrained-scheme-budget".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 10_000;
+                const EXACT_WORK: usize = 2 * DEPTH + 4;
+                let resolved = resolved_module_fixture(
+                    "constrained-scheme-budget.ash",
+                    "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nvalue : A -> Bool where Equal<A>\nvalue argument = true\n",
+                    "Unit",
+                    "()",
+                );
+                let mut definitions = resolved.definitions()[..1].to_vec();
+                let ResolvedDefinitionKind::Equational(global) = &mut definitions[0].kind else {
+                    panic!("the constrained fixture should be equational");
+                };
+                global.interface.annotation.ty = nested_function_type(DEPTH);
+
+                let mut short = Elaborator::for_module(&resolved)
+                    .expect("the constrained fixture namespace should fit");
+                short.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+                assert_eq!(
+                    short.checked_module_schemes(&definitions),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+
+                let mut exact = Elaborator::for_module(&resolved)
+                    .expect("the constrained fixture namespace should fit");
+                exact.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+                let schemes = exact
+                    .checked_module_schemes(&definitions)
+                    .expect("the exact constrained-scheme type budget should fit");
+                assert_eq!(exact.type_work.charge(1), Err(()));
+                drop(schemes);
+
+                let ResolvedDefinitionKind::Equational(global) = &mut definitions[0].kind else {
+                    unreachable!()
+                };
+                let deep = std::mem::replace(&mut global.interface.annotation.ty, Type::Unit);
+                discard_type_iteratively(deep);
+            })
+            .expect("the constrained-scheme budget thread should start")
+            .join()
+            .expect("constrained-scheme construction must fit the small stack");
     }
 
     #[test]
@@ -5906,13 +10231,13 @@ mod tests {
 
     #[test]
     fn a_shape_mismatch_poisoning_prevents_later_elaboration() {
-        let source = SourceFile::new("mismatched-provenance.ash", "fn(value) {\n    value\n}\n")
-            .expect("test source should fit");
-        let lexed = lex(&source).expect("test source should lex");
-        let tree = parse(lexed);
-        let surface = project(&source, &tree).expect("test source should project");
-        let program = resolve(&surface).expect("test source should resolve");
-        let ResolvedExprKind::Function(function) = &program.result.kind else {
+        let program = resolved_module_fixture(
+            "mismatched-provenance.ash",
+            "",
+            "A -> A",
+            "fn(value) {\n    value\n}",
+        );
+        let ResolvedExprKind::Function(function) = &fixture_result(&program).kind else {
             panic!("expected an anonymous function");
         };
         let ResolvedPatternKind::Binder(parameter) = &function.pattern.kind else {
@@ -5927,8 +10252,12 @@ mod tests {
                 quantified: Box::new([]),
             },
         );
-        let mut elaborator =
-            Elaborator::for_program(&program).expect("binder reservation should fit");
+        let mut elaborator = Elaborator::for_module_with_work(
+            &program,
+            TypeWorkBudget::default(),
+            UsefulnessBudget::default(),
+        )
+        .expect("binder reservation should fit");
 
         assert_eq!(
             elaborator.synthesize(&function.body.result, &context),
@@ -5950,36 +10279,47 @@ mod tests {
             writeln!(text, "f{index} value = f{} value", index - 1)
                 .expect("writing to a String cannot fail");
         }
-        text.push_str("f31 42\n");
-        let source = SourceFile::new("sequential-globals.ash", text).expect("source should fit");
-        let lexed = lex(&source).expect("test source should lex");
-        let tree = parse(lexed);
-        let surface = project(&source, &tree).expect("test source should project");
-        let program = resolve(&surface).expect("test source should resolve");
-        let mut elaborator =
-            Elaborator::for_program(&program).expect("binder reservation should fit");
+        let program = resolved_module_fixture("sequential-globals.ash", &text, "Int", "f31 42");
+        let mut elaborator = Elaborator::for_module_with_work(
+            &program,
+            TypeWorkBudget::default(),
+            UsefulnessBudget::default(),
+        )
+        .expect("binder reservation should fit");
+        let schemes = elaborator
+            .checked_module_schemes(program.definitions())
+            .expect("the declared global schemes should fit");
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         elaborator
-            .synthesize_program(&program)
+            .check_module_bodies(
+                &program,
+                &schemes,
+                &[],
+                &[],
+                &mut InterfaceConstraintBudget::default(),
+            )
             .expect("recursive globals should elaborate");
 
-        TYPE_CONTEXT_CLONES.with(|clones| assert_eq!(clones.get(), 0));
+        TYPE_CONTEXT_CLONES.with(|clones| {
+            assert_eq!(
+                clones.get(),
+                1,
+                "the fixed base context may be cloned once, independent of global count"
+            );
+        });
     }
 
     #[test]
     fn successful_function_work_restores_parameter_and_block_scopes() {
-        let source = SourceFile::new(
+        let program = resolved_module_fixture(
             "restored-function-scope.ash",
-            "fn(parameter) {\n    let local = parameter\n    local\n}\n",
-        )
-        .expect("source should fit");
-        let lexed = lex(&source).expect("test source should lex");
-        let tree = parse(lexed);
-        let surface = project(&source, &tree).expect("test source should project");
-        let program = resolve(&surface).expect("test source should resolve");
+            "",
+            "A -> A",
+            "fn(parameter) {\n    let local = parameter\n    local\n}",
+        );
         let mut elaborator =
-            Elaborator::for_program(&program).expect("binder reservation should fit");
+            Elaborator::for_module(&program).expect("binder reservation should fit");
         let mut context = TypeContext::new();
         let expected =
             ProvenancedType::unknown(Type::Function(Box::new(Type::Int), Box::new(Type::Int)));
@@ -5987,7 +10327,7 @@ mod tests {
         elaborator
             .elaborate_expression_with_context(
                 ElaborationTask::Check {
-                    expression: &program.result,
+                    expression: fixture_result(&program),
                     expected,
                     kind: CheckKind::General,
                 },

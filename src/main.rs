@@ -7,9 +7,12 @@ use std::{
 };
 
 use ash::{
-    driver::{FileFailure, Observation, run_path},
+    driver::{FileFailure, Observation, RunConfiguration, run_path},
+    module::{LoadGraphError, ModuleRoots},
     render,
 };
+
+const USAGE: &[u8] = b"usage: ash [--root name=path]... <entry-file>\n";
 
 fn main() -> ExitCode {
     let mut stdout = io::stdout().lock();
@@ -31,14 +34,22 @@ where
     I: IntoIterator<Item = OsString>,
     O: Write,
     E: Write,
-    R: FnOnce(PathBuf) -> Result<Observation, FileFailure>,
+    R: FnOnce(RunConfiguration) -> Result<Observation, FileFailure>,
 {
-    let Some(path) = exactly_one(arguments.into_iter()) else {
-        let _ = write_output(stderr, b"usage: ash <source-file>\n");
-        return 2;
+    let configuration = match configuration(arguments) {
+        Ok(configuration) => configuration,
+        Err(ConfigurationFailure::Usage) => {
+            let _ = write_output(stderr, USAGE);
+            return 2;
+        }
+        Err(ConfigurationFailure::Roots(failure)) => {
+            let failure = FileFailure::Graph(LoadGraphError::Module(failure));
+            let _ = write_output(stderr, render::file_failure(&failure).as_bytes());
+            return 2;
+        }
     };
 
-    match runner(PathBuf::from(path)) {
+    match runner(configuration) {
         Ok(observation) => {
             if write_output(stdout, render::observation(&observation).as_bytes()).is_ok() {
                 0
@@ -66,9 +77,75 @@ fn write_output(writer: &mut impl Write, output: &[u8]) -> io::Result<()> {
     writer.flush()
 }
 
-fn exactly_one(mut arguments: impl Iterator<Item = OsString>) -> Option<OsString> {
-    let only = arguments.next()?;
-    arguments.next().is_none().then_some(only)
+#[derive(Debug)]
+enum ConfigurationFailure {
+    Usage,
+    Roots(ash::module::ModuleFailure),
+}
+
+fn configuration<I>(arguments: I) -> Result<RunConfiguration, ConfigurationFailure>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut arguments = arguments.into_iter();
+    let mut roots = Vec::new();
+    let mut entry = None;
+
+    while let Some(argument) = arguments.next() {
+        if argument == "--root" {
+            if entry.is_some() {
+                return Err(ConfigurationFailure::Usage);
+            }
+            let specification = arguments.next().ok_or(ConfigurationFailure::Usage)?;
+            roots.push(parse_root_specification(specification)?);
+        } else if argument.to_string_lossy().starts_with("--") || entry.is_some() {
+            return Err(ConfigurationFailure::Usage);
+        } else {
+            entry = Some(PathBuf::from(argument));
+        }
+    }
+
+    let entry = entry.ok_or(ConfigurationFailure::Usage)?;
+    let roots = ModuleRoots::new(roots).map_err(ConfigurationFailure::Roots)?;
+    Ok(RunConfiguration { entry, roots })
+}
+
+#[cfg(unix)]
+fn parse_root_specification(
+    specification: OsString,
+) -> Result<(String, PathBuf), ConfigurationFailure> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let bytes = specification.as_os_str().as_bytes();
+    let separator = bytes
+        .iter()
+        .position(|byte| *byte == b'=')
+        .ok_or(ConfigurationFailure::Usage)?;
+    let name = std::str::from_utf8(&bytes[..separator]).map_err(|_| ConfigurationFailure::Usage)?;
+    let path = &bytes[separator + 1..];
+    if name.is_empty() || path.is_empty() {
+        return Err(ConfigurationFailure::Usage);
+    }
+    Ok((
+        name.to_owned(),
+        PathBuf::from(OsString::from_vec(path.to_vec())),
+    ))
+}
+
+#[cfg(not(unix))]
+fn parse_root_specification(
+    specification: OsString,
+) -> Result<(String, PathBuf), ConfigurationFailure> {
+    let specification = specification
+        .into_string()
+        .map_err(|_| ConfigurationFailure::Usage)?;
+    let (name, path) = specification
+        .split_once('=')
+        .ok_or(ConfigurationFailure::Usage)?;
+    if name.is_empty() || path.is_empty() {
+        return Err(ConfigurationFailure::Usage);
+    }
+    Ok((name.to_owned(), PathBuf::from(path)))
 }
 
 #[cfg(test)]
@@ -132,7 +209,7 @@ mod tests {
     struct TempSource(PathBuf);
 
     impl TempSource {
-        fn rejected() -> Self {
+        fn write(text: &[u8]) -> Self {
             loop {
                 let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
                 let path = std::env::temp_dir().join(format!(
@@ -141,7 +218,7 @@ mod tests {
                 ));
                 match OpenOptions::new().write(true).create_new(true).open(&path) {
                     Ok(mut file) => {
-                        file.write_all(b"true + 1\n")
+                        file.write_all(text)
                             .expect("test source should be writable");
                         return Self(path);
                     }
@@ -149,6 +226,14 @@ mod tests {
                     Err(error) => panic!("test source should be creatable: {error}"),
                 }
             }
+        }
+
+        fn valid() -> Self {
+            Self::write(b"main : Unit -> Int\nmain () = 7\n")
+        }
+
+        fn rejected() -> Self {
+            Self::write(b"main : Unit -> Int\nmain () = true + 1\n")
         }
     }
 
@@ -158,18 +243,17 @@ mod tests {
         }
     }
 
-    fn valid_fixture() -> OsString {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/first-stratum/valid/v001-precedence.ash")
-            .into_os_string()
-    }
-
     #[test]
     fn success_stdout_failure_returns_status_two_and_reports_on_stderr() {
+        let source = TempSource::valid();
         let mut stdout = AlwaysFails;
         let mut stderr = Vec::new();
 
-        let status = execute([valid_fixture()], &mut stdout, &mut stderr);
+        let status = execute(
+            [source.0.clone().into_os_string()],
+            &mut stdout,
+            &mut stderr,
+        );
 
         assert_eq!(status, 2);
         assert_eq!(
@@ -190,6 +274,40 @@ mod tests {
     }
 
     #[test]
+    fn root_options_must_precede_the_entry_path() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = execute_with_runner(
+            [
+                OsString::from("entry.ash"),
+                OsString::from("--root"),
+                OsString::from("std=library"),
+            ],
+            &mut stdout,
+            &mut stderr,
+            |_| panic!("invalid invocation must not reach the runner"),
+        );
+
+        assert_eq!(status, 2);
+        assert!(stdout.is_empty());
+        assert_eq!(stderr, USAGE);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_paths_retain_non_utf8_operating_system_bytes() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let specification = OsString::from_vec(b"std=/tmp/ash-\xff".to_vec());
+        let (name, path) =
+            parse_root_specification(specification).expect("the root syntax should be valid");
+
+        assert_eq!(name, "std");
+        assert_eq!(path.as_os_str().as_bytes(), b"/tmp/ash-\xff");
+    }
+
+    #[test]
     fn source_diagnostic_stderr_failure_returns_status_two_without_panicking() {
         let source = TempSource::rejected();
         let mut stdout = Vec::new();
@@ -207,20 +325,30 @@ mod tests {
 
     #[test]
     fn stdout_and_fallback_stderr_may_both_fail_without_panicking() {
+        let source = TempSource::valid();
         let mut stdout = AlwaysFails;
         let mut stderr = AlwaysFails;
 
-        let status = execute([valid_fixture()], &mut stdout, &mut stderr);
+        let status = execute(
+            [source.0.clone().into_os_string()],
+            &mut stdout,
+            &mut stderr,
+        );
 
         assert_eq!(status, 2);
     }
 
     #[test]
     fn success_stdout_flush_failure_returns_status_two_and_reports_on_stderr() {
+        let source = TempSource::valid();
         let mut stdout = FlushFails::default();
         let mut stderr = Vec::new();
 
-        let status = execute([valid_fixture()], &mut stdout, &mut stderr);
+        let status = execute(
+            [source.0.clone().into_os_string()],
+            &mut stdout,
+            &mut stderr,
+        );
 
         assert_eq!(status, 2);
         assert_eq!(stdout.bytes, b"7 : Int\n");
@@ -261,7 +389,7 @@ mod tests {
 
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
-        assert_eq!(stderr, b"core.validation.node-type at Core node 0\n");
+        assert_eq!(stderr, b"core.validation.node-type\nnode: 0\n");
     }
 
     #[test]
@@ -284,7 +412,7 @@ mod tests {
         assert!(stdout.is_empty());
         assert_eq!(
             stderr,
-            b"internal.runtime\nruntime lexical binding is absent\n"
+            b"runtime.missing-binding\nruntime lexical binding is absent\n"
         );
     }
 

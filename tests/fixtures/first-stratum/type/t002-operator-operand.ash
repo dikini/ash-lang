@@ -1,1 +1,2 @@
-true + 1
+main : Unit -> Int
+main () = true + 1

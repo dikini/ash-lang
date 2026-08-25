@@ -1,4 +1,4 @@
-//! Closed assembly of the named pure Mini-Ash Core dialect.
+//! Closed assembly of the named pure Ash Core dialect.
 
 use std::{
     collections::HashSet,
@@ -27,13 +27,13 @@ use crate::{
     types::{Type, TypeWorkBudget, discard_type_iteratively},
 };
 
-/// Names the closed pure Core dialect selected by Mini-Ash.
+/// Names the closed pure Core dialect selected by Ash.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MiniAshPureDialect;
+pub struct AshPureDialect;
 
-impl MiniAshPureDialect {
+impl AshPureDialect {
     /// Stable compiler-facing name of the selected Core dialect.
-    pub const NAME: &'static str = "mini-ash.pure";
+    pub const NAME: &'static str = "ash.pure";
 }
 
 /// Maximum recursive Type or Origin wrappers admitted into Core storage.
@@ -121,7 +121,7 @@ const fn checked_add_one(value: u32) -> Option<u32> {
     value.checked_add(1)
 }
 
-/// A typed expression in the pure Mini-Ash dialect.
+/// A typed expression in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypedExpr {
     /// The structural result type.
@@ -132,7 +132,7 @@ pub struct TypedExpr {
     pub kind: PureExprKind,
 }
 
-/// The closed expression families in the pure Mini-Ash dialect.
+/// The closed expression families in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PureExprKind {
     /// A value node.
@@ -212,7 +212,7 @@ fn fixed_child_at<const N: usize>(children: [Option<NodeId>; N], index: usize) -
     children.into_iter().flatten().nth(index)
 }
 
-/// The closed value families in the pure Mini-Ash dialect.
+/// The closed value families in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PureValue {
     /// An arbitrary-precision integer.
@@ -227,7 +227,7 @@ pub enum PureValue {
     Constructor(ConstructorNode),
 }
 
-/// The closed computation families in the pure Mini-Ash dialect.
+/// The closed computation families in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PureComputation {
     /// A sequential nonrecursive binding.
@@ -252,7 +252,7 @@ pub enum PureComputation {
 pub(super) struct DialectId(&'static str);
 
 impl DialectId {
-    pub(super) const PURE: Self = Self(MiniAshPureDialect::NAME);
+    pub(super) const PURE: Self = Self(AshPureDialect::NAME);
 
     #[cfg(test)]
     pub(super) const FOREIGN: Self = Self("test.foreign");
@@ -490,8 +490,13 @@ pub struct CoreBuilder {
     inference_binders: HashSet<BinderId>,
     binder_phase_started: bool,
     type_work: TypeWorkBudget,
+    rewrite_type_work: TypeWorkBudget,
     requires_type_rewrite: bool,
 }
+
+/// Identifies the first Core node after an elaboration-local type boundary.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TypeRewriteCheckpoint(usize);
 
 impl CoreBuilder {
     /// Starts an empty Core arena.
@@ -507,16 +512,16 @@ impl CoreBuilder {
             inference_binders: HashSet::new(),
             binder_phase_started: false,
             type_work: TypeWorkBudget::default(),
+            rewrite_type_work: TypeWorkBudget::default(),
             requires_type_rewrite: false,
         }
     }
 
     /// Starts an empty arena carrying an immutable resolved data registry.
     pub fn with_registry(registry: Arc<ResolvedRegistry>) -> Self {
-        Self {
-            registry,
-            ..Self::new()
-        }
+        let mut builder = Self::new();
+        builder.registry = registry;
+        builder
     }
 
     /// Reserves the complete resolver-assigned binder namespace.
@@ -939,11 +944,11 @@ impl CoreBuilder {
             return Err(BuildError::InvalidPayload);
         };
         let cause = match expected_cause {
-            Some(span) => Origin::Related {
+            Some(span) if span.source() == current.primary_span().source() => Origin::Related {
                 primary: Box::new(current.clone()),
                 related: vec![span],
             },
-            None => current.clone(),
+            Some(_) | None => current.clone(),
         };
         let origin = admit_origin(Origin::Generated {
             cause: Box::new(cause),
@@ -962,16 +967,53 @@ impl CoreBuilder {
     where
         F: FnMut(&Type) -> Result<Type, BuildError>,
     {
-        let mut rewrite_type_work = TypeWorkBudget::default();
+        let checkpoint = TypeRewriteCheckpoint(0);
+        let rewritten_requires_type_rewrite = self.rewrite_types_from(checkpoint, &mut rewrite)?;
+        self.requires_type_rewrite = rewritten_requires_type_rewrite;
+        Ok(())
+    }
+
+    /// Captures the current end of the Core arena for a bounded type rewrite.
+    pub(crate) fn type_rewrite_checkpoint(&self) -> TypeRewriteCheckpoint {
+        TypeRewriteCheckpoint(self.nodes.len())
+    }
+
+    /// Rewrites type payloads only on nodes emitted after `checkpoint`.
+    pub(crate) fn rewrite_types_since<F>(
+        &mut self,
+        checkpoint: TypeRewriteCheckpoint,
+        mut rewrite: F,
+    ) -> Result<(), BuildError>
+    where
+        F: FnMut(&Type) -> Result<Type, BuildError>,
+    {
+        let rewritten_requires_type_rewrite = self.rewrite_types_from(checkpoint, &mut rewrite)?;
+        self.requires_type_rewrite |= rewritten_requires_type_rewrite;
+        Ok(())
+    }
+
+    fn rewrite_types_from<F>(
+        &mut self,
+        checkpoint: TypeRewriteCheckpoint,
+        rewrite: &mut F,
+    ) -> Result<bool, BuildError>
+    where
+        F: FnMut(&Type) -> Result<Type, BuildError>,
+    {
+        let nodes = self
+            .nodes
+            .get_mut(checkpoint.0..)
+            .ok_or(BuildError::InvalidNodeId)?;
+        let rewrite_type_work = &mut self.rewrite_type_work;
         let mut rewritten_requires_type_rewrite = false;
         let mut rewrite_admitted = |ty: &Type| {
             let rewritten = rewrite(ty)?;
             let (rewritten, contains_inference) =
-                admit_rewritten_type(rewritten, &mut rewrite_type_work)?;
+                admit_rewritten_type(rewritten, rewrite_type_work)?;
             rewritten_requires_type_rewrite |= contains_inference;
             Ok(rewritten)
         };
-        for node in &mut self.nodes {
+        for node in nodes {
             node.ty = rewrite_admitted(&node.ty)?;
             match &mut node.kind {
                 PureExprKind::Value(PureValue::Function(function)) => {
@@ -1010,8 +1052,7 @@ impl CoreBuilder {
                 ) => {}
             }
         }
-        self.requires_type_rewrite = rewritten_requires_type_rewrite;
-        Ok(())
+        Ok(rewritten_requires_type_rewrite)
     }
 
     /// Reports whether an admitted Core type still contains inference state.
@@ -1024,7 +1065,7 @@ impl CoreBuilder {
     /// # Errors
     ///
     /// Returns [`BuildError::InvalidNodeId`] unless `root` belongs to this arena.
-    pub fn finish(self, root: NodeId) -> Result<UnvalidatedProgram, BuildError> {
+    pub fn finish(mut self, root: NodeId) -> Result<UnvalidatedProgram, BuildError> {
         let Some(arena) = self.arena else {
             return Err(BuildError::InvalidNodeId);
         };
@@ -1036,9 +1077,9 @@ impl CoreBuilder {
             return Err(BuildError::InvalidNodeId);
         }
         Ok(UnvalidatedProgram {
-            registry: self.registry,
+            registry: std::mem::take(&mut self.registry),
             arena,
-            nodes: self.nodes,
+            nodes: std::mem::take(&mut self.nodes),
             root,
         })
     }
@@ -1097,6 +1138,47 @@ impl CoreBuilder {
                 return Ok((id, next));
             }
             candidate = next;
+        }
+    }
+}
+
+impl Drop for CoreBuilder {
+    fn drop(&mut self) {
+        for stored in self.nodes.drain(..) {
+            discard_type_iteratively(stored.ty);
+            if let Some(origin) = stored.origin {
+                discard_origin_iteratively(origin);
+            }
+            match stored.kind {
+                PureExprKind::Value(PureValue::Function(function)) => {
+                    function.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                    binding.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                    group.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                    match_node.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                    operation.discard_metadata();
+                }
+                PureExprKind::Value(
+                    PureValue::Integer(_)
+                    | PureValue::Boolean(_)
+                    | PureValue::Unit(_)
+                    | PureValue::Constructor(_),
+                )
+                | PureExprKind::Variable(_)
+                | PureExprKind::Computation(
+                    PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_)
+                    | PureComputation::TypeAbstraction(_),
+                ) => {}
+            }
         }
     }
 }
@@ -1737,7 +1819,14 @@ fn admit_origin(origin: Origin) -> Result<Origin, BuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::{ByteRange, GeneratedReason, SourceFile};
+    use crate::{
+        module::ModuleId,
+        source::{ByteRange, GeneratedReason, SourceFile},
+    };
+
+    fn resolved_id(local: u32) -> BinderId {
+        BinderId::resolved(ModuleId::new(0), local)
+    }
 
     #[test]
     fn arena_allocator_reserves_maximum_as_its_exhaustion_sentinel() {
@@ -1765,6 +1854,30 @@ mod tests {
             };
         }
         origin
+    }
+
+    #[test]
+    fn unfinished_builder_discards_deep_payloads_on_a_small_stack() {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .stack_size(128 * 1024)
+                .spawn_scoped(scope, || {
+                    let source = SourceFile::new("temporary-check.ash", "()")
+                        .expect("test source should fit");
+                    let origin = Origin::Source(
+                        source
+                            .span(ByteRange::new(0, 2).expect("ordered range"))
+                            .expect("range should belong to source"),
+                    );
+                    let mut builder = CoreBuilder::new();
+                    for _ in 0..32 {
+                        builder
+                            .unit(function_type(CORE_PAYLOAD_DEPTH_LIMIT), origin.clone())
+                            .expect("boundary-depth payload should be admitted");
+                    }
+                })
+                .expect("small-stack builder-drop thread should complete");
+        });
     }
 
     fn related_origin(source: &SourceFile, depth: usize) -> Origin {
@@ -2426,31 +2539,31 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let mut builder = CoreBuilder::new();
         builder
-            .reserve_resolved_binders([BinderId::new(0), BinderId::new(1)])
+            .reserve_resolved_binders([resolved_id(0), resolved_id(1)])
             .expect("complete resolved namespace is reserved");
         assert_eq!(
             builder.resolved_binder(
-                BinderId::new(0),
+                resolved_id(0),
                 function_type(CORE_PAYLOAD_DEPTH_LIMIT + 1),
                 origin.clone(),
             ),
             Err(BuildError::TypeDepthExceeded)
         );
         let resolved = builder
-            .resolved_binder(BinderId::new(0), Type::Unit, origin.clone())
+            .resolved_binder(resolved_id(0), Type::Unit, origin.clone())
             .expect("first resolved identity is admitted");
         let generated = builder
             .binder(Type::Unit, origin.clone())
             .expect("fresh generated identity");
         let second_resolved = builder
-            .resolved_binder(BinderId::new(1), Type::Unit, origin.clone())
+            .resolved_binder(resolved_id(1), Type::Unit, origin.clone())
             .expect("later reserved identity remains materializable");
 
         assert_ne!(resolved.id(), generated.id());
         assert_ne!(second_resolved.id(), generated.id());
-        assert_eq!(generated.id().value(), 2);
+        assert_eq!(generated.id(), BinderId::generated(0));
         assert_eq!(
-            builder.resolved_binder(BinderId::new(0), Type::Unit, origin),
+            builder.resolved_binder(resolved_id(0), Type::Unit, origin),
             Err(BuildError::DuplicateResolvedBinder)
         );
     }
@@ -2461,13 +2574,13 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let mut builder = CoreBuilder::new();
         builder
-            .reserve_resolved_binders([BinderId::new(u32::MAX - 1)])
+            .reserve_resolved_binders([resolved_id(u32::MAX - 1)])
             .expect("high resolved identity is reserved");
 
         let generated = builder
             .binder(Type::Unit, origin)
             .expect("low generated identity remains available");
-        assert_eq!(generated.id().value(), 0);
+        assert_eq!(generated.id(), BinderId::generated(0));
     }
 
     #[test]
@@ -2476,22 +2589,22 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let mut builder = CoreBuilder::new();
         builder
-            .reserve_resolved_binders([BinderId::new(2)])
+            .reserve_resolved_binders([resolved_id(2)])
             .expect("first reservation");
         assert_eq!(
-            builder.reserve_resolved_binders([BinderId::new(3), BinderId::new(3)]),
+            builder.reserve_resolved_binders([resolved_id(3), resolved_id(3)]),
             Err(BuildError::DuplicateBinderReservation)
         );
-        assert!(!builder.reserved_resolved.contains(&BinderId::new(3)));
+        assert!(!builder.reserved_resolved.contains(&resolved_id(3)));
 
         builder
             .binder(Type::Unit, origin)
             .expect("generated allocation starts the binder phase");
         assert_eq!(
-            builder.reserve_resolved_binders([BinderId::new(4)]),
+            builder.reserve_resolved_binders([resolved_id(4)]),
             Err(BuildError::BinderReservationPhaseStarted)
         );
-        assert!(!builder.reserved_resolved.contains(&BinderId::new(4)));
+        assert!(!builder.reserved_resolved.contains(&resolved_id(4)));
     }
 
     #[test]
@@ -2500,17 +2613,17 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let mut builder = CoreBuilder::new();
         assert_eq!(
-            builder.resolved_binder(BinderId::new(0), Type::Unit, origin.clone()),
+            builder.resolved_binder(resolved_id(0), Type::Unit, origin.clone()),
             Err(BuildError::UnreservedResolvedBinder)
         );
         builder
-            .reserve_resolved_binders([BinderId::new(0)])
+            .reserve_resolved_binders([resolved_id(0)])
             .expect("resolved identity is reserved");
         builder
-            .resolved_binder(BinderId::new(0), Type::Unit, origin.clone())
+            .resolved_binder(resolved_id(0), Type::Unit, origin.clone())
             .expect("first materialization");
         assert_eq!(
-            builder.resolved_binder(BinderId::new(0), Type::Unit, origin),
+            builder.resolved_binder(resolved_id(0), Type::Unit, origin),
             Err(BuildError::DuplicateResolvedBinder)
         );
     }
@@ -2525,7 +2638,7 @@ mod tests {
         let last = builder
             .binder(Type::Unit, origin.clone())
             .expect("last allocatable binder");
-        assert_eq!(last.id().value(), u32::MAX - 1);
+        assert_eq!(last.id(), BinderId::generated(u32::MAX - 1));
         assert_eq!(
             builder.binder(Type::Unit, origin),
             Err(BuildError::BinderIdExhausted)
@@ -2537,7 +2650,7 @@ mod tests {
     fn failed_reserved_payload_admission_can_be_retried() {
         let source = SourceFile::new("binder.ash", "()").expect("test source");
         let origin = generated_origin(&source, 0);
-        let id = BinderId::new(7);
+        let id = resolved_id(7);
         let mut builder = CoreBuilder::new();
         builder
             .reserve_resolved_binders([id])

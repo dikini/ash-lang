@@ -1,4 +1,4 @@
-//! Tokens owned by the Mini-Ash lexical layer.
+//! Tokens owned by the Ash lexical layer.
 
 use crate::{integer::Integer, source::Span};
 
@@ -11,7 +11,7 @@ pub struct Token {
     pub span: Span,
 }
 
-/// The complete token family available to the Mini-Ash parser.
+/// The complete token family available to the Ash parser.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TokenKind {
     /// An ASCII identifier.
@@ -38,6 +38,20 @@ pub enum TokenKind {
     Type,
     /// The `match` reserved word.
     Match,
+    /// The `import` reserved word.
+    Import,
+    /// The `as` reserved word.
+    As,
+    /// The `pub` reserved word.
+    Pub,
+    /// The `opaque` reserved word.
+    Opaque,
+    /// The `interface` reserved word.
+    Interface,
+    /// The `impl` reserved word.
+    Impl,
+    /// The `where` reserved word.
+    Where,
     /// The `Int` type name.
     IntType,
     /// The `Bool` type name.
@@ -52,6 +66,10 @@ pub enum TokenKind {
     LeftBrace,
     /// `}`.
     RightBrace,
+    /// `@`, introducing a named module root.
+    At,
+    /// `.`, separating module path segments and qualified names.
+    Dot,
     /// `:`.
     Colon,
     /// `=`.

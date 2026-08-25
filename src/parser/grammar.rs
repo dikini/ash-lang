@@ -22,6 +22,7 @@ pub(super) enum PrimaryForm {
     Integer,
     Boolean,
     Identifier,
+    Qualified,
     UpperIdentifier,
     Parenthesized,
 }
@@ -118,8 +119,8 @@ pub(super) struct ParserDialect {
     atomic_types: &'static [AtomicTypeForm],
 }
 
-/// The sole closed assembly of syntax forms selected for Mini-Ash.
-const MINI_ASH_DIALECT: ParserDialect = ParserDialect {
+/// The sole closed assembly of syntax forms selected for Ash modules.
+const MODULAR_ASH_DIALECT: ParserDialect = ParserDialect {
     global_definitions: &[
         GlobalDefinitionForm::Equational,
         GlobalDefinitionForm::InlineOperational,
@@ -134,6 +135,7 @@ const MINI_ASH_DIALECT: ParserDialect = ParserDialect {
             PrimaryForm::Integer,
             PrimaryForm::Boolean,
             PrimaryForm::Identifier,
+            PrimaryForm::Qualified,
             PrimaryForm::UpperIdentifier,
             PrimaryForm::Parenthesized,
         ],
@@ -180,44 +182,22 @@ const MINI_ASH_DIALECT: ParserDialect = ParserDialect {
 };
 
 pub(super) const fn selected_dialect() -> &'static ParserDialect {
-    &MINI_ASH_DIALECT
+    &MODULAR_ASH_DIALECT
 }
 
-pub(super) fn program(parser: &mut Parser<'_>) {
-    parser.start(NodeKind::Program);
-    let mut preceding_global_end = None;
-    while parser.at(&TokenKind::Type) {
-        type_declaration(parser);
+pub(super) fn module(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Module);
+    while parser.at(&TokenKind::Import) {
+        import_declaration(parser);
         if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
             break;
         }
     }
-    while starts_global(parser) {
-        let global_start = parser.current_span();
-        let diagnostics_before = parser.diagnostic_count();
-        global_definition(parser);
-        let completed_global = if parser.diagnostic_count() == diagnostics_before {
-            global_start.zip(parser.previous_span())
-        } else {
-            None
-        };
-        if !parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd) {
+    while starts_module_declaration(parser) {
+        module_declaration(parser);
+        if !expect_declaration_line_end(parser) {
             break;
         }
-        if let (Some((start, end)), Some(line_end)) = (completed_global, parser.previous_span()) {
-            preceding_global_end = Some((start, end, line_end));
-        }
-    }
-
-    if starts_expression(parser) {
-        let recovery_start = parser.pending_recovery_count();
-        expression(parser);
-        resolve_line_or_eof(parser, recovery_start);
-    } else {
-        parser.report_expected_result(preceding_global_end);
-    }
-    if parser.at(&TokenKind::LineEnd) {
-        let _ = parser.bump();
     }
     if parser.at(&TokenKind::EndOfFile) {
         let _ = parser.bump();
@@ -234,9 +214,636 @@ pub(super) fn program(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
+fn expect_declaration_line_end(parser: &mut Parser<'_>) -> bool {
+    let recovered_expression_group = parser.take_recovered_expression_group_boundary();
+    if recovered_expression_group && parser.at(&TokenKind::EndOfFile) {
+        true
+    } else {
+        parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd)
+    }
+}
+
+fn import_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ImportDeclaration);
+    let _ = parser.bump();
+    module_path(parser);
+    if parser.at(&TokenKind::As) {
+        let _ = parser.bump();
+        expect_upper_identifier(parser);
+    } else if parser.at(&TokenKind::LeftParen) {
+        let _ = parser.bump();
+        import_item(parser);
+        while parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            import_item(parser);
+        }
+        let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    parser.finish();
+}
+
+fn module_path(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ModulePath);
+    let absolute = parser.at(&TokenKind::At);
+    if absolute {
+        let _ = parser.bump();
+    }
+    expect_lower_identifier(parser);
+    if absolute {
+        let _ = parser.expect(&TokenKind::Dot, ExpectedForm::Identifier);
+        expect_lower_identifier(parser);
+    }
+    while parser.at(&TokenKind::Dot) {
+        let _ = parser.bump();
+        expect_lower_identifier(parser);
+    }
+    parser.finish();
+}
+
+fn import_item(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ImportItem);
+    expect_import_name(parser);
+    if parser.at(&TokenKind::As) {
+        let _ = parser.bump();
+        expect_import_name(parser);
+    }
+    parser.finish();
+}
+
+fn expect_import_name(parser: &mut Parser<'_>) {
+    if matches!(
+        parser.current(),
+        Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+    ) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+}
+
+fn expect_lower_identifier(parser: &mut Parser<'_>) {
+    if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+}
+
+fn expect_upper_identifier(parser: &mut Parser<'_>) {
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+}
+
+fn starts_module_declaration(parser: &Parser<'_>) -> bool {
+    parser.at(&TokenKind::Type)
+        || parser.at(&TokenKind::Interface)
+        || parser.at(&TokenKind::Impl)
+        || starts_global(parser)
+        || parser.at(&TokenKind::Pub)
+            && matches!(
+                parser.nth(1),
+                Some(
+                    TokenKind::Type
+                        | TokenKind::Opaque
+                        | TokenKind::Interface
+                        | TokenKind::Impl
+                        | TokenKind::Fn
+                        | TokenKind::Identifier(_)
+                )
+            )
+}
+
+fn module_declaration(parser: &mut Parser<'_>) {
+    if parser.at(&TokenKind::Type)
+        || parser.at(&TokenKind::Pub)
+            && matches!(parser.nth(1), Some(TokenKind::Type | TokenKind::Opaque))
+    {
+        type_declaration(parser);
+    } else if parser.at(&TokenKind::Interface)
+        || parser.at(&TokenKind::Pub) && matches!(parser.nth(1), Some(TokenKind::Interface))
+    {
+        interface_declaration(parser);
+    } else if parser.at(&TokenKind::Impl)
+        || parser.at(&TokenKind::Pub) && matches!(parser.nth(1), Some(TokenKind::Impl))
+    {
+        implementation_declaration(parser);
+    } else {
+        global_definition(parser);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HeaderRecoveryBoundary {
+    LineEnd,
+    OpeningBrace(SynchronizationBoundary),
+}
+
+fn report_pending_expected(parser: &mut Parser<'_>, expected: ExpectedForm) {
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) =
+            parser.report_at(ParseReason::ExpectedForm, expected, primary, None)
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+}
+
+fn at_header_boundary(parser: &Parser<'_>, boundary: HeaderRecoveryBoundary) -> bool {
+    match boundary {
+        HeaderRecoveryBoundary::LineEnd => parser.at(&TokenKind::LineEnd),
+        HeaderRecoveryBoundary::OpeningBrace(_) => parser.at(&TokenKind::LeftBrace),
+    }
+}
+
+fn recover_pending_header(
+    parser: &mut Parser<'_>,
+    recovery_start: usize,
+    boundary: HeaderRecoveryBoundary,
+) {
+    if parser.pending_recovery_count() == recovery_start {
+        return;
+    }
+    if !at_header_boundary(parser, boundary)
+        && !matches!(
+            parser.current(),
+            Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+        )
+    {
+        parser.start(NodeKind::Error);
+        while !at_header_boundary(parser, boundary)
+            && !matches!(
+                parser.current(),
+                Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+            )
+        {
+            let _ = parser.bump();
+        }
+        parser.finish();
+    }
+    if parser.at(&TokenKind::LineEnd) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
+    } else if parser.at(&TokenKind::EndOfFile) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
+    } else if at_header_boundary(parser, boundary)
+        && let HeaderRecoveryBoundary::OpeningBrace(synchronization) = boundary
+    {
+        parser.resolve_pending_at_current(recovery_start, synchronization);
+    }
+}
+
+fn header_boundary_expected(boundary: HeaderRecoveryBoundary) -> ExpectedForm {
+    match boundary {
+        HeaderRecoveryBoundary::LineEnd => ExpectedForm::LineEnd,
+        HeaderRecoveryBoundary::OpeningBrace(_) => ExpectedForm::LeftBrace,
+    }
+}
+
+fn declaration_body_starts(
+    parser: &mut Parser<'_>,
+    opening: SynchronizationBoundary,
+    closing: SynchronizationBoundary,
+) -> bool {
+    if parser.at(&TokenKind::LeftBrace) {
+        return true;
+    }
+
+    let recovery_start = parser.pending_recovery_count();
+    report_pending_expected(parser, ExpectedForm::LeftBrace);
+    if parser.at(&TokenKind::LineEnd) && parser.nth(1) == Some(&TokenKind::LeftBrace) {
+        consume_rejected_braced_body(parser, recovery_start, closing);
+        return false;
+    }
+
+    recover_pending_header(
+        parser,
+        recovery_start,
+        HeaderRecoveryBoundary::OpeningBrace(opening),
+    );
+    parser.at(&TokenKind::LeftBrace)
+}
+
+fn consume_rejected_braced_body(
+    parser: &mut Parser<'_>,
+    recovery_start: usize,
+    closing: SynchronizationBoundary,
+) {
+    parser.start(NodeKind::Error);
+    let _ = parser.bump();
+    let mut depth = 0_usize;
+    loop {
+        match parser.current() {
+            Some(TokenKind::LeftBrace) => {
+                depth = depth.saturating_add(1);
+                let _ = parser.bump();
+            }
+            Some(TokenKind::RightBrace) if depth == 1 => {
+                parser.resolve_pending_at_current(recovery_start, closing);
+                let _ = parser.bump();
+                break;
+            }
+            Some(TokenKind::RightBrace) if depth > 1 => {
+                depth -= 1;
+                let _ = parser.bump();
+            }
+            Some(TokenKind::EndOfFile) | None => {
+                parser
+                    .resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
+                break;
+            }
+            Some(_) => {
+                let _ = parser.bump();
+            }
+        }
+    }
+    parser.finish();
+}
+
+fn implementation_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ImplementationDeclaration);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::Impl, ExpectedForm::InterfaceApplication);
+    let head_recovery_start = parser.pending_recovery_count();
+    let _ = interface_application(parser);
+    if parser.pending_recovery_count() > head_recovery_start
+        && !matches!(
+            parser.current(),
+            Some(
+                TokenKind::Where | TokenKind::LeftBrace | TokenKind::LineEnd | TokenKind::EndOfFile
+            )
+        )
+    {
+        parser.start(NodeKind::Error);
+        while !matches!(
+            parser.current(),
+            Some(
+                TokenKind::Where | TokenKind::LeftBrace | TokenKind::LineEnd | TokenKind::EndOfFile
+            ) | None
+        ) {
+            let _ = parser.bump();
+        }
+        parser.finish();
+    }
+    if parser.at(&TokenKind::Where) {
+        where_clause(
+            parser,
+            HeaderRecoveryBoundary::OpeningBrace(
+                SynchronizationBoundary::ImplementationBodyOpeningBrace,
+            ),
+        );
+    }
+    recover_pending_header(
+        parser,
+        head_recovery_start,
+        HeaderRecoveryBoundary::OpeningBrace(
+            SynchronizationBoundary::ImplementationBodyOpeningBrace,
+        ),
+    );
+    if !declaration_body_starts(
+        parser,
+        SynchronizationBoundary::ImplementationBodyOpeningBrace,
+        SynchronizationBoundary::ImplementationClosingBrace,
+    ) {
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+
+    loop {
+        if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+            equation(parser, SynchronizationBoundary::ImplementationClosingBrace);
+        } else if matches!(
+            parser.current(),
+            Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+        ) {
+            break;
+        } else {
+            recover_implementation_method(parser);
+        }
+        if parser.at(&TokenKind::LineEnd) {
+            let _ = parser.bump();
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.finish();
+}
+
+fn recover_implementation_method(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::ImplementationMethod,
+            primary,
+            None,
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+
+    consume_to_line_or_brace(parser);
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::ImplementationClosingBrace,
+    );
+    parser.finish();
+}
+
+fn consume_to_line_or_brace(parser: &mut Parser<'_>) {
+    let mut nested_braces = 0_usize;
+    loop {
+        match parser.current() {
+            Some(TokenKind::LeftBrace) => {
+                nested_braces = nested_braces.saturating_add(1);
+                let _ = parser.bump();
+            }
+            Some(TokenKind::RightBrace) if nested_braces == 0 => break,
+            Some(TokenKind::RightBrace) => {
+                nested_braces = nested_braces.saturating_sub(1);
+                let _ = parser.bump();
+            }
+            Some(TokenKind::LineEnd) if nested_braces == 0 => break,
+            Some(TokenKind::EndOfFile) | None => break,
+            Some(_) => {
+                let _ = parser.bump();
+            }
+        }
+    }
+}
+
+fn interface_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::InterfaceDeclaration);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::Interface, ExpectedForm::Identifier);
+    let parameter_recovery_start = parser.pending_recovery_count();
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+        interface_parameter(parser);
+    } else {
+        report_pending_expected(parser, ExpectedForm::Identifier);
+    }
+    recover_pending_header(
+        parser,
+        parameter_recovery_start,
+        HeaderRecoveryBoundary::OpeningBrace(SynchronizationBoundary::InterfaceBodyOpeningBrace),
+    );
+    if !declaration_body_starts(
+        parser,
+        SynchronizationBoundary::InterfaceBodyOpeningBrace,
+        SynchronizationBoundary::InterfaceClosingBrace,
+    ) {
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+
+    let mut has_body_line = false;
+    loop {
+        if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+            has_body_line = true;
+            interface_method(parser);
+        } else if matches!(
+            parser.current(),
+            Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+        ) {
+            break;
+        } else {
+            has_body_line = true;
+            recover_interface_method(parser);
+        }
+        if parser.at(&TokenKind::LineEnd) {
+            let _ = parser.bump();
+        }
+    }
+    if !has_body_line {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::InterfaceMethod);
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.finish();
+}
+
+fn recover_interface_method(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::InterfaceMethod,
+            primary,
+            None,
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+    consume_to_line_or_brace(parser);
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::InterfaceClosingBrace,
+    );
+    parser.finish();
+}
+
+fn interface_parameter(parser: &mut Parser<'_>) {
+    if !parser.at(&TokenKind::Less) {
+        report_pending_expected(parser, ExpectedForm::InterfaceParameter);
+        return;
+    }
+    let _ = parser.bump();
+    let parameter_present = if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+        true
+    } else {
+        report_pending_expected(parser, ExpectedForm::InterfaceParameter);
+        false
+    };
+    if parser.at(&TokenKind::Greater) {
+        let _ = parser.bump();
+        return;
+    }
+    if parameter_present {
+        report_pending_expected(parser, ExpectedForm::InterfaceParameter);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::Greater | TokenKind::LeftBrace | TokenKind::LineEnd | TokenKind::EndOfFile)
+            | None
+    ) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::Greater) {
+        let _ = parser.bump();
+    }
+}
+
+fn interface_method(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::InterfaceMethod);
+    let recovery_start = parser.pending_recovery_count();
+    binder(parser);
+    if !parser.at(&TokenKind::Colon) {
+        report_pending_expected(parser, ExpectedForm::Colon);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(
+            parser,
+            recovery_start,
+            SynchronizationBoundary::InterfaceClosingBrace,
+        );
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    if !starts_type(parser) {
+        report_pending_expected(parser, ExpectedForm::Type);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(
+            parser,
+            recovery_start,
+            SynchronizationBoundary::InterfaceClosingBrace,
+        );
+        parser.finish();
+        return;
+    }
+    type_expression(parser);
+    if !matches!(
+        parser.current(),
+        Some(TokenKind::LineEnd | TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        parser.start(NodeKind::Error);
+        if let Some(primary) = parser.current_span()
+            && let Some(diagnostic) = parser.report_at(
+                ParseReason::ExpectedForm,
+                ExpectedForm::LineEnd,
+                primary,
+                None,
+            )
+        {
+            parser.mark_pending_recovery(diagnostic);
+        }
+        consume_to_line_or_brace(parser);
+        parser.finish();
+    }
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::InterfaceClosingBrace,
+    );
+    parser.finish();
+}
+
+fn where_clause(parser: &mut Parser<'_>, boundary: HeaderRecoveryBoundary) {
+    parser.start(NodeKind::WhereClause);
+    let recovery_start = parser.pending_recovery_count();
+    let _ = parser.bump();
+    let mut application_valid = interface_application(parser);
+    while application_valid {
+        if parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            application_valid = interface_application(parser);
+        } else if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+            report_pending_expected(parser, ExpectedForm::Comma);
+            application_valid = interface_application(parser);
+        } else {
+            break;
+        }
+    }
+    if parser.pending_recovery_count() == recovery_start
+        && !at_header_boundary(parser, boundary)
+        && !matches!(
+            parser.current(),
+            Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+        )
+    {
+        report_pending_expected(parser, header_boundary_expected(boundary));
+    }
+    recover_pending_header(parser, recovery_start, boundary);
+    parser.finish();
+}
+
+fn interface_application(parser: &mut Parser<'_>) -> bool {
+    parser.start(NodeKind::InterfaceApplication);
+    let recovery_start = parser.pending_recovery_count();
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        if parser
+            .nth(1)
+            .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+        {
+            parser.start(NodeKind::QualifiedName);
+            let _ = parser.bump();
+            let _ = parser.bump();
+            if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+                let _ = parser.bump();
+            } else {
+                report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+                parser.finish();
+                parser.finish();
+                return false;
+            }
+            parser.finish();
+        } else {
+            let _ = parser.bump();
+        }
+        if !parser.at(&TokenKind::Less) {
+            report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+            parser.finish();
+            return false;
+        }
+        let _ = parser.bump();
+        let argument_valid = if starts_type(parser) {
+            type_expression(parser);
+            true
+        } else {
+            report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+            false
+        };
+        if parser.at(&TokenKind::Greater) {
+            let _ = parser.bump();
+        } else {
+            if argument_valid {
+                report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+            }
+            while !matches!(
+                parser.current(),
+                Some(
+                    TokenKind::Greater
+                        | TokenKind::Where
+                        | TokenKind::LeftBrace
+                        | TokenKind::LineEnd
+                        | TokenKind::EndOfFile
+                ) | None
+            ) {
+                let _ = parser.bump();
+            }
+            if parser.at(&TokenKind::Greater) {
+                let _ = parser.bump();
+            }
+        }
+    } else {
+        report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+    }
+    parser.finish();
+    parser.pending_recovery_count() == recovery_start
+}
+
 fn type_declaration(parser: &mut Parser<'_>) {
     parser.start(NodeKind::TypeDeclaration);
-    let _ = parser.bump();
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+        if parser.at(&TokenKind::Opaque) {
+            let _ = parser.bump();
+        }
+    }
+    let _ = parser.expect(&TokenKind::Type, ExpectedForm::Type);
     if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
         let _ = parser.bump();
     } else {
@@ -314,17 +921,18 @@ fn global_definition(parser: &mut Parser<'_>) {
 }
 
 fn global_definition_form(parser: &Parser<'_>) -> Option<GlobalDefinitionForm> {
+    let offset = usize::from(parser.at(&TokenKind::Pub));
     selected_dialect()
         .global_definitions
         .iter()
         .copied()
         .find(|form| match form {
             GlobalDefinitionForm::Equational => matches!(
-                (parser.current(), parser.nth(1)),
+                (parser.nth(offset), parser.nth(offset.saturating_add(1))),
                 (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon))
             ),
             GlobalDefinitionForm::InlineOperational => matches!(
-                (parser.current(), parser.nth(1)),
+                (parser.nth(offset), parser.nth(offset.saturating_add(1))),
                 (Some(TokenKind::Fn), Some(TokenKind::Identifier(_)))
             ),
         })
@@ -332,6 +940,9 @@ fn global_definition_form(parser: &Parser<'_>) -> Option<GlobalDefinitionForm> {
 
 fn equational_global(parser: &mut Parser<'_>) {
     parser.start(NodeKind::EquationalGlobal);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
     parser.start(NodeKind::ExternalInterface);
     let name = match parser.current() {
         Some(TokenKind::Identifier(name)) => Some(name.clone()),
@@ -340,17 +951,53 @@ fn equational_global(parser: &mut Parser<'_>) {
     binder(parser);
     let _ = parser.expect(&TokenKind::Colon, ExpectedForm::Colon);
     type_expression(parser);
+    if parser.at(&TokenKind::Where) {
+        where_clause(parser, HeaderRecoveryBoundary::LineEnd);
+    }
     parser.finish();
-    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    expect_header_line_end(parser);
 
-    equation(parser);
+    equation(parser, SynchronizationBoundary::BlockClosingBrace);
     while parser.at(&TokenKind::LineEnd)
         && name
             .as_deref()
             .is_some_and(|name| looks_like_equation(parser, name))
     {
         let _ = parser.bump();
-        equation(parser);
+        equation(parser, SynchronizationBoundary::BlockClosingBrace);
+    }
+    parser.finish();
+}
+
+fn expect_header_line_end(parser: &mut Parser<'_>) {
+    if parser.at(&TokenKind::LineEnd) {
+        let _ = parser.bump();
+        return;
+    }
+
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::LineEnd,
+            primary,
+            None,
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+    ) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::LineEnd) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
+        let _ = parser.bump();
+    } else {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
     }
     parser.finish();
 }
@@ -377,24 +1024,58 @@ fn looks_like_equation(parser: &Parser<'_>, expected: &str) -> bool {
     }
 }
 
-fn equation(parser: &mut Parser<'_>) {
+fn equation(parser: &mut Parser<'_>, closing_brace: SynchronizationBoundary) {
     parser.start(NodeKind::Equation);
+    let recovery_start = parser.pending_recovery_count();
     binder(parser);
     if !starts_pattern(parser) {
-        parser.report(ParseReason::ExpectedForm, ExpectedForm::Pattern);
+        report_pending_expected(parser, ExpectedForm::Pattern);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(parser, recovery_start, closing_brace);
+        parser.finish();
+        return;
     }
     while starts_pattern(parser) {
         pattern(parser);
     }
-    let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
-    let recovery_start = parser.pending_recovery_count();
+    if !parser.at(&TokenKind::Equal) {
+        report_pending_expected(parser, ExpectedForm::Equal);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(parser, recovery_start, closing_brace);
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    if !starts_expression(parser) {
+        report_pending_expected(parser, ExpectedForm::Expression);
+        consume_to_line_or_brace(parser);
+        resolve_line_eof_or_brace(parser, recovery_start, closing_brace);
+        parser.finish();
+        return;
+    }
     expression(parser);
-    resolve_line_or_eof(parser, recovery_start);
+    if !matches!(
+        parser.current(),
+        Some(TokenKind::LineEnd | TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        if parser.at(&TokenKind::Semicolon) {
+            parser.error_at_current(ParseReason::Semicolon);
+        } else if parser.at(&TokenKind::And) {
+            parser.error_at_current(ParseReason::UnexpectedAnd);
+        } else {
+            report_pending_expected(parser, ExpectedForm::LineEnd);
+        }
+        consume_to_line_or_brace(parser);
+    }
+    resolve_line_eof_or_brace(parser, recovery_start, closing_brace);
     parser.finish();
 }
 
 fn inline_operational_global(parser: &mut Parser<'_>) {
     parser.start(NodeKind::InlineOperationalGlobal);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
     parser.start(NodeKind::InlineOperationalHeader);
     let _ = parser.bump();
     binder(parser);
@@ -408,7 +1089,23 @@ fn inline_operational_global(parser: &mut Parser<'_>) {
     let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
     let _ = parser.expect(&TokenKind::Arrow, ExpectedForm::Arrow);
     type_expression(parser);
+    if parser.at(&TokenKind::Where) {
+        where_clause(
+            parser,
+            HeaderRecoveryBoundary::OpeningBrace(
+                SynchronizationBoundary::OperationalBodyOpeningBrace,
+            ),
+        );
+    }
     parser.finish();
+    if !declaration_body_starts(
+        parser,
+        SynchronizationBoundary::OperationalBodyOpeningBrace,
+        SynchronizationBoundary::BlockClosingBrace,
+    ) {
+        parser.finish();
+        return;
+    }
     block(parser);
     parser.finish();
 }
@@ -525,7 +1222,7 @@ fn block(parser: &mut Parser<'_>) {
     if starts_expression(parser) {
         expression(parser);
     } else {
-        parser.report(ParseReason::ExpectedResult, ExpectedForm::Expression);
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Expression);
     }
     if parser.at(&TokenKind::LineEnd) {
         let _ = parser.bump();
@@ -635,13 +1332,24 @@ fn local_binding(parser: &mut Parser<'_>) {
 }
 
 fn resolve_line_or_eof(parser: &mut Parser<'_>, recovery_start: usize) {
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::BlockClosingBrace,
+    );
+}
+
+fn resolve_line_eof_or_brace(
+    parser: &mut Parser<'_>,
+    recovery_start: usize,
+    closing_brace: SynchronizationBoundary,
+) {
     if parser.at(&TokenKind::LineEnd) {
         parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
     } else if parser.at(&TokenKind::EndOfFile) {
         parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
     } else if parser.at(&TokenKind::RightBrace) {
-        parser
-            .resolve_pending_at_current(recovery_start, SynchronizationBoundary::BlockClosingBrace);
+        parser.resolve_pending_at_current(recovery_start, closing_brace);
     }
 }
 
@@ -705,6 +1413,9 @@ fn pattern_inner(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
         return;
     }
     match form {
+        Some(PatternForm::Binder) if starts_lowercase_qualification(parser) => {
+            reject_lowercase_qualification(parser);
+        }
         Some(PatternForm::Binder) => binder(parser),
         Some(PatternForm::Wildcard) => {
             parser.start(NodeKind::WildcardPattern);
@@ -755,7 +1466,14 @@ fn starts_pattern(parser: &Parser<'_>) -> bool {
 
 fn constructor_pattern(parser: &mut Parser<'_>, allow_juxtaposed_payload: bool) {
     parser.start(NodeKind::ConstructorPattern);
-    let _ = parser.bump();
+    if parser
+        .nth(1)
+        .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+    {
+        qualified_name(parser, true);
+    } else {
+        let _ = parser.bump();
+    }
     if parser.at(&TokenKind::LeftParen) {
         let _ = parser.bump();
         let tuple_start = parser.event_position();
@@ -819,24 +1537,39 @@ fn type_expression(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
+fn starts_type(parser: &Parser<'_>) -> bool {
+    atomic_type_form(parser).is_some() || starts_lowercase_qualification(parser)
+}
+
 fn atomic_type(parser: &mut Parser<'_>) {
     parser.start(NodeKind::AtomicType);
-    match atomic_type_form(parser) {
-        Some(AtomicTypeForm::Int | AtomicTypeForm::Bool | AtomicTypeForm::Unit) => {
-            let _ = parser.bump();
-            if parser.at(&TokenKind::Less) {
-                parser.error_at_current(ParseReason::UnexpectedToken);
-                type_arguments(parser);
+    if starts_lowercase_qualification(parser) {
+        reject_lowercase_qualification(parser);
+    } else {
+        match atomic_type_form(parser) {
+            Some(AtomicTypeForm::Int | AtomicTypeForm::Bool | AtomicTypeForm::Unit) => {
+                let _ = parser.bump();
+                if parser.at(&TokenKind::Less) {
+                    parser.error_at_current(ParseReason::UnexpectedToken);
+                    type_arguments(parser);
+                }
             }
-        }
-        Some(AtomicTypeForm::Nominal) => {
-            let _ = parser.bump();
-            if parser.at(&TokenKind::Less) {
-                type_arguments(parser);
+            Some(AtomicTypeForm::Nominal) => {
+                if parser
+                    .nth(1)
+                    .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+                {
+                    qualified_name(parser, true);
+                } else {
+                    let _ = parser.bump();
+                }
+                if parser.at(&TokenKind::Less) {
+                    type_arguments(parser);
+                }
             }
+            Some(AtomicTypeForm::Parenthesized) => parenthesized_type(parser),
+            _ => parser.report(ParseReason::ExpectedForm, ExpectedForm::Type),
         }
-        Some(AtomicTypeForm::Parenthesized) => parenthesized_type(parser),
-        _ => parser.report(ParseReason::ExpectedForm, ExpectedForm::Type),
     }
     parser.finish();
 }
@@ -866,6 +1599,39 @@ fn atomic_type_form(parser: &Parser<'_>) -> Option<AtomicTypeForm> {
                     | (AtomicTypeForm::Parenthesized, Some(TokenKind::LeftParen))
             )
         })
+}
+
+pub(super) fn qualified_name(parser: &mut Parser<'_>, uppercase_member: bool) {
+    parser.start(NodeKind::QualifiedName);
+    expect_upper_identifier(parser);
+    let _ = parser.expect(&TokenKind::Dot, ExpectedForm::Identifier);
+    if uppercase_member {
+        expect_upper_identifier(parser);
+    } else {
+        expect_import_name(parser);
+    }
+    parser.finish();
+}
+
+pub(super) fn starts_lowercase_qualification(parser: &Parser<'_>) -> bool {
+    matches!(parser.current(), Some(TokenKind::Identifier(_)))
+        && parser
+            .nth(1)
+            .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+}
+
+pub(super) fn reject_lowercase_qualification(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    parser.error_at_current(ParseReason::UnexpectedToken);
+    let _ = parser.bump();
+    let _ = parser.bump();
+    if matches!(
+        parser.current(),
+        Some(TokenKind::Identifier(_) | TokenKind::UpperIdentifier(_))
+    ) {
+        let _ = parser.bump();
+    }
+    parser.finish();
 }
 
 fn parenthesized_type(parser: &mut Parser<'_>) {
@@ -903,6 +1669,8 @@ fn starts_expression(parser: &Parser<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::{lexer::lex, source::SourceFile};
+
     use super::*;
 
     mod mock_nested_feature {
@@ -965,5 +1733,19 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_block_without_its_result_reports_an_expected_expression() {
+        let source = SourceFile::new("missing-block-result.ash", "main : Unit\nmain () = {\n}\n")
+            .expect("the parser fixture should fit");
+        let tree = super::super::parse(lex(&source).expect("the parser fixture should lex"));
+
+        let diagnostic = tree
+            .parse_diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.expected.as_deref() == Some("an expression"))
+            .expect("the missing block result should require an expression");
+        assert_eq!(diagnostic.reason, ParseReason::ExpectedForm);
     }
 }

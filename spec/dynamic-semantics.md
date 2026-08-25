@@ -1,6 +1,6 @@
 # Dynamic Semantics
 
-Mini-Ash evaluation is defined by one deterministic small-step relation over
+Ash evaluation is defined by one deterministic small-step relation over
 configurations `CONFIG(heap, environment, control, continuation)`. The heap is
 fresh for one evaluation and maps numeric locations to tuples, completed
 constructors, uninitialized recursive data slots, or aliases. Tuple elements
@@ -16,6 +16,28 @@ identity or observable mutation.
 
 Core type abstractions and applications are static evidence. They are not
 runtime values, do not extend the environment, and allocate no heap cells.
+
+## Initial configuration
+
+Elaboration produces one linked pure Core expression: dependency-ordered
+recursive global groups around the generated application of the entry module's
+local `main` to unit. Evaluation starts with that expression as control, a
+fresh empty heap and environment, and an empty continuation:
+
+```sequent
+E-Program-Start :=
+  elaborate(modules, entry) = linked_program
+  validate(linked_program) = success
+  ===>
+  INITIAL(modules, entry) = CONFIG(empty_heap, empty_environment, linked_program, empty_continuation)
+```
+
+`linked_program` is the dependency-ordered groups around `main ()` described in
+[Elaboration](elaboration.md). The second premise requires the independent
+whole-program validation boundary before evaluation. Neither premise performs
+module loading at runtime. The ordinary recursive-binding and application rules
+enter the linked groups and call `main`. Imports have no initialization step,
+and modules are not runtime values.
 
 ## Type erasure
 
@@ -36,6 +58,70 @@ family type-erasure-steps:
 
 The unchanged heap and environment make erasure observable only as progress in
 the machine. No source program can inspect a type parameter or type argument.
+
+## Generated interface evidence
+
+Linking preserves each checked interface selection. Linked interface-evidence
+validation authenticates it, and Core synthesis lowers it before evaluation.
+An abstract evidence method becomes an ordinary function parameter. A concrete
+evidence method becomes a binder occurrence for the implementation method in
+its defining module's recursive group. Looking up that recursive function
+binder materializes a lexical closure under the existing recursive-binding
+behavior. No interface identity or selection record reaches the machine.
+
+For a generic implementation method, lowering uses the recorded head
+substitution to form an ordinary Core type application. When evaluation enters
+that Core node, `E-Type-Application` erases it to its function without inspecting
+the type arguments. The recorded substitution itself does not reach the
+evaluator. The existing strict application transitions then evaluate and apply
+every recursively generated prerequisite method in declaration order. The
+result is the lexical method closure that accepts the source value argument. At
+a constrained-global call, the same transitions apply its evidence functions
+before the surrounding source arguments because elaboration nested the
+applications in that order. Abstract prerequisite evidence uses ordinary
+environment lookup; concrete prerequisite evidence uses ordinary recursive
+function lookup and closure materialization.
+
+There is no runtime interface value, dictionary, interface or implementation
+registry, implementation lookup, interface dispatch, registration step, or
+interface-specific failure mode. Evidence construction uses only type erasure,
+recursive binding, ordinary binder lookup and closure materialization, and the
+strict application transitions below. It adds no Core node and requires no new
+evaluation rule.
+
+The executable test
+`generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace`
+checks this program:
+
+```ash
+type Wrap<A> = Wrap(A)
+
+interface Read<A> {
+    read : A -> Int
+}
+
+impl Read<Int> {
+    read value = value
+}
+
+impl Read<Wrap<A>> where Read<A> {
+    read (Wrap(value)) = read value
+}
+
+main : Unit -> Int
+main () = read(Wrap(42))
+```
+
+The test trace enters the source application, its evidence application, the
+generic method's type application, and the variable occurrences for the
+generic implementation method and concrete prerequisite method in that order.
+A trace event enters an occurrence node, not a binder identity. The trace enters
+the prerequisite occurrence before the source `Wrap(42)` argument and produces
+`42`. It contains at most 32 node-entry events, and the machine reaches at most
+six continuation frames. These bounds describe this fixed program. They follow
+from the existing erasure, lookup, recursive-binding, and application
+transitions; they are not a new transition or a bound on arbitrary prerequisite
+chains.
 
 ## Bindings
 
@@ -58,7 +144,7 @@ family binding-steps:
 
 `E-Let-Enter` saves the lexical environment that precedes the binding.
 `E-Let-Continue` uses that environment plus the pattern bindings. Semicolons
-separate semantic fields; Mini-Ash source does not contain semicolons.
+separate semantic fields; Ash source does not contain semicolons.
 
 ## Recursive bindings
 
@@ -119,7 +205,8 @@ The executable test `dynamic_recursive_group_example_is_executable` exercises
 mutual scope and lexical recursive closure materialization:
 
 ```ash
-{
+main : Unit -> Int
+main () = {
     let rec first : Unit -> Int = fn(ignored) {
         second ()
     }
@@ -260,8 +347,10 @@ rules compute the primitive result.
 
 ## Observation
 
-Successful evaluation retains the heap with the result value. Observation
-renders tuples and constructors structurally. A constructor with a tuple
+Successful evaluation of the generated entry application retains the heap
+with the result value. The observation pairs that value with the closed result
+type established for `main`. Observation renders tuples and constructors
+structurally. A constructor with a tuple
 payload renders its components as constructor fields. A location already on
 the active rendering path renders as `<cycle>`. Removing a location from the
 active path after its subtree means shared acyclic data renders in full at each
@@ -278,7 +367,8 @@ allocation and active-path rendering:
 type Stream =
     Next(Int, Stream)
 
-{
+main : Unit -> Stream
+main () = {
     let rec ones : Stream = Next(1, ones)
     ones
 }
@@ -309,21 +399,25 @@ a derived sequence.
 ## Representative derivations
 
 The following matrix connects each derivation to its executable specification
-test. The prose derivations omit grouping erased by elaboration and use renamed
-binders where needed to show distinct lexical identities.
+test. Every case first enters its module's recursive global group and applies
+`main` through `E-Let-Rec-Allocate`, `E-Let-Rec-Body`, and `E-Beta`. The matrix
+lists the principal rules after that common entry prefix. The prose derivations
+omit grouping erased by elaboration and use renamed binders where needed to show
+distinct lexical identities.
 
 | Case | Executable test | Principal rule sequence |
 | --- | --- | --- |
 | `V-003` | `dynamic_binding_derivation_example_v003_is_executable` | `E-Let-Enter`, `E-Let-Continue`, `E-Add-Values` |
 | `V-001` | `dynamic_primitive_derivation_example_v001_is_executable` | `E-Add-Right`, `E-Multiply-Values`, `E-Add-Values` |
-| `V-002` | `dynamic_application_derivation_example_v002_is_executable` | `E-Let-Rec-Allocate`, `E-Let-Rec-Body`, `E-Beta`, `E-Add-Values` |
+| `V-002` | `dynamic_application_derivation_example_v002_is_executable` | `E-Beta`, `E-Add-Values` |
 | `V-004` | `dynamic_capture_derivation_example_v004_is_executable` | `E-Let-Enter`, `E-Let-Continue`, `E-Beta`, `E-Add-Values` |
-| `V-008` | `dynamic_nested_application_derivation_example_v008_is_executable` | `E-Let-Rec-Allocate`, `E-Let-Rec-Body`, strict application frames, `E-Beta`, and integer primitives |
+| `V-008` | `dynamic_nested_application_derivation_example_v008_is_executable` | Strict application frames, two `E-Beta` steps, and integer primitives |
 
 ### Binding and shadowing: V-003
 
 ```ash
-{
+main : Unit -> Int
+main () = {
     let value = 1
     let value = value + 1
     value
@@ -333,12 +427,13 @@ binders where needed to show distinct lexical identities.
 Elaboration gives the two `value` binders distinct identities. The first
 `E-Let-Continue` extends the environment for the second initializer.
 `E-Add-Values` produces `2`, and the second continuation extends the result
-environment with that integer value. Thus the file evaluates to `2`.
+environment with that integer value. Thus `main ()` evaluates to `2`.
 
 ### Primitive precedence: V-001
 
 ```ash
-1 + 2 * 3
+main : Unit -> Int
+main () = 1 + 2 * 3
 ```
 
 Precedence produces `1 + (2 * 3)`. Because the left addition operand is already
@@ -351,20 +446,23 @@ a value, `E-Add-Right` carries the `E-Multiply-Values` step to obtain `1 + 6`.
 increment : Int -> Int
 increment value = value + 1
 
-increment 41
+main : Unit -> Int
+main () = increment 41
 ```
 
-The global elaborates as a one-member recursive binding.
-`E-Let-Rec-Allocate` installs its function template in the recursive
-environment without allocating a data slot. The empty initialization sequence
-then enters the file result through `E-Let-Rec-Body`. Looking up `increment`
-materializes the closure value. `E-Beta` extends its captured environment with
-the integer value `41`, and `E-Add-Values` produces `42`.
+The module's `increment` and `main` globals elaborate as one two-member
+recursive binding. `E-Let-Rec-Allocate` installs both function templates
+without allocating a data slot. The empty initialization sequence enters the
+generated entry application through `E-Let-Rec-Body`. The common entry
+`E-Beta` enters the body of `main`; looking up `increment` then materializes its
+closure. A second `E-Beta` extends that closure's captured environment with the
+integer value `41`, and `E-Add-Values` produces `42`.
 
 ### Lexical capture: V-004
 
 ```ash
-{
+main : Unit -> Int
+main () = {
     let offset = 40
     let add_offset : Int -> Int = fn(value) {
         value + offset
@@ -389,11 +487,13 @@ fn double(value : Int) -> Int {
     value * 2
 }
 
-double (increment 20)
+main : Unit -> Int
+main () = double (increment 20)
 ```
 
-The two globals elaborate as one recursive group. Allocation installs both
-function templates in the recursive environment; it allocates no data slots.
-Strict application frames evaluate `increment 20` before applying `double`:
-`E-Beta` enters `20 + 1`, then `E-Add-Values` produces `21`. The outer
-`E-Beta` enters `21 * 2`, and `E-Multiply-Values` produces `42`.
+The three globals elaborate as one recursive group. Allocation installs the
+`increment`, `double`, and `main` function templates in the recursive
+environment; it allocates no data slots. After the common entry `E-Beta` enters
+the body of `main`, strict application frames evaluate `increment 20` before
+applying `double`: `E-Beta` enters `20 + 1`, then `E-Add-Values` produces `21`.
+The outer `E-Beta` enters `21 * 2`, and `E-Multiply-Values` produces `42`.

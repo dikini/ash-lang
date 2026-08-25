@@ -251,7 +251,7 @@ mod tests {
             Some(InternalReason::UnexpectedFinish)
         );
         assert_eq!(
-            malformed(Vec::new(), vec![Event::Start(NodeKind::Program)]),
+            malformed(Vec::new(), vec![Event::Start(NodeKind::Module)]),
             Some(InternalReason::UnclosedNode)
         );
     }
@@ -266,9 +266,9 @@ mod tests {
             malformed(
                 Vec::new(),
                 vec![
-                    Event::Start(NodeKind::Program),
+                    Event::Start(NodeKind::Module),
                     Event::Finish,
-                    Event::Start(NodeKind::Program),
+                    Event::Start(NodeKind::Module),
                     Event::Finish,
                 ],
             ),
@@ -282,7 +282,7 @@ mod tests {
             malformed(
                 Vec::new(),
                 vec![
-                    Event::Start(NodeKind::Program),
+                    Event::Start(NodeKind::Module),
                     Event::Token(0),
                     Event::Finish,
                 ],
@@ -293,7 +293,7 @@ mod tests {
             malformed(
                 tokens(""),
                 vec![
-                    Event::Start(NodeKind::Program),
+                    Event::Start(NodeKind::Module),
                     Event::Token(0),
                     Event::Token(0),
                     Event::Finish,
@@ -305,7 +305,7 @@ mod tests {
             malformed(
                 tokens("1"),
                 vec![
-                    Event::Start(NodeKind::Program),
+                    Event::Start(NodeKind::Module),
                     Event::Token(0),
                     Event::Finish,
                 ],
@@ -316,7 +316,7 @@ mod tests {
             malformed(
                 tokens("1"),
                 vec![
-                    Event::Start(NodeKind::Program),
+                    Event::Start(NodeKind::Module),
                     Event::Token(1),
                     Event::Token(0),
                     Event::Finish,
@@ -333,7 +333,7 @@ mod tests {
                 .stack_size(64 * 1024)
                 .spawn_scoped(scope, || {
                     let mut node = ConcreteNode {
-                        kind: NodeKind::Program,
+                        kind: NodeKind::Module,
                         children: Vec::new(),
                     };
                     for _ in 0..4_096 {

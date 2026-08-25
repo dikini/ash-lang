@@ -90,6 +90,9 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
     let start_event = parser.event_position();
     parser.start(NodeKind::PrimaryExpression);
     match primary_form(parser, forms) {
+        Some(PrimaryForm::Identifier) if grammar::starts_lowercase_qualification(parser) => {
+            grammar::reject_lowercase_qualification(parser);
+        }
         Some(
             PrimaryForm::Integer
             | PrimaryForm::Boolean
@@ -98,6 +101,7 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
         ) => {
             let _ = parser.bump();
         }
+        Some(PrimaryForm::Qualified) => grammar::qualified_name(parser, false),
         Some(PrimaryForm::Parenthesized) => parse_parenthesized(parser),
         _ => parser.report(ParseReason::ExpectedOperand, ExpectedForm::Operand),
     }
@@ -147,15 +151,22 @@ fn parse_parenthesized(parser: &mut Parser<'_>) {
         );
         let _ = parser.bump();
     } else {
-        if parser.at(&TokenKind::RightBrace) {
+        let recovered_at_owner_boundary = if parser.at(&TokenKind::RightBrace) {
             parser.resolve_pending_at_current(
                 recovery_start,
                 SynchronizationBoundary::BlockClosingBrace,
             );
+            true
         } else if parser.at(&TokenKind::EndOfFile) {
             parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
-        }
+            true
+        } else {
+            false
+        };
         report_unclosed_group(parser, opening);
+        if recovered_at_owner_boundary {
+            parser.mark_recovered_expression_group_boundary();
+        }
     }
     parser.finish();
 }
@@ -179,22 +190,20 @@ fn starts_primary_in(parser: &Parser<'_>, forms: &[PrimaryForm]) -> bool {
 }
 
 fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryForm> {
-    forms.iter().copied().find(|form| {
-        matches!(
-            (form, parser.current()),
+    forms
+        .iter()
+        .copied()
+        .find(|form| match (form, parser.current()) {
             (PrimaryForm::Integer, Some(TokenKind::Integer(_)))
-                | (
-                    PrimaryForm::Boolean,
-                    Some(TokenKind::True | TokenKind::False)
-                )
-                | (PrimaryForm::Identifier, Some(TokenKind::Identifier(_)))
-                | (
-                    PrimaryForm::UpperIdentifier,
-                    Some(TokenKind::UpperIdentifier(_))
-                )
-                | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen))
-        )
-    })
+            | (PrimaryForm::Boolean, Some(TokenKind::True | TokenKind::False))
+            | (PrimaryForm::Identifier, Some(TokenKind::Identifier(_)))
+            | (PrimaryForm::UpperIdentifier, Some(TokenKind::UpperIdentifier(_)))
+            | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen)) => true,
+            (PrimaryForm::Qualified, Some(TokenKind::UpperIdentifier(_))) => parser
+                .nth(1)
+                .is_some_and(|kind| matches!(kind, TokenKind::Dot)),
+            _ => false,
+        })
 }
 
 fn consume_repeated_non_associative(
@@ -305,6 +314,7 @@ mod tests {
             events: Vec::new(),
             diagnostics: Vec::new(),
             pending_recoveries: Vec::new(),
+            recovered_expression_group_boundary: false,
             nesting_depth: 0,
             resource_failure: None,
             syntax_budget: crate::syntax_resource::SyntaxBudget::default(),

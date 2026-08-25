@@ -5,4 +5,5 @@ fn value(input : Int) -> Int {
     input + 1
 }
 
-value 1
+main : Unit -> Int
+main () = value 1

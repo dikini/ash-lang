@@ -1,0 +1,270 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use ash::{
+    interface::{ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId},
+    module::{ModuleRoots, load_module_graph},
+    resolve::{DependencyExports, resolve_module},
+    resolved::{BinderId, CheckedModule},
+};
+
+static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct ModuleTree(PathBuf);
+
+impl ModuleTree {
+    fn create() -> Self {
+        loop {
+            let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "ash-interface-identity-diamond-{}-{id}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("interface identity tree should be creatable: {error}"),
+            }
+        }
+    }
+
+    fn write(&self, relative: &str, text: &str) -> PathBuf {
+        let path = self.0.join(relative);
+        fs::write(&path, text).expect("fixture module should be writable");
+        path
+    }
+}
+
+impl Drop for ModuleTree {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BaseIdentities {
+    interface: InterfaceId,
+    method: MethodId,
+    implementation: ImplId,
+    implementation_method: ImplMethodId,
+    prerequisite: RequirementId,
+}
+
+#[derive(Clone, Copy)]
+struct ArmIdentities {
+    global: BinderId,
+    requirement: RequirementId,
+}
+
+fn file_name(module: &ash::module::LoadedModule) -> &Path {
+    Path::new(module.source().display_path())
+        .file_name()
+        .expect("fixture module should have a file name")
+        .as_ref()
+}
+
+fn dependency_exports<'a>(
+    module: &'a ash::module::LoadedModule,
+    checked: &'a [CheckedModule],
+) -> Vec<DependencyExports<'a>> {
+    module
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            let dependency = checked
+                .iter()
+                .find(|checked| checked.module() == edge.target())
+                .expect("dependency order should check the target first");
+            DependencyExports::new(edge, dependency.exports())
+                .expect("checked summary should authenticate its edge")
+        })
+        .collect()
+}
+
+#[test]
+fn preserves_all_interface_identity_families_through_dependency_diamond() {
+    let tree = ModuleTree::create();
+    let entry = tree.write("entry.ash", "import left as Left\nimport right as Right\n");
+    tree.write(
+        "base.ash",
+        concat!(
+            "pub type Wrap<A> = Wrap(A)\n",
+            "pub interface Transform<A> {\ntransform : A -> A\n}\n",
+            "pub impl Transform<Wrap<A>> where Transform<A> {\n",
+            "transform value = value\n}\n",
+        ),
+    );
+    tree.write(
+        "left.ash",
+        concat!(
+            "import base as Base\n",
+            "pub left : A -> A where Base.Transform<A>\n",
+            "left value = value\n",
+        ),
+    );
+    tree.write(
+        "right.ash",
+        concat!(
+            "import base as Base\n",
+            "pub right : A -> A where Base.Transform<A>\n",
+            "right value = value\n",
+        ),
+    );
+
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).expect("diamond should load");
+    assert_eq!(graph.modules().len(), 4);
+    let base_module = graph
+        .modules()
+        .iter()
+        .find(|module| file_name(module) == Path::new("base.ash"))
+        .expect("base module should be present");
+    assert_eq!(
+        graph
+            .modules()
+            .iter()
+            .flat_map(|module| module.dependencies())
+            .filter(|edge| edge.target() == base_module.id())
+            .count(),
+        2,
+        "left and right should each directly import the shared base",
+    );
+
+    let mut checked = Vec::new();
+    let mut base: Option<BaseIdentities> = None;
+    let mut left: Option<ArmIdentities> = None;
+    let mut right: Option<ArmIdentities> = None;
+
+    for module in graph.modules() {
+        let dependencies = dependency_exports(module, &checked);
+        let resolved =
+            resolve_module(module, &dependencies).expect("diamond module should resolve");
+
+        match file_name(module)
+            .to_str()
+            .expect("fixture name should be UTF-8")
+        {
+            "base.ash" => {}
+            "left.ash" | "right.ash" => {
+                let identities = base.expect("base should check before either diamond arm");
+                let imported_interface = resolved
+                    .imported_facts()
+                    .interface(identities.interface)
+                    .expect("each arm should directly import the base interface fact");
+                assert_eq!(imported_interface.id, identities.interface);
+                assert_eq!(imported_interface.methods[0].id, identities.method);
+
+                let imported_implementation = resolved
+                    .imported_facts()
+                    .implementation(identities.implementation)
+                    .expect("each arm should directly import the base implementation fact");
+                assert_eq!(imported_implementation.id, identities.implementation);
+                assert_eq!(
+                    imported_implementation.methods[0].id,
+                    identities.implementation_method
+                );
+                assert_eq!(imported_implementation.methods[0].method, identities.method);
+                assert_eq!(
+                    imported_implementation.prerequisites[0].id,
+                    identities.prerequisite
+                );
+            }
+            "entry.ash" => {
+                let identities = base.expect("base should check before the entry");
+                let left = left.expect("left should check before the entry");
+                let right = right.expect("right should check before the entry");
+                assert!(
+                    resolved
+                        .imported_facts()
+                        .implementation(identities.implementation)
+                        .is_none(),
+                    "entry must not receive the base implementation transitively",
+                );
+                assert_ne!(left.global, right.global);
+                assert_ne!(left.requirement, right.requirement);
+                assert!(resolved.imported_facts().global(left.global).is_some());
+                assert!(resolved.imported_facts().global(right.global).is_some());
+                let imported_interface = resolved
+                    .imported_facts()
+                    .interface(identities.interface)
+                    .expect("the constrained summaries should retain hidden interface metadata");
+                assert_eq!(imported_interface.id, identities.interface);
+                assert_eq!(imported_interface.methods[0].id, identities.method);
+
+                for arm in [left, right] {
+                    let imported = resolved
+                        .imported_facts()
+                        .global(arm.global)
+                        .expect("entry should directly import each arm's constrained global");
+                    let [requirement] = imported.scheme.requirements.as_ref() else {
+                        panic!("the imported constrained global should retain one requirement");
+                    };
+                    assert_eq!(requirement.id, arm.requirement);
+                    assert_eq!(requirement.interface, identities.interface);
+                }
+            }
+            other => panic!("unexpected fixture module {other}"),
+        }
+
+        let module_checked = ash::elaborate::check_module(resolved)
+            .expect("every module in the identity diamond should check");
+        match file_name(module)
+            .to_str()
+            .expect("fixture name should be UTF-8")
+        {
+            "base.ash" => {
+                let [interface] = module_checked.interface_facts() else {
+                    panic!("base should retain one interface fact");
+                };
+                let [method] = interface.methods.as_ref() else {
+                    panic!("base interface should retain one method fact");
+                };
+                let [implementation] = module_checked.implementation_facts() else {
+                    panic!("base should retain one implementation fact");
+                };
+                let [implementation_method] = implementation.methods.as_ref() else {
+                    panic!("base implementation should retain one method mapping");
+                };
+                let [prerequisite] = implementation.prerequisites.as_ref() else {
+                    panic!("base implementation should retain one prerequisite");
+                };
+                base = Some(BaseIdentities {
+                    interface: interface.id,
+                    method: method.id,
+                    implementation: implementation.id,
+                    implementation_method: implementation_method.id,
+                    prerequisite: prerequisite.id,
+                });
+            }
+            "left.ash" => {
+                let [scheme] = module_checked.schemes() else {
+                    panic!("left should retain one constrained global");
+                };
+                let [requirement] = scheme.scheme.requirements.as_ref() else {
+                    panic!("left global should retain one requirement");
+                };
+                left = Some(ArmIdentities {
+                    global: scheme.binder,
+                    requirement: requirement.id,
+                });
+            }
+            "right.ash" => {
+                let [scheme] = module_checked.schemes() else {
+                    panic!("right should retain one constrained global");
+                };
+                let [requirement] = scheme.scheme.requirements.as_ref() else {
+                    panic!("right global should retain one requirement");
+                };
+                right = Some(ArmIdentities {
+                    global: scheme.binder,
+                    requirement: requirement.id,
+                });
+            }
+            "entry.ash" => {}
+            _ => unreachable!("fixture names were checked before module checking"),
+        }
+        checked.push(module_checked);
+    }
+}

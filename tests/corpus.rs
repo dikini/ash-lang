@@ -1,13 +1,52 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use ash::{
-    driver::{PipelineFailure, run_source},
+    driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
     elaborate::{TypeError, TypeReason},
     lexer::LexReason,
+    module::{LoadGraphError, ModuleRoots},
     parser::ParseReason,
     resolve::ResolveReason,
-    source::SourceFile,
 };
+
+static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct TempSource(PathBuf);
+
+impl TempSource {
+    fn write(text: &str) -> Self {
+        loop {
+            let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("ash-corpus-inline-{}-{id}.ash", std::process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    use std::io::Write as _;
+                    file.write_all(text.as_bytes())
+                        .expect("the inline corpus source should be writable");
+                    return Self(path);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("the inline corpus source should be creatable: {error}"),
+            }
+        }
+    }
+}
+
+impl Drop for TempSource {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
 
 struct ValidCase {
     id: &'static str,
@@ -134,15 +173,6 @@ const VALID_CASES: &[ValidCase] = &[
 ];
 
 const INVALID_CASES: &[InvalidCase] = &[
-    InvalidCase {
-        id: "P-001",
-        path: "tests/fixtures/first-stratum/parse/p001-missing-result.ash",
-        stage: Stage::Parser,
-        reason: ExpectedReason::Parser {
-            parser: &[ParseReason::ExpectedResult],
-            lexical: &[],
-        },
-    },
     InvalidCase {
         id: "P-002",
         path: "tests/fixtures/first-stratum/parse/p002-unclosed-group.ash",
@@ -302,22 +332,18 @@ fn ash(path: &Path) -> std::process::Output {
         .expect("the Ash executable should start")
 }
 
-fn source(case: &InvalidCase) -> SourceFile {
-    let text = fs::read_to_string(case.path)
-        .unwrap_or_else(|error| panic!("{} could not read {}: {error}", case.id, case.path));
-    SourceFile::new(case.path, text)
-        .unwrap_or_else(|error| panic!("{} could not admit its fixture: {error}", case.id))
+fn run(path: impl Into<PathBuf>) -> Result<ash::driver::Observation, FileFailure> {
+    run_path(RunConfiguration {
+        entry: path.into(),
+        roots: ModuleRoots::empty(),
+    })
 }
 
 #[test]
 fn every_valid_corpus_presentation_has_its_exact_library_and_cli_observation() {
     for case in VALID_CASES {
-        let text = fs::read_to_string(case.path)
-            .unwrap_or_else(|error| panic!("{} could not read {}: {error}", case.id, case.path));
-        let source = SourceFile::new(case.path, text)
-            .unwrap_or_else(|error| panic!("{} could not admit its fixture: {error}", case.id));
-        let observation = run_source(source)
-            .unwrap_or_else(|error| panic!("{} was rejected by {error}", case.id));
+        let observation =
+            run(case.path).unwrap_or_else(|error| panic!("{} was rejected by {error}", case.id));
 
         assert_eq!(
             observation.value.to_string(),
@@ -347,7 +373,7 @@ fn every_valid_corpus_presentation_has_its_exact_library_and_cli_observation() {
 #[test]
 fn every_invalid_corpus_case_stops_at_its_owning_stage_and_cli_boundary() {
     for case in INVALID_CASES {
-        let failure = match run_source(source(case)) {
+        let failure = match run(case.path) {
             Ok(_) => panic!("{} unexpectedly reached evaluation", case.id),
             Err(failure) => failure,
         };
@@ -361,12 +387,12 @@ fn every_invalid_corpus_case_stops_at_its_owning_stage_and_cli_boundary() {
     }
 }
 
-fn assert_source_reason(case: &InvalidCase, failure: &PipelineFailure) {
+fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
     match (case.stage, case.reason, failure) {
         (
             Stage::Lexical,
             ExpectedReason::Lexical { lexical, parser },
-            PipelineFailure::Syntax(actual),
+            FileFailure::Graph(LoadGraphError::Syntax(actual)),
         ) => {
             assert_eq!(actual.resource, None, "{}", case.id);
             assert_eq!(
@@ -393,7 +419,7 @@ fn assert_source_reason(case: &InvalidCase, failure: &PipelineFailure) {
         (
             Stage::Parser,
             ExpectedReason::Parser { parser, lexical },
-            PipelineFailure::Syntax(actual),
+            FileFailure::Graph(LoadGraphError::Syntax(actual)),
         ) => {
             assert_eq!(actual.resource, None, "{}", case.id);
             assert_eq!(
@@ -420,12 +446,12 @@ fn assert_source_reason(case: &InvalidCase, failure: &PipelineFailure) {
         (
             Stage::Resolution,
             ExpectedReason::Resolution(expected),
-            PipelineFailure::Resolution(actual),
+            FileFailure::Pipeline(PipelineFailure::Resolution(actual)),
         ) => assert_eq!(actual.reason, expected, "{}", case.id),
         (
             Stage::Typing,
             ExpectedReason::Typing(expected),
-            PipelineFailure::Typing(TypeError::Source(actual)),
+            FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Source(actual))),
         ) => assert_eq!(actual.reason, expected, "{}", case.id),
         _ => panic!(
             "{} expected {:?} at {:?}, found {failure:?}",
@@ -436,10 +462,9 @@ fn assert_source_reason(case: &InvalidCase, failure: &PipelineFailure) {
 
 #[test]
 fn bare_carriage_return_is_a_structured_lexical_rejection() {
-    let source = SourceFile::new("bare-cr.ash", "1\r2")
-        .expect("the excluded source should fit the source model");
-    let failure = run_source(source).expect_err("bare CR must not reach evaluation");
-    let PipelineFailure::Syntax(actual) = failure else {
+    let source = TempSource::write("\rmain : Unit -> Int\nmain () = 1\n");
+    let failure = run(source.0.clone()).expect_err("bare CR must not reach evaluation");
+    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
         panic!("bare CR should fail in the syntax pipeline");
     };
     assert_eq!(
@@ -455,10 +480,9 @@ fn bare_carriage_return_is_a_structured_lexical_rejection() {
 
 #[test]
 fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
-    let source = SourceFile::new("mixed-syntax.ash", "@\n(1\n")
-        .expect("the mixed invalid source should fit the source model");
-    let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-    let PipelineFailure::Syntax(actual) = failure else {
+    let source = TempSource::write("$\nmain : Unit -> Bool\nmain () = true == false == true\n");
+    let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
         panic!("the mixed source should fail in the syntax pipeline");
     };
 
@@ -476,17 +500,16 @@ fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
             .iter()
             .map(|item| item.reason)
             .collect::<Vec<_>>(),
-        vec![ParseReason::UnclosedGroup]
+        vec![ParseReason::RepeatedEquality]
     );
 }
 
 #[test]
-fn a_missing_result_after_a_complete_global_survives_an_earlier_lexical_failure() {
-    let text = "@\nfn identity(value : Int) -> Int {\n    value\n}\n";
-    let source = SourceFile::new("mixed-missing-result.ash", text)
-        .expect("the mixed invalid source should fit the source model");
-    let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-    let PipelineFailure::Syntax(actual) = failure else {
+fn a_complete_module_retains_an_independent_lexical_failure() {
+    let text = "$\nfn identity(value : Int) -> Int {\n    value\n}\n";
+    let source = TempSource::write(text);
+    let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
         panic!("the mixed source should fail in the syntax pipeline");
     };
 
@@ -498,29 +521,21 @@ fn a_missing_result_after_a_complete_global_survives_an_earlier_lexical_failure(
             .collect::<Vec<_>>(),
         vec![LexReason::UnknownCharacter]
     );
-    assert_eq!(
-        actual
-            .parser
-            .iter()
-            .map(|item| item.reason)
-            .collect::<Vec<_>>(),
-        vec![ParseReason::ExpectedResult]
-    );
+    assert!(actual.parser.is_empty());
 }
 
 #[test]
-fn an_excluded_result_after_a_complete_global_has_only_its_lexical_reason() {
-    for (result, expected) in [
+fn a_lexically_rejected_line_after_complete_declarations_has_only_its_lexical_reason() {
+    for (line, expected) in [
         ("-1\n", LexReason::NegativeLiteral),
         ("café\n", LexReason::UnicodeIdentifier),
         ("01\n", LexReason::InvalidIntegerLiteral),
     ] {
-        let text = format!("identity : Int -> Int\nidentity value = value\n\n{result}");
-        let source = SourceFile::new("excluded-result.ash", text)
-            .expect("the excluded source should fit the source model");
-        let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-        let PipelineFailure::Syntax(actual) = failure else {
-            panic!("the excluded result should fail in the syntax pipeline");
+        let text = format!("identity : Int -> Int\nidentity value = value\n\n{line}");
+        let source = TempSource::write(&text);
+        let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+            panic!("the excluded line should fail in the syntax pipeline");
         };
 
         assert_eq!(
@@ -531,23 +546,22 @@ fn an_excluded_result_after_a_complete_global_has_only_its_lexical_reason() {
                 .collect::<Vec<_>>(),
             vec![expected]
         );
-        assert!(actual.parser.is_empty(), "result: {result:?}");
+        assert!(actual.parser.is_empty(), "line: {line:?}");
     }
 }
 
 #[test]
-fn a_non_expression_lexical_tail_does_not_hide_a_missing_result() {
+fn a_lexically_rejected_tail_does_not_create_a_parser_diagnostic() {
     for (tail, expected) in [
-        ("// no result\n", LexReason::Comment),
+        ("// unavailable comment\n", LexReason::Comment),
         ("\u{feff}\n", LexReason::ByteOrderMark),
         ("\r", LexReason::BareCarriageReturn),
-        ("@\n", LexReason::UnknownCharacter),
+        ("$\n", LexReason::UnknownCharacter),
     ] {
         let text = format!("fn identity(value : Int) -> Int {{\n    value\n}}\n\n{tail}");
-        let source = SourceFile::new("missing-result-after-trivia.ash", text)
-            .expect("the excluded source should fit the source model");
-        let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-        let PipelineFailure::Syntax(actual) = failure else {
+        let source = TempSource::write(&text);
+        let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
             panic!("the excluded tail should fail in the syntax pipeline");
         };
 
@@ -559,30 +573,21 @@ fn a_non_expression_lexical_tail_does_not_hide_a_missing_result() {
                 .collect::<Vec<_>>(),
             vec![expected]
         );
-        assert_eq!(
-            actual
-                .parser
-                .iter()
-                .map(|item| item.reason)
-                .collect::<Vec<_>>(),
-            vec![ParseReason::ExpectedResult],
-            "tail: {tail:?}"
-        );
+        assert!(actual.parser.is_empty(), "tail: {tail:?}");
     }
 }
 
 #[test]
-fn an_expression_shaped_failure_on_the_definition_line_does_not_hide_a_missing_result() {
+fn a_lexically_rejected_definition_tail_does_not_create_a_parser_diagnostic() {
     for (tail, expected) in [
         ("-1", LexReason::NegativeLiteral),
         ("café", LexReason::UnicodeIdentifier),
         ("01", LexReason::InvalidIntegerLiteral),
     ] {
         let text = format!("identity : Int -> Int\nidentity value = value {tail}\n");
-        let source = SourceFile::new("missing-result-after-definition.ash", text)
-            .expect("the excluded source should fit the source model");
-        let failure = run_source(source).expect_err("invalid source must not reach evaluation");
-        let PipelineFailure::Syntax(actual) = failure else {
+        let source = TempSource::write(&text);
+        let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
+        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
             panic!("the excluded definition tail should fail in the syntax pipeline");
         };
 
@@ -594,14 +599,6 @@ fn an_expression_shaped_failure_on_the_definition_line_does_not_hide_a_missing_r
                 .collect::<Vec<_>>(),
             vec![expected]
         );
-        assert_eq!(
-            actual
-                .parser
-                .iter()
-                .map(|item| item.reason)
-                .collect::<Vec<_>>(),
-            vec![ParseReason::ExpectedResult],
-            "tail: {tail:?}"
-        );
+        assert!(actual.parser.is_empty(), "tail: {tail:?}");
     }
 }

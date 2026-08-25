@@ -1,21 +1,32 @@
+mod support;
+
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 use ash::{
-    core::{CoreBuilder, PureComputation, PureExprKind, validate},
-    driver::{PipelineFailure, run_source},
+    core::{CoreBuilder, PureComputation, PureExprKind, validate, validate_modules},
+    driver::PipelineFailure,
     elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason},
     eval::{TraceEvent, Value, evaluate},
     integer::Integer,
-    lexer::lex,
-    parser::{parse, project},
-    resolve::resolve,
+    module::{ModuleRoots, load_module_graph},
+    resolve::resolve_module,
     resolved::{
-        Binder, ResolvedBinding, ResolvedBlock, ResolvedExprKind, ResolvedLocalDeclaration,
-        ResolvedPatternKind, ResolvedProgram,
+        Binder, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr,
+        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedPatternKind,
+        ResolvedTermName,
     },
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
     types::Type,
 };
+use support::run_module;
 
-const V003: &str = include_str!("fixtures/first-stratum/valid/v003-local-shadowing.ash");
+const V003: &str =
+    "main : Unit -> Int\nmain () = {\n    let value = 1\n    let value = value + 1\n    value\n}\n";
+static MODULE_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
     let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[index] else {
@@ -38,34 +49,68 @@ fn binding_mut(block: &mut ResolvedBlock, index: usize) -> &mut ResolvedBinding 
     binding
 }
 
-fn resolved(source: &SourceFile) -> ResolvedProgram {
-    let lexed = lex(source).expect("test source should lex");
-    assert!(lexed.diagnostics.is_empty());
-    let tree = parse(lexed);
-    assert!(tree.parse_diagnostics().is_empty());
-    let surface = project(source, &tree).expect("test source should project");
-    resolve(&surface).expect("test source should resolve")
+fn resolved(name: &str, text: &str) -> (SourceFile, ResolvedModule) {
+    let directory = loop {
+        let id = MODULE_TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("ash-binding-module-{}-{id}", std::process::id()));
+        match fs::create_dir(&path) {
+            Ok(()) => break path,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("binding fixture directory should be creatable: {error}"),
+        }
+    };
+    let path: PathBuf = directory.join(name);
+    fs::write(&path, text).expect("binding fixture should be writable");
+    let graph =
+        load_module_graph(&path, &ModuleRoots::empty()).expect("binding module should load");
+    let source = graph.modules()[0].source().clone();
+    let resolved = resolve_module(&graph.modules()[0], &[]).expect("binding module should resolve");
+    let _ = fs::remove_dir_all(directory);
+    (source, resolved)
+}
+
+fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
+    let definition = module
+        .definitions()
+        .iter()
+        .find(|definition| match &definition.kind {
+            ResolvedDefinitionKind::Equational(global) => global.interface.name.spelling == "main",
+            ResolvedDefinitionKind::InlineOperational(global) => {
+                global.header.name.spelling == "main"
+            }
+        })
+        .expect("fixture should declare main");
+    let ResolvedDefinitionKind::Equational(main) = &definition.kind else {
+        panic!("binding fixture main should be equational");
+    };
+    &main.equations[0].body
+}
+
+fn expression_elaborator(module: &ResolvedModule, expression: &ResolvedExpr) -> Elaborator {
+    Elaborator::for_resolved_expression(module, expression).expect("binder reservation should fit")
 }
 
 fn elaborate(
     source: &SourceFile,
-    program: &ResolvedProgram,
+    module: &ResolvedModule,
+    expression: &ResolvedExpr,
 ) -> (ash::core::ValidatedProgram, Type) {
-    let mut elaborator = Elaborator::for_program(program).expect("binder reservation should fit");
+    let mut elaborator = expression_elaborator(module, expression);
     let typed = elaborator
-        .synthesize(&program.result, &TypeContext::new())
+        .synthesize(expression, &TypeContext::new())
         .expect("binding program should synthesize");
     let ty = typed.ty;
     let unchecked = elaborator.finish(typed.node).expect("root should finish");
-    let validated = validate(unchecked, &[source]).expect("binding Core should validate");
+    let validated = validate_modules(unchecked, &[source], &[(module.module(), source.id())])
+        .expect("binding Core should validate");
     (validated, ty)
 }
 
 #[test]
 fn v003_resolves_shadowing_to_distinct_binders_and_runs_to_two() {
-    let source = SourceFile::new("v003-local-shadowing.ash", V003).expect("fixture should fit");
-    let program = resolved(&source);
-    let ResolvedExprKind::Block(block) = &program.result.kind else {
+    let (_source, module) = resolved("v003-local-shadowing.ash", V003);
+    let ResolvedExprKind::Block(block) = &main_body(&module).kind else {
         panic!("expected the V-003 block");
     };
     let first = binding_binder(binding(block, 0)).id;
@@ -81,10 +126,11 @@ fn v003_resolves_shadowing_to_distinct_binders_and_runs_to_two() {
     };
 
     assert_ne!(first, second);
-    assert_eq!(initializer_use.binder, first);
-    assert_eq!(result_use.binder, second);
+    assert_eq!(initializer_use.global_binder(), Some(first));
+    assert_eq!(result_use.global_binder(), Some(second));
 
-    let observation = run_source(source).expect("V-003 should run end to end");
+    let observation =
+        run_module("v003-local-shadowing.ash", V003).expect("V-003 should run end to end");
     let Value::Integer(value) = observation.value else {
         panic!("expected an integer value");
     };
@@ -96,11 +142,12 @@ fn v003_resolves_shadowing_to_distinct_binders_and_runs_to_two() {
 fn annotated_primitive_binding_checks_then_enters_the_remainder_scope() {
     let source = SourceFile::new(
         "annotated.ash",
-        "{\n    let answer : Int = 20 + 1\n    answer * 2\n}\n",
+        "main : Unit -> Int\nmain () = {\n    let answer : Int = 20 + 1\n    answer * 2\n}\n",
     )
     .expect("test source should fit");
 
-    let observation = run_source(source).expect("annotated binding should run");
+    let observation =
+        run_module("annotated.ash", source.text()).expect("annotated binding should run");
     let Value::Integer(value) = observation.value else {
         panic!("expected an integer value");
     };
@@ -112,11 +159,12 @@ fn annotated_primitive_binding_checks_then_enters_the_remainder_scope() {
 fn annotated_initializer_mismatch_is_a_source_type_rejection() {
     let source = SourceFile::new(
         "mismatch.ash",
-        "{\n    let value : Bool = 1\n    value\n}\n",
+        "main : Unit -> Bool\nmain () = {\n    let value : Bool = 1\n    value\n}\n",
     )
     .expect("test source should fit");
 
-    let error = run_source(source).expect_err("the initializer should not check");
+    let error =
+        run_module("mismatch.ash", source.text()).expect_err("the initializer should not check");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = &error else {
         panic!("expected a categorized binding-initializer diagnostic");
     };
@@ -128,12 +176,12 @@ fn annotated_initializer_mismatch_is_a_source_type_rejection() {
 
 #[test]
 fn block_elaboration_folds_bindings_right_to_left_with_causal_origins() {
-    let source = SourceFile::new("origins.ash", V003).expect("fixture should fit");
-    let program = resolved(&source);
-    let ResolvedExprKind::Block(block) = &program.result.kind else {
+    let (source, module) = resolved("origins.ash", V003);
+    let expression = main_body(&module);
+    let ResolvedExprKind::Block(block) = &expression.kind else {
         panic!("expected a block");
     };
-    let (validated, ty) = elaborate(&source, &program);
+    let (validated, ty) = elaborate(&source, &module, expression);
     assert_eq!(ty, Type::Int);
 
     let outer = validated.node(validated.root()).expect("outer binding");
@@ -181,9 +229,8 @@ fn block_elaboration_folds_bindings_right_to_left_with_causal_origins() {
 
 #[test]
 fn machine_trace_enters_each_initializer_before_its_binding_body() {
-    let source = SourceFile::new("trace.ash", V003).expect("fixture should fit");
-    let program = resolved(&source);
-    let (validated, _) = elaborate(&source, &program);
+    let (source, module) = resolved("trace.ash", V003);
+    let (validated, _) = elaborate(&source, &module, main_body(&module));
 
     let outer = validated.node(validated.root()).expect("outer binding");
     let PureExprKind::Computation(PureComputation::Bind(first)) = &outer.kind else {
@@ -222,9 +269,9 @@ fn machine_trace_enters_each_initializer_before_its_binding_body() {
 
 #[test]
 fn failed_initializer_scope_check_poisons_the_elaborator() {
-    let source = SourceFile::new("invalid-scope.ash", V003).expect("fixture should fit");
-    let mut program = resolved(&source);
-    let ResolvedExprKind::Block(block) = &mut program.result.kind else {
+    let (_source, module) = resolved("invalid-scope.ash", V003);
+    let mut expression = main_body(&module).clone();
+    let ResolvedExprKind::Block(block) = &mut expression.kind else {
         panic!("expected a block");
     };
     let prior_expression = binding(block, 0).initializer.clone();
@@ -235,14 +282,14 @@ fn failed_initializer_scope_check_poisons_the_elaborator() {
     let ResolvedExprKind::Occurrence(use_site) = &mut initializer.left.kind else {
         panic!("expected an occurrence");
     };
-    use_site.binder = second_binder;
+    use_site.term = ResolvedTermName::Global(second_binder);
 
-    let mut elaborator = Elaborator::for_program(&program).expect("reservation should fit");
+    let mut elaborator = expression_elaborator(&module, &expression);
     let prior = elaborator
         .synthesize(&prior_expression, &TypeContext::new())
         .expect("the independent primitive should synthesize");
     assert!(matches!(
-        elaborator.synthesize(&program.result, &TypeContext::new()),
+        elaborator.synthesize(&expression, &TypeContext::new()),
         Err(TypeError::Internal(ElaborationFailure::InvalidState))
     ));
     assert!(matches!(
@@ -253,15 +300,14 @@ fn failed_initializer_scope_check_poisons_the_elaborator() {
 
 #[test]
 fn annotated_function_is_checked_from_the_binding_annotation() {
-    let source = SourceFile::new(
+    let (source, module) = resolved(
         "pending-function.ash",
-        "{\n    let identity : Int -> Int = fn(value) {\n        value\n    }\n    1\n}\n",
-    )
-    .expect("test source should fit");
-    let program = resolved(&source);
-    let mut elaborator = Elaborator::for_program(&program).expect("reservation should fit");
+        "main : Unit -> Int\nmain () = {\n    let identity : Int -> Int = fn(value) {\n        value\n    }\n    1\n}\n",
+    );
+    let expression = main_body(&module);
+    let mut elaborator = expression_elaborator(&module, expression);
     let typed = elaborator
-        .synthesize(&program.result, &TypeContext::new())
+        .synthesize(expression, &TypeContext::new())
         .expect("the annotated function should check");
     assert_eq!(typed.ty, Type::Int);
     let validated = validate(
@@ -275,13 +321,12 @@ fn annotated_function_is_checked_from_the_binding_annotation() {
 
 #[test]
 fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() {
-    let source = SourceFile::new(
+    let (source, module) = resolved(
         "nested.ash",
-        "{\n    let outer = 20\n    let inner = {\n        let shadow = outer + 1\n        shadow\n    }\n    outer + inner\n}\n",
-    )
-    .expect("test source should fit");
-    let program = resolved(&source);
-    let ResolvedExprKind::Block(outer_block) = &program.result.kind else {
+        "main : Unit -> Int\nmain () = {\n    let outer = 20\n    let inner = {\n        let shadow = outer + 1\n        shadow\n    }\n    outer + inner\n}\n",
+    );
+    let expression = main_body(&module);
+    let ResolvedExprKind::Block(outer_block) = &expression.kind else {
         panic!("expected outer block");
     };
     let ResolvedExprKind::Block(inner_block) = &binding(outer_block, 1).initializer.kind else {
@@ -293,9 +338,12 @@ fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() 
     let ResolvedExprKind::Occurrence(outer_use) = &inner_initializer.left.kind else {
         panic!("expected outer use inside nested block");
     };
-    assert_eq!(outer_use.binder, binding_binder(binding(outer_block, 0)).id);
+    assert_eq!(
+        outer_use.global_binder(),
+        Some(binding_binder(binding(outer_block, 0)).id)
+    );
 
-    let (validated, ty) = elaborate(&source, &program);
+    let (validated, ty) = elaborate(&source, &module, expression);
     let outer_core = validated.node(validated.root()).expect("outer binding");
     let PureExprKind::Computation(PureComputation::Bind(outer_binding)) = &outer_core.kind else {
         panic!("expected outer Core binding");
@@ -325,13 +373,12 @@ fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() 
 
 #[test]
 fn nested_block_binder_is_removed_before_the_enclosing_result() {
-    let source = SourceFile::new(
+    let (_source, module) = resolved(
         "nested-scope.ash",
-        "{\n    let value = {\n        let hidden = 1\n        hidden\n    }\n    value\n}\n",
-    )
-    .expect("test source should fit");
-    let mut program = resolved(&source);
-    let ResolvedExprKind::Block(outer) = &mut program.result.kind else {
+        "main : Unit -> Int\nmain () = {\n    let value = {\n        let hidden = 1\n        hidden\n    }\n    value\n}\n",
+    );
+    let mut expression = main_body(&module).clone();
+    let ResolvedExprKind::Block(outer) = &mut expression.kind else {
         panic!("expected outer block");
     };
     let ResolvedExprKind::Block(inner) = &binding(outer, 0).initializer.kind else {
@@ -341,11 +388,11 @@ fn nested_block_binder_is_removed_before_the_enclosing_result() {
     let ResolvedExprKind::Occurrence(result_use) = &mut outer.result.kind else {
         panic!("expected outer result occurrence");
     };
-    result_use.binder = hidden;
+    result_use.term = ResolvedTermName::Global(hidden);
 
-    let mut elaborator = Elaborator::for_program(&program).expect("reservation should fit");
+    let mut elaborator = expression_elaborator(&module, &expression);
     assert!(matches!(
-        elaborator.synthesize(&program.result, &TypeContext::new()),
+        elaborator.synthesize(&expression, &TypeContext::new()),
         Err(TypeError::Internal(ElaborationFailure::InvalidState))
     ));
 }
@@ -357,7 +404,8 @@ fn long_flat_binding_machine_shares_extensions_and_drops_on_a_small_stack() {
         .name("long-flat-bindings".to_owned())
         .stack_size(256 * 1024)
         .spawn(|| {
-            let source = SourceFile::new("long-bindings.ash", "1").expect("source should fit");
+            let source = SourceFile::new("long-bindings.ash", "main : Unit -> Int\nmain () = 1\n")
+                .expect("source should fit");
             let origin = Origin::Source(
                 source
                     .span(ByteRange::new(0, 1).expect("ordered range"))

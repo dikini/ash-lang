@@ -12,7 +12,7 @@ use std::ops::Deref;
 pub use crate::syntax_resource::{ResourceFailure, SYNTAX_WORK_LIMIT};
 pub use cst::{ConcreteElement, ConcreteNode, ConcreteTree, InternalReason};
 pub use event::Event;
-pub use project::{ProjectionError, project};
+pub use project::{ProjectionError, project_module};
 
 use crate::{
     diagnostic::{Diagnostic, SourceLabel},
@@ -36,12 +36,28 @@ pub(super) const MATCH_STRUCTURAL_WEIGHT: usize = 32;
 /// The grammar role of one concrete node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeKind {
-    /// A complete source file.
-    Program,
+    /// A complete declarations-only module source.
+    Module,
+    /// One source import declaration.
+    ImportDeclaration,
+    /// A relative or named-root dotted module path.
+    ModulePath,
+    /// One selected public spelling and its optional local alias.
+    ImportItem,
     /// A nominal type declaration.
     TypeDeclaration,
     /// One constructor declaration under a nominal type.
     ConstructorDeclaration,
+    /// A method-only interface declaration.
+    InterfaceDeclaration,
+    /// One signature-only method in an interface.
+    InterfaceMethod,
+    /// One trailing nonempty `where` clause.
+    WhereClause,
+    /// One interface reference applied to its single type argument.
+    InterfaceApplication,
+    /// One implementation declaration with flat method equations.
+    ImplementationDeclaration,
     /// An equational global definition.
     EquationalGlobal,
     /// An external name and type interface.
@@ -106,6 +122,8 @@ pub enum NodeKind {
     ParenthesizedType,
     /// A structural tuple type.
     TupleType,
+    /// A module-qualified type or constructor occurrence.
+    QualifiedName,
     /// Rejected syntax retained until projection fails.
     Error,
 }
@@ -123,6 +141,16 @@ pub enum ExpectedForm {
     Type,
     /// A source pattern.
     Pattern,
+    /// A single interface parameter written as `<A>`.
+    InterfaceParameter,
+    /// A signature-only interface method.
+    InterfaceMethod,
+    /// An interface application in a constraint or impl head.
+    InterfaceApplication,
+    /// An implementation method equation.
+    ImplementationMethod,
+    /// `,`.
+    Comma,
     /// `(`.
     LeftParen,
     /// `)`.
@@ -148,8 +176,6 @@ pub enum ExpectedForm {
 /// A parser-owned reason retained independently from rendering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseReason {
-    /// The file has no required final result expression.
-    ExpectedResult,
     /// A grammar form was absent.
     ExpectedForm,
     /// An operand was absent after an operator.
@@ -173,15 +199,6 @@ pub enum ParseReason {
 /// A parser recovery fact retained independently from rendered prose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseContext {
-    /// Parsing completed one global before discovering the missing file result.
-    PrecedingGlobalComplete {
-        /// The first source token of the completed global.
-        starting_at: Span,
-        /// The final source token of the completed global.
-        ending_at: Span,
-        /// The logical line boundary consumed after the completed global.
-        line_end: Span,
-    },
     /// Recovery synchronized at an owning grammar boundary.
     Synchronization {
         /// The kind of grammar boundary used for synchronization.
@@ -196,11 +213,21 @@ pub enum ParseContext {
 pub enum SynchronizationBoundary {
     /// A logical line boundary owned by an equation or binding.
     LogicalLineEnd,
+    /// The opening brace owned by an interface declaration.
+    InterfaceBodyOpeningBrace,
+    /// The opening brace owned by an implementation declaration.
+    ImplementationBodyOpeningBrace,
+    /// The opening brace owned by an operational global.
+    OperationalBodyOpeningBrace,
     /// The closing brace owned by the current block.
     BlockClosingBrace,
+    /// The closing brace owned by the current interface declaration.
+    InterfaceClosingBrace,
+    /// The closing brace owned by the current implementation declaration.
+    ImplementationClosingBrace,
     /// The closing parenthesis owned by the current grouped expression.
     ParenthesisClosing,
-    /// End of input owned by the current program or incomplete nested form.
+    /// End of input owned by the current module or incomplete nested form.
     EndOfFile,
 }
 
@@ -232,7 +259,6 @@ impl Deref for ParseDiagnostic {
 impl fmt::Display for ParseReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::ExpectedResult => "parse.expected-result",
             Self::ExpectedForm => "parse.expected-form",
             Self::ExpectedOperand => "parse.expected-operand",
             Self::UnclosedGroup => "parse.unclosed-group",
@@ -250,44 +276,82 @@ impl fmt::Display for ParseReason {
 #[must_use]
 pub fn parse(lexed: Lexed) -> ConcreteTree {
     let (tokens, lexical_diagnostics, syntax_budget, lexical_resource_failure) = lexed.into_parts();
+    parse_parts(
+        tokens,
+        lexical_diagnostics,
+        syntax_budget,
+        lexical_resource_failure,
+    )
+    .0
+}
+
+pub(crate) fn parse_with_budget(lexed: Lexed, syntax_budget: &mut SyntaxBudget) -> ConcreteTree {
+    let (tokens, lexical_diagnostics, _, lexical_resource_failure) = lexed.into_parts();
+    let (tree, retained_budget) = parse_parts(
+        tokens,
+        lexical_diagnostics,
+        syntax_budget.clone(),
+        lexical_resource_failure,
+    );
+    *syntax_budget = retained_budget;
+    tree
+}
+
+fn parse_parts(
+    tokens: Vec<crate::lexer::Token>,
+    lexical_diagnostics: Vec<Diagnostic<crate::lexer::LexReason>>,
+    syntax_budget: SyntaxBudget,
+    lexical_resource_failure: Option<ResourceFailure>,
+) -> (ConcreteTree, SyntaxBudget) {
     if let Some(resource_failure) = lexical_resource_failure {
-        return cst::resource_limited(tokens, lexical_diagnostics, Vec::new(), resource_failure);
+        return (
+            cst::resource_limited(tokens, lexical_diagnostics, Vec::new(), resource_failure),
+            syntax_budget,
+        );
     }
 
-    let (events, diagnostics, resource_failure, syntax_work_exhausted) = {
+    let (events, diagnostics, resource_failure, syntax_work_exhausted, syntax_budget) = {
         let mut parser = Parser {
             tokens: &tokens,
             position: 0,
             events: Vec::new(),
             diagnostics: Vec::new(),
             pending_recoveries: Vec::new(),
+            recovered_expression_group_boundary: false,
             nesting_depth: 0,
             resource_failure: None,
             syntax_budget,
             syntax_work_exhausted: false,
         };
-        grammar::program(&mut parser);
+        grammar::module(&mut parser);
         (
             parser.events,
             parser.diagnostics,
             parser.resource_failure,
             parser.syntax_work_exhausted,
+            parser.syntax_budget,
         )
     };
     if syntax_work_exhausted {
-        return cst::resource_limited(
+        return (
+            cst::resource_limited(
+                tokens,
+                lexical_diagnostics,
+                diagnostics,
+                resource_failure.expect("syntax exhaustion records its resource failure"),
+            ),
+            syntax_budget,
+        );
+    }
+    (
+        cst::build(
             tokens,
             lexical_diagnostics,
             diagnostics,
-            resource_failure.expect("syntax exhaustion records its resource failure"),
-        );
-    }
-    cst::build(
-        tokens,
-        lexical_diagnostics,
-        diagnostics,
-        events,
-        resource_failure,
+            events,
+            resource_failure,
+        ),
+        syntax_budget,
     )
 }
 
@@ -297,6 +361,7 @@ pub(crate) struct Parser<'tokens> {
     events: Vec<Event>,
     diagnostics: Vec<ParseDiagnostic>,
     pending_recoveries: Vec<usize>,
+    recovered_expression_group_boundary: bool,
     nesting_depth: usize,
     resource_failure: Option<ResourceFailure>,
     syntax_budget: SyntaxBudget,
@@ -427,35 +492,16 @@ impl Parser<'_> {
             .map(|token| token.span)
     }
 
-    fn previous_span(&self) -> Option<Span> {
-        self.position
-            .checked_sub(1)
-            .and_then(|position| self.tokens.get(position))
-            .map(|token| token.span)
-    }
-
-    fn report_expected_result(&mut self, preceding_global: Option<(Span, Span, Span)>) {
-        let before = self.diagnostics.len();
-        self.report(ParseReason::ExpectedResult, ExpectedForm::Expression);
-        if let (Some((starting_at, ending_at, line_end)), Some(diagnostic)) =
-            (preceding_global, self.diagnostics.get_mut(before))
-        {
-            diagnostic
-                .context
-                .push(ParseContext::PrecedingGlobalComplete {
-                    starting_at,
-                    ending_at,
-                    line_end,
-                });
-        }
-    }
-
     fn pending_recovery_count(&self) -> usize {
         self.pending_recoveries.len()
     }
 
-    fn diagnostic_count(&self) -> usize {
-        self.diagnostics.len()
+    fn mark_recovered_expression_group_boundary(&mut self) {
+        self.recovered_expression_group_boundary = true;
+    }
+
+    fn take_recovered_expression_group_boundary(&mut self) -> bool {
+        std::mem::take(&mut self.recovered_expression_group_boundary)
     }
 
     fn mark_pending_recovery(&mut self, diagnostic_index: usize) {
@@ -574,7 +620,22 @@ impl Parser<'_> {
 const fn synchronization_message(boundary: SynchronizationBoundary) -> &'static str {
     match boundary {
         SynchronizationBoundary::LogicalLineEnd => "parsing resumes at this logical line boundary",
+        SynchronizationBoundary::InterfaceBodyOpeningBrace => {
+            "parsing resumes at this interface body opening brace"
+        }
+        SynchronizationBoundary::ImplementationBodyOpeningBrace => {
+            "parsing resumes at this implementation body opening brace"
+        }
+        SynchronizationBoundary::OperationalBodyOpeningBrace => {
+            "parsing resumes at this operational body opening brace"
+        }
         SynchronizationBoundary::BlockClosingBrace => "parsing resumes at this block closing brace",
+        SynchronizationBoundary::InterfaceClosingBrace => {
+            "parsing resumes at this interface closing brace"
+        }
+        SynchronizationBoundary::ImplementationClosingBrace => {
+            "parsing resumes at this implementation closing brace"
+        }
         SynchronizationBoundary::ParenthesisClosing => {
             "parsing resumes at this closing parenthesis"
         }
@@ -600,6 +661,13 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::And => "and",
         TokenKind::Type => "type",
         TokenKind::Match => "match",
+        TokenKind::Import => "import",
+        TokenKind::As => "as",
+        TokenKind::Pub => "pub",
+        TokenKind::Opaque => "opaque",
+        TokenKind::Interface => "interface",
+        TokenKind::Impl => "impl",
+        TokenKind::Where => "where",
         TokenKind::IntType => "Int",
         TokenKind::BoolType => "Bool",
         TokenKind::UnitType => "Unit",
@@ -619,6 +687,8 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Less => "<",
         TokenKind::Greater => ">",
         TokenKind::Semicolon => ";",
+        TokenKind::At => "@",
+        TokenKind::Dot => ".",
         TokenKind::LineEnd => "line end",
         TokenKind::EndOfFile => "end of input",
     }
@@ -626,19 +696,16 @@ fn token_name(kind: &TokenKind) -> &'static str {
 
 const fn primary_message(reason: ParseReason) -> &'static str {
     match reason {
-        ParseReason::ExpectedResult => "the file requires a final result expression",
         ParseReason::ExpectedForm => "required syntax is missing",
         ParseReason::ExpectedOperand => "the operator requires a right operand",
         ParseReason::UnclosedGroup => "the opening parenthesis is not closed",
         ParseReason::RepeatedEquality => "equality is non-associative",
-        ParseReason::PolymorphicHeader => {
-            "explicit value type parameters are not available in Mini-Ash"
-        }
+        ParseReason::PolymorphicHeader => "explicit value type parameters are not available in Ash",
         ParseReason::ExpectedRecursiveMember => {
             "the recursive delimiter requires another binding member"
         }
         ParseReason::UnexpectedAnd => "and is only accepted within a recursive binding group",
-        ParseReason::Semicolon => "semicolons are not available in Mini-Ash",
+        ParseReason::Semicolon => "semicolons are not available in Ash",
         ParseReason::UnexpectedToken => "token is not accepted at this grammar position",
     }
 }
@@ -650,6 +717,11 @@ const fn expected_name(expected: ExpectedForm) -> &'static str {
         ExpectedForm::Identifier => "an identifier",
         ExpectedForm::Type => "a type",
         ExpectedForm::Pattern => "a pattern",
+        ExpectedForm::InterfaceParameter => "one interface parameter written as <A>",
+        ExpectedForm::InterfaceMethod => "an interface method signature",
+        ExpectedForm::InterfaceApplication => "an interface application",
+        ExpectedForm::ImplementationMethod => "an implementation method equation",
+        ExpectedForm::Comma => ",",
         ExpectedForm::LeftParen => "(",
         ExpectedForm::RightParen => ")",
         ExpectedForm::LeftBrace => "{",

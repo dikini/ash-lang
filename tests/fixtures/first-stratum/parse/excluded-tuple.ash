@@ -1,1 +1,2 @@
-(1, 2)
+main : Unit -> (Int, Int)
+main () = (1, 2)

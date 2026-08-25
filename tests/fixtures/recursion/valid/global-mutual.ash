@@ -8,4 +8,5 @@ fn second(ignored : Unit) -> Int {
     42
 }
 
-first ()
+main : Unit -> Int
+main () = first ()

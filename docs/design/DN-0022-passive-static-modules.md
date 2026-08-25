@@ -2,11 +2,12 @@
 
 - ID: `DN-0022`
 - Status: exploring
-- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), and the [Mini-Ash closure report](mini-ash/closure.md)
+- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md), [DN-0007: Data and Pattern Typing](DN-0007-data-and-pattern-typing.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), the [Mini-Ash closure report](mini-ash/closure.md), and the [passive-module evidence](modular-ash/evidence.md)
 
-> This design note is informative. It does not define current Ash, accept
-> module semantics, or authorize product implementation. The syntax is
-> illustrative until a change proposal defines the semantic transition.
+> This design note is informative. It records the exploration that led to the
+> implemented passive-module increment, but it does not define current Ash.
+> The [specification](../../spec/README.md) is the source of current language
+> behavior.
 
 ## Question
 
@@ -14,26 +15,41 @@ Can Ash add passive static modules, explicit public and opaque declarations,
 deterministic imports, and per-module checking while elaborating the complete
 program into the existing pure Core dialect?
 
+## Result
+
+Yes. Modular Ash implements the recommended model: declarations-only source
+modules, acyclic rooted imports, defining-file exports, generated immutable
+export summaries, separate dependency-ordered checking, and assembly into one
+validated pure Core program. Module syntax and access rules erase before Core;
+there is no runtime module value or module Core node.
+
+The [passive-module evidence](modular-ash/evidence.md) records the required
+positive and negative cases, resource boundaries, implementation-locality
+inspection, compiler verification checkpoints, and comparison with the
+historical Mini-Ash tag at commit `d62d3ba`. Current semantic details belong to
+the [specification](../../spec/README.md), not this retained design account.
+
 ## Context
 
-Current Ash is the Mini-Ash dialect defined by the
-[specification](../../spec/README.md). One source file contains mutually visible
-nominal declarations and global functions followed by one result expression.
-The file cannot import another source. Nominal, constructor, term, and type
-parameter identities are allocated within that file, and resolution publishes
-one immutable registry to elaboration and Core.
+When this note was written, Ash was the Mini-Ash dialect. One source file
+contained mutually visible nominal declarations and global functions followed
+by one result expression. The file could not import another source. Nominal,
+constructor, term, and type-parameter identities were allocated within that
+file, and resolution published one immutable registry to elaboration and Core.
 
 The `mini-ash` Git tag retains the completed Mini-Ash implementation, tests,
-specification, and evidence. Current source will evolve into Modular Ash rather
-than keeping Mini-Ash and Modular Ash as selectable dialects in one compiler.
-Historical or differential evidence can build the tag separately.
+specification, and evidence. The selected plan evolved current source into
+Modular Ash rather than keeping Mini-Ash and Modular Ash as selectable dialects
+in one compiler. Historical or differential evidence can build the tag
+separately.
 
-The closure report supplies the transferable boundary facts. Resolved and Core
-registries are immutable. Nominal identities already distinguish declarations
-by source. Global schemes are fully zonked before they leave elaboration.
-Explicit Core type abstractions and applications preserve rank-1 scope until
-runtime erasure. Independent Core validation already accepts provenance from a
-set of source files even though the current driver supplies one.
+The closure report supplied the transferable boundary facts. Resolved and Core
+registries were immutable. Nominal identities already distinguished
+declarations by source. Global schemes were fully zonked before they left
+elaboration. Explicit Core type abstractions and applications preserved rank-1
+scope until runtime erasure. Independent Core validation already accepted
+provenance from a set of source files even though the Mini-Ash driver supplied
+one.
 
 [DN-0007](DN-0007-data-and-pattern-typing.md) separates the ability to name a
 nominal type from the ability to construct or deconstruct its values. Static
@@ -42,9 +58,10 @@ modules are the first source boundary that can exercise that separation.
 pressure but does not require loading, providers, registration, or unloading in
 this increment.
 
-Ash `interface` and `impl` denote a future Rust-trait- or Haskell-type-class-like
-relationship. They are not module signatures. This increment adds modules only;
-interfaces and implementations are the next candidate Modular Ash increment.
+At the passive-module increment, Ash `interface` and `impl` still denoted a
+future Rust-trait- or Haskell-type-class-like relationship. They were not module
+signatures. That increment added modules only; interfaces and implementations
+were the next candidate Modular Ash increment. They are now implemented.
 
 ## Constraints
 
@@ -117,12 +134,12 @@ Target selection changes source visibility, not which dependency is checked or
 linked. Unknown, private, duplicate, or conflicting selections are rejected.
 Re-exporting an import is outside the first increment.
 
-## Candidate directions
+## Candidate directions considered
 
 ### Check modules separately and assemble one Core program
 
-This is the recommended direction. The driver builds the import graph and
-processes modules in dependency order. Each checked module produces a
+This was the recommended and selected direction. The driver builds the import
+graph and processes modules in dependency order. Each checked module produces a
 compiler-generated immutable export summary. Dependents resolve and type-check
 against that summary rather than the dependency's private scope or body.
 
@@ -152,15 +169,15 @@ opacity, targeted imports, hidden identities, and cross-file diagnostics would
 be preprocessing conventions instead of front-end invariants. It would not
 provide the evidence required for module semantics.
 
-## Recommended model
+## Selected model
 
 ### Graph loading and source admission
 
 The tool receives an entry file and zero or more named-root mappings. Loading
 resolves imports recursively, admits each canonical source once, records import
 edges, and rejects cycles. Missing roots, missing files, invalid path segments,
-root escapes, duplicate root names, and alias conflicts retain the importing
-source as their causal location.
+root escapes, and duplicate root names retain the importing source as their
+causal location.
 
 Loading, cycle detection, and graph destruction must use explicit worklists
 rather than host recursion at admitted graph depth.
@@ -250,13 +267,13 @@ The compiler reports failures deterministically in dependency and source order.
 Graph-wide recovery is outside the first increment. Existing syntax, coverage,
 type, Core-construction, and validation work accounting extends across the
 complete module graph. Loading also bounds cumulative sources, import edges,
-and path bytes before retaining proportional graph state. Exact limits are
-implementation resource policy, not language semantics, and require boundary
-evidence.
+and path segments before retaining proportional graph state. Exact limits are
+implementation resource policy, not language semantics. The implementation
+supplies boundary evidence for those limits.
 
-## Evidence and experiments
+## Requested evidence
 
-Positive cases should include:
+The note requested positive cases for:
 
 - sibling, nested, and named-root imports;
 - complete qualified and targeted renamed imports;
@@ -270,7 +287,7 @@ Positive cases should include:
 - mutually recursive globals within one module; and
 - exact execution and observation of `main ()`.
 
-Negative cases should include:
+It requested negative cases for:
 
 - unknown roots, missing files, invalid segments, canonical root escapes, and
   duplicate root configuration;
@@ -284,14 +301,15 @@ Negative cases should include:
 - malformed combined registries, module-qualified binder collisions, foreign
   provenance, and transformed linked Core.
 
-Architecture evidence should show that a dependent module is resolved and
-typed from an immutable export summary rather than a dependency body, while the
+The architecture evidence had to show that a dependent module resolves and
+types from an immutable export summary rather than a dependency body, while the
 linked Core validator still authenticates every implementation. Resource tests
-should exercise graph width, graph depth, source count, import edges, combined
-registry size, and cumulative type work on a small host stack.
+had to exercise graph width, graph depth, source count, import edges, combined
+registry size, and cumulative type work on a small host stack. The retained
+[evidence report](modular-ash/evidence.md) records these results.
 
-Milestone evidence may build the `mini-ash` tag in an isolated worktree and
-compare representative unchanged semantics. That comparison does not add the
+The milestone comparison built the `mini-ash` tag in an isolated worktree and
+compared representative unchanged semantics. That comparison did not add the
 historical dialect to current source or routine current-tree verification.
 
 ## Intentional exclusions
@@ -308,17 +326,17 @@ This increment does not add:
   runtime module values; or
 - dead-code elimination or a core-versus-library migration.
 
-Interfaces are the next candidate Modular Ash increment. The resulting module
-and interface boundary can then support the core-versus-library audit without
-requiring the current source tree to keep the Mini-Ash implementation dialect.
+At the passive-module checkpoint, interfaces remained the next candidate
+Modular Ash increment. They are now implemented. The resulting module and
+interface boundary can support the core-versus-library audit without requiring
+the current source tree to keep the Mini-Ash implementation dialect.
 
-## Open questions
+## Resolved implementation choices
 
-- Which exact reason codes and source labels should the change proposal assign
-  to module and entry failures?
-- Which checked numeric identity shape best extends binder identity across
-  modules without coupling semantics to filesystem spelling?
-- Which graph-wide resource limits follow from implementation evidence?
-- Does implementation evidence justify retaining one combined registry or a
-  graph-owned registry view before Core assembly?
-- Which module-root CLI spelling should the tool proposal select?
+The implementation assigned structured stage-owned reason families to module,
+resolution, type, entry, Core, runtime, and resource failures. It uses
+compilation-local module-qualified numeric identities, graph-wide cumulative
+resource budgets, and one combined internal registry assembled before Core
+validation. The tool accepts named roots through repeated
+`--root name=path` options. These are observed results, not design-note
+authority; the specification and tool guide define the current behavior.

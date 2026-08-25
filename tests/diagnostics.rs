@@ -1,16 +1,32 @@
-use ash::{
-    driver::{PipelineFailure, run_source},
-    elaborate::{TypeError, TypeReason},
-    lexer::lex,
-    parser::{ParseContext, ParseReason, ProjectionError, SynchronizationBoundary, parse, project},
-    resolve::{ResolveReason, resolve},
-    resolved::{ResolvedBinding, ResolvedBlock, ResolvedExprKind, ResolvedLocalDeclaration},
-    source::SourceFile,
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
-const P001: &str = include_str!("fixtures/first-stratum/parse/p001-missing-result.ash");
-const P002: &str = include_str!("fixtures/first-stratum/parse/p002-unclosed-group.ash");
-const P003: &str = include_str!("fixtures/first-stratum/parse/p003-independent-recovery.ash");
+mod support;
+
+use ash::{
+    driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
+    elaborate::{TypeError, TypeReason, check_module},
+    lexer::lex,
+    module::{LoadGraphError, LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
+    parser::{
+        ParseContext, ParseReason, ProjectionError, SynchronizationBoundary, parse, project_module,
+    },
+    render,
+    resolve::{ResolveReason, resolve_module},
+    resolved::{
+        ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
+        ResolvedLocalDeclaration, ResolvedModule,
+    },
+    source::SourceFile,
+};
+use support::run_module;
+
+const P002: &str = "main : Unit -> Int\nmain () = (41\n";
+const P003: &str =
+    "fn increment(value : Int) -> Int {\n    value +\n}\n\nmain : Unit -> Int\nmain () = (41\n";
 const R001: &str = include_str!("fixtures/first-stratum/resolve/r001-unknown-name.ash");
 const R002: &str = include_str!("fixtures/first-stratum/resolve/r002-duplicate-global.ash");
 const EQUATION_NAME_MISMATCH: &str =
@@ -30,6 +46,55 @@ const FUNCTION_RESULT_NEEDS_CONTEXT: &str =
 const FUNCTION_NON_FUNCTION_CONTEXT: &str =
     include_str!("fixtures/first-stratum/type/function-non-function-context.ash");
 
+static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct ModuleFixture {
+    directory: PathBuf,
+    graph: ModuleGraph,
+}
+
+impl ModuleFixture {
+    fn load(name: &str, text: &str) -> Self {
+        let directory = loop {
+            let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "ash-diagnostics-module-{}-{id}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => break path,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("diagnostic fixture directory should be creatable: {error}"),
+            }
+        };
+        let path = directory.join(name);
+        fs::write(&path, text).expect("diagnostic fixture should be writable");
+        let graph = load_module_graph(&path, &ModuleRoots::empty())
+            .expect("diagnostic fixture module should load");
+        Self { directory, graph }
+    }
+
+    fn loaded(&self) -> &LoadedModule {
+        self.graph
+            .modules()
+            .iter()
+            .find(|module| module.id() == self.graph.entry())
+            .expect("entry module should remain loaded")
+    }
+
+    fn resolve(&self) -> ResolvedModule {
+        let loaded = self.loaded();
+        assert!(loaded.dependencies().is_empty());
+        resolve_module(loaded, &[]).expect("diagnostic fixture should resolve")
+    }
+}
+
+impl Drop for ModuleFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
 fn source(name: &str, text: &str) -> SourceFile {
     SourceFile::new(name, text).expect("diagnostic fixture should fit the source model")
 }
@@ -45,9 +110,107 @@ fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
     binding
 }
 
+fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
+    module
+        .definitions()
+        .iter()
+        .find_map(|definition| match &definition.kind {
+            ResolvedDefinitionKind::Equational(definition)
+                if definition.interface.name.spelling == "main" =>
+            {
+                Some(
+                    &definition
+                        .equations
+                        .first()
+                        .expect("main should have an equation")
+                        .body,
+                )
+            }
+            ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::InlineOperational(_) => None,
+        })
+        .expect("fixture should declare equational main")
+}
+
+fn failure(name: &str, text: &str) -> PipelineFailure {
+    run_module(name, text).expect_err("diagnostic fixture should be rejected")
+}
+
+#[test]
+fn syntax_failure_reason_and_rendering_follow_source_order_across_stages() {
+    let text = concat!(
+        "import @ as Missing\n",
+        "main : Unit -> Int\n",
+        "main () = 42 #\n",
+    );
+    let fixture = ModuleFixture::load(
+        "syntax-source-order.ash",
+        "main : Unit -> Unit\nmain () = ()\n",
+    );
+    let entry = fixture.directory.join("syntax-source-order.ash");
+    fs::write(&entry, text).expect("the syntax-order fixture should be writable");
+    let file_error = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("the module should retain both independent syntax failures");
+    let FileFailure::Graph(LoadGraphError::Syntax(syntax)) = &file_error else {
+        panic!("the independent lexical and parser failures should retain graph syntax ownership")
+    };
+    let parser = syntax
+        .parser
+        .first()
+        .expect("the malformed absolute path should retain a parser diagnostic");
+    let lexical = syntax
+        .lexical
+        .first()
+        .expect("the later unknown character should retain a lexical diagnostic");
+
+    assert!(
+        parser.primary.span().range().start() < lexical.primary.span().range().start(),
+        "the fixture must place the parser cause before the lexical cause"
+    );
+    let pipeline_error = PipelineFailure::Syntax(Box::new(SyntaxFailure {
+        lexical: syntax.lexical.clone(),
+        parser: syntax.parser.clone(),
+        resource: syntax.resource,
+    }));
+    assert!(file_error.is_source_rejection());
+    assert!(pipeline_error.is_source_rejection());
+    let expected = parser.reason.to_string();
+    let file_rendered = render::file_failure(&file_error);
+    let pipeline_rendered = render::pipeline_failure(&pipeline_error);
+    let parser_position = pipeline_rendered
+        .find(&expected)
+        .expect("the earlier parser diagnostic should be rendered");
+    let lexical_position = pipeline_rendered
+        .find(&lexical.reason.to_string())
+        .expect("the later lexical diagnostic should also be rendered");
+    assert!(parser_position < lexical_position);
+    assert_eq!(
+        [
+            file_error.reason_code(),
+            file_rendered
+                .lines()
+                .next()
+                .expect("file-rendered reason line")
+                .to_owned(),
+            pipeline_error.reason_code(),
+            pipeline_rendered
+                .lines()
+                .next()
+                .expect("pipeline-rendered reason line")
+                .to_owned(),
+        ],
+        std::array::from_fn(|_| expected.clone()),
+        "public reason selection and rendering must share source-order causality"
+    );
+}
+
 #[test]
 fn recursive_diagnostics_retain_exact_stage_facts() {
-    let missing_member_text = "{\nlet rec value : Int = 1\nand\nvalue\n}\n";
+    let missing_member_text =
+        "main : Unit -> Int\nmain () = {\nlet rec value : Int = 1\nand\nvalue\n}\n";
     let missing_member_source = source("missing-member.ash", missing_member_text);
     let missing_member = parse(lex(&missing_member_source).expect("fixture should lex"));
     let diagnostic = missing_member
@@ -71,7 +234,8 @@ fn recursive_diagnostics_retain_exact_stage_facts() {
         }]
     ));
 
-    let missing_annotation_text = "{\nlet rec value = fn(item) {\nitem\n}\nvalue\n}\n";
+    let missing_annotation_text =
+        "main : Unit -> Int\nmain () = {\nlet rec value = fn(item) {\nitem\n}\nvalue\n}\n";
     let missing_annotation_source = source("missing-annotation.ash", missing_annotation_text);
     let missing_annotation = parse(lex(&missing_annotation_source).expect("fixture should lex"));
     let diagnostic = missing_annotation
@@ -83,12 +247,13 @@ fn recursive_diagnostics_retain_exact_stage_facts() {
         })
         .expect("missing annotation delimiter should be diagnosed");
     let equal = missing_annotation_text
-        .find('=')
-        .expect("initializer delimiter");
+        .find("value =")
+        .expect("recursive binding")
+        + "value ".len();
     assert_eq!(diagnostic.primary.span().range().start(), offset(equal));
     assert_eq!(diagnostic.found.as_deref(), Some("="));
 
-    let stray_text = "{\nand stray : Int = 1\n42\n}\n";
+    let stray_text = "main : Unit -> Int\nmain () = {\nand stray : Int = 1\n42\n}\n";
     let stray_source = source("stray-and.ash", stray_text);
     let stray = parse(lex(&stray_source).expect("fixture should lex"));
     let diagnostic = stray
@@ -96,12 +261,15 @@ fn recursive_diagnostics_retain_exact_stage_facts() {
         .iter()
         .find(|diagnostic| diagnostic.reason == ParseReason::UnexpectedAnd)
         .expect("stray and should be diagnosed");
-    assert_eq!(diagnostic.primary.span().range().start(), offset(2));
-    assert_eq!(diagnostic.primary.span().range().end(), offset(5));
+    let stray_and = stray_text.find("and stray").expect("stray and");
+    assert_eq!(diagnostic.primary.span().range().start(), offset(stray_and));
+    assert_eq!(
+        diagnostic.primary.span().range().end(),
+        offset(stray_and + 3)
+    );
 
-    let unsafe_text = "{\nlet rec value : Int = 1\nvalue\n}\n";
-    let error = run_source(source("unsafe-recursion.ash", unsafe_text))
-        .expect_err("unsafe initialization should fail");
+    let unsafe_text = "main : Unit -> Int\nmain () = {\nlet rec value : Int = 1\nvalue\n}\n";
+    let error = failure("unsafe-recursion.ash", unsafe_text);
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("expected source typing failure")
     };
@@ -113,43 +281,6 @@ fn recursive_diagnostics_retain_exact_stage_facts() {
     );
     assert_eq!(diagnostic.related.len(), 2);
     assert_eq!(diagnostic.expected.as_deref(), None);
-}
-
-#[test]
-fn p001_preserves_the_complete_global_before_the_missing_result() {
-    let source = source("p001.ash", P001);
-    let tree = parse(lex(&source).expect("P-001 should lex"));
-
-    assert_eq!(tree.parse_diagnostics().len(), 1);
-    let diagnostic = &tree.parse_diagnostics()[0];
-    assert_eq!(diagnostic.reason, ParseReason::ExpectedResult);
-    assert_eq!(
-        diagnostic.primary.span().range().start(),
-        offset(P001.len())
-    );
-    assert_eq!(diagnostic.primary.span().range().end(), offset(P001.len()));
-    assert_eq!(diagnostic.expected, Some("an expression".to_owned()));
-    assert_eq!(diagnostic.found, Some("end of input".to_owned()));
-    assert_eq!(diagnostic.related, []);
-    assert_eq!(diagnostic.context.len(), 1);
-    let ParseContext::PrecedingGlobalComplete {
-        starting_at,
-        ending_at,
-        line_end,
-    } = diagnostic.context[0]
-    else {
-        panic!("P-001 should retain the preceding global context");
-    };
-    assert_eq!(starting_at.range().start(), 0);
-    assert_eq!(
-        ending_at.range().start(),
-        offset(P001.rfind('}').expect("closing brace"))
-    );
-    assert_eq!(line_end.range().end(), offset(P001.len()));
-    assert_eq!(
-        project(&source, &tree),
-        Err(ProjectionError::RecoveryNodesPresent)
-    );
 }
 
 #[test]
@@ -171,7 +302,7 @@ fn p002_labels_the_opening_group_and_the_eof_close_requirement() {
         offset(P002.len())
     );
     assert_eq!(
-        project(&source, &tree),
+        project_module(&source, &tree),
         Err(ProjectionError::RecoveryNodesPresent)
     );
 }
@@ -189,9 +320,7 @@ fn p003_recovers_at_the_body_brace_then_reports_the_later_group_independently() 
     assert_eq!(operand.expected, Some("an operand".to_owned()));
     assert_eq!(operand.found, Some("line end".to_owned()));
     assert_eq!(operand.context.len(), 1);
-    let ParseContext::Synchronization { boundary, span } = operand.context[0] else {
-        panic!("P-003 should record its owning recovery boundary");
-    };
+    let ParseContext::Synchronization { boundary, span } = operand.context[0];
     assert_eq!(boundary, SynchronizationBoundary::BlockClosingBrace);
     assert_eq!(
         span.range().start(),
@@ -207,21 +336,41 @@ fn p003_recovers_at_the_body_brace_then_reports_the_later_group_independently() 
     assert_eq!(group.related.len(), 1);
     assert_eq!(group.related[0].span().range().start(), offset(P003.len()));
     assert_eq!(
-        project(&source, &tree),
+        project_module(&source, &tree),
         Err(ProjectionError::RecoveryNodesPresent)
     );
 }
 
 #[test]
+fn complete_declaration_without_a_logical_line_end_remains_diagnosed() {
+    let text = "main : Unit -> Int\nmain () = 1";
+    let source = source("missing-line-end.ash", text);
+    let tree = parse(lex(&source).expect("the declaration should lex"));
+
+    assert_eq!(tree.parse_diagnostics().len(), 1);
+    let diagnostic = &tree.parse_diagnostics()[0];
+    assert_eq!(diagnostic.reason, ParseReason::ExpectedForm);
+    assert_eq!(
+        diagnostic.primary.span().range().start(),
+        offset(text.len())
+    );
+    assert_eq!(diagnostic.primary.span().range().end(), offset(text.len()));
+    assert_eq!(diagnostic.expected.as_deref(), Some("a logical line end"));
+    assert_eq!(diagnostic.found.as_deref(), Some("end of input"));
+}
+
+#[test]
 fn r001_reports_only_the_unknown_occurrence_without_an_unjustified_suggestion() {
-    let source = source("r001.ash", R001);
-    let tree = parse(lex(&source).expect("R-001 should lex"));
-    let surface = project(&source, &tree).expect("R-001 should project");
-    let error = resolve(&surface).expect_err("R-001 should fail in resolution");
+    let fixture = ModuleFixture::load("r001.ash", R001);
+    let error = resolve_module(fixture.loaded(), &[]).expect_err("R-001 should fail in resolution");
 
     assert_eq!(error.reason, ResolveReason::UnknownName);
-    assert_eq!(error.primary.span().range().start(), 0);
-    assert_eq!(error.primary.span().range().end(), offset("missing".len()));
+    let missing = R001.find("missing").expect("unknown occurrence");
+    assert_eq!(error.primary.span().range().start(), offset(missing));
+    assert_eq!(
+        error.primary.span().range().end(),
+        offset(missing + "missing".len())
+    );
     assert!(error.related.is_empty());
     assert!(error.expected.is_none());
     assert!(error.found.is_none());
@@ -230,24 +379,25 @@ fn r001_reports_only_the_unknown_occurrence_without_an_unjustified_suggestion() 
 
 #[test]
 fn data_resolution_diagnostics_retain_names_and_binder_sites() {
-    let duplicate_text = "type Thing =\nFirst\n\ntype Thing =\nSecond\n\nFirst\n";
-    let duplicate_source = source("duplicate-type.ash", duplicate_text);
-    let tree = parse(lex(&duplicate_source).expect("fixture should lex"));
-    let surface = project(&duplicate_source, &tree).expect("fixture should project");
-    let error = resolve(&surface).expect_err("duplicate type should fail");
+    let duplicate_text =
+        "type Thing =\nFirst\n\ntype Thing =\nSecond\n\nmain : Unit -> Thing\nmain () = First\n";
+    let duplicate = ModuleFixture::load("duplicate-type.ash", duplicate_text);
+    let error = resolve_module(duplicate.loaded(), &[]).expect_err("duplicate type should fail");
     assert_eq!(error.reason, ResolveReason::DuplicateType);
-    let first = duplicate_text.find("Thing").expect("first type name");
-    let second = duplicate_text.rfind("Thing").expect("second type name");
+    let first = duplicate_text.find("type Thing").expect("first type name") + "type ".len();
+    let second = duplicate_text
+        .find("type Thing =\nSecond")
+        .expect("second type name")
+        + "type ".len();
     assert_eq!(error.primary.span().range().start(), offset(second));
     assert_eq!(error.related.len(), 1);
     assert_eq!(error.related[0].span().range().start(), offset(first));
     assert!(error.expected.is_none() && error.found.is_none() && error.help.is_none());
 
-    let binder_text = "{\nlet (value, value) = (1, 2)\nvalue\n}\n";
-    let binder_source = source("duplicate-pattern-binder.ash", binder_text);
-    let tree = parse(lex(&binder_source).expect("fixture should lex"));
-    let surface = project(&binder_source, &tree).expect("fixture should project");
-    let error = resolve(&surface).expect_err("duplicate binder should fail");
+    let binder_text = "main : Unit -> Int\nmain () = {\nlet (value, value) = (1, 2)\nvalue\n}\n";
+    let binder_fixture = ModuleFixture::load("duplicate-pattern-binder.ash", binder_text);
+    let error =
+        resolve_module(binder_fixture.loaded(), &[]).expect_err("duplicate binder should fail");
     assert_eq!(error.reason, ResolveReason::DuplicatePatternBinder);
     let first = binder_text.find("value").expect("first binder");
     let second = binder_text[first + 1..]
@@ -258,29 +408,26 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
     assert_eq!(error.related.len(), 1);
     assert_eq!(error.related[0].span().range().start(), offset(first));
 
-    let unknown_text = "Missing\n";
-    let unknown_source = source("unknown-constructor.ash", unknown_text);
-    let tree = parse(lex(&unknown_source).expect("fixture should lex"));
-    let surface = project(&unknown_source, &tree).expect("fixture should project");
-    let error = resolve(&surface).expect_err("unknown constructor should fail");
+    let unknown_text = "main : Unit -> Unit\nmain () = Missing\n";
+    let unknown = ModuleFixture::load("unknown-constructor.ash", unknown_text);
+    let error = resolve_module(unknown.loaded(), &[]).expect_err("unknown constructor should fail");
     assert_eq!(error.reason, ResolveReason::UnknownConstructor);
-    assert_eq!(error.primary.span().range().start(), 0);
+    assert_eq!(
+        error.primary.span().range().start(),
+        offset(unknown_text.find("Missing").expect("unknown constructor"))
+    );
     assert_eq!(error.found.as_deref(), Some("Missing"));
     assert!(error.related.is_empty() && error.expected.is_none() && error.help.is_none());
 }
 
 #[test]
 fn coverage_diagnostics_retain_arm_spans_and_concrete_witnesses() {
-    let missing_text = "match true {\ntrue => 1\n}\n";
-    let missing_source = source("missing-case.ash", missing_text);
-    let tree = parse(lex(&missing_source).expect("fixture should lex"));
-    let surface = project(&missing_source, &tree).expect("fixture should project");
-    let expected_span = resolve(&surface)
-        .expect("fixture should resolve")
-        .result
-        .span;
-    let error = run_source(missing_source).expect_err("false is uncovered");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+    let missing_text = "main : Unit -> Int\nmain () = match true {\ntrue => 1\n}\n";
+    let missing = ModuleFixture::load("missing-case.ash", missing_text);
+    let resolved = missing.resolve();
+    let expected_span = main_body(&resolved).span;
+    let TypeError::Source(diagnostic) = check_module(resolved).expect_err("false is uncovered")
+    else {
         panic!("missing case should be a typed source diagnostic")
     };
     assert_eq!(diagnostic.reason, TypeReason::NonExhaustive);
@@ -288,17 +435,16 @@ fn coverage_diagnostics_retain_arm_spans_and_concrete_witnesses() {
     assert_eq!(diagnostic.found.as_deref(), Some("false"));
     assert!(diagnostic.related.is_empty() && diagnostic.expected.is_none());
 
-    let redundant_text = "match true {\ntrue => 1\nfalse => 2\nfalse => 3\n}\n";
-    let redundant_source = source("redundant-case.ash", redundant_text);
-    let tree = parse(lex(&redundant_source).expect("fixture should lex"));
-    let surface = project(&redundant_source, &tree).expect("fixture should project");
-    let resolved = resolve(&surface).expect("fixture should resolve");
-    let ResolvedExprKind::Match(match_expression) = &resolved.result.kind else {
+    let redundant_text =
+        "main : Unit -> Int\nmain () = match true {\ntrue => 1\nfalse => 2\nfalse => 3\n}\n";
+    let redundant = ModuleFixture::load("redundant-case.ash", redundant_text);
+    let resolved = redundant.resolve();
+    let ResolvedExprKind::Match(match_expression) = &main_body(&resolved).kind else {
         panic!("fixture should resolve to a match")
     };
     let expected_span = match_expression.arms[2].span;
-    let error = run_source(redundant_source).expect_err("third arm is redundant");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+    let TypeError::Source(diagnostic) = check_module(resolved).expect_err("third arm is redundant")
+    else {
         panic!("redundant case should be a typed source diagnostic")
     };
     assert_eq!(diagnostic.reason, TypeReason::RedundantCase);
@@ -311,25 +457,22 @@ fn nominal_mismatches_render_source_declaration_spellings() {
     let declarations = "type Left =\nLeftValue\n\ntype Right =\nRightValue\n\n";
     let cases = [
         (
-            "fn select(value : Left) -> Left {\nvalue\n}\n\nselect RightValue\n",
+            "fn select(value : Left) -> Left {\nvalue\n}\n\nmain : Unit -> Left\nmain () = select RightValue\n",
             TypeReason::Argument,
         ),
         (
-            "{\nlet value : Left = RightValue\nvalue\n}\n",
+            "main : Unit -> Left\nmain () = {\nlet value : Left = RightValue\nvalue\n}\n",
             TypeReason::BindingInitializer,
         ),
         (
-            "fn select(value : Left) -> Left {\nRightValue\n}\n\nselect LeftValue\n",
+            "fn select(value : Left) -> Left {\nRightValue\n}\n\nmain : Unit -> Left\nmain () = select LeftValue\n",
             TypeReason::DefinitionResult,
         ),
     ];
 
     for (index, (program, reason)) in cases.into_iter().enumerate() {
-        let source = source(
-            &format!("nominal-mismatch-{index}.ash"),
-            &format!("{declarations}{program}"),
-        );
-        let error = run_source(source).expect_err("distinct nominal declarations should differ");
+        let text = format!("{declarations}{program}");
+        let error = failure(&format!("nominal-mismatch-{index}.ash"), &text);
         let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
             panic!("nominal mismatch should be a typed source diagnostic")
         };
@@ -340,11 +483,10 @@ fn nominal_mismatches_render_source_declaration_spellings() {
         assert!(!diagnostic.render_plain().contains("<type:"));
     }
 
-    let source = source(
-        "nominal-match-result.ash",
-        &format!("{declarations}match true {{\ntrue => LeftValue\nfalse => RightValue\n}}\n"),
+    let text = format!(
+        "{declarations}main : Unit -> Unit\nmain () = {{\nlet value = match true {{\ntrue => LeftValue\nfalse => RightValue\n}}\n()\n}}\n"
     );
-    let error = run_source(source).expect_err("match arms should have one nominal result type");
+    let error = failure("nominal-match-result.ash", &text);
     let PipelineFailure::Typing(error) = error else {
         panic!("match result mismatch should fail during typing")
     };
@@ -373,7 +515,7 @@ fn checked_match_arms_retain_the_definition_result_cause() {
 
     for (arms, name) in cases {
         let text = format!(
-            "fn choose(flag : Bool) -> Int -> Int {{\nmatch flag {{\n{arms}\n}}\n}}\n\nchoose true 0\n"
+            "fn choose(flag : Bool) -> Int -> Int {{\nmatch flag {{\n{arms}\n}}\n}}\n\nmain : Unit -> Int\nmain () = choose true 0\n"
         );
         let bad_body = text
             .find("fn(value) {\nfalse\n}")
@@ -381,8 +523,7 @@ fn checked_match_arms_retain_the_definition_result_cause() {
             + "fn(value) {\n".len();
         let declared_result =
             text.find("-> Int -> Int").expect("declared result") + "-> Int -> ".len();
-        let error = run_source(source(name, &text))
-            .expect_err("a Boolean arm result should violate the declared function result");
+        let error = failure(name, &text);
         let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
             panic!("checked match arm should retain a source diagnostic")
         };
@@ -409,9 +550,8 @@ fn checked_match_arms_retain_the_definition_result_cause() {
 
 #[test]
 fn unguarded_recursive_use_retains_the_transporting_expression_span() {
-    let text = "type Stream =\nNext(Int, Stream)\n\nfn identity(value : Stream) -> Stream {\nvalue\n}\n\n{\nlet rec stream : Stream = Next(1, identity stream)\nstream\n}\n";
-    let source = source("unguarded-recursion.ash", text);
-    let error = run_source(source).expect_err("ordinary call cannot transport recursion");
+    let text = "type Stream =\nNext(Int, Stream)\n\nfn identity(value : Stream) -> Stream {\nvalue\n}\n\nmain : Unit -> Stream\nmain () = {\nlet rec stream : Stream = Next(1, identity stream)\nstream\n}\n";
+    let error = failure("unguarded-recursion.ash", text);
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("unguarded use should be a typed source diagnostic")
     };
@@ -428,12 +568,11 @@ fn unguarded_recursive_use_retains_the_transporting_expression_span() {
 
 #[test]
 fn r002_relates_the_second_global_to_the_first_name_and_definition() {
-    let source = source("r002.ash", R002);
-    let tree = parse(lex(&source).expect("R-002 should lex"));
-    let surface = project(&source, &tree).expect("R-002 should project");
+    let fixture = ModuleFixture::load("r002.ash", R002);
+    let surface = fixture.loaded().surface();
     let first = &surface.definitions[0];
     let second = &surface.definitions[1];
-    let error = resolve(&surface).expect_err("R-002 should fail in resolution");
+    let error = resolve_module(fixture.loaded(), &[]).expect_err("R-002 should fail in resolution");
 
     assert_eq!(error.reason, ResolveReason::DuplicateGlobal);
     assert_eq!(
@@ -455,10 +594,9 @@ fn r002_relates_the_second_global_to_the_first_name_and_definition() {
 
 #[test]
 fn equation_name_mismatch_retains_both_names_and_a_justified_correction() {
-    let source = source("equation-name.ash", EQUATION_NAME_MISMATCH);
-    let tree = parse(lex(&source).expect("name mismatch should lex"));
-    let surface = project(&source, &tree).expect("name mismatch should project");
-    let error = resolve(&surface).expect_err("the equation head should disagree");
+    let fixture = ModuleFixture::load("equation-name.ash", EQUATION_NAME_MISMATCH);
+    let error =
+        resolve_module(fixture.loaded(), &[]).expect_err("the equation head should disagree");
 
     assert_eq!(error.reason, ResolveReason::EquationNameMismatch);
     assert_eq!(error.expected.as_deref(), Some("identity"));
@@ -473,8 +611,7 @@ fn equation_name_mismatch_retains_both_names_and_a_justified_correction() {
 
 #[test]
 fn t001_definition_result_relates_the_body_to_the_interface_codomain() {
-    let source = source("t001.ash", T001);
-    let error = run_source(source).expect_err("T-001 should fail in typing");
+    let error = failure("t001.ash", T001);
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("T-001 should remain a typed source diagnostic");
     };
@@ -495,15 +632,15 @@ fn t001_definition_result_relates_the_body_to_the_interface_codomain() {
 
 #[test]
 fn t002_operator_operand_relates_the_bool_to_the_operator() {
-    let source = source("t002.ash", T002);
-    let error = run_source(source).expect_err("T-002 should fail in typing");
+    let error = failure("t002.ash", T002);
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("T-002 should remain a typed source diagnostic");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::OperatorOperand);
-    assert_eq!(diagnostic.primary.span().range().start(), 0);
-    assert_eq!(diagnostic.primary.span().range().end(), 4);
+    let boolean = T002.find("true").expect("Boolean operand");
+    assert_eq!(diagnostic.primary.span().range().start(), offset(boolean));
+    assert_eq!(diagnostic.primary.span().range().end(), offset(boolean + 4));
     assert_eq!(diagnostic.expected.as_deref(), Some("Int"));
     assert_eq!(diagnostic.found.as_deref(), Some("Bool"));
     assert_eq!(diagnostic.related.len(), 1);
@@ -515,9 +652,9 @@ fn t002_operator_operand_relates_the_bool_to_the_operator() {
 
 #[test]
 fn unresolved_inference_is_anonymous_in_source_type_diagnostics() {
-    let operator_text = "type Option<A> =\nNone\n| Some(A)\n\nSome + 1\n";
-    let operator = run_source(source("inferred-operator.ash", operator_text))
-        .expect_err("a constructor function is not an integer operand");
+    let operator_text =
+        "type Option<A> =\nNone\n| Some(A)\n\nmain : Unit -> Int\nmain () = Some + 1\n";
+    let operator = failure("inferred-operator.ash", operator_text);
     let PipelineFailure::Typing(TypeError::Source(operator)) = operator else {
         panic!("the operator rejection should remain a typed source diagnostic");
     };
@@ -526,9 +663,8 @@ fn unresolved_inference_is_anonymous_in_source_type_diagnostics() {
     assert_eq!(operator.found.as_deref(), Some("_ -> Option<_>"));
     assert!(!operator.render_plain().contains('?'));
 
-    let pattern_text = "{\nlet split = fn(value) {\nlet (left, right) = value\nlet () = value\nleft\n}\nsplit\n}\n";
-    let pattern = run_source(source("inferred-pattern.ash", pattern_text))
-        .expect_err("Unit cannot destructure an inferred tuple");
+    let pattern_text = "main : Unit -> Int\nmain () = {\nlet split = fn(value) {\nlet (left, right) = value\nlet () = value\nleft\n}\nsplit\n}\n";
+    let pattern = failure("inferred-pattern.ash", pattern_text);
     let PipelineFailure::Typing(TypeError::Source(pattern)) = pattern else {
         panic!("the pattern rejection should remain a typed source diagnostic");
     };
@@ -539,26 +675,34 @@ fn unresolved_inference_is_anonymous_in_source_type_diagnostics() {
 
 #[test]
 fn t003_not_applicable_relates_the_function_position_to_the_application() {
-    let source = source("t003.ash", T003);
-    let error = run_source(source).expect_err("T-003 should fail in typing");
+    let error = failure("t003.ash", T003);
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("T-003 should remain a typed source diagnostic");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::NotApplicable);
-    assert_eq!(diagnostic.primary.span().range().start(), 0);
-    assert_eq!(diagnostic.primary.span().range().end(), 2);
+    let function = T003.find("41 1").expect("non-function application");
+    assert_eq!(diagnostic.primary.span().range().start(), offset(function));
+    assert_eq!(
+        diagnostic.primary.span().range().end(),
+        offset(function + 2)
+    );
     assert_eq!(diagnostic.expected.as_deref(), Some("function"));
     assert_eq!(diagnostic.found.as_deref(), Some("Int"));
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span().range().start(), 0);
-    assert_eq!(diagnostic.related[0].span().range().end(), 4);
+    assert_eq!(
+        diagnostic.related[0].span().range().start(),
+        offset(function)
+    );
+    assert_eq!(
+        diagnostic.related[0].span().range().end(),
+        offset(function + 4)
+    );
 }
 
 #[test]
 fn t004_argument_relates_the_argument_to_the_declared_domain() {
-    let source = source("t004.ash", T004);
-    let error = run_source(source).expect_err("T-004 should fail in typing");
+    let error = failure("t004.ash", T004);
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("T-004 should remain a typed source diagnostic");
     };
@@ -577,24 +721,25 @@ fn t004_argument_relates_the_argument_to_the_declared_domain() {
 
 #[test]
 fn annotated_binding_initializer_relates_the_expression_to_its_annotation() {
-    let source = source("binding-initializer.ash", BINDING_INITIALIZER);
-    let tree = parse(lex(&source).expect("binding mismatch should lex"));
-    let surface = project(&source, &tree).expect("binding mismatch should project");
-    let resolved = resolve(&surface).expect("binding mismatch should resolve");
-    let ResolvedExprKind::Block(block) = &resolved.result.kind else {
+    let fixture = ModuleFixture::load("binding-initializer.ash", BINDING_INITIALIZER);
+    let resolved = fixture.resolve();
+    let ResolvedExprKind::Block(block) = &main_body(&resolved).kind else {
         panic!("fixture should resolve to a block");
     };
     let binding = binding(block, 0);
     let annotation = binding.annotation.as_ref().expect("binding annotation");
-    let error = run_source(source).expect_err("the initializer should not check");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+    let initializer_span = binding.initializer.span;
+    let annotation_span = annotation.span;
+    let TypeError::Source(diagnostic) =
+        check_module(resolved).expect_err("the initializer should not check")
+    else {
         panic!("binding mismatch should be a categorized source diagnostic");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::BindingInitializer);
-    assert_eq!(diagnostic.primary.span(), binding.initializer.span);
+    assert_eq!(diagnostic.primary.span(), initializer_span);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span(), annotation.span);
+    assert_eq!(diagnostic.related[0].span(), annotation_span);
     assert_eq!(diagnostic.expected.as_deref(), Some("Bool"));
     assert_eq!(diagnostic.found.as_deref(), Some("Int"));
     assert!(diagnostic.help.is_none());
@@ -602,28 +747,27 @@ fn annotated_binding_initializer_relates_the_expression_to_its_annotation() {
 
 #[test]
 fn annotated_binding_keeps_the_whole_nested_initializer_as_primary() {
-    let text = "{\n    let value : Bool = {\n        1\n    }\n    value\n}\n";
-    let source = source("nested-binding-mismatch.ash", text);
-    let tree = parse(lex(&source).expect("nested binding mismatch should lex"));
-    let surface = project(&source, &tree).expect("nested binding mismatch should project");
-    let resolved = resolve(&surface).expect("nested binding mismatch should resolve");
-    let ResolvedExprKind::Block(block) = &resolved.result.kind else {
+    let text = "main : Unit -> Bool\nmain () = {\n    let value : Bool = {\n        1\n    }\n    value\n}\n";
+    let fixture = ModuleFixture::load("nested-binding-mismatch.ash", text);
+    let resolved = fixture.resolve();
+    let ResolvedExprKind::Block(block) = &main_body(&resolved).kind else {
         panic!("fixture should resolve to a block");
     };
     let binding = binding(block, 0);
-    let error = run_source(source).expect_err("the nested initializer should not check");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+    let initializer_span = binding.initializer.span;
+    let TypeError::Source(diagnostic) =
+        check_module(resolved).expect_err("the nested initializer should not check")
+    else {
         panic!("nested binding mismatch should be categorized");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::BindingInitializer);
-    assert_eq!(diagnostic.primary.span(), binding.initializer.span);
+    assert_eq!(diagnostic.primary.span(), initializer_span);
 }
 
 #[test]
 fn equational_interface_shape_relates_the_annotation_to_the_equation_head() {
-    let source = source("interface.ash", EQUATION_INTERFACE_NOT_FUNCTION);
-    let error = run_source(source).expect_err("the interface should require one domain");
+    let error = failure("interface.ash", EQUATION_INTERFACE_NOT_FUNCTION);
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("interface shape should remain a typed source diagnostic");
     };
@@ -652,11 +796,9 @@ fn equational_interface_shape_relates_the_annotation_to_the_equation_head() {
 
 #[test]
 fn anonymous_function_without_an_annotation_relates_to_the_binding_that_requires_synthesis() {
-    let source = source("function-context.ash", FUNCTION_NEEDS_CONTEXT);
-    let tree = parse(lex(&source).expect("function context should lex"));
-    let surface = project(&source, &tree).expect("function context should project");
-    let resolved = resolve(&surface).expect("function context should resolve");
-    let ResolvedExprKind::Block(block) = &resolved.result.kind else {
+    let fixture = ModuleFixture::load("function-context.ash", FUNCTION_NEEDS_CONTEXT);
+    let resolved = fixture.resolve();
+    let ResolvedExprKind::Block(block) = &main_body(&resolved).kind else {
         panic!("fixture should resolve to a block");
     };
     let binding_span = binding(block, 0).span;
@@ -664,8 +806,9 @@ fn anonymous_function_without_an_annotation_relates_to_the_binding_that_requires
         panic!("fixture initializer should preserve its nested block");
     };
     let function_span = initializer.result.span;
-    let error = run_source(source).expect_err("the anonymous function cannot synthesize");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+    let TypeError::Source(diagnostic) =
+        check_module(resolved).expect_err("the anonymous function cannot synthesize")
+    else {
         panic!("missing function context should remain a typed source diagnostic");
     };
 
@@ -680,27 +823,25 @@ fn anonymous_function_without_an_annotation_relates_to_the_binding_that_requires
 }
 
 #[test]
-fn anonymous_program_result_records_the_file_position_that_requires_synthesis() {
-    let source = source("function-result-context.ash", FUNCTION_RESULT_NEEDS_CONTEXT);
-    let tree = parse(lex(&source).expect("function result context should lex"));
-    let surface = project(&source, &tree).expect("function result context should project");
-    let resolved = resolve(&surface).expect("function result context should resolve");
-    let error = run_source(source).expect_err("the program result must synthesize");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+fn anonymous_main_body_records_the_source_position_that_requires_synthesis() {
+    let fixture = ModuleFixture::load("function-result-context.ash", FUNCTION_RESULT_NEEDS_CONTEXT);
+    let resolved = fixture.resolve();
+    let expected_span = main_body(&resolved).span;
+    let TypeError::Source(diagnostic) =
+        check_module(resolved).expect_err("the program result must synthesize")
+    else {
         panic!("missing program-result context should be a source diagnostic");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::FunctionNeedsContext);
-    assert_eq!(diagnostic.primary.span(), resolved.result.span);
-    assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span(), resolved.result.span);
+    assert_eq!(diagnostic.primary.span(), expected_span);
+    assert!(diagnostic.related.is_empty());
     assert!(diagnostic.help.is_none());
 }
 
 #[test]
 fn anonymous_function_checked_against_a_non_function_keeps_the_accepted_context_category() {
-    let source = source("non-function-context.ash", FUNCTION_NON_FUNCTION_CONTEXT);
-    let error = run_source(source).expect_err("an Int is not a function context");
+    let error = failure("non-function-context.ash", FUNCTION_NON_FUNCTION_CONTEXT);
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("the provisional non-function context should be a source diagnostic");
     };
@@ -712,86 +853,88 @@ fn anonymous_function_checked_against_a_non_function_keeps_the_accepted_context_
 
 #[test]
 fn anonymous_function_in_function_position_relates_to_the_application_that_requires_synthesis() {
-    let text = "(fn(value) {\n    value\n}) 1\n";
-    let source = source("application-context.ash", text);
-    let tree = parse(lex(&source).expect("application context should lex"));
-    let surface = project(&source, &tree).expect("application context should project");
-    let resolved = resolve(&surface).expect("application context should resolve");
-    let ResolvedExprKind::Apply(application) = &resolved.result.kind else {
+    let text = "main : Unit -> Int\nmain () = (fn(value) {\n    value\n}) 1\n";
+    let fixture = ModuleFixture::load("application-context.ash", text);
+    let resolved = fixture.resolve();
+    let result_span = main_body(&resolved).span;
+    let ResolvedExprKind::Apply(application) = &main_body(&resolved).kind else {
         panic!("fixture should resolve to an application");
     };
-    let error = run_source(source).expect_err("the function position must synthesize");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+    let function_span = application.function.span;
+    let TypeError::Source(diagnostic) =
+        check_module(resolved).expect_err("the function position must synthesize")
+    else {
         panic!("missing application context should be a source diagnostic");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::FunctionNeedsContext);
-    assert_eq!(diagnostic.primary.span(), application.function.span);
+    assert_eq!(diagnostic.primary.span(), function_span);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span(), resolved.result.span);
+    assert_eq!(diagnostic.related[0].span(), result_span);
 }
 
 #[test]
 fn anonymous_function_operand_relates_to_the_operator_that_requires_synthesis() {
-    let text = "(fn(value) {\n    value\n}) + 1\n";
-    let source = source("operator-context.ash", text);
-    let tree = parse(lex(&source).expect("operator context should lex"));
-    let surface = project(&source, &tree).expect("operator context should project");
-    let resolved = resolve(&surface).expect("operator context should resolve");
-    let ResolvedExprKind::Add(addition) = &resolved.result.kind else {
+    let text = "main : Unit -> Int\nmain () = (fn(value) {\n    value\n}) + 1\n";
+    let fixture = ModuleFixture::load("operator-context.ash", text);
+    let resolved = fixture.resolve();
+    let ResolvedExprKind::Add(addition) = &main_body(&resolved).kind else {
         panic!("fixture should resolve to addition");
     };
-    let error = run_source(source).expect_err("the operand must synthesize");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+    let left_span = addition.left.span;
+    let operator_span = addition.operator_span;
+    let TypeError::Source(diagnostic) =
+        check_module(resolved).expect_err("the operand must synthesize")
+    else {
         panic!("missing operator context should be a source diagnostic");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::FunctionNeedsContext);
-    assert_eq!(diagnostic.primary.span(), addition.left.span);
+    assert_eq!(diagnostic.primary.span(), left_span);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span(), addition.operator_span);
+    assert_eq!(diagnostic.related[0].span(), operator_span);
 }
 
 #[test]
 fn anonymous_function_right_operand_keeps_the_operator_synthesis_context() {
-    let text = "1 + (fn(value) {\n    value\n})\n";
-    let source = source("right-operator-context.ash", text);
-    let tree = parse(lex(&source).expect("right operator context should lex"));
-    let surface = project(&source, &tree).expect("right operator context should project");
-    let resolved = resolve(&surface).expect("right operator context should resolve");
-    let ResolvedExprKind::Add(addition) = &resolved.result.kind else {
+    let text = "main : Unit -> Int\nmain () = 1 + (fn(value) {\n    value\n})\n";
+    let fixture = ModuleFixture::load("right-operator-context.ash", text);
+    let resolved = fixture.resolve();
+    let ResolvedExprKind::Add(addition) = &main_body(&resolved).kind else {
         panic!("fixture should resolve to addition");
     };
-    let error = run_source(source).expect_err("the right operand must synthesize");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+    let right_span = addition.right.span;
+    let operator_span = addition.operator_span;
+    let TypeError::Source(diagnostic) =
+        check_module(resolved).expect_err("the right operand must synthesize")
+    else {
         panic!("missing right-operator context should be a source diagnostic");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::FunctionNeedsContext);
-    assert_eq!(diagnostic.primary.span(), addition.right.span);
+    assert_eq!(diagnostic.primary.span(), right_span);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span(), addition.operator_span);
+    assert_eq!(diagnostic.related[0].span(), operator_span);
 }
 
 #[test]
 fn nested_block_preserves_the_outer_binding_synthesis_context() {
-    let text = "{\n    let identity = {\n        fn(value) {\n            value\n        }\n    }\n    identity 1\n}\n";
-    let source = source("nested-binding-context.ash", text);
-    let tree = parse(lex(&source).expect("nested binding context should lex"));
-    let surface = project(&source, &tree).expect("nested binding context should project");
-    let resolved = resolve(&surface).expect("nested binding context should resolve");
-    let ResolvedExprKind::Block(block) = &resolved.result.kind else {
+    let text = "main : Unit -> Int\nmain () = {\n    let identity = {\n        fn(value) {\n            value\n        }\n    }\n    identity 1\n}\n";
+    let fixture = ModuleFixture::load("nested-binding-context.ash", text);
+    let resolved = fixture.resolve();
+    let ResolvedExprKind::Block(block) = &main_body(&resolved).kind else {
         panic!("fixture should resolve to a block");
     };
-    let outer_binding = binding(block, 0);
-    let error = run_source(source).expect_err("the nested function still cannot synthesize");
-    let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
+    let outer_binding_span = binding(block, 0).span;
+    let TypeError::Source(diagnostic) =
+        check_module(resolved).expect_err("the nested function still cannot synthesize")
+    else {
         panic!("nested missing context should be a source diagnostic");
     };
 
     assert_eq!(diagnostic.reason, TypeReason::FunctionNeedsContext);
     assert_eq!(diagnostic.related.len(), 1);
-    assert_eq!(diagnostic.related[0].span(), outer_binding.span);
+    assert_eq!(diagnostic.related[0].span(), outer_binding_span);
     assert_eq!(
         diagnostic.help.as_deref(),
         Some("add a function type annotation to this binding")
@@ -800,9 +943,9 @@ fn nested_block_preserves_the_outer_binding_synthesis_context() {
 
 #[test]
 fn rank_one_resolution_diagnostics_retain_exact_type_sites() {
-    let duplicate_text = "type Pair<A, A> =\n    Pair(Int, Int)\n\n0\n";
-    let duplicate = run_source(source("duplicate-type-parameter.ash", duplicate_text))
-        .expect_err("a declaration cannot repeat one type parameter");
+    let duplicate_text =
+        "type Pair<A, A> =\n    Pair(Int, Int)\n\nmain : Unit -> Int\nmain () = 0\n";
+    let duplicate = failure("duplicate-type-parameter.ash", duplicate_text);
     let PipelineFailure::Resolution(duplicate) = duplicate else {
         panic!("duplicate parameters should fail during resolution");
     };
@@ -819,10 +962,8 @@ fn rank_one_resolution_diagnostics_retain_exact_type_sites() {
     assert_eq!(duplicate.related.len(), 1);
     assert_eq!(duplicate.related[0].span().range().start(), offset(first));
 
-    let arity_text =
-        "type Option<A> =\n    None\n    | Some(A)\n\nbad : Option -> Int\nbad _ = 0\n\nbad None\n";
-    let arity = run_source(source("type-argument-count.ash", arity_text))
-        .expect_err("a parameterized nominal must be saturated");
+    let arity_text = "type Option<A> =\n    None\n    | Some(A)\n\nbad : Option -> Int\nbad _ = 0\n\nmain : Unit -> Int\nmain () = bad None\n";
+    let arity = failure("type-argument-count.ash", arity_text);
     let PipelineFailure::Resolution(arity) = arity else {
         panic!("wrong nominal arity should fail during resolution");
     };
@@ -836,9 +977,8 @@ fn rank_one_resolution_diagnostics_retain_exact_type_sites() {
     );
     assert_eq!(arity.found.as_deref(), Some("0"));
 
-    let kind_text = "type Bad<A> =\n    Bad(A<Int>)\n\n0\n";
-    let kind = run_source(source("type-kind.ash", kind_text))
-        .expect_err("a kind-Type parameter cannot be applied");
+    let kind_text = "type Bad<A> =\n    Bad(A<Int>)\n\nmain : Unit -> Int\nmain () = 0\n";
+    let kind = failure("type-kind.ash", kind_text);
     let PipelineFailure::Resolution(kind) = kind else {
         panic!("type kind errors should fail during resolution");
     };
@@ -847,9 +987,8 @@ fn rank_one_resolution_diagnostics_retain_exact_type_sites() {
     assert_eq!(kind.primary.span().range().start(), offset(applied));
     assert_eq!(kind.primary.span().range().end(), offset(applied + 1));
 
-    let unknown_text = "type Wrapped<A> =\n    Wrapped(B)\n\n0\n";
-    let unknown = run_source(source("unknown-type-variable.ash", unknown_text))
-        .expect_err("an undeclared payload type must be rejected");
+    let unknown_text = "type Wrapped<A> =\n    Wrapped(B)\n\nmain : Unit -> Int\nmain () = 0\n";
+    let unknown = failure("unknown-type-variable.ash", unknown_text);
     let PipelineFailure::Resolution(unknown) = unknown else {
         panic!("unknown types should fail during resolution");
     };
@@ -865,9 +1004,8 @@ fn rank_one_resolution_diagnostics_retain_exact_type_sites() {
 
 #[test]
 fn rank_one_inference_diagnostics_retain_exact_categories_and_types() {
-    let rigid_text = "rigid : A -> A\nrigid value = 1\n\n0\n";
-    let rigid = run_source(source("rigid-mismatch.ash", rigid_text))
-        .expect_err("a rigid result variable cannot become Int");
+    let rigid_text = "rigid : A -> A\nrigid value = 1\n\nmain : Unit -> Int\nmain () = 0\n";
+    let rigid = failure("rigid-mismatch.ash", rigid_text);
     let PipelineFailure::Typing(TypeError::Source(rigid)) = rigid else {
         panic!("rigid mismatches should fail during typing");
     };
@@ -878,9 +1016,8 @@ fn rank_one_inference_diagnostics_retain_exact_categories_and_types() {
     assert_eq!(rigid.primary.span().range().start(), offset(literal));
     assert_eq!(rigid.primary.span().range().end(), offset(literal + 1));
 
-    let recursive_text = "loop : A -> Unit\nloop value = loop((value, value))\n\nloop(1)\n";
-    let recursive = run_source(source("polymorphic-recursion.ash", recursive_text))
-        .expect_err("recursive self-use cannot instantiate at another type");
+    let recursive_text = "loop : A -> Unit\nloop value = loop((value, value))\n\nmain : Unit -> Unit\nmain () = loop(1)\n";
+    let recursive = failure("polymorphic-recursion.ash", recursive_text);
     let PipelineFailure::Typing(TypeError::Source(recursive)) = recursive else {
         panic!("polymorphic recursion should fail during typing");
     };
@@ -897,9 +1034,9 @@ fn rank_one_inference_diagnostics_retain_exact_categories_and_types() {
         offset(argument + argument_text.len())
     );
 
-    let infinite_text = "{\nlet omega = fn(value) {\nvalue(value)\n}\nomega\n}\n";
-    let infinite = run_source(source("infinite-type.ash", infinite_text))
-        .expect_err("self-application requires an infinite type");
+    let infinite_text =
+        "main : Unit -> Int\nmain () = {\nlet omega = fn(value) {\nvalue(value)\n}\nomega\n}\n";
+    let infinite = failure("infinite-type.ash", infinite_text);
     let PipelineFailure::Typing(TypeError::Source(infinite)) = infinite else {
         panic!("infinite types should fail during typing");
     };
@@ -917,23 +1054,27 @@ fn rank_one_inference_diagnostics_retain_exact_categories_and_types() {
         offset(self_application + infinite_argument_text.len())
     );
 
-    let ambiguous_text = "{\nlet constant = fn(ignored) {\n42\n}\nconstant\n}\n";
-    let ambiguous = run_source(source("ambiguous-type.ash", ambiguous_text))
-        .expect_err("the result leaves the function domain ambiguous");
+    let ambiguous_text = "main : Unit -> Unit\nmain () = {\nlet result = {\nlet constant = fn(ignored) {\n42\n}\nconstant\n}\n()\n}\n";
+    let ambiguous = failure("ambiguous-type.ash", ambiguous_text);
     let PipelineFailure::Typing(TypeError::Source(ambiguous)) = ambiguous else {
         panic!("ambiguous types should fail during typing");
     };
     assert_eq!(ambiguous.reason, TypeReason::AmbiguousType);
-    let result_end = ambiguous_text.rfind('}').expect("program result end") + 1;
-    assert_eq!(ambiguous.primary.span().range().start(), 0);
+    let result_start = ambiguous_text
+        .rfind("constant\n")
+        .expect("ambiguous synthesized result");
+    let result_end = result_start + "constant".len();
+    assert_eq!(
+        ambiguous.primary.span().range().start(),
+        offset(result_start)
+    );
     assert_eq!(ambiguous.primary.span().range().end(), offset(result_end));
 }
 
 #[test]
 fn unused_global_body_inference_labels_its_causal_initializer() {
-    let text = "type Option<A> =\nNone\n| Some(A)\n\nunused : Unit -> Unit\nunused _ = {\nlet value = None\n()\n}\n\n()\n";
-    let error = run_source(source("unused-global-inference.ash", text))
-        .expect_err("the unused constructor leaves its argument ambiguous");
+    let text = "type Option<A> =\nNone\n| Some(A)\n\nunused : Unit -> Unit\nunused _ = {\nlet value = None\n()\n}\n\nmain : Unit -> Unit\nmain () = ()\n";
+    let error = failure("unused-global-inference.ash", text);
     let PipelineFailure::Typing(TypeError::Source(error)) = error else {
         panic!("unsolved inference should be a source typing diagnostic")
     };

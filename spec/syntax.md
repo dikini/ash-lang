@@ -1,21 +1,39 @@
 # Syntax
 
-A Mini-Ash file contains zero or more nominal type declarations, zero or more
-global function definitions, and exactly one result expression. The file does
-not declare a module and cannot import another file.
+Each Ash source file defines one unnamed passive static module. A module
+contains zero or more imports followed by zero or more declarations. It has no
+module header, source-declared signature, or file result expression. An import
+affects compile-time visibility; it does not define a runtime module value or
+run initialization.
+
+The source path selected for execution identifies the entry module. The entry
+contract requires a local global named `main`; [Static
+Semantics](static-semantics.md) defines its type requirements.
 
 ## Grammar
 
-The following grammar is the complete Mini-Ash surface grammar. Each `;`
-terminates an EBNF production; it is not Ash source punctuation.
+The following grammar is the complete Ash surface grammar. Each `;` terminates
+an EBNF production; it is not Ash source punctuation.
 
 ```ebnf
-program ::=
-  { type_declaration line_end }
-  { global_definition line_end }
-  expression [ line_end ] ;
+module ::= { import_declaration line_end } { module_declaration line_end } ;
+module_declaration ::=
+    type_declaration
+  | interface_declaration
+  | implementation_declaration
+  | global_definition ;
+
+import_declaration ::=
+  "import" module_path
+  ( "as" upper_identifier | "(" import_item { "," import_item } ")" ) ;
+module_path ::= relative_module_path | absolute_module_path ;
+relative_module_path ::= identifier { "." identifier } ;
+absolute_module_path ::= "@" identifier "." identifier { "." identifier } ;
+import_item ::= import_name [ "as" import_name ] ;
+import_name ::= identifier | upper_identifier ;
 
 type_declaration ::=
+  [ "pub" [ "opaque" ] ]
   "type" upper_identifier [ type_parameters ] "=" [ line_end ] constructor_declaration
   { line_end "|" constructor_declaration } ;
 type_parameters ::=
@@ -23,13 +41,35 @@ type_parameters ::=
 constructor_declaration ::=
   upper_identifier [ "(" type { "," type } ")" ] ;
 
+interface_declaration ::=
+  [ "pub" ] "interface" upper_identifier interface_parameter
+  "{" line_end
+  interface_method { line_end interface_method } [ line_end ]
+  "}" ;
+interface_parameter ::= "<" upper_identifier ">" ;
+interface_method ::= identifier ":" type ;
+
+implementation_declaration ::=
+  [ "pub" ] "impl" interface_application [ where_clause ]
+  "{" line_end
+  [ impl_equation { line_end impl_equation } [ line_end ] ]
+  "}" ;
+impl_equation ::= identifier pattern { pattern } "=" expression ;
+
 global_definition ::= equational_global | inline_operational_global ;
-equational_global ::= external_interface line_end equation { line_end equation } ;
-external_interface ::= identifier ":" type ;
+equational_global ::=
+  [ "pub" ] global_signature line_end equation { line_end equation } ;
+global_signature ::= identifier ":" type [ where_clause ] ;
 equation ::= identifier pattern { pattern } "=" expression ;
 inline_operational_global ::=
-  "fn" identifier "(" typed_pattern { "," typed_pattern } ")"
-  "->" type block ;
+  [ "pub" ] "fn" identifier "(" typed_pattern { "," typed_pattern } ")"
+  "->" type [ where_clause ] block ;
+
+where_clause ::= "where" constraint { "," constraint } ;
+constraint ::= interface_application ;
+interface_application ::= interface_reference "<" type ">" ;
+interface_reference ::=
+  upper_identifier | upper_identifier "." upper_identifier ;
 
 block ::=
   "{" line_end { local_declaration line_end } expression [ line_end ] "}" ;
@@ -55,9 +95,11 @@ primary_expression ::=
   integer
   | boolean
   | unit
-  | identifier
-  | upper_identifier
+  | unqualified_term_reference
+  | qualified_term_reference
   | parenthesized_expression ;
+unqualified_term_reference ::= identifier | upper_identifier ;
+qualified_term_reference ::= upper_identifier "." import_name ;
 parenthesized_expression ::=
   "(" expression [ "," expression { "," expression } ] ")" ;
 
@@ -66,22 +108,26 @@ pattern ::=
   | "_"
   | boolean
   | unit
-  | upper_identifier [ "(" pattern { "," pattern } ")" ]
+  | constructor_reference [ "(" pattern { "," pattern } ")" ]
   | parenthesized_pattern ;
+constructor_reference ::=
+  upper_identifier | upper_identifier "." upper_identifier ;
 parenthesized_pattern ::=
   "(" pattern ")"
   | "(" juxtaposed_constructor_pattern ")"
   | "(" pattern "," pattern { "," pattern } ")" ;
 juxtaposed_constructor_pattern ::=
-  upper_identifier ( pattern | juxtaposed_constructor_pattern ) ;
+  constructor_reference ( pattern | juxtaposed_constructor_pattern ) ;
 typed_pattern ::= pattern ":" type ;
 type ::= atomic_type [ "->" type ] ;
 atomic_type ::=
   "Int"
   | "Bool"
   | "Unit"
-  | upper_identifier [ type_arguments ]
+  | nominal_type_reference [ type_arguments ]
   | parenthesized_type ;
+nominal_type_reference ::=
+  upper_identifier | upper_identifier "." upper_identifier ;
 type_arguments ::= "<" type { "," type } ">" ;
 parenthesized_type ::= "(" type [ "," type { "," type } ] ")" ;
 
@@ -90,20 +136,70 @@ upper_identifier ::= /[A-Z][a-zA-Z0-9_]*/ ;
 integer ::= /0|[1-9][0-9]*/ ;
 boolean ::= "true" | "false" ;
 unit ::= "(" ")" ;
-line_end ::= /logical-newline-in-file-or-block-context/ ;
+line_end ::= /logical-newline-in-module-or-block-context/ ;
 ```
 
-`line_end` is the logical boundary defined by
-[lexical structure](lexical-structure.md#whitespace-and-logical-lines).
+`line_end` is the logical boundary defined by [lexical
+structure](lexical-structure.md#whitespace-and-logical-lines). Imports must
+precede every module declaration. Both import lists and declaration lists may
+be empty. A targeted import list contains at least one item. Neither a module
+nor a block uses a trailing semicolon.
+
+A relative module path contains one or more lowercase path segments. An
+absolute path starts with `@`, contains a lowercase root name, and has at least
+one path segment beneath that root. Paths contain neither filename-extension
+syntax nor current-directory or parent-directory segments. A complete import
+uses one uppercase local alias:
+
+```ash
+import helpers.math as Math
+```
+
+A targeted import selects one or more public names and may rename each selected
+spelling. This fragment selects a term, a type, and a constructor:
+
+```ash
+import @std.collections.list (map, Option as ListOption, Some)
+```
+
+An imported module member uses one uppercase module alias and one member
+spelling. Terms may have lowercase or uppercase member spellings, as in
+`List.map` and `List.Some`. Type and constructor occurrences use uppercase
+members, as in `List.Option` and `List.Some`. Qualification has exactly these
+two components; it does not repeat the dependency's path.
+
+An unmodified declaration is private. `pub` marks a global, nominal type,
+interface, or implementation declaration as public. `pub opaque type` exports
+the nominal name without exporting its constructors. `opaque` is valid only
+between `pub` and `type`; constructors cannot carry individual modifiers. An
+equational global writes `pub` once before its global signature, not on its
+equation heads. An inline operational global writes `pub` before `fn`.
+
+An interface declaration has exactly one parameter and a nonempty body of
+method signatures. A method has no visibility modifier, type-parameter list,
+requirement, or body. An implementation has no source name. Its body contains
+only equations; an equation has no separate visibility modifier, signature, or
+requirement. Implementation equations use the same pattern and expression
+grammar as equational-global clauses, and the body may be empty. The grammar
+provides no associated declaration, default method, named implementation, or
+runtime dictionary form.
+
+A `where` clause contains one or more comma-separated interface applications
+and has no trailing comma. It remains on its declaration header's logical line.
+It follows the complete value type in either global presentation and the
+complete interface application in an implementation head. A constraint is
+therefore not part of a global's result type. Each interface application has
+one type argument and may use an unqualified interface name or one qualified by
+a module alias.
+
 Braces delimit blocks, and parentheses group expressions and types. A block
 contains ordered local declarations and one result expression. An ordinary
 `let` is sequential. A `let rec` declaration is one simultaneous group; each
-following `and` member occupies another logical line. Neither the file nor a
-block uses a trailing semicolon.
+following `and` member occupies another logical line.
 
 Every recursive member has a required type annotation. The grammar accepts an
 arbitrary initializer expression so static semantics can distinguish safe
-function or constructor-rooted initialization from malformed syntax.
+function- or constructor-rooted initialization from malformed syntax.
 
 A nominal declaration binds its ordered type parameters only in its
 constructor payload types. Every source nominal occurrence is saturated:
@@ -114,11 +210,13 @@ expressions have no explicit type abstraction or type-application form;
 `value<Type>` is not an expression.
 
 The executable test `syntax_local_recursive_group_example_is_executable`
-checks a two-member recursive group. The second function retains a reference
-back to the first without calling it, so the program terminates with `42`:
+checks a complete entry module containing a two-member recursive group. The
+second function retains a reference back to the first without calling it, so
+the program terminates with `42`:
 
 ```ash
-{
+main : Unit -> Int
+main () = {
     let rec first : Unit -> Int = fn(ignored) {
         second ()
     }
@@ -141,8 +239,8 @@ is invalid. Function arrows associate to the right, so `Int -> Int -> Int`
 means `Int -> (Int -> Int)`.
 
 Commas construct a tuple expression or tuple type with at least two elements.
-`(value)` remains grouping and `()` remains unit. A constructor has zero or
-one semantic payload. Two or more declared fields form one tuple payload, so
+`(value)` remains grouping and `()` remains unit. A constructor has zero or one
+semantic payload. Two or more declared fields form one tuple payload, so
 `Node(left, right)` applies the unary constructor value `Node` to the tuple
 `(left, right)`.
 
@@ -152,29 +250,56 @@ function as one argument.
 
 ## Global function presentations
 
-An equational global places its type interface before one or more contiguous
-pattern clauses.
-The executable test `syntax_equational_global_example_v002_is_executable`
-checks this complete file:
+An equational global places its global signature before one or more contiguous
+pattern clauses. The executable test
+`syntax_equational_global_example_v002_is_executable` checks this complete
+entry module:
 
 ```ash
 increment : Int -> Int
 increment value = value + 1
 
-increment 41
+main : Unit -> Int
+main () = increment 41
 ```
 
 An inline operational global places its parameter and result annotations in
 the function header. The executable test
 `syntax_inline_operational_global_example_v002_is_executable` checks this
-complete file:
+complete entry module:
 
 ```ash
 fn increment(value : Int) -> Int {
     value + 1
 }
 
-increment 41
+main : Unit -> Int
+main () = increment 41
+```
+
+Either global presentation may append a `where` clause to its header. The
+executable test
+`syntax_constrained_global_presentations_are_executable`
+checks that both presentations admit the same constraint syntax:
+
+```ash
+interface Equal<A> {
+    equal : (A, A) -> Bool
+}
+
+impl Equal<Int> {
+    equal (left, right) = left == right
+}
+
+same_equational : (A, A) -> Bool where Equal<A>
+same_equational pair = equal pair
+
+fn same_operational(pair : (A, A)) -> Bool where Equal<A> {
+    equal pair
+}
+
+main : Unit -> (Bool, Bool)
+main () = (same_equational (1, 1), same_operational (1, 1))
 ```
 
 An equational clause has a positive pattern count, and every contiguous clause

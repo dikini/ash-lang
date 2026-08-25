@@ -1,4 +1,5 @@
 answer : Int
 answer value = value
 
-1
+main : Unit -> Int
+main () = 1
