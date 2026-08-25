@@ -267,6 +267,10 @@ impl ResolvedModule {
         &self.definitions
     }
 
+    fn take_interfaces(&mut self) -> Box<[ResolvedInterfaceDeclaration]> {
+        std::mem::take(&mut self.interfaces)
+    }
+
     /// Moves resolved globals across a successful checker-owned transition.
     pub(crate) fn take_definitions(&mut self) -> Box<[ResolvedDefinition]> {
         std::mem::take(&mut self.definitions)
@@ -292,6 +296,9 @@ impl ResolvedModule {
 
 impl Drop for ResolvedModule {
     fn drop(&mut self) {
+        for interface in self.take_interfaces().into_vec() {
+            discard_resolved_interface_iteratively(interface);
+        }
         for definition in self.take_definitions().into_vec() {
             discard_resolved_definition_iteratively(definition);
         }
@@ -3822,6 +3829,18 @@ fn discard_resolved_implementation_iteratively(implementation: ResolvedImplement
         }
     }
     discard_resolved_body_work(expressions, patterns);
+}
+
+fn discard_resolved_interface_iteratively(interface: ResolvedInterfaceDeclaration) {
+    discard_origin_iteratively(interface.parameter.origin);
+    for method in interface.methods.into_vec() {
+        discard_resolved_type(method.annotation);
+        for parameter in method.type_parameters.into_vec() {
+            discard_origin_iteratively(parameter.origin);
+        }
+        discard_origin_iteratively(method.origin);
+    }
+    discard_origin_iteratively(interface.origin);
 }
 
 fn discard_external_interface(interface: ResolvedExternalInterface) {

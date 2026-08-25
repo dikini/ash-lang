@@ -8529,6 +8529,10 @@ mod tests {
     use crate::{
         module::{ModuleId, ModuleRoots, load_module_graph},
         resolve::resolve_module,
+        resolved::{
+            ImportedFacts, ResolvedExportCandidate, ResolvedInterfaceDeclaration,
+            ResolvedInterfaceMethod, ResolvedModuleParts, ResolvedTypeVariable,
+        },
         source::{ByteRange, SourceFile},
     };
 
@@ -8877,11 +8881,25 @@ mod tests {
     #[test]
     fn one_constraint_budget_spans_all_checked_modules() {
         let interface = "interface Marker<A> {\nmarker : A -> Bool\n}\n";
+        let short_module = resolved_module_fixture("short-constraint.ash", interface, "Unit", "()");
         let first = resolved_module_fixture("first-constraint.ash", interface, "Unit", "()");
         let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut constraint_work = InterfaceConstraintBudget::with_limit(39);
+        let mut short = InterfaceConstraintBudget::with_limit(36);
+
+        let failure =
+            check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
+                .expect_err("one missing unit should reject one interface");
+        assert_eq!(
+            failure,
+            TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
+        );
+        assert_eq!(short.used(), 36);
+
+        let mut type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(37);
 
         check_module_with_budget(
             first,
@@ -8890,6 +8908,8 @@ mod tests {
             &mut constraint_work,
         )
         .expect("one interface should fit the exact constraint budget");
+        assert_eq!(constraint_work.used(), 37);
+        assert_eq!(constraint_work.charge(1), Err(()));
         let failure = check_module_with_budget(
             second,
             &mut type_work,
@@ -8920,7 +8940,7 @@ mod tests {
             resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(78);
+        let mut short = InterfaceConstraintBudget::with_limit(76);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -8932,30 +8952,109 @@ mod tests {
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut exact = InterfaceConstraintBudget::with_limit(79);
+        let mut exact = InterfaceConstraintBudget::with_limit(77);
         check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
             .expect("the exact budget should admit one implementation method");
 
-        assert_eq!(exact.used(), 79);
+        assert_eq!(exact.used(), 77);
         assert_eq!(exact.charge(1), Err(()));
     }
 
     #[test]
-    fn nested_method_arrow_traversal_has_an_exact_constraint_boundary() {
-        let method_type = Type::Tuple(
-            vec![
-                Type::Int,
-                Type::Function(Box::new(Type::Unit), Box::new(Type::Bool)),
-            ]
-            .into_boxed_slice(),
-        );
-        let mut short = InterfaceConstraintBudget::with_limit(5);
-        assert_eq!(type_contains_function(&method_type, &mut short), Err(()));
+    fn invalid_outer_method_shape_has_an_exact_stack_safe_constraint_boundary() {
+        std::thread::Builder::new()
+            .name("interface-method-shape-boundary".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 10_000;
+                let source = SourceFile::new(
+                    "deep-interface-method.ash",
+                    "interface Deep<A> {\ndeep : A\n}\n",
+                )
+                .expect("the interface fixture should fit");
+                let span = source
+                    .span(
+                        ByteRange::new(
+                            0,
+                            u32::try_from(source.text().len())
+                                .expect("the fixture length should fit"),
+                        )
+                        .expect("the span is ordered"),
+                    )
+                    .expect("the span should belong to the fixture");
+                let module_id = ModuleId::new(1);
+                let interface_id = InterfaceId::new(module_id, 0);
+                let parameter_id = TypeVariableId::resolved(module_id, 0);
+                let mut nested_tail = Type::Function(Box::new(Type::Unit), Box::new(Type::Bool));
+                for _ in 0..DEPTH {
+                    nested_tail = Type::Tuple(vec![Type::Unit, nested_tail].into_boxed_slice());
+                }
+                let method_type =
+                    Type::Tuple(vec![Type::Variable(parameter_id), nested_tail].into_boxed_slice());
+                let module = ResolvedModule::new(ResolvedModuleParts {
+                    module: module_id,
+                    registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+                    imported: ImportedFacts::default(),
+                    direct_dependencies: Vec::new(),
+                    declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
+                    interfaces: vec![ResolvedInterfaceDeclaration {
+                        id: interface_id,
+                        public: false,
+                        spelling: "Deep".to_owned(),
+                        parameter: ResolvedTypeVariable {
+                            id: parameter_id,
+                            spelling: "A".to_owned(),
+                            origin: Origin::Source(span),
+                        },
+                        methods: vec![ResolvedInterfaceMethod {
+                            id: MethodId::new(interface_id, 0),
+                            spelling: "deep".to_owned(),
+                            annotation: ResolvedType {
+                                ty: method_type,
+                                provenance: ResolvedTypeProvenance::new(
+                                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                    0,
+                                ),
+                                origin: Origin::Source(span),
+                                span,
+                            },
+                            type_parameters: Box::new([]),
+                            origin: Origin::Source(span),
+                            span,
+                        }]
+                        .into_boxed_slice(),
+                        origin: Origin::Source(span),
+                        span,
+                    }],
+                    implementations: Vec::new(),
+                    definitions: Vec::new(),
+                    export_candidate: ResolvedExportCandidate::default(),
+                    span,
+                });
 
-        let mut exact = InterfaceConstraintBudget::with_limit(6);
-        assert_eq!(type_contains_function(&method_type, &mut exact), Ok(true));
-        assert_eq!(exact.used(), 6);
-        assert_eq!(exact.charge(1), Err(()));
+                let mut short = InterfaceConstraintBudget::with_limit(7);
+                assert_eq!(
+                    check_interface_declarations(&module, &mut short),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::ConstraintResourceExhausted
+                    ))
+                );
+                assert_eq!(short.used(), 7);
+
+                let mut exact = InterfaceConstraintBudget::with_limit(8);
+                let error = check_interface_declarations(&module, &mut exact)
+                    .expect_err("the exact budget should reach the source diagnostic");
+                let TypeError::Interface(diagnostic) = error else {
+                    panic!("the invalid outer method shape should use an interface diagnostic");
+                };
+                assert_eq!(diagnostic.reason, InterfaceReason::MethodNotFunction);
+                assert_eq!(exact.used(), 8);
+                assert_eq!(exact.charge(1), Err(()));
+                drop(module);
+            })
+            .expect("the small-stack method-shape thread should start")
+            .join()
+            .expect("method-shape rejection and destruction must fit the small stack");
     }
 
     #[test]
