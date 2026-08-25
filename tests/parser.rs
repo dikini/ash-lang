@@ -258,6 +258,17 @@ fn malformed_public_imports_and_implementation_selectors_recover_at_the_line_end
             Err(ProjectionError::RecoveryNodesPresent),
             "{case} should not project"
         );
+        assert_eq!(
+            tree.events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Token(index) => Some(*index),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            (0..tree.tokens().len()).collect::<Vec<_>>(),
+            "{case} should retain every lexer token exactly once"
+        );
         let mut depth = 0_u32;
         for event in tree.events() {
             match event {

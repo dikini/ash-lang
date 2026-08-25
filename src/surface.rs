@@ -41,7 +41,7 @@ pub struct SurfaceImport {
     pub public: bool,
     /// The relative or named-root module path.
     pub path: SurfaceModulePath,
-    /// The names made visible by the import.
+    /// The qualified alias or targeted name and implementation channels selected by the import.
     pub selection: SurfaceImportSelection,
     /// The complete import declaration span.
     pub span: Span,
@@ -61,7 +61,7 @@ pub enum SurfaceModulePath {
     },
 }
 
-/// The local names introduced by an import.
+/// The channels selected from an import dependency.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceImportSelection {
     /// The dependency's public namespaces under one module alias.
@@ -69,16 +69,16 @@ pub enum SurfaceImportSelection {
         /// The local module alias.
         alias: SurfaceName,
     },
-    /// Selected public spellings imported without module qualification.
+    /// Independent selected public name and implementation channels without module qualification.
     Targeted(Vec<SurfaceImportItem>),
 }
 
 /// One selected import channel.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceImportItem {
-    /// A spelling selected from the dependency's public namespaces.
+    /// A source spelling selected from the dependency's public namespaces.
     Name {
-        /// The selected dependency spelling.
+        /// The selected dependency spelling bound in the importing source.
         name: SurfaceName,
         /// The replacement local spelling, when present.
         alias: Option<SurfaceName>,
@@ -87,7 +87,8 @@ pub enum SurfaceImportItem {
     },
     /// Public implementations selected by one dependency interface spelling.
     Implementation {
-        /// The dependency interface spelling.
+        /// The dependency interface spelling; this channel binds no source name and Task 3 uses it
+        /// to control implementation availability.
         interface: SurfaceName,
         /// The complete selector item span.
         span: Span,
