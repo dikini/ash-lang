@@ -161,10 +161,9 @@ fn interface_state_release_is_ordered(source: &str) -> bool {
     ) else {
         return false;
     };
-    let Some(validated_interface_bindings) = code_token_sequence_positions_at_top_level(
-        driver_pipeline,
-        &["let", "validated_interfaces"],
-    ) else {
+    let Some(validated_interface_bindings) =
+        top_level_let_binding_positions(driver_pipeline, "validated_interfaces")
+    else {
         return false;
     };
     let [validated_interface_binding] = validated_interface_bindings.as_slice() else {
@@ -312,6 +311,46 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
         }
         fn entry_failure() {}
     "#;
+    let tuple_pattern_moved_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            let unchecked = elaborator.finish(typed.node)?;
+            let (validated_interfaces,) = (ManuallyDrop::new(validated_interfaces),);
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let ref_pattern_shadowed_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            let unchecked = elaborator.finish(typed.node)?;
+            let ref validated_interfaces = String::new();
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let mutable_pattern_shadowed_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            let unchecked = elaborator.finish(typed.node)?;
+            let mut validated_interfaces = String::new();
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
+    let struct_pattern_shadowed_drop = r#"
+        fn run_path_with_consumers_and_constraint_budget() {
+            let validated_interfaces = interface_validator(linked, constraint_work)?;
+            let unchecked = elaborator.finish(typed.node)?;
+            let Shadow { value: validated_interfaces } = Shadow::new();
+            ::std::mem::drop(validated_interfaces);
+            let validated = validator(unchecked, &sources, &module_sources)?;
+        }
+        fn entry_failure() {}
+    "#;
     let nested_shadow_then_actual_drop = r#"
         fn run_path_with_consumers_and_constraint_budget() {
             let validated_interfaces = interface_validator(linked, constraint_work)?;
@@ -327,11 +366,25 @@ fn interface_state_boundary_guard_ignores_prose_and_requires_code_sequences() {
     "#;
     let shadowed_drop_looks_ordered = interface_state_release_is_ordered(top_level_shadowed_drop);
     let moved_drop_looks_ordered = interface_state_release_is_ordered(top_level_moved_drop);
+    let tuple_moved_drop_looks_ordered =
+        interface_state_release_is_ordered(tuple_pattern_moved_drop);
+    let ref_shadowed_drop_looks_ordered =
+        interface_state_release_is_ordered(ref_pattern_shadowed_drop);
+    let mutable_shadowed_drop_looks_ordered =
+        interface_state_release_is_ordered(mutable_pattern_shadowed_drop);
+    let struct_shadowed_drop_looks_ordered =
+        interface_state_release_is_ordered(struct_pattern_shadowed_drop);
     let nested_shadow_looks_ordered =
         interface_state_release_is_ordered(nested_shadow_then_actual_drop);
     assert!(
-        !shadowed_drop_looks_ordered && !moved_drop_looks_ordered && nested_shadow_looks_ordered,
-        "the release guard must reject top-level shadowing or moves without counting nested bindings; shadowed: {shadowed_drop_looks_ordered}, moved: {moved_drop_looks_ordered}, nested: {nested_shadow_looks_ordered}"
+        !shadowed_drop_looks_ordered
+            && !moved_drop_looks_ordered
+            && !tuple_moved_drop_looks_ordered
+            && !ref_shadowed_drop_looks_ordered
+            && !mutable_shadowed_drop_looks_ordered
+            && !struct_shadowed_drop_looks_ordered
+            && nested_shadow_looks_ordered,
+        "the release guard must reject top-level shadowing or moves across binding patterns without counting nested bindings; direct: {shadowed_drop_looks_ordered}, moved: {moved_drop_looks_ordered}, tuple moved: {tuple_moved_drop_looks_ordered}, ref: {ref_shadowed_drop_looks_ordered}, mut: {mutable_shadowed_drop_looks_ordered}, struct: {struct_shadowed_drop_looks_ordered}, nested: {nested_shadow_looks_ordered}"
     );
 }
 
@@ -584,6 +637,7 @@ fn rust_code_tokens(source: &str) -> Vec<&str> {
                 | b'&'
                 | b':'
                 | b'!'
+                | b'='
         ) {
             tokens.push(&source[cursor..cursor + 1]);
         }
@@ -699,6 +753,68 @@ fn code_token_sequence_positions_at_top_level(
         }
     }
     delimiters.is_empty().then_some(sequence_positions)
+}
+
+fn top_level_let_binding_positions(tokens: &[&str], identifier: &str) -> Option<Vec<usize>> {
+    if identifier.is_empty() {
+        return None;
+    }
+    let mut delimiters = Vec::new();
+    let mut binding_positions = Vec::new();
+    for (position, token) in tokens.iter().enumerate() {
+        let starts_let_statement = delimiters.is_empty()
+            && *token == "let"
+            && (position == 0 || matches!(tokens[position - 1], ";" | "}"));
+        if starts_let_statement {
+            let pattern = let_binding_pattern(&tokens[position + 1..])?;
+            if pattern_binds_identifier(pattern, identifier) {
+                binding_positions.push(position);
+            }
+        }
+        if !update_delimiter_stack(&mut delimiters, token) {
+            return None;
+        }
+    }
+    delimiters.is_empty().then_some(binding_positions)
+}
+
+fn let_binding_pattern<'a>(tokens: &'a [&'a str]) -> Option<&'a [&'a str]> {
+    let mut delimiters = Vec::new();
+    let mut pattern_end = None;
+    for (position, token) in tokens.iter().enumerate() {
+        if delimiters.is_empty() {
+            let previous = position
+                .checked_sub(1)
+                .and_then(|previous| tokens.get(previous))
+                .copied();
+            let next = tokens.get(position + 1).copied();
+            if *token == "=" && previous != Some(".") {
+                return Some(&tokens[..pattern_end.unwrap_or(position)]);
+            }
+            if *token == ";" {
+                return None;
+            }
+            if *token == ":" && previous != Some(":") && next != Some(":") {
+                pattern_end = Some(position);
+            }
+        }
+        if !update_delimiter_stack(&mut delimiters, token) {
+            return None;
+        }
+    }
+    None
+}
+
+fn pattern_binds_identifier(pattern: &[&str], identifier: &str) -> bool {
+    pattern.iter().enumerate().any(|(position, token)| {
+        if *token != identifier {
+            return false;
+        }
+        let follows_path_separator =
+            position >= 2 && pattern[position - 2] == ":" && pattern[position - 1] == ":";
+        let next = pattern.get(position + 1).copied();
+        !follows_path_separator && !matches!(next, Some(":" | "(" | "{"))
+    })
 }
 
 fn top_level_statement_position(tokens: &[&str], statement: &[&str]) -> Option<usize> {
