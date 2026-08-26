@@ -46,6 +46,10 @@ pub enum NodeKind {
     ImportItem,
     /// A nominal type declaration.
     TypeDeclaration,
+    /// One nonempty declaration-level type-parameter list.
+    TypeParameters,
+    /// One declaration-level type parameter and its optional kind annotation.
+    TypeParameter,
     /// One constructor declaration under a nominal type.
     ConstructorDeclaration,
     /// A method-only interface declaration.
@@ -116,6 +120,10 @@ pub enum NodeKind {
     TypedPattern,
     /// A right-associated type.
     Type,
+    /// A right-associated kind.
+    Kind,
+    /// A grouped kind.
+    ParenthesizedKind,
     /// An atomic type.
     AtomicType,
     /// A grouped type.
@@ -139,9 +147,11 @@ pub enum ExpectedForm {
     Identifier,
     /// A source type.
     Type,
+    /// A source kind.
+    Kind,
     /// A source pattern.
     Pattern,
-    /// A single interface parameter written as `<A>`.
+    /// One interface type parameter.
     InterfaceParameter,
     /// A signature-only interface method.
     InterfaceMethod,
@@ -159,6 +169,8 @@ pub enum ExpectedForm {
     LeftBrace,
     /// `}`.
     RightBrace,
+    /// `>`.
+    Greater,
     /// `:`.
     Colon,
     /// `=`.
@@ -180,12 +192,10 @@ pub enum ParseReason {
     ExpectedForm,
     /// An operand was absent after an operator.
     ExpectedOperand,
-    /// A parenthesized expression or type was not closed.
+    /// A parenthesized expression, type, or kind was not closed.
     UnclosedGroup,
     /// Equality was repeated despite being non-associative.
     RepeatedEquality,
-    /// A polymorphic header is excluded from this increment.
-    PolymorphicHeader,
     /// A recursive delimiter is not followed by a member.
     ExpectedRecursiveMember,
     /// `and` appears outside a recursive binding group.
@@ -213,6 +223,18 @@ pub enum ParseContext {
 pub enum SynchronizationBoundary {
     /// A logical line boundary owned by an equation or binding.
     LogicalLineEnd,
+    /// A comma separating declaration-level type parameters.
+    TypeParameterSeparator,
+    /// The closing `>` of a declaration-level type-parameter list.
+    TypeParameterListClosing,
+    /// The `=` following a nominal declaration's type parameters.
+    TypeDeclarationEqual,
+    /// The `:` following an equational global's type parameters.
+    EquationalGlobalColon,
+    /// The `(` following an operational global's type parameters.
+    OperationalParameterOpeningParen,
+    /// The interface application following an implementation's type parameters.
+    ImplementationInterfaceHead,
     /// The opening brace owned by an interface declaration.
     InterfaceBodyOpeningBrace,
     /// The opening brace owned by an implementation declaration.
@@ -263,7 +285,6 @@ impl fmt::Display for ParseReason {
             Self::ExpectedOperand => "parse.expected-operand",
             Self::UnclosedGroup => "parse.unclosed-group",
             Self::RepeatedEquality => "parse.repeated-equality",
-            Self::PolymorphicHeader => "parse.polymorphic-header",
             Self::ExpectedRecursiveMember => "parse.expected-recursive-member",
             Self::UnexpectedAnd => "parse.unexpected-and",
             Self::Semicolon => "parse.semicolon",
@@ -620,6 +641,24 @@ impl Parser<'_> {
 const fn synchronization_message(boundary: SynchronizationBoundary) -> &'static str {
     match boundary {
         SynchronizationBoundary::LogicalLineEnd => "parsing resumes at this logical line boundary",
+        SynchronizationBoundary::TypeParameterSeparator => {
+            "parsing resumes at this type parameter separator"
+        }
+        SynchronizationBoundary::TypeParameterListClosing => {
+            "parsing resumes at this type parameter list closing delimiter"
+        }
+        SynchronizationBoundary::TypeDeclarationEqual => {
+            "parsing resumes at this nominal declaration equals sign"
+        }
+        SynchronizationBoundary::EquationalGlobalColon => {
+            "parsing resumes at this equational global colon"
+        }
+        SynchronizationBoundary::OperationalParameterOpeningParen => {
+            "parsing resumes at this operational parameter opening parenthesis"
+        }
+        SynchronizationBoundary::ImplementationInterfaceHead => {
+            "parsing resumes at this implementation interface head"
+        }
         SynchronizationBoundary::InterfaceBodyOpeningBrace => {
             "parsing resumes at this interface body opening brace"
         }
@@ -700,7 +739,6 @@ const fn primary_message(reason: ParseReason) -> &'static str {
         ParseReason::ExpectedOperand => "the operator requires a right operand",
         ParseReason::UnclosedGroup => "the opening parenthesis is not closed",
         ParseReason::RepeatedEquality => "equality is non-associative",
-        ParseReason::PolymorphicHeader => "explicit value type parameters are not available in Ash",
         ParseReason::ExpectedRecursiveMember => {
             "the recursive delimiter requires another binding member"
         }
@@ -716,8 +754,9 @@ const fn expected_name(expected: ExpectedForm) -> &'static str {
         ExpectedForm::Operand => "an operand",
         ExpectedForm::Identifier => "an identifier",
         ExpectedForm::Type => "a type",
+        ExpectedForm::Kind => "a kind",
         ExpectedForm::Pattern => "a pattern",
-        ExpectedForm::InterfaceParameter => "one interface parameter written as <A>",
+        ExpectedForm::InterfaceParameter => "one interface type parameter",
         ExpectedForm::InterfaceMethod => "an interface method signature",
         ExpectedForm::InterfaceApplication => "an interface application",
         ExpectedForm::ImplementationMethod => "an implementation method equation",
@@ -726,6 +765,7 @@ const fn expected_name(expected: ExpectedForm) -> &'static str {
         ExpectedForm::RightParen => ")",
         ExpectedForm::LeftBrace => "{",
         ExpectedForm::RightBrace => "}",
+        ExpectedForm::Greater => ">",
         ExpectedForm::Colon => ":",
         ExpectedForm::Equal => "=",
         ExpectedForm::Arrow => "->",

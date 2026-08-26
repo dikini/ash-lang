@@ -330,7 +330,7 @@ fn malformed_interface_and_impl_heads_retain_exact_expected_forms() {
         (
             "interface parameter",
             "interface Equal {\nequal : Int -> Bool\n}\n",
-            "one interface parameter written as <A>",
+            "one interface type parameter",
         ),
         ("impl head", "impl Equal {\n}\n", "an interface application"),
     ];
@@ -386,16 +386,18 @@ fn malformed_header_delimiters_recover_once_at_the_owning_boundary() {
         (
             "extra interface parameter",
             "interface Equal<A, B> {\nequal : A -> Bool\n}\n",
-            "one interface parameter written as <A>",
+            "one interface type parameter",
             ",",
-            SynchronizationBoundary::InterfaceBodyOpeningBrace,
+            SynchronizationBoundary::TypeParameterSeparator,
+            ",",
         ),
         (
             "missing interface parameter",
             "interface Equal<,> {\nequal : A -> Bool\n}\n",
-            "one interface parameter written as <A>",
+            "one interface type parameter",
             ",",
-            SynchronizationBoundary::InterfaceBodyOpeningBrace,
+            SynchronizationBoundary::TypeParameterSeparator,
+            ",",
         ),
         (
             "extra impl argument",
@@ -403,10 +405,11 @@ fn malformed_header_delimiters_recover_once_at_the_owning_boundary() {
             "an interface application",
             ",",
             SynchronizationBoundary::ImplementationBodyOpeningBrace,
+            "{",
         ),
     ];
 
-    for (case, text, expected, primary, boundary) in cases {
+    for (case, text, expected, primary, boundary, synchronization) in cases {
         let (source, tree) = parse_tree(text);
         let [diagnostic] = tree.parse_diagnostics() else {
             panic!(
@@ -425,7 +428,7 @@ fn malformed_header_delimiters_recover_once_at_the_owning_boundary() {
             matches!(
                 diagnostic.context.as_slice(),
                 [ParseContext::Synchronization { boundary: actual, span }]
-                    if *actual == boundary && spanned_text(&source, *span) == "{"
+                    if *actual == boundary && spanned_text(&source, *span) == synchronization
             ),
             "{case}: {:?}",
             diagnostic.context
@@ -967,7 +970,7 @@ fn projects_public_and_private_method_only_interfaces_exactly() {
                     | ConcreteElement::Error(_) => None,
                 })
                 .collect::<Vec<_>>(),
-            vec![NodeKind::InterfaceMethod]
+            vec![NodeKind::TypeParameter, NodeKind::InterfaceMethod]
         );
     }
     let module = project_module(&source, &tree).expect("interface source should project");
@@ -977,7 +980,7 @@ fn projects_public_and_private_method_only_interfaces_exactly() {
 
     assert!(!private.public);
     assert_eq!(private.name.text, "Render");
-    assert_eq!(private.parameter.text, "A");
+    assert_eq!(private.parameter.name.text, "A");
     assert_eq!(
         spanned_text(&source, private.span),
         text.lines().take(3).collect::<Vec<_>>().join("\n")
@@ -994,7 +997,7 @@ fn projects_public_and_private_method_only_interfaces_exactly() {
 
     assert!(public.public);
     assert_eq!(public.name.text, "Equal");
-    assert_eq!(public.parameter.text, "A");
+    assert_eq!(public.parameter.name.text, "A");
     assert_eq!(
         spanned_text(&source, public.span),
         text.lines().skip(3).take(3).collect::<Vec<_>>().join("\n")

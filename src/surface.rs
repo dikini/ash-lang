@@ -113,8 +113,8 @@ pub struct SurfaceTypeDeclaration {
     pub visibility: SurfaceTypeVisibility,
     /// The declared type spelling.
     pub name: SurfaceName,
-    /// Ordered type parameters, each of kind `Type`.
-    pub parameters: Vec<SurfaceName>,
+    /// Ordered type parameters.
+    pub parameters: Vec<SurfaceTypeParameter>,
     /// Its nonempty constructor list.
     pub constructors: Vec<SurfaceConstructorDeclaration>,
     /// The complete declaration span.
@@ -140,7 +140,7 @@ pub struct SurfaceInterfaceDeclaration {
     /// The declared interface spelling.
     pub name: SurfaceName,
     /// The interface's single type parameter.
-    pub parameter: SurfaceName,
+    pub parameter: SurfaceTypeParameter,
     /// The nonempty ordered method signatures.
     pub methods: Vec<SurfaceInterfaceMethod>,
     /// The complete interface declaration span.
@@ -163,6 +163,8 @@ pub struct SurfaceInterfaceMethod {
 pub struct SurfaceImplementation {
     /// Whether the anonymous implementation fact is exported.
     pub public: bool,
+    /// The optional complete explicit type-parameter list.
+    pub type_parameters: Option<Vec<SurfaceTypeParameter>>,
     /// The implemented interface reference.
     pub interface: SurfaceReference,
     /// The interface's single head type argument.
@@ -209,6 +211,8 @@ pub struct EquationalGlobal {
 pub struct SurfaceExternalInterface {
     /// The declared global name.
     pub name: SurfaceName,
+    /// The optional complete explicit type-parameter list.
+    pub type_parameters: Option<Vec<SurfaceTypeParameter>>,
     /// The declared type.
     pub annotation: SurfaceType,
     /// Ordered explicit interface requirements.
@@ -244,6 +248,8 @@ pub struct InlineOperationalGlobal {
 pub struct SurfaceInlineOperationalHeader {
     /// The global function name.
     pub name: SurfaceName,
+    /// The optional complete explicit type-parameter list.
+    pub type_parameters: Option<Vec<SurfaceTypeParameter>>,
     /// The nonempty operational parameter vector.
     pub parameters: Vec<SurfaceTypedPattern>,
     /// The declared result type.
@@ -416,6 +422,40 @@ pub struct SurfaceName {
     pub text: String,
     /// The exact name span.
     pub span: Span,
+}
+
+/// One declaration-level source type parameter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceTypeParameter {
+    /// The source spelling and exact name span.
+    pub name: SurfaceName,
+    /// The optional explicit kind annotation.
+    pub kind: Option<SurfaceKind>,
+    /// The complete parameter span, including its annotation when present.
+    pub span: Span,
+}
+
+/// One source kind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceKind {
+    /// The kind payload.
+    pub kind: SurfaceKindKind,
+    /// The complete kind span, including grouping delimiters when present.
+    pub span: Span,
+}
+
+/// The closed source kind family.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SurfaceKindKind {
+    /// The kind of ordinary value types.
+    Type,
+    /// A right-associated kind function.
+    Function {
+        /// The argument kind.
+        domain: Box<SurfaceKind>,
+        /// The result kind.
+        codomain: Box<SurfaceKind>,
+    },
 }
 
 /// An unresolved source reference, with qualification retained structurally.

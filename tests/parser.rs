@@ -133,7 +133,6 @@ fn retained_reason_code(reason: ParseReason) -> &'static str {
         ParseReason::ExpectedOperand => "parse.expected-operand",
         ParseReason::UnclosedGroup => "parse.unclosed-group",
         ParseReason::RepeatedEquality => "parse.repeated-equality",
-        ParseReason::PolymorphicHeader => "parse.polymorphic-header",
         ParseReason::ExpectedRecursiveMember => "parse.expected-recursive-member",
         ParseReason::UnexpectedAnd => "parse.unexpected-and",
         ParseReason::Semicolon => "parse.semicolon",
@@ -148,7 +147,6 @@ fn public_parse_reasons_describe_only_retained_diagnostics() {
         ParseReason::ExpectedOperand,
         ParseReason::UnclosedGroup,
         ParseReason::RepeatedEquality,
-        ParseReason::PolymorphicHeader,
         ParseReason::ExpectedRecursiveMember,
         ParseReason::UnexpectedAnd,
         ParseReason::Semicolon,
@@ -849,7 +847,7 @@ fn excluded_structural_forms_report_owned_reasons_and_never_project() {
     let cases = [
         (
             "fn identity<a>(value : Int) -> Int {\n    value\n}\n\nidentity\n",
-            ParseReason::PolymorphicHeader,
+            ParseReason::ExpectedForm,
         ),
         ("1;", ParseReason::Semicolon),
     ];
@@ -882,6 +880,47 @@ fn excluded_structural_forms_report_owned_reasons_and_never_project() {
             "source: {text:?}"
         );
     }
+}
+
+#[test]
+fn lowercase_type_parameter_recovers_once_without_cascades() {
+    let text = "fn identity<a>(value : Int) -> Int {\n    value\n}\n\nidentity\n";
+    let (source, tree) = parse_tree(text);
+
+    let [diagnostic] = tree.parse_diagnostics() else {
+        panic!(
+            "expected one lowercase-parameter diagnostic: {:?}",
+            tree.parse_diagnostics()
+        );
+    };
+    assert_eq!(diagnostic.reason, ParseReason::ExpectedForm);
+    assert_eq!(diagnostic.expected.as_deref(), Some("an identifier"));
+    let range = diagnostic.primary.span().range();
+    assert_eq!(
+        &source.text()[range.start() as usize..range.end() as usize],
+        "a"
+    );
+    assert!(matches!(
+        diagnostic.context.as_slice(),
+        [ParseContext::Synchronization {
+            boundary: SynchronizationBoundary::TypeParameterListClosing,
+            span,
+        }] if &source.text()[span.range().start() as usize..span.range().end() as usize] == ">"
+    ));
+    assert_eq!(
+        project(&source, &tree),
+        Err(ProjectionError::RecoveryNodesPresent)
+    );
+    assert_eq!(
+        tree.events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Token(index) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        (0..tree.tokens().len()).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -1063,20 +1102,24 @@ fn logical_line_ends_stop_unparenthesized_infix_but_not_grouped_syntax() {
 }
 
 #[test]
-fn value_level_polymorphic_headers_remain_a_parser_projection_boundary() {
-    let (source, tree) =
-        parse_tree("fn identity<A>(value : Int) -> Int {\n    value\n}\n\nidentity\n");
+fn explicit_operational_type_parameters_project() {
+    let (_, program) =
+        parse_valid("fn identity<A>(value : Int) -> Int {\n    value\n}\n\nidentity\n");
 
-    assert!(tree.lexical_diagnostics().is_empty());
-    assert!(
-        tree.parse_diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.reason == ParseReason::PolymorphicHeader)
-    );
-    assert_eq!(
-        project(&source, &tree),
-        Err(ProjectionError::RecoveryNodesPresent)
-    );
+    let SurfaceDefinitionKind::InlineOperational(definition) = &program.definitions[0].kind else {
+        panic!("expected inline operational definition");
+    };
+    let [parameter] = definition
+        .header
+        .type_parameters
+        .as_ref()
+        .expect("the explicit list should remain present")
+        .as_slice()
+    else {
+        panic!("expected one type parameter");
+    };
+    assert_eq!(parameter.name.text, "A");
+    assert_eq!(parameter.kind, None);
 }
 
 #[test]
@@ -1085,7 +1128,7 @@ fn parameterized_declarations_and_type_applications_project() {
         "type Option<A> =\nNone\n| Some(A)\n\nid : Option<Int> -> Option<Int>\nid value = value\n\nid None\n",
     );
 
-    assert_eq!(program.type_declarations[0].parameters[0].text, "A");
+    assert_eq!(program.type_declarations[0].parameters[0].name.text, "A");
     let SurfaceDefinitionKind::Equational(definition) = &program.definitions[0].kind else {
         panic!("expected equational definition");
     };

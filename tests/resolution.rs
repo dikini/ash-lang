@@ -557,6 +557,40 @@ fn implicit_global_parameters_preserve_free_name_order_and_exclude_nominals() {
 }
 
 #[test]
+fn explicit_global_syntax_preserves_predecessor_resolution_until_kind_checking() {
+    let program = resolve_valid(
+        "identity<A : Type> : A -> A\nidentity value = value\n\nfn operational<A : Type>(value : A) -> A {\nvalue\n}\n",
+    );
+
+    let ResolvedDefinitionKind::Equational(identity) = &program.definitions()[0].kind else {
+        panic!("expected an equational definition");
+    };
+    assert_eq!(
+        identity
+            .interface
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["A"]
+    );
+
+    let ResolvedDefinitionKind::InlineOperational(operational) = &program.definitions()[1].kind
+    else {
+        panic!("expected an operational definition");
+    };
+    assert_eq!(
+        operational
+            .header
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["A"]
+    );
+}
+
+#[test]
 fn data_namespaces_report_stable_resolution_reasons() {
     let cases = [
         (

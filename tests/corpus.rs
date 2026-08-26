@@ -196,7 +196,7 @@ const INVALID_CASES: &[InvalidCase] = &[
         path: "tests/fixtures/first-stratum/parse/excluded-polymorphism.ash",
         stage: Stage::Parser,
         reason: ExpectedReason::Parser {
-            parser: &[ParseReason::PolymorphicHeader],
+            parser: &[ParseReason::ExpectedForm],
             lexical: &[],
         },
     },

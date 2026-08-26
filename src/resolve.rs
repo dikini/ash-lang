@@ -1032,13 +1032,15 @@ impl Resolver {
         let mut resolved = Vec::with_capacity(declarations.len());
         let mut retained_type_variables = Vec::new();
         for (declaration, (id, method_ids)) in declarations.iter().zip(identities) {
-            let parameter = self
-                .allocate_type_variable(&declaration.parameter.text, declaration.parameter.span)?;
+            let parameter = self.allocate_type_variable(
+                &declaration.parameter.name.text,
+                declaration.parameter.name.span,
+            )?;
             retained_type_variables.push(parameter.clone());
             let mut methods = Vec::with_capacity(declaration.methods.len());
             for (method, method_id) in declaration.methods.iter().zip(method_ids) {
                 let mut names = Vec::new();
-                let mut seen = HashSet::from([declaration.parameter.text.as_str()]);
+                let mut seen = HashSet::from([declaration.parameter.name.text.as_str()]);
                 collect_free_type_names(
                     &method.annotation,
                     &self.type_names,
@@ -3438,10 +3440,15 @@ impl Resolver {
             let mut first = HashMap::new();
             let mut parameters = Vec::with_capacity(declaration.parameters.len());
             for parameter in &declaration.parameters {
-                if let Some(first_span) = first.insert(parameter.text.as_str(), parameter.span) {
+                if let Some(first_span) =
+                    first.insert(parameter.name.text.as_str(), parameter.name.span)
+                {
                     let mut diagnostic = Diagnostic::new(
                         ResolveReason::DuplicateTypeParameter,
-                        SourceLabel::new(parameter.span, "this type parameter is already declared"),
+                        SourceLabel::new(
+                            parameter.name.span,
+                            "this type parameter is already declared",
+                        ),
                     );
                     diagnostic.related.push(SourceLabel::new(
                         first_span,
@@ -3449,7 +3456,8 @@ impl Resolver {
                     ));
                     return Err(diagnostic.into());
                 }
-                parameters.push(self.allocate_type_variable(&parameter.text, parameter.span)?);
+                parameters
+                    .push(self.allocate_type_variable(&parameter.name.text, parameter.name.span)?);
             }
             nominal_parameters.push((*owner, parameters));
         }

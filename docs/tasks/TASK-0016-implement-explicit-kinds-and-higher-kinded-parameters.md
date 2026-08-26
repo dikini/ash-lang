@@ -77,10 +77,22 @@ permanent language principle.
   inference-kind ownership, Core-instantiation distinctions, and the complete
   evidence gate before CP-0009 was accepted.
 - The dedicated worktree starts from `a1647ff`; baseline build and full
-  repository verification pass. Authorization and implementation-plan
-  preparation are in progress; no production behavior has changed yet.
+  repository verification pass. CP-0009 is accepted, the task and execution
+  plan are authorized, and the branch remains stacked and unmerged.
 - The execution plan orders the closed type-site inventory and resource
   formulas early so omissions fail during implementation rather than closure.
+- Task 2 retains contextual kind syntax and exact explicit binder lists across
+  nominal, interface, equational, operational, and implementation headers.
+  Parser evidence covers right-associated kinds, exact spans, omission versus
+  explicit `Type`, token-complete recovery, every header-owner boundary,
+  line-end and end-of-file termination, and contextual `Type` as either a kind
+  atom or an ordinary implementation-head name. Mechanical resolver changes
+  preserve predecessor semantics until kind resolution begins in Task 4.
+- Task 2 passed independent semantic and parser-quality review after recovery
+  ownership, synchronization context, exact `>` diagnostics, owner-token
+  preservation, and contextual-name ambiguity were corrected. Focused tests,
+  the full all-feature workspace suite, Clippy with warnings denied,
+  formatting, all-target checking, and diff hygiene pass on the final change.
 
 ## Verification
 
