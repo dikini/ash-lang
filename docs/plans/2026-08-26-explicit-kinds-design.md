@@ -93,14 +93,17 @@ unification remain separate design questions.
 
 ## Kind checking and type representation
 
-`DELTA` maps type-variable identities to fixed kinds, and `XI` maps nominal
-identities to constructor kinds derived from their ordered parameter records.
+`DELTA` maps type-variable identities to fixed kinds, `XI` maps nominal
+identities to constructor kinds derived from their ordered parameter records,
+and `IOTA` maps interface identities to their single declared parameter kinds.
 Kind synthesis is total for monotypes. Primitives synthesize `Type`; variables
 and nominals use `DELTA` and `XI`; application requires a function kind with a
 matching argument; every tuple element and both sides of a term function must
-synthesize `Type`, producing `Type`. Every value annotation, requirement
-argument, constructor payload, pattern type, and term binder type must
-synthesize `Type`.
+synthesize `Type`, producing `Type`. Every value annotation, constructor
+payload, pattern type, and term binder type must synthesize `Type`. A
+requirement, implementation head, or prerequisite argument instead synthesizes
+the declared kind of its selected interface parameter. The interface
+application is a constraint and has no monotype kind of its own.
 
 The CST and surface tree preserve a named application and its argument vector
 for source spans. Resolution folds that vector left into one unary semantic

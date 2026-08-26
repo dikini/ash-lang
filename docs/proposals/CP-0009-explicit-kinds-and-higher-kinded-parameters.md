@@ -113,7 +113,9 @@ kind ::= Type | kind -> kind
 
 `->` associates to the right. The kind environment `DELTA` maps every in-scope
 `TypeVariableId` to exactly one kind. The nominal environment `XI` maps every
-accessible `NominalTypeId` to its constructor kind. A nominal declared with
+accessible `NominalTypeId` to its constructor kind. The interface environment
+`IOTA` maps every accessible `InterfaceId` to its single parameter kind, as
+owned by that interface's canonical binder record. A nominal declared with
 parameter kinds `k_1` through `k_n` has the right fold
 `k_1 -> ... -> k_n -> Type`.
 
@@ -158,14 +160,24 @@ family kind-synthesis:
     DELTA; XI |- monotype => Type
     ===>
     DELTA; XI |- value monotype ok
+
+  K-Interface-Argument :=
+    IOTA(interface) = parameter_kind
+    DELTA; XI |- argument => parameter_kind
+    ===>
+    DELTA; XI; IOTA |- constraint Interface(argument) ok
 ```
 
 An unsaturated constructor always synthesizes its derived kind. A partial
 application always synthesizes its residual kind. It fails only when an
 application premise or an owning value-type rule requires a different kind.
-Constructor payloads, requirement arguments, global and method value types,
-pattern and term binder types, source expression types, entry results, and
-ordinary Core value annotations use `K-Value-Type`.
+Constructor payloads, global and method value types, pattern and term binder
+types, source expression types, entry results, and ordinary Core value
+annotations use `K-Value-Type`. Requirement arguments, implementation head
+arguments, and prerequisite arguments use `K-Interface-Argument`; the argument
+must synthesize the selected interface parameter's declared kind, which need
+not be `Type`. An interface application is a constraint and has no monotype
+kind of its own.
 
 The CST and surface tree preserve one named application with its source
 argument vector and spans. During resolution, every admitted named application,
@@ -299,8 +311,9 @@ Kind checking reports structured reasons for:
 
 - `kind.not-applicable` when an applied type does not synthesize a function
   kind;
-- `kind.argument` when an argument kind differs from the function kind's
-  domain; and
+- `kind.argument` when a type-application argument differs from the function
+  kind's domain or an interface-application argument differs from the selected
+  interface parameter kind; and
 - `kind.expected-type` when an owning value-type rule finds a kind other than
   `Type`.
 
