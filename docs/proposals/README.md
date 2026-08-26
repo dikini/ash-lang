@@ -18,8 +18,8 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0009: Explicit Kinds and Higher-Kinded Parameters](CP-0009-explicit-kinds-and-higher-kinded-parameters.md)
+No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-No accepted change proposal is currently awaiting implementation.
+- [CP-0009: Explicit Kinds and Higher-Kinded Parameters](CP-0009-explicit-kinds-and-higher-kinded-parameters.md)
