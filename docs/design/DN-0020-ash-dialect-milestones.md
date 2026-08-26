@@ -14,8 +14,9 @@ authorized core-versus-library audit, and the final simplification analysis
 each retain their increment-local implementation, review, verification, and
 evidence. The `mini-ash` Git tag, closure report, and integration evidence retain
 the historical dialect. The
-[current specification](../../spec/README.md) defines Modular Ash; these
-type-class-like interfaces and `impl` are not module signatures. The final
+[current specification](../../spec/README.md) defines the implemented first
+`lib-ash` increment on the completed Modular Ash base; its type-class-like
+interfaces and `impl` are not module signatures. The final
 cross-cutting independent reviews and root verification completed the lifecycle
 gate after task and plan cleanup. The annotated `modular-ash` tag retains the
 final closure commit. Those mechanics did not supply missing semantics, and
@@ -54,9 +55,9 @@ exports, visibility, and typed composition were established first.
 ### Retain Mini-Ash historically
 
 The `mini-ash` tag is the runnable retained dialect. Current source has evolved
-into Modular Ash rather than carrying two grammars, drivers, lowerings, or Core
-compatibility paths. Current artifacts may reference the tag and build it for
-bounded comparison evidence.
+beyond Modular Ash rather than carrying historical grammars, drivers,
+lowerings, or Core compatibility paths. Current artifacts may reference the tag
+and build it for bounded comparison evidence.
 
 This retention preserves the milestone without constraining later
 core-to-library refactoring to keep Mini-Ash source runnable in the evolving

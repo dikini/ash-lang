@@ -24,12 +24,17 @@ module_declaration ::=
   | global_definition ;
 
 import_declaration ::=
-  "import" module_path
-  ( "as" upper_identifier | "(" import_item { "," import_item } ")" ) ;
+    "import" module_path
+      ( "as" upper_identifier | targeted_import )
+  | "pub" "import" module_path targeted_import ;
+targeted_import ::=
+  "(" import_item { "," import_item } ")" ;
 module_path ::= relative_module_path | absolute_module_path ;
 relative_module_path ::= identifier { "." identifier } ;
 absolute_module_path ::= "@" identifier "." identifier { "." identifier } ;
-import_item ::= import_name [ "as" import_name ] ;
+import_item ::=
+    import_name [ "as" import_name ]
+  | "impl" upper_identifier ;
 import_name ::= identifier | upper_identifier ;
 
 type_declaration ::=
@@ -142,7 +147,8 @@ line_end ::= /logical-newline-in-module-or-block-context/ ;
 `line_end` is the logical boundary defined by [lexical
 structure](lexical-structure.md#whitespace-and-logical-lines). Imports must
 precede every module declaration. Both import lists and declaration lists may
-be empty. A targeted import list contains at least one item. Neither a module
+be empty. A private import may be complete or targeted. A public import must be
+targeted. A targeted import list contains at least one item. Neither a module
 nor a block uses a trailing semicolon.
 
 A relative module path contains one or more lowercase path segments. An
@@ -162,18 +168,33 @@ spelling. This fragment selects a term, a type, and a constructor:
 import @std.collections.list (map, Option as ListOption, Some)
 ```
 
+A targeted implementation item writes `impl` followed by one uppercase public
+interface spelling. It cannot be renamed and binds no source name. Name items
+and implementation items are independent, so selecting an interface or method
+name does not select its implementations:
+
+```ash
+import equality (Equal, equal, impl Equal)
+```
+
+`pub import` uses the same targeted list and re-exports each selected name or
+implementation channel. It has no qualified `as Module` form. [Name
+resolution](name-resolution.md#imports-and-namespaces) defines selection,
+availability, and re-export identity.
+
 An imported module member uses one uppercase module alias and one member
 spelling. Terms may have lowercase or uppercase member spellings, as in
 `List.map` and `List.Some`. Type and constructor occurrences use uppercase
 members, as in `List.Option` and `List.Some`. Qualification has exactly these
 two components; it does not repeat the dependency's path.
 
-An unmodified declaration is private. `pub` marks a global, nominal type,
-interface, or implementation declaration as public. `pub opaque type` exports
-the nominal name without exporting its constructors. `opaque` is valid only
-between `pub` and `type`; constructors cannot carry individual modifiers. An
-equational global writes `pub` once before its global signature, not on its
-equation heads. An inline operational global writes `pub` before `fn`.
+An unmodified declaration is private. On a declaration, `pub` marks a global,
+nominal type, interface, or implementation as public. On an import, `pub`
+re-exports the selected channels. `pub opaque type` exports the nominal name
+without exporting its constructors. `opaque` is valid only between `pub` and
+`type`; constructors cannot carry individual modifiers. An equational global
+writes `pub` once before its global signature, not on its equation heads. An
+inline operational global writes `pub` before `fn`.
 
 An interface declaration has exactly one parameter and a nonempty body of
 method signatures. A method has no visibility modifier, type-parameter list,

@@ -8,6 +8,7 @@ use std::{
 use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
     elaborate::{TypeError, TypeReason},
+    interface::InterfaceReason,
     lexer::LexReason,
     module::{LoadGraphError, ModuleRoots},
     resolve::ResolveReason,
@@ -81,6 +82,32 @@ const CONSTRAINED_IMPORT_LIBRARY_MODULE: &str = concat!(
     "pub same : (A, A) -> Bool where Equal<A>\n",
     "same pair = equal pair\n",
 );
+const NAME_ONLY_IMPORT_ENTRY_MODULE: &str = concat!(
+    "import equality (Equal, equal)\n\n",
+    "main : Unit -> Bool\n",
+    "main () = equal(1, 1)\n",
+);
+const EQUALITY_IMPLEMENTATION_MODULE: &str = concat!(
+    "pub interface Equal<A> {\n",
+    "    equal : (A, A) -> Bool\n",
+    "}\n\n",
+    "pub impl Equal<Int> {\n",
+    "    equal (left, right) = left == right\n",
+    "}\n",
+);
+const PUBLIC_NAME_REEXPORT_ENTRY_MODULE: &str = concat!(
+    "import facade (facade_answer)\n\n",
+    "main : Unit -> Int\n",
+    "main () = facade_answer(())\n",
+);
+const PUBLIC_NAME_REEXPORT_FACADE_MODULE: &str =
+    "pub import arithmetic (answer as facade_answer)\n";
+const IMPLEMENTATION_FACADE_ENTRY_MODULE: &str = concat!(
+    "import facade (Equal, equal, impl Equal)\n\n",
+    "main : Unit -> Bool\n",
+    "main () = equal(1, 1)\n",
+);
+const IMPLEMENTATION_FACADE_MODULE: &str = "pub import equality (Equal, equal, impl Equal)\n";
 const GENERIC_PREREQUISITE_EVIDENCE_MODULE: &str = concat!(
     "type Option<A> =\n",
     "    None\n",
@@ -276,6 +303,28 @@ fn assert_module_tree(
         .expect("the documented module tree should be accepted")
 }
 
+fn exact_range(source: &str, needle: &str) -> (u32, u32) {
+    let start = source
+        .find(needle)
+        .unwrap_or_else(|| panic!("the fixture should contain {needle:?}"));
+    let end = start + needle.len();
+    (
+        u32::try_from(start).expect("the fixture offset should fit in a source span"),
+        u32::try_from(end).expect("the fixture offset should fit in a source span"),
+    )
+}
+
+fn exact_last_range(source: &str, needle: &str) -> (u32, u32) {
+    let start = source
+        .rfind(needle)
+        .unwrap_or_else(|| panic!("the fixture should contain {needle:?}"));
+    let end = start + needle.len();
+    (
+        u32::try_from(start).expect("the fixture offset should fit in a source span"),
+        u32::try_from(end).expect("the fixture offset should fit in a source span"),
+    )
+}
+
 #[test]
 fn overview_main_application_example_is_executable() {
     assert_observation("main.ash", MAIN_MODULE, "42", "Int");
@@ -329,6 +378,26 @@ fn overview_targeted_import_example_is_executable() {
 }
 
 #[test]
+fn resolution_targeted_public_name_reexport_is_executable() {
+    let observation = assert_module_tree(
+        PUBLIC_NAME_REEXPORT_ENTRY_MODULE,
+        &[
+            ("app/arithmetic.ash", SIBLING_ARITHMETIC_MODULE),
+            ("app/facade.ash", PUBLIC_NAME_REEXPORT_FACADE_MODULE),
+        ],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+    assert_documented("spec/name-resolution.md", PUBLIC_NAME_REEXPORT_ENTRY_MODULE);
+    assert_documented(
+        "spec/name-resolution.md",
+        PUBLIC_NAME_REEXPORT_FACADE_MODULE,
+    );
+    assert_documented("spec/name-resolution.md", SIBLING_ARITHMETIC_MODULE);
+}
+
+#[test]
 fn overview_opaque_smart_constructor_example_is_executable() {
     let observation = assert_module_tree(
         OPAQUE_ENTRY_MODULE,
@@ -376,7 +445,7 @@ fn overview_local_interface_evidence_example_is_executable() {
 }
 
 #[test]
-fn overview_cross_module_constrained_example_is_executable() {
+fn overview_implementation_only_selector_beside_qualified_import_is_executable() {
     let observation = assert_module_tree(
         CONSTRAINED_IMPORT_ENTRY_MODULE,
         &[("app/equality.ash", CONSTRAINED_IMPORT_LIBRARY_MODULE)],
@@ -386,6 +455,104 @@ fn overview_cross_module_constrained_example_is_executable() {
     assert_eq!(observation.type_display(), "Bool");
     assert_documented("spec/README.md", CONSTRAINED_IMPORT_ENTRY_MODULE);
     assert_documented("spec/README.md", CONSTRAINED_IMPORT_LIBRARY_MODULE);
+}
+
+#[test]
+fn overview_name_only_import_has_structured_unsatisfied_constraint() {
+    let tree = TempDirectory::create();
+    let entry = tree.write("app/main.ash", NAME_ONLY_IMPORT_ENTRY_MODULE);
+    tree.write("app/equality.ash", EQUALITY_IMPLEMENTATION_MODULE);
+
+    let failure = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("a name-only import should not make implementation evidence available");
+    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(diagnostic))) = failure
+    else {
+        panic!("the name-only method use should retain an interface diagnostic")
+    };
+
+    assert_eq!(diagnostic.reason, InterfaceReason::Unsatisfied);
+    assert_eq!(diagnostic.reason.to_string(), "constraint.unsatisfied");
+    assert_eq!(
+        diagnostic.primary.message(),
+        "no available implementation satisfies this interface obligation"
+    );
+    let primary = diagnostic.primary.span();
+    assert_eq!(
+        (primary.range().start(), primary.range().end()),
+        exact_last_range(NAME_ONLY_IMPORT_ENTRY_MODULE, "equal")
+    );
+    let [declaration, import, interface] = diagnostic.related.as_slice() else {
+        panic!("the name-only failure should retain exactly three ordered causes")
+    };
+    assert_eq!(
+        declaration.message(),
+        "this declaration introduced the interface obligation"
+    );
+    assert_eq!(
+        (
+            declaration.span().range().start(),
+            declaration.span().range().end()
+        ),
+        exact_range(EQUALITY_IMPLEMENTATION_MODULE, "equal : (A, A) -> Bool")
+    );
+    assert_eq!(
+        import.message(),
+        "this import made the declaration available"
+    );
+    let selector_start = NAME_ONLY_IMPORT_ENTRY_MODULE
+        .find("Equal, equal")
+        .expect("the name-only fixture should contain its method selector")
+        + "Equal, ".len();
+    let selector_end = selector_start + "equal".len();
+    assert_eq!(
+        (import.span().range().start(), import.span().range().end()),
+        (
+            u32::try_from(selector_start).expect("the selector offset should fit in a source span"),
+            u32::try_from(selector_end).expect("the selector offset should fit in a source span")
+        )
+    );
+    assert_eq!(
+        interface.message(),
+        "this interface declaration participates in the failing selection"
+    );
+    assert_eq!(
+        (
+            interface.span().range().start(),
+            interface.span().range().end()
+        ),
+        exact_range(
+            EQUALITY_IMPLEMENTATION_MODULE,
+            "pub interface Equal<A> {\n    equal : (A, A) -> Bool\n}"
+        )
+    );
+    assert_eq!(primary.source(), import.span().source());
+    assert_eq!(declaration.span().source(), interface.span().source());
+    assert_ne!(primary.source(), declaration.span().source());
+    assert!(diagnostic.expected.is_none());
+    assert!(diagnostic.found.is_none());
+    assert!(diagnostic.help.is_none());
+    assert_documented("spec/name-resolution.md", NAME_ONLY_IMPORT_ENTRY_MODULE);
+    assert_documented("spec/name-resolution.md", EQUALITY_IMPLEMENTATION_MODULE);
+}
+
+#[test]
+fn overview_three_module_implementation_facade_is_executable() {
+    let observation = assert_module_tree(
+        IMPLEMENTATION_FACADE_ENTRY_MODULE,
+        &[
+            ("app/equality.ash", EQUALITY_IMPLEMENTATION_MODULE),
+            ("app/facade.ash", IMPLEMENTATION_FACADE_MODULE),
+        ],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "true");
+    assert_eq!(observation.type_display(), "Bool");
+    assert_documented("spec/README.md", IMPLEMENTATION_FACADE_ENTRY_MODULE);
+    assert_documented("spec/README.md", IMPLEMENTATION_FACADE_MODULE);
+    assert_documented("spec/README.md", EQUALITY_IMPLEMENTATION_MODULE);
 }
 
 #[test]

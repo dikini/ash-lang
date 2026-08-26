@@ -206,7 +206,17 @@ entry-contract rejections also use status `1`. Interface-related source reasons
 include `interface.*`, `impl.*`, and `constraint.*`; the stable reason
 identifies the judgment that first established the rejection. Related labels
 may identify the interface, implementation, method, implementation method, and
-direct import occurrences that caused it. An unavailable private or transitive
+name import occurrences that caused it. When an explicitly selected
+implementation crosses a facade, related labels identify each import or public
+re-export hop in the authorization route. The route labels remain attached to
+the same structured diagnostic at the programmatic and executable boundaries.
+
+A targeted name import alone does not select implementation evidence, so a
+method use that needs that evidence can report `constraint.unsatisfied`. A
+missing or private interface named by `impl Interface` reports
+`resolve.unavailable-export`; selecting a public declaration from another
+namespace reports `resolve.interface-kind`. These source failures identify the
+selector that established the rejection. An unavailable private or unselected
 implementation is reported without exposing that declaration's metadata.
 
 Entry failures include `entry.missing-main`, `entry.main-polymorphic`,

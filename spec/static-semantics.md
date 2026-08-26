@@ -673,26 +673,30 @@ Method body failures retain the existing `type.*`, `pattern.*`, and
 `coverage.*` reasons.
 
 The effective implementation environment of a module contains all its local
-private and public implementations plus every public implementation defined by
-a direct dependency. Complete and targeted imports both admit those anonymous
-facts. A target selector changes source-name visibility only. An imported
-implementation is not copied into the current module's export summary and is
-therefore unavailable to a dependent that does not import its defining module
-directly. Multiple direct routes to one stable implementation identity
-deduplicate before comparison.
+private and public implementations plus only the public implementation facts
+selected by its targeted `impl Interface` items. A selector operates on its
+direct dependency summary's public implementation closure, so it may select a
+fact declared by that dependency or re-exported through it. Complete imports
+and targeted name items admit no implementation facts. Multiple selected
+routes to one stable implementation identity deduplicate before comparison.
+The [name-resolution rules](name-resolution.md#imports-and-namespaces) choose
+one deterministic effective route independently from any public re-export
+route.
 
 Every pair of distinct implementation heads for one interface in the effective
 environment is freshened independently. If the heads unify, the environment is
 rejected with `impl.overlap`. Prerequisites, source order, dependency order, and
 import order never select a winner. Header admission precedes environment
 construction, so an invalid local header reports its own failure and cannot
-cause a secondary overlap failure. Membership and bodies are checked only after
-overlap succeeds.
+cause a secondary overlap failure. The first module whose effective environment
+combines the two distinct facts owns the overlap and publishes no summary.
+Membership and bodies are checked only after overlap succeeds.
 
 ```sequent
 WF-Effective-Implementations :=
   local = admitted_local_impls(module)
-  effective = local union public_impls(direct_dependencies(module))
+  selected = selected_public_impls(implementation_items(module), dependency_summaries)
+  effective = local union selected
   effective is deduplicated by stable implementation identity
   for each distinct pair for one interface,
     not unifies(freshen(left.head), freshen(right.head))
@@ -773,13 +777,19 @@ selection reports `constraint.cycle`. If no implementation matches, it reports
 `constraint.unsatisfied`. Coherent effective environments ensure that concrete
 selection has at most one matching implementation after identity
 deduplication. Candidate enumeration consults only the effective environment.
-An implementation that is private in another module, or public but reachable
-only through a transitive dependency, contributes no candidate. Without
-another evidence source, the obligation is `constraint.unsatisfied` at its
-constrained occurrence, and that occurrence owns the failure. Its deterministic
-related labels stop at the method or constrained-global declaration and any
-relevant direct import. They never reveal the unavailable implementation or a
-transitive import route.
+An implementation that is private in another module, or public but absent
+because no implementation item selected an authorizing direct or re-export
+route, contributes no candidate. Without another evidence source, the
+obligation is `constraint.unsatisfied` at its constrained occurrence, and that
+occurrence owns the failure.
+
+For a name-only import, deterministic related labels identify the original
+method or constrained-global declaration, the name import used by the
+occurrence, and the owning interface. They do not reveal a private or
+unselected implementation. If a selected implementation fails because one of
+its prerequisites is unsatisfied, the labels additionally identify the
+original implementation and method declarations and every import hop of the
+chosen authorization route in order.
 
 A local generalized function cannot acquire a new requirement.
 For an eligible unannotated anonymous-function initializer, typing closes and
@@ -929,7 +939,9 @@ It checks interface declarations and admits implementation headers, builds and
 checks the effective implementation environment, checks exact method
 membership, then checks ordinary globals and implementation method bodies in
 deterministic source and method order. `THETA` is the accumulated first-order
-substitution described above.
+substitution described above. Resolution has already staged the name and
+implementation facts selected by public imports, but none enters a summary
+until all these checks succeed.
 
 ```sequent
 family module-and-program-typing:
@@ -937,7 +949,8 @@ family module-and-program-typing:
     GAMMA_D = checked schemes imported from direct dependency summaries
     for each local interface, |-interface interface ok
     admitted_impls = admitted local implementation headers
-    effective_impls = effective(admitted_impls, direct_dependencies)
+    selected_impls = explicitly selected implementation facts from dependency summaries
+    effective_impls = effective(admitted_impls, selected_impls)
     module |-implementations effective_impls coherent
     for each local implementation, |-impl-membership implementation ok
     GAMMA_G = all local schemes accepted by WF-Global-Signature
@@ -945,7 +958,8 @@ family module-and-program-typing:
     for each ordinary global or implementation method in deterministic source and method order,
       GAMMA_D, GAMMA_G, GAMMA_M |-body definition ok
     every inference variable allocated by these premises is in domain(THETA)
-    freeze_public(module, checked definitions, admitted_impls, apply(THETA)) = summary
+    freeze_public(module, checked definitions, admitted_impls,
+      staged public name and implementation re-exports, apply(THETA)) = summary
     ===>
     summaries(direct_dependencies) |-module module ⇒ checked_module, summary
 
@@ -967,12 +981,14 @@ those definitions. Its inference premise closes inference over the complete
 module, including types inferred only inside discarded expressions.
 
 `freeze_public` atomically derives the body-free checked summary only after the
-complete module succeeds. Every public interface or implementation fact in the
-summary has therefore passed its owning judgment. Any header, overlap,
-membership, body, inference-closure, or selection failure publishes no summary.
-The [name-resolution specification](name-resolution.md#imports-and-namespaces)
-defines the summary's public facts, required hidden closure, access effects, and
-non-re-export boundary.
+complete module succeeds. Public local declarations and implementations retain
+the facts established by their owning judgments. Publicly selected name and
+implementation re-exports preserve the checked facts and defining identities
+from their dependency summary while adding the current public spelling or
+authorization hop. Any header, overlap, membership, body, inference-closure,
+or selection failure publishes no summary. The [name-resolution
+specification](name-resolution.md#imports-and-namespaces) defines the summary's
+public facts, required hidden closure, access effects, and authorization routes.
 
 The filled occurrence fields and checked modules become inputs to
 [module linking and linked interface-evidence validation](elaboration.md#module-linking-and-entry-generation).
@@ -1012,19 +1028,22 @@ global requirement failures belong to their well-formedness judgments.
 Implementation visibility, head, prerequisite, orphan, and termination
 failures belong to header admission; overlap belongs to effective-environment
 construction; method membership and bodies belong to their respective checks;
-and satisfaction failures belong to selection. Earlier parser and resolution
-failures are not reclassified by static checking. Traversal follows dependency,
-import, declaration, requirement, and method order, so one source program has a
-deterministic first failure.
+and satisfaction failures belong to selection. An unavailable implementation
+item or a file-wide import-name conflict remains a resolution failure. Earlier
+parser and resolution failures are not reclassified by static checking.
+Traversal follows dependency, import, selector, declaration, requirement, and
+method order. Chosen authorization routes follow their deterministic hop order,
+so one source program has a deterministic first failure and label sequence.
 
 One graph-wide interface-and-constraint work budget persists from dependency-
 summary admission through effective-environment construction, header and body
 checking, evidence selection, linking, and linked evidence validation. The
 static stages charge proportional work before retaining or visiting interface
-and implementation facts, effective environments, overlap pairs, obligations,
-candidates, substitutions, prerequisite edges, active goals, and evidence
-nodes. [Elaboration](elaboration.md#module-linking-and-entry-generation) defines
-the linking and validation charges. Exhaustion at any stage is
+and implementation facts, selector expansions, effective and public routes,
+summary closure, overlap pairs, obligations, candidates, substitutions,
+prerequisite edges, active goals, and evidence nodes.
+[Elaboration](elaboration.md#module-linking-and-entry-generation) defines the
+link-retention and full-route-validation charges. Exhaustion at any stage is
 `internal.resource.constraint-work`; validation has no separate resource
 reason. Active-goal cycle detection precedes resource exhaustion for the same
 retained selection work. Existing type-inference, Core-construction, and Core-

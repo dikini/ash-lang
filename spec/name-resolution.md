@@ -42,18 +42,38 @@ alias. It does not copy declarations or change their identities. Public globals,
 nominal types, interfaces, methods, and constructors are available through
 qualified occurrences such as `List.map`, `List.Option`, `List.Equal`,
 `List.equal`, and `List.Some`. A qualified occurrence must use an alias bound by
-an import in the same module.
+an import in the same module. A complete import is private and selects no
+implementation facts.
 
-A targeted import binds only the selected public spellings as unqualified
-names. An `as` clause changes the local spelling without changing the imported
-identity. One selector considers the term namespace, the shared
+A targeted name item binds only the selected public spelling as an unqualified
+name. An `as` clause changes the local spelling without changing the imported
+identity. One name item considers the term namespace, the shared
 nominal-type/interface name namespace, and the constructor namespace. If a
 public nominal type or interface and a constructor share the selected uppercase
-spelling, the selector imports both exported declarations; constraint, type,
-expression, and pattern syntax still distinguish their uses. A public method may
-be targeted independently of its interface, and an interface may be targeted
-without importing any method spelling. A rename changes the local spelling in
-every namespace selected by that item.
+spelling, the item imports both exported declarations; constraint, type,
+expression, and pattern syntax still distinguish their uses. A public method
+may be targeted independently of its interface, and an interface may be
+targeted without importing any method spelling. A rename changes the local
+spelling in every namespace selected by that item.
+
+A targeted implementation item has the form `impl Interface`. Resolution uses
+the uppercase spelling in the dependency's public interface namespace and
+selects every public implementation fact for that exact `InterfaceId` from the
+dependency summary's public implementation closure. The item binds no source
+name and cannot be renamed. A qualified import and a targeted name item select
+no implementation facts. Conversely, an implementation item does not bind the
+interface or any method spelling.
+
+Every import establishes one direct dependency regardless of which channel it
+selects. A private targeted import makes its selected names and implementation
+facts available only in the importing module. A public import must be targeted.
+It creates the same local bindings and implementation availability, then stages
+each selected name under its local spelling and each selected implementation
+fact for the module's checked public summary. Re-exporting a name preserves its
+original global binder, nominal, constructor, interface, or method identity.
+Re-exporting an implementation preserves its original `ImplId`, checked head,
+prerequisites, method identities, and defining method binders. A facade creates
+no forwarding declaration or implementation.
 
 The module-level term namespace contains global functions, interface methods,
 and constructors. Interface spellings occupy the nominal-type name namespace,
@@ -74,33 +94,105 @@ file-wide binding that conflicts as described above is rejected with
 Selecting a private spelling or a spelling that the dependency does not export
 is rejected with `resolve.unavailable-export`. Attempting to select or use a
 constructor withheld by opacity is rejected with
-`resolve.opaque-constructor`. Imports do not re-export imported bindings; only
-declarations local to the module can be public.
+`resolve.opaque-constructor`. An implementation item whose spelling is absent,
+private, or names a public non-interface declaration is rejected with the
+corresponding unavailable-export or interface-kind reason. The failed item does
+not bind the interface spelling.
 
-Implementation declarations have no source spelling and cannot be qualified,
-targeted, or renamed. Both complete and targeted imports establish the same
-direct dependency, so either form makes every public implementation fact
-defined by that dependency available. Target selectors change source names but
-do not filter implementation availability. Imported implementation facts do not
-enter the importer's export summary and are not re-exported to its dependents.
-Alternate direct routes to one implementation identity retain one fact.
+One stable implementation identity reached through several selected routes is
+retained once. Each retained imported or re-exported fact carries an
+authorization route whose first hop is the current module's exact import edge
+and whose suffix is the dependency summary's authorization for that fact. A
+local implementation has an empty route. A nonempty route preserves every
+summary edge back to the defining module; it does not change declaration
+ownership.
+
+For one identity, the shortest route wins. Equal-length routes use dependency
+order, then import source order, then selector source order. These ranks choose
+the current winner but do not enter a public authorization route. If the ranks
+are equal, the lexicographic sequence of graph-local `(from ModuleId, to
+ModuleId, import byte range)` hop keys breaks the tie. Process-global source
+allocation, hash-map iteration, and the numeric order of `ModuleId` values do
+not choose a route.
+
+Effective availability and public authorization choose routes independently.
+Any explicit implementation item may supply the effective winner. Only a
+public item may supply the public winner, so a shorter private route cannot
+authorize a re-export. An empty public authorization denotes a public local
+implementation. A private local implementation never enters the public
+implementation closure.
 
 Resolution uses each already checked dependency's immutable export summary.
-The summary supplies public identities, checked constrained rank-1 schemes,
-accessible constructor facts, public interface and implementation facts, and
-hidden identity or interface-shape facts required to close those public facts.
-The compiler produces this summary after checking the module; Ash source does
-not declare it. It contains no dependency body or mutable dependency scope.
+The summary supplies public local and re-exported names under their selected
+spellings, checked constrained rank-1 schemes, accessible constructor facts,
+the public implementation closure with authorization routes, and hidden
+identity or interface-shape facts required to close those public facts. The
+compiler produces this body-free summary only after checking the complete
+module; Ash source does not declare it. It contains no dependency body,
+implementation body, forwarding declaration, or mutable dependency scope.
 Importing a scheme does not infer or generalize it again.
 
-A public constrained global or public implementation may refer to an interface
-defined by one of its module's dependencies. Its summary retains that foreign
-interface's checked parameter and method shape so an importer can authenticate
-the public fact. This hidden closure creates no source binding, cannot be
-qualified or targeted through the summary, and may retain nominal identities
-needed by method types without exporting their names or constructors. It does
-not re-export any implementation fact imported from the interface's defining
-module.
+A public constrained global, public implementation, or re-exported fact may
+refer to declarations defined by an earlier module. The summary retains the
+foreign interface's checked parameter and method shape and any nominal or
+constructor identities needed to authenticate and type those public facts.
+This hidden closure creates no source binding, cannot be qualified or targeted
+through the summary, and does not export a hidden spelling or constructor.
+Privacy and opacity therefore remain properties of source access even when a
+public scheme or implementation route carries the hidden identity.
+
+The following three sibling modules demonstrate a targeted public name
+re-export. `arithmetic.ash` defines the original binder:
+
+```ash
+pub answer : Unit -> Int
+answer () = 42
+```
+
+`facade.ash` re-exports it under a new public spelling:
+
+```ash
+pub import arithmetic (answer as facade_answer)
+```
+
+The entry selects that spelling without creating a facade definition:
+
+```ash
+import facade (facade_answer)
+
+main : Unit -> Int
+main () = facade_answer(())
+```
+
+The program observes `42 : Int`, and `facade_answer` resolves to the binder
+defined by `arithmetic.ash`.
+
+Name selection alone does not admit evidence. In this entry, both `Equal` and
+`equal` resolve, but the method obligation is `constraint.unsatisfied` because
+the import contains no `impl Equal` item:
+
+```ash
+import equality (Equal, equal)
+
+main : Unit -> Bool
+main () = equal(1, 1)
+```
+
+The sibling `equality.ash` does publish an implementation:
+
+```ash
+pub interface Equal<A> {
+    equal : (A, A) -> Bool
+}
+
+pub impl Equal<Int> {
+    equal (left, right) = left == right
+}
+```
+
+The missing selector, not the implementation declaration, owns the absence
+from the entry's effective environment. Adding `impl Equal` to the targeted
+list makes that fact available without changing the two name bindings.
 
 Imports are installed in source order. Local nominal types, interfaces,
 implementations, and globals are each resolved in source order after their
@@ -186,8 +278,11 @@ method spellings remain local to the defining module. `pub interface` exports
 the interface identity, parameter, ordered methods, checked method signatures,
 and their spellings as one declaration unit. A method cannot have visibility
 separate from its interface. Public implementation facts are anonymous: `impl`
-keeps the fact local, while `pub impl` makes the checked fact available to
-direct dependents without creating an exported source name.
+keeps the fact local, while `pub impl` places the checked fact in its module's
+public implementation closure without creating an exported source name. A
+dependent obtains that fact only through an explicit implementation item. A
+targeted public implementation item may authorize later dependents to select
+the same fact transitively.
 
 A public opaque type can appear by name in an importing module's annotations
 and global signatures. Its constructors cannot occur there as values or
@@ -235,10 +330,10 @@ pub read : Hidden -> Int
 read (Hidden value) = value
 ```
 
-A complete import in `main.ash` exposes `Carrier.transform` and establishes the
-direct dependency that supplies the public implementation fact. The result of
-`Carrier.make` carries the same hidden nominal identity used by that fact, even
-though the importer has no spelling for it:
+A complete import in `main.ash` exposes `Carrier.transform`; the separate
+implementation item selects the public fact. The result of `Carrier.make`
+carries the same hidden nominal identity used by that fact, even though the
+importer has no spelling for it:
 
 ```ash
 import carrier as Carrier
@@ -271,9 +366,8 @@ pub make : Int -> Token
 make value = Token(value)
 ```
 
-Its sibling `main.ash` can name `Token.Token`, call the public method, and use
-the direct dependency's public implementation fact without gaining constructor
-access:
+Its sibling `main.ash` can name `Token.Token`, call the public method, and
+select the public implementation fact without gaining constructor access:
 
 ```ash
 import token as Token
@@ -375,5 +469,10 @@ Every resolved imported global or interface-method occurrence also retains the
 exact source import binding used by that occurrence: the complete import
 declaration or the targeted selector item, including a rename. This provenance
 lets a diagnostic relate the route the program actually wrote when several
-routes reach one identity. It does not participate in semantic identity,
+name routes reach one identity. It does not participate in semantic identity,
 implementation availability, or evidence selection.
+
+Selected implementation facts separately retain the chosen authorization
+route. Overlap and selected-prerequisite diagnostics use its import hops in
+order. The route authenticates availability and supplies causal labels; it does
+not become part of the implementation identity.

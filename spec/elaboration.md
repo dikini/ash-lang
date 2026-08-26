@@ -16,12 +16,14 @@ constructor occurrences, typed patterns, and matches remain structured semantic
 terms. Their nominal and constructor references use registry identities rather
 than source spellings.
 
-Module paths, imports, aliases, targeted bindings, declaration visibility, and
-opacity are source-only forms and do not become Core terms. Resolution has
-already authenticated each cross-module occurrence against the defining
-module's export summary. The resolved semantic terms and registries still
-retain the module-qualified term, nominal, constructor, type-parameter, source,
-and origin identities that later stages require.
+Module paths, imports, aliases, targeted bindings, public re-export spellings,
+declaration visibility, and opacity are source-only forms and do not become
+Core terms. Resolution has already authenticated each cross-module name
+occurrence against its dependency summary. Implementation authorization routes
+remain linked metadata until validation authenticates their complete summary
+path. The resolved semantic terms and registries still retain the
+module-qualified term, nominal, constructor, type-parameter, source, and origin
+identities that later stages require.
 
 Interface and implementation declarations likewise produce no Core declaration
 node. The interface-specific identities and registries established during
@@ -68,6 +70,14 @@ registries retain that identity so all compatible imported schemes continue to
 refer to the same type. Opaque constructor access has already been enforced and
 does not restrict the defining constructor facts needed by the linked program.
 
+Each checked module also contributes its local implementation inventory, its
+effective imported implementation inventory, and a lightweight public
+authorization entry for every implementation fact in its public closure. An
+entry contains the original `ImplId` and its flat authorization route. Linking
+moves these entries out of the frozen summary; it does not retain the complete
+dependency summary, duplicate an imported implementation body or method fact,
+or synthesize a facade definition.
+
 Every resolved method or constrained-global occurrence has an occurrence-local
 structural evidence field. Resolution creates each slot empty. Checking
 atomically fills each slot with the zonked checked obligation argument and the
@@ -81,12 +91,29 @@ exact occurrences; it neither joins evidence by source location nor performs
 implementation selection again.
 
 Before Core synthesis, linked interface-evidence validation receives the
-checked definition groups and their combined registries. It authenticates:
+checked definition groups, their combined registries, effective implementation
+inventories, and public authorization entries. It first authenticates every
+group's local implementation inventory. In dependency order, it then
+authenticates every complete public authorization table and every effective
+inventory before inspecting occurrence evidence.
+
+An empty public authorization is valid only for a public implementation defined
+by the publishing group. A nonempty route must begin at the publishing group,
+match one exact direct dependency edge and import span, and continue as the
+exact suffix published by that dependency for the same `ImplId`. Repeating the
+check reaches the group that owns the public implementation fact, source body,
+and original method binders. A disconnected, malformed, repeated, truncated,
+or otherwise inconsistent route fails authentication. Validation then uses the
+same authenticated relation for occurrence availability; it never substitutes
+another route or candidate.
+
+The complete validation authenticates:
 
 - interface, method, implementation, nominal, requirement,
   implementation-method, and binder identities;
-- each selected implementation's availability in the occurrence module's
-  direct effective implementation environment;
+- every local implementation inventory, public authorization table, and
+  selected implementation's availability in the occurrence module's effective
+  environment through its complete local, import, or re-export route;
 - implementation-head matching, recorded substitutions, prerequisite trees,
   and prerequisite termination;
 - complete method slots in interface declaration order, including slots with
@@ -103,9 +130,10 @@ checked definition groups and their combined registries. It authenticates:
 This validation checks the recorded selections and does not choose candidates
 again. A malformed linked selection is an internal
 `evidence.validation.*` failure. The graph-wide interface-and-constraint work
-budget continues through this judgment, and exhaustion remains
+budget charges linked public-entry retention and every route hop, then continues
+through inventory and occurrence validation. Exhaustion remains
 `internal.resource.constraint-work`. Core construction begins only after the
-judgment succeeds.
+complete judgment succeeds.
 
 Each nonempty module definition group becomes one ordinary Core recursive
 binding. Groups appear in dependency order: a dependency's group surrounds the
@@ -161,6 +189,9 @@ term arguments. Exact current-implementation evidence uses the same lowering;
 its prerequisite selections refer to the implementation method's abstract
 evidence binders rather than triggering another selection.
 
+Direct and facade selections therefore lower through the same original method
+binder. A facade authorization contributes no Core binder or forwarding call.
+
 Each implementation-method binder has the Core scheme obtained from its rigid
 head parameters, flattened prerequisite methods, and substituted source method
 type. Its initializer therefore uses an outer type abstraction when generic,
@@ -171,11 +202,11 @@ method recursion consequently use the existing recursive binding rather than a
 cross-module group.
 
 After linked interface-evidence validation, interface, implementation, method,
-implementation-method, and requirement identities erase. Their authenticated
-relationships have become ordinary Core type abstractions, function binders,
-binder occurrences, type applications, and term applications. Stable Core
-binder, nominal, constructor, type-parameter, source, and origin identities
-remain for ordinary Core validation.
+implementation-method, requirement, and authorization-route metadata erase.
+Their authenticated relationships have become ordinary Core type abstractions,
+function binders, binder occurrences, type applications, and term
+applications. Stable Core binder, nominal, constructor, type-parameter, source,
+and origin identities remain for ordinary Core validation.
 
 ## Explicit rank-1 operations
 

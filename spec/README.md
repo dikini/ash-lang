@@ -13,22 +13,30 @@ definitions. Global signatures may state explicit interface constraints, and
 implementation heads may state explicit prerequisite constraints. A module has
 no result expression, runtime module value, or initialization.
 
-Imports expose only declarations marked `pub`. A complete import places a
-dependency's public namespace under a module alias; a targeted import places
-selected public spellings in the importing module's file-wide namespaces.
-Either form establishes a direct dependency and makes every public anonymous
-implementation fact defined by that dependency available for evidence
-selection. A module does not re-export imported implementation facts.
-Private nominal identities may flow through public global schemes without
-becoming nameable. A `pub opaque type` exports a name without constructors, and
-a `pub type` exports its name and complete constructor family.
+Imports expose only public facts. A private complete import places a
+dependency's public namespaces under a module alias. A private targeted import
+places selected public spellings in the importing module's file-wide
+namespaces. A public import must be targeted and re-exports its selected
+spellings. These name channels preserve the defining declaration identities.
+
+An `impl Interface` item is an independent channel. It binds no source name and
+makes the dependency summary's public implementations for that interface
+available for evidence selection. Neither a complete import nor a targeted
+name item selects implementations. A public implementation item also adds the
+selected facts to the importer's public implementation closure, so later
+facades can select them transitively without changing their defining
+identities. Private nominal identities may flow through public schemes and
+implementation facts without becoming nameable. A `pub opaque type` exports a
+name without constructors, and a `pub type` exports its name and complete
+constructor family.
 
 An interface declares one type parameter and an ordered set of method
 signatures. Every method type has `Function` as its top-level constructor. Its
 methods are constrained terms. An implementation supplies the complete method
 set for one interface argument but introduces no source name. Private
 implementations remain available only in their defining module; `pub impl`
-publishes a body-free fact to direct dependents.
+publishes a body-free fact that dependents or later facades may select
+explicitly.
 
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
@@ -95,7 +103,8 @@ main () = equal(1, 1)
 ```
 
 Constraints also cross module boundaries through checked public declarations.
-In the following sibling-file program, `main.ash` imports `./equality.ash`:
+In the following sibling-file program, `main.ash` uses a complete import for
+qualified names and a separate targeted item for implementation evidence:
 
 ```ash
 import equality as Equality
@@ -105,7 +114,7 @@ main : Unit -> Bool
 main () = Equality.same((1, 1))
 ```
 
-The sibling `equality.ash` exports a method-only interface, a constrained
+The defining `equality.ash` exports a method-only interface, a constrained
 global, and an anonymous implementation fact:
 
 ```ash
@@ -122,10 +131,32 @@ same pair = equal pair
 ```
 
 The body of `same` uses its declared requirement. At the imported call,
-ordinary typing fixes the argument to `Int`, and the direct dependency's public
-implementation supplies the evidence. The program observes `true : Bool`.
-Aliases and implementation identities do not become runtime values; the
-selected method evidence runs as ordinary function application.
+ordinary typing fixes the argument to `Int`, and the explicit selector makes
+the defining module's public implementation available. The program observes
+`true : Bool`.
+
+A targeted public import can place a facade between that implementation owner
+and the entry. This complete `facade.ash` re-exports names and implementations
+through independent items:
+
+```ash
+pub import equality (Equal, equal, impl Equal)
+```
+
+The facade entry selects the same channels from `facade.ash`:
+
+```ash
+import facade (Equal, equal, impl Equal)
+
+main : Unit -> Bool
+main () = equal(1, 1)
+```
+
+The selector follows the facade's public authorization route to the
+implementation defined in `equality.ash`. The interface, implementation,
+method, and binder identities remain those of the defining module. Aliases and
+authorization routes do not become runtime values; the selected method
+evidence runs as ordinary function application.
 
 ### Opaque types and smart constructors
 

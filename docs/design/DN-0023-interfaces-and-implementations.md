@@ -18,12 +18,13 @@ modules into signatures or adding associated-type machinery prematurely?
 
 ## Result
 
-Method-only interfaces and implementations now provide that increment. Ash has
-one-parameter interfaces, explicit requirements on global signatures, private
-and public implementations, direct-dependency implementation availability,
-typed selection retained on checked occurrences, linked evidence validation,
-and lowering through ordinary pure Core functions and applications. The
-original interface increment's normative checkpoint is unsigned commit
+At the retained Modular Ash checkpoint, method-only interfaces and
+implementations provided that increment. It had one-parameter interfaces,
+explicit requirements on global signatures, private and public
+implementations, direct-dependency implementation availability, typed selection
+retained on checked occurrences, linked evidence validation, and lowering
+through ordinary pure Core functions and applications. The original interface
+increment's normative checkpoint is unsigned commit
 `f783271`. The [current specification](../../spec/README.md) includes the
 outer-`Function` correction retained by unsigned commit `089c54e`. The
 [interface implementation evidence](modular-ash/interfaces-evidence.md) records

@@ -35,8 +35,13 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   — a version-pinned external learning corpus, forward migration, and
   cooperative design-evidence flow.
 - [DN-0025: Library and Package Milestones](DN-0025-library-and-package-milestones.md)
-  — the completed `modular-ash` closure boundary and separate exploratory
-  `lib-ash` language-library and `pack-ash` package-artifact descendants.
+  — the completed `modular-ash` closure boundary, the implemented first
+  `lib-ash` increment, and later exploratory language-library and package-
+  artifact work.
+- [Explicit implementation import and re-export evidence](lib-ash/imports-evidence.md)
+  — selector and facade behavior, identities, summaries, diagnostics,
+  resources, linked authentication, Core locality, migration, and exclusions
+  for the first `lib-ash` increment.
 - [Passive-module evidence](modular-ash/evidence.md) — implementation,
   resource, locality, historical-comparison, and verification evidence for the
   first Modular Ash increment.

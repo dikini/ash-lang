@@ -2,14 +2,14 @@
 
 - ID: `TASK-0015`
 - Status: active
-- Related: [CP-0008: Explicit Implementation Imports and Re-exports](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md), [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), and the [execution plan](../plans/2026-08-25-explicit-implementation-imports-and-reexports.md)
+- Related: [CP-0008: Explicit Implementation Imports and Re-exports](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md), [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), the [explicit-import evidence report](../design/lib-ash/imports-evidence.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), and the [execution plan](../plans/2026-08-25-explicit-implementation-imports-and-reexports.md)
 
 > This task organizes work. It does not define Ash semantics.
 
 ## Dependencies
 
-- CP-0008 is accepted transition authority. Current `spec/` remains normative
-  until implementation, tests, and specification changes land together.
+- CP-0008 is accepted transition authority. Current `spec/` owns the
+  implemented semantics; this task and the proposal remain non-normative.
 - The final `modular-ash` checkpoint supplies stable module, declaration,
   interface, implementation, method, evidence, and Core identities; generated
   body-free summaries; scoped coherence; linked evidence validation; one
@@ -116,6 +116,20 @@ or evaluator forms.
   that requires implementation evidence uses an explicit selector, with a
   retained negative witness for name-only imports. Focused suites, the full
   workspace, and three independent reviews have no open findings.
+- Task 8 reconciles the specification and explanatory documentation with the
+  implemented first `lib-ash` increment. The retained
+  [evidence report](../design/lib-ash/imports-evidence.md) records selector and
+  facade behavior, identity and summary isolation, coherence and information
+  boundaries, diagnostics, exact resources and small-stack disposal, linked
+  tamper rejection, unchanged Core and runtime representation, migration,
+  maintenance sites, exclusions, and remaining milestone pressure. DN-0025,
+  the trajectory, design index, and tool guide now point to that boundary. The
+  executable specification target passes all 48 tests. Full-tree Markdown
+  lint, relative-link inspection, whitespace checking, and `cargo xtask verify`
+  pass. The all-target inventory is 330 library tests, 10 `ash` binary tests,
+  648 integration tests, and one `xtask` test: 989 tests. Independent
+  documentation and authority review remains; Task 9 final verification and
+  lifecycle cleanup have not begun.
 - The execution plan defines focused red-green increments, review checkpoints,
   migration, retained evidence, and lifecycle cleanup.
 
@@ -227,5 +241,12 @@ production accounting, diagnostic reasons, rendering, and phase boundaries
 were sufficient; Task 7 changes only evidence. CLI assertions canonicalize
 numeric source identifiers by encounter order so output is allocation-
 independent without erasing whether two labels refer to the same or different
-source files. Task 8 retains the normative specification and retained-evidence
-reconciliation.
+source files.
+
+Task 8 keeps the new `lib-ash` report informative and the specification
+normative. The report records implemented evidence and future pressure without
+promoting DN-0025's later kinds, interface forms, package model, or artifact
+model into current Ash. The tool guide describes observed source reasons and
+authorization-route labels but does not define their semantics. Retained
+Modular Ash reports remain unchanged. Independent documentation and authority
+review remains before Task 9 cleanup.

@@ -2,7 +2,7 @@
 
 - ID: `DN-0025`
 - Status: exploring
-- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [CP-0008: Explicit Implementation Imports and Re-exports](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
+- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [CP-0008: Explicit Implementation Imports and Re-exports](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md), the [explicit-import evidence](lib-ash/imports-evidence.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
 
 > This design note is informative. It does not define current Ash, accept
 > language semantics, or accept a package or artifact architecture.
@@ -15,14 +15,15 @@ capabilities require a later milestone?
 
 ## Current boundary
 
-The [current specification](../../spec/README.md) defines Modular Ash. It has
-passive acyclic source modules, public and private declarations, opaque type
-exports, targeted and qualified imports, compiler-generated body-free export
-summaries, method-only single-parameter interfaces, scoped implementation
-availability, explicit evidence lowering, and one linked typed Core program.
-Imports do not re-export names or implementations. Interfaces are not module
-signatures. Persistent compiled modules, package resolution, and separate
-object linking remain outside current Ash.
+The [current specification](../../spec/README.md) defines the first `lib-ash`
+increment on the completed Modular Ash base. It has passive acyclic source
+modules, public and private declarations, opaque type exports, qualified and
+targeted imports, targeted public name and implementation re-exports,
+compiler-generated body-free export summaries, method-only single-parameter
+interfaces, explicit implementation selection, authenticated transitive
+authorization routes, explicit evidence lowering, and one linked typed Core
+program. Interfaces are not module signatures. Persistent compiled modules,
+package resolution, and separate object linking remain outside current Ash.
 
 The `mini-ash` Git tag retains Mini-Ash as a historical runnable dialect.
 Current source does not carry a second grammar or compiler path for it.
@@ -52,7 +53,7 @@ modular-ash -> lib-ash -> pack-ash
 
 ### `modular-ash`
 
-The current dialect is complete at its final milestone checkpoint. The retained
+Modular Ash is complete at its final milestone checkpoint. The retained
 core-versus-library audit, simplification analysis, module and interface
 evidence, and closure report establish the boundary. The annotated
 `modular-ash` tag retains the final verified closure commit.
@@ -61,11 +62,14 @@ that closure.
 
 ### `lib-ash`
 
-The first descendant, `lib-ash`, remains an exploratory design-and-proposal
-stage. Later proposals may add the language mechanisms needed to define
-stronger libraries: higher-kinded parameters, method-local type parameters,
-multi-parameter interfaces, associated outputs or relational determination,
-method and associated-type defaults, and explicit module re-exports.
+The first bounded `lib-ash` increment is implemented: implementation
+availability is explicit, and targeted imports can re-export selected names and
+implementation authorizations. The retained
+[evidence report](lib-ash/imports-evidence.md) records its implemented boundary.
+The complete milestone remains open. Later proposals may add the language
+mechanisms needed to define stronger libraries: higher-kinded parameters,
+method-local type parameters, multi-parameter interfaces, associated outputs
+or relational determination, and method and associated-type defaults.
 
 ### `pack-ash`
 
@@ -86,9 +90,11 @@ narrow, reorder, or remove it.
 
 1. Replace automatic direct-import implementation availability with explicit
    implementation selectors. Add targeted name and implementation re-exports,
-   transitive authorization routes, and a migration corpus. This is the first
-   prepared increment and is accepted by
-   [CP-0008](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md).
+   transitive authorization routes, and a migration corpus. This implemented
+   first increment was accepted by
+   [CP-0008](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md)
+   and is retained by the
+   [explicit-import evidence report](lib-ash/imports-evidence.md).
 2. Add explicit `Type` and function kinds and higher-kinded parameters without
    kind inference or kind polymorphism. Make checking, summaries,
    substitution, and independent Core validation kind-aware.
@@ -435,15 +441,16 @@ dependency order, import source order, and then stable route identity.
 
 ## `lib-ash` evidence and closure
 
-The first increment requires a complete name-versus-implementation and
-private-versus-public selector matrix. Its evidence includes the three-module
-facade; transitive and diamond identity; aliases; hidden and opaque nominal
-facts; private exports; overlap at the first combined closure; deterministic
-shortest authorization routes; graph-wide selector, closure, summary, and
-validation budgets; rejection of forged routes; unchanged Core node inventory;
-and explicit migration of every existing imported implementation dependency.
-Neither complete nor ordinary targeted name imports make implementations
-available implicitly after this increment.
+The first increment's
+[retained evidence](lib-ash/imports-evidence.md) covers the complete
+name-versus-implementation and private-versus-public selector matrix; the
+three-module facade; transitive and diamond identity; aliases; hidden and opaque
+nominal facts; private exports; overlap at the first combined closure;
+deterministic shortest authorization routes; graph-wide selector, closure,
+summary, and validation budgets; rejection of forged routes; unchanged Core
+node inventory; and explicit migration of every imported implementation
+dependency. Neither complete nor ordinary targeted name imports make
+implementations available implicitly.
 
 The comparison corpus should cover kind-aware Core, authenticated polymorphic
 evidence slots, higher-kinded partial application, method-local parameters,
@@ -669,9 +676,11 @@ type-class-like constraints rather than module APIs.
 ## Required authority transitions
 
 This note can guide comparison and proposal work but cannot authorize product
-implementation. Language changes for `lib-ash` require one or more change
-proposals and tasks. Package, cache, and linker architecture that does not alter
-language semantics requires accepted architectural decisions and tasks. Any
+implementation. CP-0008 and TASK-0015 authorized the implemented first
+increment; the current specification and retained evidence record its result.
+Further language changes for `lib-ash` require one or more change proposals and
+tasks. Package, cache, and linker architecture that does not alter language
+semantics requires accepted architectural decisions and tasks. Any
 source-visible package or import semantic change also requires a change
 proposal. Current specification text changes only with retained implementation
 evidence.
@@ -682,8 +691,6 @@ evidence.
   narrower combination of both?
 - What syntax, if any, lets an associated output declare a smaller determinant
   set?
-- What exact syntax exports imported names and all implementations for one
-  interface?
 - Which implementation-head import patterns are justified after the initial
   all-for-interface form has evidence?
 - How does a portable lock graph encode unpublished workspace identity?

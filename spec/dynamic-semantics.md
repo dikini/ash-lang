@@ -67,7 +67,8 @@ An abstract evidence method becomes an ordinary function parameter. A concrete
 evidence method becomes a binder occurrence for the implementation method in
 its defining module's recursive group. Looking up that recursive function
 binder materializes a lexical closure under the existing recursive-binding
-behavior. No interface identity or selection record reaches the machine.
+behavior. No interface identity, selection record, or implementation
+authorization route reaches the machine.
 
 For a generic implementation method, lowering uses the recorded head
 substitution to form an ordinary Core type application. When evaluation enters
