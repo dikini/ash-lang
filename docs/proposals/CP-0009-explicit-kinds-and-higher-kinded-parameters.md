@@ -105,13 +105,8 @@ inference independently from kind polymorphism and higher-order unification.
 
 ### Kinds and application
 
-The source kind language is:
-
-```text
-kind ::= Type | kind -> kind
-```
-
-`->` associates to the right. The declaration-kind environment `DELTA` maps
+The source kind algebra contains `Type` and function kinds. `->` associates to
+the right. The declaration-kind environment `DELTA` maps
 every in-scope `TypeVariableId` to exactly one kind. The transient inference
 environment `OMEGA` maps every live `InferenceVariableId` to exactly one fixed
 kind. The nominal environment `XI` maps every accessible `NominalTypeId` to its
