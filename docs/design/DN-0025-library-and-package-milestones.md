@@ -94,8 +94,11 @@ narrow, reorder, or remove it.
    first increment is retained by the
    [explicit-import evidence report](lib-ash/imports-evidence.md).
 2. Add explicit `Type` and function kinds and higher-kinded parameters without
-   kind inference or kind polymorphism. Make checking, summaries,
-   substitution, and independent Core validation kind-aware.
+   kind inference or kind polymorphism in this increment. Make checking,
+   summaries, substitution, and independent Core validation kind-aware. The
+   absence of kind inference is a phase-dependent constraint, not a permanent
+   language principle; later work may consider bounded declaration-local kind
+   inference separately from kind polymorphism.
 3. Add method-local type parameters. Keep ordinary source rank-1 and admit
    polymorphic term slots only as authenticated compiler-generated interface
    evidence.
@@ -122,8 +125,10 @@ identities.
 
 The initial kind language contains `Type` and function kinds. Ordinary type
 parameters default to `Type`; a parameter used as a constructor requires an
-explicit kind such as `Type -> Type`. The design does not initially infer kinds
-or support kind polymorphism.
+explicit kind such as `Type -> Type`. This increment does not infer kinds or
+support kind polymorphism. The first restriction is phase-dependent: later
+work may consider bounded declaration-local kind inference without treating it
+as kind polymorphism or as a prerequisite for this increment.
 
 Nominal constructors receive derived kinds. An unsaturated constructor is
 valid only where the expected kind admits it. Every value-level expression
