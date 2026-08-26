@@ -121,14 +121,15 @@ a type parameter merely because the parameter is not a nominal. Sort errors,
 such as using an interface as an ordinary type constructor, remain resolution
 errors.
 
-A distinct kind-checking responsibility derives declaration constructor kinds,
-checks binder annotations, synthesizes or checks every resolved type kind, and
-freezes kinded facts before ordinary type checking. It reports structured
-reasons for a non-constructor application, an argument-kind mismatch, and a
-constructor-kinded type in a value-type context. Diagnostics retain the
-application or value-type site, the declared binder or constructor site when
-useful, and structured expected and found kinds. Rendering does not own this
-policy.
+Resolution also owns duplicate explicit binders and an unbound uppercase name
+under a complete binder list. A distinct kind-checking responsibility derives
+declaration constructor kinds, checks binder annotations, synthesizes or checks
+every resolved type kind, and freezes kinded facts before ordinary type
+checking. It reports structured reasons for a non-constructor application, an
+argument-kind mismatch, and a constructor-kinded type in a value-type context.
+Diagnostics retain the application or value-type site, the declared binder or
+constructor site when useful, and structured expected and found kinds.
+Rendering does not own this policy.
 
 Checked schemes bind `(TypeVariableId, Kind)` pairs. Nominal registries,
 interface registries, implementation headers, requirements, inference
@@ -150,11 +151,12 @@ frame, or transition.
 Kind operations are iterative or use explicit bounded work stacks. Clone,
 equality, hashing, rendering, substitution, unification, summary admission,
 Core admission, validation, and disposal must not recurse on host stack depth.
-Every retained or visited kind node and every kind-aware application operation
-charges the existing type-work resource family at the stage that owns the
-work. Core construction and independent Core validation keep their independent
-budgets. Exact-limit and one-short tests establish each new charge rather than
-relying only on large stress cases.
+Lexing, concrete-tree construction, and projection charge the existing syntax
+budget. After projection, every retained or visited kind node and every
+kind-aware application operation charges the existing type-work resource
+family at the stage that owns the work. Core construction and independent Core
+validation keep their independent budgets. Exact-limit and one-short tests
+establish each new charge rather than relying only on large stress cases.
 
 Kind failures precede ordinary type unification, implementation selection, or
 Core synthesis for the same source fact. Dependency, import, declaration,
