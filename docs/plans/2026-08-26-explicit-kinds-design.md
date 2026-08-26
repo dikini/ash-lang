@@ -2,7 +2,7 @@
 
 - Status: approved design
 - Date: 2026-08-26
-- Related: [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), and [AD-0007: Core Type Erasure and Runtime Validation Boundary](../decisions/AD-0007-core-type-erasure-and-runtime-validation-boundary.md)
+- Related: [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), and [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md)
 
 > This document records the approved prospective design. It does not describe
 > current Ash or authorize implementation. The accepted change proposal owns
