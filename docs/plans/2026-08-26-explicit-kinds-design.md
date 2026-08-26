@@ -93,17 +93,21 @@ unification remain separate design questions.
 
 ## Kind checking and type representation
 
-`DELTA` maps type-variable identities to fixed kinds, `XI` maps nominal
-identities to constructor kinds derived from their ordered parameter records,
-and `IOTA` maps interface identities to their single declared parameter kinds.
-Kind synthesis is total for monotypes. Primitives synthesize `Type`; variables
-and nominals use `DELTA` and `XI`; application requires a function kind with a
-matching argument; every tuple element and both sides of a term function must
-synthesize `Type`, producing `Type`. Every value annotation, constructor
-payload, pattern type, and term binder type must synthesize `Type`. A
-requirement, implementation head, or prerequisite argument instead synthesizes
-the declared kind of its selected interface parameter. The interface
-application is a constraint and has no monotype kind of its own.
+`DELTA` maps type-variable identities to fixed declared kinds, transient
+`OMEGA` maps live inference-variable identities to fixed kinds, `XI` maps
+nominal identities to constructor kinds derived from their ordered parameter
+records, and `IOTA` maps interface identities to their canonical single
+parameter records. Kind synthesis is total for monotypes. Primitives synthesize
+`Type`; declared variables, inference variables, and nominals use `DELTA`,
+`OMEGA`, and `XI`; application requires a function kind with a matching
+argument; every tuple element and both sides of a term function must synthesize
+`Type`, producing `Type`. Every value annotation, constructor payload, pattern
+type, and term binder type must synthesize `Type`. A source or inferred
+requirement, method obligation, implementation head or prerequisite, or
+evidence goal instead checks its argument against the declared kind in its
+selected interface parameter record. The interface application is a constraint
+and has no monotype kind of its own. A legacy interface parameter defaults to
+kind `Type`.
 
 The CST and surface tree preserve a named application and its argument vector
 for source spans. Resolution folds that vector left into one unary semantic
@@ -121,14 +125,17 @@ interface parameter of kind `Type -> Type`, while a value annotation cannot end
 at `Option`. `Result<Int>` can be used where `Type -> Type` is expected if
 `Result` has kind `Type -> Type -> Type`.
 
-Type inference remains first-order over the canonical application tree, with
-every inference variable carrying one fixed kind. Unification may solve a
-higher-kinded inference variable with a constructor or partial application of
-the same kind. It does not synthesize a type lambda, abstract over mismatched
-arguments, or change an inference variable's kind. Eligible local bindings may
-generalize eligible variables of any fixed monomorphic kind, but only into
-outer rank-1 schemes whose monotype body has kind `Type`. A scheme has no
-ordinary kind and cannot occur in a monotype position.
+Type inference remains first-order over the canonical application tree.
+Resolved checking uses empty `OMEGA`; elaboration registers every fresh
+inference variable at one fixed kind before use. Unification and occurs checking
+consult that entry. Unification may solve a higher-kinded inference variable
+with a constructor or partial application of the same kind. It does not
+synthesize a type lambda, abstract over mismatched arguments, change an
+inference variable's kind, or recover a missing or conflicting registry entry.
+Zonking removes every inference variable before summaries or Core. Eligible
+local bindings may generalize eligible variables of any fixed monomorphic kind,
+but only into outer rank-1 schemes whose monotype body has kind `Type`. A scheme
+has no ordinary kind and cannot occur in a monotype position.
 
 Implementation-head matching uses the same kind-preserving first-order
 structure and may bind only an independently freshened candidate's declared
@@ -215,7 +222,8 @@ The product checkpoint must retain:
   implementations, constraints, and value-type contexts;
 - first-order higher-kinded unification, substitution, occurs-check, overlap,
   termination, orphan, and evidence-selection cases without type-lambda
-  synthesis;
+  synthesis, including missing or conflicting transient inference-kind entries
+  and complete zonking;
 - immutable body-free opaque, hidden-carrier, facade, transitive, diamond, and
   implementation-only import cases that preserve defining kinds and identities;
 - dependency-summary, linked-evidence, and Core tampering cases that forge

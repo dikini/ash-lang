@@ -111,61 +111,67 @@ The source kind language is:
 kind ::= Type | kind -> kind
 ```
 
-`->` associates to the right. The kind environment `DELTA` maps every in-scope
-`TypeVariableId` to exactly one kind. The nominal environment `XI` maps every
-accessible `NominalTypeId` to its constructor kind. The interface environment
-`IOTA` maps every accessible `InterfaceId` to its single parameter kind, as
-owned by that interface's canonical binder record. A nominal declared with
-parameter kinds `k_1` through `k_n` has the right fold
-`k_1 -> ... -> k_n -> Type`.
+`->` associates to the right. The declaration-kind environment `DELTA` maps
+every in-scope `TypeVariableId` to exactly one kind. The transient inference
+environment `OMEGA` maps every live `InferenceVariableId` to exactly one fixed
+kind. The nominal environment `XI` maps every accessible `NominalTypeId` to its
+constructor kind. The interface environment `IOTA` maps every accessible
+`InterfaceId` to its canonical single parameter `(TypeVariableId, Kind)`
+record. A nominal declared with parameter kinds `k_1` through `k_n` has the
+right fold `k_1 -> ... -> k_n -> Type`.
 
-The total synthesis judgment `DELTA; XI |- type => kind` has the following
-rules. `all_type` requires each listed monotype to synthesize `Type`.
+The total synthesis judgment `DELTA; OMEGA; XI |- type => kind` has the
+following rules. `all_type` requires each listed monotype to synthesize `Type`.
 
 ```sequent
 family kind-synthesis:
   K-Primitive :=
     primitive in {Int, Bool, Unit}
     ===>
-    DELTA; XI |- primitive => Type
+    DELTA; OMEGA; XI |- primitive => Type
 
   K-Variable :=
     DELTA(variable) = kind
     ===>
-    DELTA; XI |- variable => kind
+    DELTA; OMEGA; XI |- variable => kind
+
+  K-Inference :=
+    OMEGA(inference) = kind
+    ===>
+    DELTA; OMEGA; XI |- inference => kind
 
   K-Nominal :=
     XI(nominal) = kind
     ===>
-    DELTA; XI |- nominal => kind
+    DELTA; OMEGA; XI |- nominal => kind
 
   K-Application :=
-    DELTA; XI |- function_type => argument_kind -> result_kind
-    DELTA; XI |- argument_type => argument_kind
+    DELTA; OMEGA; XI |- function_type => argument_kind -> result_kind
+    DELTA; OMEGA; XI |- argument_type => argument_kind
     ===>
-    DELTA; XI |- Apply(function_type, argument_type) => result_kind
+    DELTA; OMEGA; XI |- Apply(function_type, argument_type) => result_kind
 
   K-Tuple :=
-    all_type(DELTA, XI, elements)
+    all_type(DELTA, OMEGA, XI, elements)
     ===>
-    DELTA; XI |- Tuple(elements) => Type
+    DELTA; OMEGA; XI |- Tuple(elements) => Type
 
   K-Function :=
-    DELTA; XI |- domain => Type
-    DELTA; XI |- codomain => Type
+    DELTA; OMEGA; XI |- domain => Type
+    DELTA; OMEGA; XI |- codomain => Type
     ===>
-    DELTA; XI |- Function(domain, codomain) => Type
+    DELTA; OMEGA; XI |- Function(domain, codomain) => Type
 
   K-Value-Type :=
-    DELTA; XI |- monotype => Type
+    DELTA; OMEGA; XI |- monotype => Type
     ===>
-    DELTA; XI |- value monotype ok
+    DELTA; OMEGA; XI |- value monotype ok
 
   K-Interface-Argument :=
-    IOTA(interface) = parameter_kind
-    DELTA; XI |- argument => parameter_kind
+    IOTA(interface) = (parameter, parameter_kind)
+    DELTA; OMEGA; XI |- argument => parameter_kind
     ===>
-    DELTA; XI; IOTA |- constraint Interface(argument) ok
+    DELTA; OMEGA; XI; IOTA |- constraint Interface(argument) ok
 ```
 
 An unsaturated constructor always synthesizes its derived kind. A partial
@@ -173,11 +179,13 @@ application always synthesizes its residual kind. It fails only when an
 application premise or an owning value-type rule requires a different kind.
 Constructor payloads, global and method value types, pattern and term binder
 types, source expression types, entry results, and ordinary Core value
-annotations use `K-Value-Type`. Requirement arguments, implementation head
-arguments, and prerequisite arguments use `K-Interface-Argument`; the argument
-must synthesize the selected interface parameter's declared kind, which need
-not be `Type`. An interface application is a constraint and has no monotype
-kind of its own.
+annotations use `K-Value-Type`. Source and inferred requirements, method
+obligations, implementation heads and prerequisites, and evidence goals use
+`K-Interface-Argument`; the argument must synthesize the selected interface
+parameter's declared kind, which need not be `Type`. An interface application
+is a constraint and has no monotype kind of its own. A legacy interface
+parameter has the default kind `Type`, so its applications recover predecessor
+behavior.
 
 The CST and surface tree preserve one named application with its source
 argument vector and spans. During resolution, every admitted named application,
@@ -212,14 +220,17 @@ checking freezes the kinded facts used by later stages. The first kind rule
 that can establish a failure owns it; ordinary unification, evidence selection,
 and Core synthesis do not reclassify a source kind error.
 
-Each type inference variable receives one fixed monomorphic kind when
-allocated. Instantiating an outer scheme copies the corresponding declared
-binder kind. Unification is first-order over the canonical application tree and
-checks kinds before solving a variable. It may solve a higher-kinded inference
-variable with a constructor or partial application of the same kind. It does
-not infer a kind, synthesize a type lambda, abstract over mismatched application
-arguments, or change the variable's kind. The occurs check traverses both
-children of every application.
+Resolved declaration checking uses an empty `OMEGA`. Each type inference
+variable is registered in `OMEGA` with one fixed monomorphic kind before the
+variable can enter a type. Instantiating an outer scheme copies the
+corresponding declared binder kind. Unification and the occurs check consult
+that same entry, and unification checks kinds before solving a variable. It may
+solve a higher-kinded inference variable with a constructor or partial
+application of the same kind. It does not infer a kind, synthesize a type
+lambda, abstract over mismatched application arguments, change the variable's
+kind, or recover a missing or conflicting registry entry. The occurs check
+traverses both children of every application. Zonking removes every inference
+variable before a checked summary, linked fact, or Core program is retained.
 
 A scheme is distinct from a monotype and has no ordinary kind. It has the shape
 `forall (A_1 : k_1) ... (A_n : k_n). body`, with distinct binders and a body
@@ -504,9 +515,10 @@ Positive and negative tests must cover:
 - derived nominal kinds, higher-kinded nominal, interface, global,
   implementation, and eligible generalized-local parameters, nested and
   partial applications, and outer scheme well-formedness;
-- fixed-kinded inference allocation, structural and injective first-order
-  constructor and partial-application solutions, occurs checks, and cases that
-  would require a type lambda;
+- fixed-kinded inference allocation before use, structural and injective
+  first-order constructor and partial-application solutions, occurs checks,
+  missing or conflicting transient registry entries, complete zonking, and
+  cases that would require a type lambda;
 - generic implementation heads, both application subterms, strict-subterm
   prerequisites, full-head overlap, stable bare/partial/saturated orphan
   ownership, inference-free selection goals, and abstract and concrete evidence;
@@ -532,8 +544,10 @@ Positive and negative tests must cover:
   retained transforms, independent revalidation, erasure, evaluation, and
   exact library and CLI observations;
 - `kind.not-applicable`, `kind.argument`, and `kind.expected-type` reasons with
-  primary and related spans, expected and found kinds, deterministic precedence,
-  library API observations, and CLI rendering independently from policy; and
+  positive and negative higher-kinded requirement and implementation-head
+  arguments, primary and related spans, expected and found kinds, deterministic
+  precedence, library API observations, and CLI rendering independently from
+  policy; and
 - migration of every predecessor-valid omitted kind and implicit global or
   implementation binder without edits, preserving first-occurrence order and
   kind `Type`; no legacy header silently gains a function kind.
