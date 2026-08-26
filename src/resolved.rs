@@ -16,8 +16,9 @@ use crate::{
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
-        discard_type_iteratively,
+        ConstructorId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
+        clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
+        same_kind_with_charge,
     },
 };
 
@@ -205,17 +206,17 @@ pub(crate) struct ResolvedModuleParts {
 }
 
 impl ResolvedModule {
-    pub(crate) fn new(parts: ResolvedModuleParts) -> Self {
+    pub(crate) fn new(mut parts: ResolvedModuleParts) -> Self {
         Self {
             module: parts.module,
-            registry: parts.registry,
-            imported: parts.imported,
-            direct_dependencies: parts.direct_dependencies.into_boxed_slice(),
-            declaration_order: parts.declaration_order.into_boxed_slice(),
-            interfaces: parts.interfaces.into_boxed_slice(),
-            implementations: parts.implementations.into_boxed_slice(),
-            definitions: parts.definitions.into_boxed_slice(),
-            export_candidate: parts.export_candidate,
+            registry: std::mem::take(&mut parts.registry),
+            imported: std::mem::take(&mut parts.imported),
+            direct_dependencies: std::mem::take(&mut parts.direct_dependencies).into_boxed_slice(),
+            declaration_order: std::mem::take(&mut parts.declaration_order).into_boxed_slice(),
+            interfaces: std::mem::take(&mut parts.interfaces).into_boxed_slice(),
+            implementations: std::mem::take(&mut parts.implementations).into_boxed_slice(),
+            definitions: std::mem::take(&mut parts.definitions).into_boxed_slice(),
+            export_candidate: std::mem::take(&mut parts.export_candidate),
             span: parts.span,
         }
     }
@@ -292,6 +293,20 @@ impl ResolvedModule {
     #[must_use]
     pub const fn span(&self) -> Span {
         self.span
+    }
+}
+
+impl Drop for ResolvedModuleParts {
+    fn drop(&mut self) {
+        for interface in self.interfaces.drain(..) {
+            discard_resolved_interface_iteratively(interface);
+        }
+        for definition in self.definitions.drain(..) {
+            discard_resolved_definition_iteratively(definition);
+        }
+        for implementation in self.implementations.drain(..) {
+            discard_resolved_implementation_iteratively(implementation);
+        }
     }
 }
 
@@ -1417,7 +1432,9 @@ impl Drop for ResolvedModuleProgram {
 #[derive(Debug, Default, Eq, PartialEq)]
 pub struct ImportedFacts {
     globals: HashMap<BinderId, ImportedGlobalScheme>,
+    global_order: Vec<BinderId>,
     nominals: HashMap<NominalTypeId, ImportedNominalFact>,
+    nominal_order: Vec<NominalTypeId>,
     constructors: HashMap<ConstructorId, ImportedConstructorFact>,
     interfaces: Vec<ImportedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
@@ -1481,7 +1498,9 @@ impl ImportedFacts {
     }
 
     pub(crate) fn globals(&self) -> impl Iterator<Item = &ImportedGlobalScheme> {
-        self.globals.values()
+        self.global_order
+            .iter()
+            .filter_map(|identity| self.globals.get(identity))
     }
 
     pub(crate) fn interface_imports(&self) -> impl Iterator<Item = &ImportedInterfaceFact> {
@@ -1489,7 +1508,9 @@ impl ImportedFacts {
     }
 
     pub(crate) fn nominals(&self) -> impl Iterator<Item = &ImportedNominalFact> {
-        self.nominals.values()
+        self.nominal_order
+            .iter()
+            .filter_map(|identity| self.nominals.get(identity))
     }
 
     pub(crate) fn implementations(&self) -> impl Iterator<Item = &ImportedImplementationFact> {
@@ -1500,35 +1521,71 @@ impl ImportedFacts {
         self.globals.contains_key(&id)
     }
 
-    pub(crate) fn insert_global(&mut self, fact: ImportedGlobalScheme) {
+    pub(crate) fn insert_global(
+        &mut self,
+        fact: ImportedGlobalScheme,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        if !self.globals.contains_key(&fact.binder) {
+            if budget.charge(1).is_err()
+                || self.global_order.try_reserve(1).is_err()
+                || self.globals.try_reserve(1).is_err()
+            {
+                discard_imported_global(fact);
+                return Err(());
+            }
+            self.global_order.push(fact.binder);
+        }
         if let Some(displaced) = self.globals.insert(fact.binder, fact) {
             discard_imported_global(displaced);
         }
+        Ok(())
     }
 
     pub(crate) fn merge_nominal(
         &mut self,
         mut fact: ImportedNominalFact,
-    ) -> Result<(), ImportedNominalConflict> {
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ImportedNominalMergeFailure> {
         let Some(existing) = self.nominals.get_mut(&fact.id) else {
+            if budget.charge(1).is_err() {
+                discard_imported_nominal(fact);
+                return Err(ImportedNominalMergeFailure::TypeResource);
+            }
+            if self.nominal_order.try_reserve(1).is_err() || self.nominals.try_reserve(1).is_err() {
+                discard_imported_nominal(fact);
+                return Err(ImportedNominalMergeFailure::TypeResource);
+            }
+            self.nominal_order.push(fact.id);
             if let Some(displaced) = self.nominals.insert(fact.id, fact) {
                 discard_imported_nominal(displaced);
             }
             return Ok(());
         };
+        if existing.parameter_count != fact.parameter_count {
+            discard_imported_nominal(fact);
+            return Err(ImportedNominalMergeFailure::Conflict);
+        }
+        let parameters_match = match same_resolved_type_variables_with_budget(
+            &existing.parameters,
+            &fact.parameters,
+            budget,
+        ) {
+            Ok(matches) => matches,
+            Err(()) => {
+                discard_imported_nominal(fact);
+                return Err(ImportedNominalMergeFailure::TypeResource);
+            }
+        };
         let constructor_conflict = !existing.constructors.is_empty()
             && !fact.constructors.is_empty()
             && existing.constructors != fact.constructors;
-        if existing.parameter_count != fact.parameter_count
-            || existing.parameters != fact.parameters
+        if !parameters_match
             || constructor_conflict
             || existing.display_is_private != fact.display_is_private
         {
-            for parameter in fact.parameters.into_vec() {
-                discard_origin_iteratively(parameter.origin);
-            }
-            discard_origin_iteratively(fact.origin);
-            return Err(ImportedNominalConflict);
+            discard_imported_nominal(fact);
+            return Err(ImportedNominalMergeFailure::Conflict);
         }
         if fact.access.rank() > existing.access.rank() {
             existing.access = fact.access;
@@ -1541,10 +1598,7 @@ impl ImportedFacts {
         } else if existing.display_spelling.is_none() {
             existing.display_spelling = fact.display_spelling.take();
         }
-        for parameter in fact.parameters.into_vec() {
-            discard_origin_iteratively(parameter.origin);
-        }
-        discard_origin_iteratively(fact.origin);
+        discard_imported_nominal(fact);
         Ok(())
     }
 
@@ -1647,12 +1701,14 @@ impl Drop for ImportedFacts {
             drop(fact.scheme);
             discard_origin_iteratively(fact.origin);
         }
+        self.global_order.clear();
         for (_, fact) in self.nominals.drain() {
             for parameter in fact.parameters.into_vec() {
                 discard_origin_iteratively(parameter.origin);
             }
             discard_origin_iteratively(fact.origin);
         }
+        self.nominal_order.clear();
         for (_, fact) in self.constructors.drain() {
             if let Some(payload) = fact.payload {
                 discard_type_iteratively(payload);
@@ -1917,7 +1973,8 @@ fn clone_checked_interface_fact(
     Ok(CheckedInterfaceFact {
         id: fact.id,
         spelling: fact.spelling.clone(),
-        parameter: fact.parameter.clone(),
+        parameter: clone_resolved_type_variable_with_budget(&fact.parameter, type_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
         methods: methods.into_boxed_slice(),
         origin: fact.origin.clone(),
         span: fact.span,
@@ -1946,7 +2003,12 @@ fn clone_checked_implementation_fact(
     head_parameters
         .try_reserve(fact.head_parameters.len())
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-    head_parameters.extend(fact.head_parameters.iter().cloned());
+    for parameter in &fact.head_parameters {
+        head_parameters.push(
+            clone_resolved_type_variable_with_budget(parameter, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+        );
+    }
 
     let mut prerequisites = Vec::new();
     prerequisites
@@ -2028,6 +2090,14 @@ pub struct AuthorizedImplementationFact {
 }
 
 impl AuthorizedImplementationFact {
+    #[cfg(test)]
+    pub(crate) fn local_for_test(fact: CheckedImplementationFact) -> Self {
+        Self {
+            fact,
+            authorization: ImplementationAuthorization::local(),
+        }
+    }
+
     /// Returns the original checked implementation fact.
     #[must_use]
     pub const fn fact(&self) -> &CheckedImplementationFact {
@@ -2046,7 +2116,7 @@ impl AuthorizedImplementationFact {
 pub struct ImportedNominalFact {
     /// Stable defining nominal identity.
     pub id: NominalTypeId,
-    /// Number of parameters of kind `Type`.
+    /// Number of declared parameters.
     pub parameter_count: usize,
     /// Ordered declaration parameters, preserving defining identities.
     pub parameters: Box<[ResolvedTypeVariable]>,
@@ -2077,7 +2147,10 @@ impl ImportedNominalFact {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ImportedNominalConflict;
+pub(crate) enum ImportedNominalMergeFailure {
+    Conflict,
+    TypeResource,
+}
 
 /// One imported transparent constructor fact.
 #[derive(Debug, Eq, PartialEq)]
@@ -2452,7 +2525,7 @@ pub(crate) enum CandidateFactSource {
 pub struct CandidateHiddenNominal {
     /// Stable nominal identity.
     pub id: NominalTypeId,
-    /// Number of parameters of kind `Type`.
+    /// Number of declared parameters.
     pub parameter_count: usize,
     /// Display-only declaration spelling.
     pub spelling: String,
@@ -2680,7 +2753,7 @@ pub struct ExportedGlobal {
 pub struct ExportedType {
     /// Stable nominal identity from the defining module.
     pub id: NominalTypeId,
-    /// Number of parameters of kind `Type`.
+    /// Number of declared parameters.
     pub parameter_count: usize,
     /// Ordered declaration parameters, preserving defining identities.
     pub parameters: Box<[ResolvedTypeVariable]>,
@@ -2770,7 +2843,7 @@ fn reserve_summary_implementation_storage(
 pub struct ExportedHiddenType {
     /// Stable nominal identity from the defining module.
     pub id: NominalTypeId,
-    /// Number of parameters of kind `Type`.
+    /// Number of declared parameters.
     pub parameter_count: usize,
     /// Ordered declaration parameters, preserving defining identities.
     pub parameters: Box<[ResolvedTypeVariable]>,
@@ -3324,17 +3397,15 @@ impl ExportSummary {
                 }
             };
             type_work
-                .charge(parameters.len().saturating_add(constructors.len()))
+                .charge(constructors.len())
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            let mut cloned_parameters = Vec::new();
-            cloned_parameters
-                .try_reserve(parameters.len())
-                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            let cloned_parameters =
+                clone_resolved_type_variables_with_budget(parameters, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             let mut cloned_constructors = Vec::new();
             cloned_constructors
                 .try_reserve(constructors.len())
                 .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-            cloned_parameters.extend(parameters.iter().cloned());
             cloned_constructors.extend_from_slice(constructors);
             summary
                 .nominal_names_by_id
@@ -3666,13 +3737,11 @@ impl ExportSummary {
                 .nominal_parameters(candidate.id)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             type_work
-                .charge(source_parameters.len().saturating_add(1))
+                .charge(1)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            let mut parameters = Vec::new();
-            parameters
-                .try_reserve(source_parameters.len())
-                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-            parameters.extend(source_parameters.iter().cloned());
+            let parameters =
+                clone_resolved_type_variables_with_budget(source_parameters, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             if summary
                 .hidden_nominals
                 .insert(
@@ -3710,23 +3779,15 @@ impl ExportSummary {
                 continue;
             }
             type_work
-                .charge(
-                    imported
-                        .parameters
-                        .len()
-                        .saturating_add(imported.constructors.len())
-                        .saturating_add(1),
-                )
+                .charge(imported.constructors.len().saturating_add(1))
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            let mut parameters = Vec::new();
-            parameters
-                .try_reserve(imported.parameters.len())
-                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            let parameters =
+                clone_resolved_type_variables_with_budget(&imported.parameters, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             let mut constructors = Vec::new();
             constructors
                 .try_reserve(imported.constructors.len())
                 .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-            parameters.extend(imported.parameters.iter().cloned());
             constructors.extend_from_slice(&imported.constructors);
             if summary
                 .hidden_nominals
@@ -4288,11 +4349,17 @@ impl ResolvedRegistry {
                 origin: constructor.origin.clone(),
             });
         }
-        let mut parameters = self
-            .nominal_parameters
-            .iter()
-            .map(|(owner, parameters)| (*owner, parameters.to_vec()))
-            .collect::<Vec<_>>();
+        let mut parameters = Vec::new();
+        parameters
+            .try_reserve(self.nominal_parameters.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (owner, owner_parameters) in &self.nominal_parameters {
+            parameters.push((
+                *owner,
+                clone_resolved_type_variables_with_budget(owner_parameters, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            ));
+        }
 
         for fact in imported.nominals() {
             if fact.access != ImportedTypeAccess::Transparent {
@@ -4332,7 +4399,11 @@ impl ResolvedRegistry {
                 constructors: fact.constructors.clone(),
                 origin: fact.origin.clone(),
             });
-            parameters.push((fact.id, fact.parameters.to_vec()));
+            parameters.push((
+                fact.id,
+                clone_resolved_type_variables_with_budget(&fact.parameters, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            ));
         }
 
         let abstract_nominal_names = imported
@@ -4348,9 +4419,20 @@ impl ResolvedRegistry {
                 (fact.id, display)
             })
             .collect();
+        let mut additional_type_variables = Vec::new();
+        additional_type_variables
+            .try_reserve(self.type_variables.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for parameter in self.type_variables.values() {
+            additional_type_variables.push(
+                clone_resolved_type_variable_with_budget(parameter, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            );
+        }
         Ok(Self::new(nominals, constructors.into_vec())
-            .with_type_parameters(parameters)
-            .with_additional_type_variables(self.type_variables.values().cloned())
+            .with_type_parameters_with_budget(parameters, budget)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+            .with_additional_type_variables(additional_type_variables)
             .with_abstract_nominal_names(abstract_nominal_names))
     }
 
@@ -4402,7 +4484,11 @@ impl ResolvedRegistry {
                 if owner.module() != checked.module() {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                parameters.push((owner, owner_parameters.to_vec()));
+                parameters.push((
+                    owner,
+                    clone_resolved_type_variables_with_budget(owner_parameters, budget)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                ));
             }
             for parameter in registry.type_variables.values() {
                 if parameter.id.module() != Some(checked.module())
@@ -4410,24 +4496,44 @@ impl ResolvedRegistry {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                additional_type_variables.push(parameter.clone());
+                additional_type_variables.push(
+                    clone_resolved_type_variable_with_budget(parameter, budget)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                );
             }
         }
 
         Ok(Self::new(nominals, constructors.into_vec())
-            .with_type_parameters(parameters)
+            .with_type_parameters_with_budget(parameters, budget)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
             .with_additional_type_variables(additional_type_variables))
     }
 
     /// Attaches ordered declaration parameters after nominal identity allocation.
     #[must_use]
     pub fn with_type_parameters(
-        mut self,
+        self,
         parameters: Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>,
     ) -> Self {
+        let mut budget = TypeWorkBudget::unbounded();
+        match self.with_type_parameters_with_budget(parameters, &mut budget) {
+            Ok(registry) => registry,
+            Err(()) => {
+                unreachable!("in-memory type parameters cannot exceed the address-space work bound")
+            }
+        }
+    }
+
+    pub(crate) fn with_type_parameters_with_budget(
+        mut self,
+        parameters: Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
         for (owner, parameters) in parameters {
             for parameter in &parameters {
-                self.insert_type_variable(parameter.clone());
+                self.insert_type_variable(clone_resolved_type_variable_with_budget(
+                    parameter, budget,
+                )?);
             }
             if let Some(replaced) = self
                 .nominal_parameters
@@ -4436,7 +4542,7 @@ impl ResolvedRegistry {
                 discard_resolved_type_variables(replaced);
             }
         }
-        self
+        Ok(self)
     }
 
     /// Attaches non-nominal type parameters before the registry is published.
@@ -4503,6 +4609,14 @@ impl ResolvedRegistry {
     pub fn nominal_parameters(&self, id: NominalTypeId) -> Option<&[ResolvedTypeVariable]> {
         self.nominal(id)?;
         Some(self.nominal_parameters.get(&id).map_or(&[], Box::as_ref))
+    }
+
+    pub(crate) fn canonical_nominal_parameters(
+        &self,
+        id: NominalTypeId,
+    ) -> Option<&[ResolvedTypeVariable]> {
+        self.nominal(id)?;
+        self.nominal_parameters.get(&id).map(Box::as_ref)
     }
 
     pub(crate) fn nominal_parameter_entries(
@@ -4667,6 +4781,60 @@ fn discard_resolved_type_variable(parameter: ResolvedTypeVariable) {
     discard_origin_iteratively(parameter.origin);
 }
 
+pub(crate) fn clone_resolved_type_variable_with_budget(
+    parameter: &ResolvedTypeVariable,
+    budget: &mut TypeWorkBudget,
+) -> Result<ResolvedTypeVariable, ()> {
+    budget.charge(1)?;
+    let kind = clone_kind_with_budget(&parameter.kind, budget)?;
+    Ok(ResolvedTypeVariable {
+        id: parameter.id,
+        spelling: parameter.spelling.clone(),
+        kind,
+        origin: parameter.origin.clone(),
+    })
+}
+
+pub(crate) fn same_resolved_type_variables_with_charge(
+    left: &[ResolvedTypeVariable],
+    right: &[ResolvedTypeVariable],
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<bool, ()> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.iter().zip(right) {
+        charge(1)?;
+        if left.id != right.id || left.spelling != right.spelling || left.origin != right.origin {
+            return Ok(false);
+        }
+        if !same_kind_with_charge(&left.kind, &right.kind, || charge(1))? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) fn same_resolved_type_variables_with_budget(
+    left: &[ResolvedTypeVariable],
+    right: &[ResolvedTypeVariable],
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    same_resolved_type_variables_with_charge(left, right, |work| budget.charge(work))
+}
+
+fn clone_resolved_type_variables_with_budget(
+    parameters: &[ResolvedTypeVariable],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<ResolvedTypeVariable>, ()> {
+    let mut cloned = Vec::new();
+    cloned.try_reserve(parameters.len()).map_err(|_| ())?;
+    for parameter in parameters {
+        cloned.push(clone_resolved_type_variable_with_budget(parameter, budget)?);
+    }
+    Ok(cloned)
+}
+
 fn discard_resolved_type_variables(parameters: Box<[ResolvedTypeVariable]>) {
     for parameter in parameters.into_vec() {
         discard_resolved_type_variable(parameter);
@@ -4699,6 +4867,8 @@ pub struct ResolvedTypeVariable {
     pub id: TypeVariableId,
     /// Exact source spelling.
     pub spelling: String,
+    /// Fixed semantic kind assigned by the defining declaration.
+    pub kind: Kind,
     /// Definition provenance.
     pub origin: Origin,
 }
@@ -5484,16 +5654,26 @@ mod tests {
                     .expect("the imported-global fixture should fit");
                 let binder = BinderId::resolved(ModuleId::new(90), 0);
                 let mut imported = ImportedFacts::default();
-                imported.insert_global(ImportedGlobalScheme {
-                    binder,
-                    scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
-                    origin: generated_origin(&source, DEPTH),
-                });
-                imported.insert_global(ImportedGlobalScheme {
-                    binder,
-                    scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
-                    origin: generated_origin(&source, 0),
-                });
+                imported
+                    .insert_global(
+                        ImportedGlobalScheme {
+                            binder,
+                            scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
+                            origin: generated_origin(&source, DEPTH),
+                        },
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+                imported
+                    .insert_global(
+                        ImportedGlobalScheme {
+                            binder,
+                            scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
+                            origin: generated_origin(&source, 0),
+                        },
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
                 assert_eq!(
                     imported
                         .global(binder)
@@ -5506,6 +5686,38 @@ mod tests {
             .expect("the duplicate-global thread should start")
             .join()
             .expect("the displaced imported global must be dismantled iteratively");
+    }
+
+    #[test]
+    fn imported_global_order_failure_dismantles_deep_input_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("rejected-imported-global-order".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("rejected-global.ash", "x")
+                    .expect("the rejected-global fixture should fit");
+                let binder = BinderId::resolved(ModuleId::new(91), 0);
+                let mut imported = ImportedFacts::default();
+                let mut budget = TypeWorkBudget::with_limit(0);
+                assert_eq!(
+                    imported.insert_global(
+                        ImportedGlobalScheme {
+                            binder,
+                            scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
+                            origin: generated_origin(&source, DEPTH),
+                        },
+                        &mut budget,
+                    ),
+                    Err(())
+                );
+                assert!(imported.global(binder).is_none());
+                assert_eq!(budget.used(), 0);
+            })
+            .expect("the rejected-global thread should start")
+            .join()
+            .expect("pre-insert failure must dismantle deep Type and Origin within 256 KiB");
     }
 
     #[test]
@@ -5690,6 +5902,7 @@ mod tests {
             .with_additional_type_variables([ResolvedTypeVariable {
                 id: parameter,
                 spelling: "A".into(),
+                kind: crate::types::Kind::Type,
                 origin: Origin::Source(span),
             }]);
 
@@ -5712,6 +5925,186 @@ mod tests {
         );
     }
 
+    #[test]
+    fn copied_fixed_kind_binder_storage_is_exact_and_atomic() {
+        // One retained record plus the Arrow and its two Type leaves costs four units.
+        const EXACT_WORK: usize = 4;
+        let source = SourceFile::new("fixed-kind-copy.ash", "F")
+            .expect("the fixed-kind copy fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the binder range should be ordered"))
+            .expect("the binder range should belong to the fixture");
+        let owner = NominalTypeId::new(ModuleId::new(0), 0);
+        let id = TypeVariableId::resolved(ModuleId::new(0), 0);
+        let parameter = || ResolvedTypeVariable {
+            id,
+            spelling: "F".to_owned(),
+            kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+            origin: Origin::Source(span),
+        };
+
+        let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert!(
+            ResolvedRegistry::new(Vec::new(), Vec::new())
+                .with_type_parameters_with_budget(vec![(owner, vec![parameter()])], &mut short,)
+                .is_err(),
+            "one missing kind-node unit must publish no registry",
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_type_parameters_with_budget(vec![(owner, vec![parameter()])], &mut exact)
+            .expect("the exact record-and-kind budget should publish the registry");
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(
+            registry.type_variable(id).map(|binder| &binder.kind),
+            Some(&parameter().kind)
+        );
+    }
+
+    #[test]
+    fn fixed_kind_binder_comparison_is_exact_and_stack_safe() {
+        const DEPTH: usize = 32_768;
+        const KIND_NODES: usize = 2 * DEPTH + 1;
+        const EXACT_WORK: usize = 1 + KIND_NODES;
+
+        std::thread::Builder::new()
+            .name("deep-fixed-kind-binder-comparison".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-kind-comparison.ash", "F")
+                    .expect("the comparison fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the binder range should be ordered"))
+                    .expect("the binder range should belong to the fixture");
+                let id = TypeVariableId::resolved(ModuleId::new(0), 0);
+                let deep_kind = || {
+                    let mut kind = Kind::Type;
+                    for _ in 0..DEPTH {
+                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+                    }
+                    kind
+                };
+                let left = [ResolvedTypeVariable {
+                    id,
+                    spelling: "F".to_owned(),
+                    kind: deep_kind(),
+                    origin: Origin::Source(span),
+                }];
+                let right = [ResolvedTypeVariable {
+                    id,
+                    spelling: "F".to_owned(),
+                    kind: deep_kind(),
+                    origin: Origin::Source(span),
+                }];
+
+                let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+                assert_eq!(
+                    same_resolved_type_variables_with_budget(&left, &right, &mut short),
+                    Err(()),
+                );
+                assert_eq!(short.used(), EXACT_WORK - 1);
+
+                let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+                assert_eq!(
+                    same_resolved_type_variables_with_budget(&left, &right, &mut exact),
+                    Ok(true),
+                );
+                assert_eq!(exact.used(), EXACT_WORK);
+
+                let mismatched = [ResolvedTypeVariable {
+                    id,
+                    spelling: "F".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                }];
+                let mut mismatch_exact = TypeWorkBudget::with_limit(2);
+                assert_eq!(
+                    same_resolved_type_variables_with_budget(
+                        &left,
+                        &mismatched,
+                        &mut mismatch_exact,
+                    ),
+                    Ok(false),
+                );
+                assert_eq!(mismatch_exact.used(), 2);
+            })
+            .expect("the comparison thread should start")
+            .join()
+            .expect("deep fixed-kind comparison and teardown must remain stack-safe");
+    }
+
+    #[test]
+    fn imported_nominal_kind_authentication_is_exact_and_atomic() {
+        const EXACT_WORK: usize = 4;
+        let source = SourceFile::new("imported-nominal-kind.ash", "F")
+            .expect("the imported nominal fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the binder range should be ordered"))
+            .expect("the binder range should belong to the fixture");
+        let nominal = NominalTypeId::new(ModuleId::new(0), 0);
+        let parameter = TypeVariableId::resolved(ModuleId::new(0), 0);
+        let fact = |kind| ImportedNominalFact {
+            id: nominal,
+            parameter_count: 1,
+            parameters: Box::new([ResolvedTypeVariable {
+                id: parameter,
+                spelling: "F".to_owned(),
+                kind,
+                origin: Origin::Source(span),
+            }]),
+            constructors: Box::new([]),
+            access: ImportedTypeAccess::Hidden,
+            display_spelling: Some("Holder".to_owned()),
+            display_is_private: false,
+            origin: Origin::Source(span),
+        };
+        let arrow = || Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+
+        let mut imported = ImportedFacts::default();
+        imported
+            .merge_nominal(fact(arrow()), &mut TypeWorkBudget::default())
+            .expect("the first route should publish without a comparison");
+
+        let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            imported.merge_nominal(fact(arrow()), &mut short),
+            Err(ImportedNominalMergeFailure::TypeResource),
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(
+            imported
+                .nominals()
+                .next()
+                .map(|retained| &retained.parameters[0].kind),
+            Some(&arrow()),
+            "failed authentication must not mutate the retained route",
+        );
+
+        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+        imported
+            .merge_nominal(fact(arrow()), &mut exact)
+            .expect("the exact record-and-kind comparison should accept the route");
+        assert_eq!(exact.used(), EXACT_WORK);
+
+        let mut wrong_count = fact(arrow());
+        wrong_count.parameter_count = 2;
+        let mut no_kind_work = TypeWorkBudget::with_limit(0);
+        assert_eq!(
+            imported.merge_nominal(wrong_count, &mut no_kind_work),
+            Err(ImportedNominalMergeFailure::Conflict),
+        );
+        assert_eq!(no_kind_work.used(), 0);
+
+        let mut mismatch = TypeWorkBudget::with_limit(2);
+        assert_eq!(
+            imported.merge_nominal(fact(Kind::Type), &mut mismatch),
+            Err(ImportedNominalMergeFailure::Conflict),
+        );
+        assert_eq!(mismatch.used(), 2);
+    }
+
     fn resolved_interface_with_annotation(
         module: ModuleId,
         span: Span,
@@ -5725,6 +6118,7 @@ mod tests {
             parameter: ResolvedTypeVariable {
                 id: TypeVariableId::new(0),
                 spelling: "A".into(),
+                kind: crate::types::Kind::Type,
                 origin: Origin::Source(span),
             },
             methods: vec![ResolvedInterfaceMethod {
@@ -6313,6 +6707,7 @@ mod tests {
                 parameter: ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
+                    kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
                 },
                 methods: Box::new([]),
@@ -6527,16 +6922,19 @@ mod tests {
             .collect::<Vec<_>>();
         let mut imported = ImportedFacts::default();
         imported
-            .merge_nominal(ImportedNominalFact {
-                id: nominal,
-                parameter_count: 0,
-                parameters: Box::new([]),
-                constructors: constructors.clone().into_boxed_slice(),
-                access: ImportedTypeAccess::Transparent,
-                display_spelling: Some("Family".into()),
-                display_is_private: false,
-                origin: Origin::Source(span),
-            })
+            .merge_nominal(
+                ImportedNominalFact {
+                    id: nominal,
+                    parameter_count: 0,
+                    parameters: Box::new([]),
+                    constructors: constructors.clone().into_boxed_slice(),
+                    access: ImportedTypeAccess::Transparent,
+                    display_spelling: Some("Family".into()),
+                    display_is_private: false,
+                    origin: Origin::Source(span),
+                },
+                &mut TypeWorkBudget::default(),
+            )
             .expect("the transparent nominal fixture should be unique");
         for (index, constructor) in constructors.iter().copied().enumerate() {
             imported.insert_constructor(ImportedConstructorFact {
@@ -6744,6 +7142,7 @@ mod tests {
                 parameter: ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
+                    kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
                 },
                 methods: vec![CheckedInterfaceMethodFact {
@@ -6858,6 +7257,7 @@ mod tests {
                 parameter: ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
+                    kind: crate::types::Kind::Type,
                     origin: Origin::Source(hidden_span),
                 },
                 methods: Box::new([]),
@@ -6905,6 +7305,7 @@ mod tests {
                 parameter: ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
+                    kind: crate::types::Kind::Type,
                     origin: Origin::Source(first),
                 },
                 methods: Box::new([]),
@@ -7303,11 +7704,13 @@ mod tests {
                             ResolvedTypeVariable {
                                 id: parameter,
                                 spelling: "A".into(),
+                                kind: crate::types::Kind::Type,
                                 origin,
                             },
                             ResolvedTypeVariable {
                                 id: parameter,
                                 spelling: "B".into(),
+                                kind: crate::types::Kind::Type,
                                 origin: Origin::Source(span),
                             },
                         ]);
@@ -7347,6 +7750,7 @@ mod tests {
                             vec![ResolvedTypeVariable {
                                 id: parameter,
                                 spelling: "Deep".to_owned(),
+                                kind: crate::types::Kind::Type,
                                 origin: generated_origin(&file, DEPTH),
                             }],
                         ),
@@ -7355,6 +7759,7 @@ mod tests {
                             vec![ResolvedTypeVariable {
                                 id: parameter,
                                 spelling: "Shallow".to_owned(),
+                                kind: crate::types::Kind::Type,
                                 origin: Origin::Source(span),
                             }],
                         ),

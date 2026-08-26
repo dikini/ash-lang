@@ -8,10 +8,11 @@ use std::{
 
 use crate::module::ModuleId;
 
-/// Maximum cumulative structural type cells processed by one compiler phase.
+/// Maximum cumulative structural Type cells, Kind nodes, and retained or
+/// visited binder-kind records processed by one compiler phase.
 pub const TYPE_WORK_LIMIT: usize = 327_680;
 
-/// Cumulative accounting for compiler-owned structural type work.
+/// Cumulative accounting for compiler-owned Type, Kind, and binder-kind work.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TypeWorkBudget {
     used: usize,
@@ -28,12 +29,18 @@ impl Default for TypeWorkBudget {
 }
 
 impl TypeWorkBudget {
+    pub(crate) const fn unbounded() -> Self {
+        Self {
+            used: 0,
+            limit: usize::MAX,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) const fn with_limit(limit: usize) -> Self {
         Self { used: 0, limit }
     }
 
-    #[cfg(test)]
     pub(crate) const fn used(&self) -> usize {
         self.used
     }
@@ -160,10 +167,7 @@ pub(crate) fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> 
 }
 
 fn clone_type(ty: &Type) -> Type {
-    let mut unbounded = TypeWorkBudget {
-        used: 0,
-        limit: usize::MAX,
-    };
+    let mut unbounded = TypeWorkBudget::unbounded();
     match clone_type_with_budget(ty, &mut unbounded) {
         Ok(cloned) => cloned,
         Err(()) => unreachable!("an in-memory type cannot exceed the address-space work bound"),
@@ -889,7 +893,6 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
 }
 
 /// The internal kind language used to check type constructors.
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Kind {
     /// The kind of every source-admitted value type.
     Type,
@@ -897,14 +900,657 @@ pub enum Kind {
     Arrow(Box<Kind>, Box<Kind>),
 }
 
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "Task 4 tests close the budgeted multi-arrow fold; production uses single-arrow reconstruction until later Core and inference consumers need the fold"
+    )
+)]
+pub(crate) fn arrows_with_budget(
+    domains: impl IntoIterator<Item = Kind>,
+    result: Kind,
+    budget: &mut TypeWorkBudget,
+) -> Result<Kind, ()> {
+    charge_kind_nodes(&result, budget)?;
+    let mut retained_domains = Vec::new();
+    for domain in domains {
+        charge_kind_nodes(&domain, budget)?;
+        budget.charge(1)?;
+        retained_domains.try_reserve(1).map_err(|_| ())?;
+        retained_domains.push(domain);
+    }
+
+    Ok(retained_domains
+        .into_iter()
+        .rev()
+        .fold(result, |codomain, domain| {
+            Kind::Arrow(Box::new(domain), Box::new(codomain))
+        }))
+}
+
+#[cfg(test)]
+thread_local! {
+    static KIND_NODE_CHARGE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static KIND_RENDER_MAX_LIVE_STATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_kind_node_charge_visits() {
+    KIND_NODE_CHARGE_VISITS.set(0);
+}
+
+#[cfg(test)]
+pub(crate) fn kind_node_charge_visits() -> usize {
+    KIND_NODE_CHARGE_VISITS.get()
+}
+
+#[cfg(test)]
+fn reset_kind_render_max_live_states() {
+    KIND_RENDER_MAX_LIVE_STATES.set(0);
+}
+
+#[cfg(test)]
+fn kind_render_max_live_states() -> usize {
+    KIND_RENDER_MAX_LIVE_STATES.get()
+}
+
+#[cfg(test)]
+fn observe_kind_render_live_states(states: usize) {
+    KIND_RENDER_MAX_LIVE_STATES.set(KIND_RENDER_MAX_LIVE_STATES.get().max(states));
+}
+
+pub(crate) fn charge_kind_nodes(kind: &Kind, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+    let mut work = vec![kind];
+    while let Some(kind) = work.pop() {
+        #[cfg(test)]
+        KIND_NODE_CHARGE_VISITS.set(KIND_NODE_CHARGE_VISITS.get().saturating_add(1));
+        budget.charge(1)?;
+        if let Kind::Arrow(domain, codomain) = kind {
+            work.push(codomain);
+            work.push(domain);
+        }
+    }
+    Ok(())
+}
+
+/// Charges every Kind node below an already charged root.
+pub(crate) fn charge_kind_descendants(kind: &Kind, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+    match kind {
+        Kind::Type => Ok(()),
+        Kind::Arrow(domain, codomain) => {
+            charge_kind_nodes(domain, budget)?;
+            charge_kind_nodes(codomain, budget)
+        }
+    }
+}
+
+pub(crate) fn clone_kind_with_budget(kind: &Kind, budget: &mut TypeWorkBudget) -> Result<Kind, ()> {
+    enum Task<'a> {
+        Visit(&'a Kind),
+        Arrow,
+    }
+
+    charge_kind_nodes(kind, budget)?;
+    let mut work = vec![Task::Visit(kind)];
+    let mut rebuilt = Vec::new();
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Visit(Kind::Type) => rebuilt.push(Kind::Type),
+            Task::Visit(Kind::Arrow(domain, codomain)) => {
+                work.push(Task::Arrow);
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
+            }
+            Task::Arrow => {
+                let codomain = rebuilt.pop().expect("cloned kind codomain");
+                let domain = rebuilt.pop().expect("cloned kind domain");
+                rebuilt.push(Kind::Arrow(Box::new(domain), Box::new(codomain)));
+            }
+        }
+    }
+    rebuilt.pop().ok_or(())
+}
+
+pub(crate) fn clone_kinded_type_parameters_with_budget(
+    parameters: &[(TypeVariableId, Kind)],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<(TypeVariableId, Kind)>, ()> {
+    budget.charge(parameters.len())?;
+    let mut cloned = Vec::new();
+    cloned.try_reserve(parameters.len()).map_err(|_| ())?;
+    for (parameter, kind) in parameters {
+        cloned.push((*parameter, clone_kind_with_budget(kind, budget)?));
+    }
+    Ok(cloned)
+}
+
+fn clone_kind(kind: &Kind) -> Kind {
+    let mut unbounded = TypeWorkBudget::unbounded();
+    match clone_kind_with_budget(kind, &mut unbounded) {
+        Ok(cloned) => cloned,
+        Err(()) => unreachable!("an in-memory kind cannot exceed the address-space work bound"),
+    }
+}
+
+impl Clone for Kind {
+    fn clone(&self) -> Self {
+        clone_kind(self)
+    }
+}
+
+fn same_kind(left: &Kind, right: &Kind) -> bool {
+    let mut unbounded = TypeWorkBudget::unbounded();
+    match same_kind_with_budget(left, right, &mut unbounded) {
+        Ok(equal) => equal,
+        Err(()) => {
+            unreachable!("an in-memory kind comparison cannot exceed the address-space work bound")
+        }
+    }
+}
+
+pub(crate) fn same_kind_with_budget(
+    left: &Kind,
+    right: &Kind,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    same_kind_with_charge(left, right, || budget.charge(1))
+}
+
+pub(crate) fn same_kind_with_charge(
+    left: &Kind,
+    right: &Kind,
+    mut charge: impl FnMut() -> Result<(), ()>,
+) -> Result<bool, ()> {
+    let mut work = vec![(left, right)];
+    while let Some((left, right)) = work.pop() {
+        charge()?;
+        match (left, right) {
+            (Kind::Type, Kind::Type) => {}
+            (
+                Kind::Arrow(left_domain, left_codomain),
+                Kind::Arrow(right_domain, right_codomain),
+            ) => {
+                work.push((left_codomain, right_codomain));
+                work.push((left_domain, right_domain));
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+impl PartialEq for Kind {
+    fn eq(&self, other: &Self) -> bool {
+        same_kind(self, other)
+    }
+}
+
+impl Eq for Kind {}
+
+pub(crate) fn hash_kind_with_budget<H: Hasher>(
+    kind: &Kind,
+    state: &mut H,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    charge_kind_nodes(kind, budget)?;
+    let mut work = vec![kind];
+    while let Some(kind) = work.pop() {
+        match kind {
+            Kind::Type => 0_u8.hash(state),
+            Kind::Arrow(domain, codomain) => {
+                1_u8.hash(state);
+                work.push(codomain);
+                work.push(domain);
+            }
+        }
+    }
+    Ok(())
+}
+
+impl Hash for Kind {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut unbounded = TypeWorkBudget::unbounded();
+        if hash_kind_with_budget(self, state, &mut unbounded).is_err() {
+            unreachable!("an in-memory kind hash cannot exceed the address-space work bound");
+        }
+    }
+}
+
+fn write_kind(kind: &Kind, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    #[derive(Clone, Copy)]
+    enum Phase {
+        Start,
+        AfterDomain,
+        AfterCodomain,
+    }
+
+    struct Task<'a> {
+        kind: &'a Kind,
+        phase: Phase,
+        parenthesized: bool,
+    }
+
+    let mut work = Vec::new();
+    work.try_reserve(1).map_err(|_| fmt::Error)?;
+    work.push(Task {
+        kind,
+        phase: Phase::Start,
+        parenthesized: false,
+    });
+    #[cfg(test)]
+    observe_kind_render_live_states(work.len());
+    while !work.is_empty() {
+        let mut child = None;
+        let mut finished = false;
+        {
+            let task = work.last_mut().expect("nonempty Kind render work");
+            match task.kind {
+                Kind::Type => {
+                    formatter.write_str("Type")?;
+                    finished = true;
+                }
+                Kind::Arrow(domain, codomain) => match task.phase {
+                    Phase::Start => {
+                        if task.parenthesized {
+                            formatter.write_str("(")?;
+                        }
+                        task.phase = Phase::AfterDomain;
+                        child = Some(Task {
+                            kind: domain,
+                            phase: Phase::Start,
+                            parenthesized: matches!(domain.as_ref(), Kind::Arrow(_, _)),
+                        });
+                    }
+                    Phase::AfterDomain => {
+                        formatter.write_str(" -> ")?;
+                        task.phase = Phase::AfterCodomain;
+                        child = Some(Task {
+                            kind: codomain,
+                            phase: Phase::Start,
+                            parenthesized: false,
+                        });
+                    }
+                    Phase::AfterCodomain => {
+                        if task.parenthesized {
+                            formatter.write_str(")")?;
+                        }
+                        finished = true;
+                    }
+                },
+            }
+        }
+        if finished {
+            let _ = work.pop();
+        } else if let Some(child) = child {
+            work.try_reserve(1).map_err(|_| fmt::Error)?;
+            work.push(child);
+        } else {
+            unreachable!("an unfinished Kind render task schedules one child");
+        }
+        #[cfg(test)]
+        observe_kind_render_live_states(work.len());
+    }
+    Ok(())
+}
+
+pub(crate) fn render_kind_with_budget(
+    kind: &Kind,
+    budget: &mut TypeWorkBudget,
+) -> Result<String, ()> {
+    charge_kind_nodes(kind, budget)?;
+    struct RenderedKind<'a>(&'a Kind);
+
+    impl fmt::Display for RenderedKind<'_> {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write_kind(self.0, formatter)
+        }
+    }
+
+    Ok(format!("{}", RenderedKind(kind)))
+}
+
+impl fmt::Display for Kind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut unbounded = TypeWorkBudget::unbounded();
+        match render_kind_with_budget(self, &mut unbounded) {
+            Ok(rendered) => formatter.write_str(&rendered),
+            Err(()) => {
+                unreachable!("an in-memory kind render cannot exceed the address-space work bound")
+            }
+        }
+    }
+}
+
+impl fmt::Debug for Kind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl Drop for Kind {
+    fn drop(&mut self) {
+        let Self::Arrow(domain, codomain) = self else {
+            return;
+        };
+        if matches!(domain.as_ref(), Self::Type) && matches!(codomain.as_ref(), Self::Type) {
+            return;
+        }
+
+        let mut work = Vec::new();
+        work.push(std::mem::replace(codomain.as_mut(), Self::Type));
+        work.push(std::mem::replace(domain.as_mut(), Self::Type));
+        while let Some(mut kind) = work.pop() {
+            if let Self::Arrow(domain, codomain) = &mut kind {
+                work.push(std::mem::replace(codomain.as_mut(), Self::Type));
+                work.push(std::mem::replace(domain.as_mut(), Self::Type));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::module::ModuleId;
     use std::{
+        cell::Cell,
         collections::hash_map::DefaultHasher,
         hash::{Hash, Hasher},
     };
+
+    #[test]
+    fn arrow_folding_stops_domain_consumption_at_budget_failure() {
+        let yielded = Cell::new(0);
+        let domains = std::iter::from_fn(|| {
+            let next = yielded.get() + 1;
+            yielded.set(next);
+            assert!(next <= 2, "the fold requested an unbudgeted third domain");
+            Some(Kind::Type)
+        });
+        let mut budget = TypeWorkBudget::with_limit(4);
+
+        assert_eq!(
+            arrows_with_budget(domains, Kind::Type, &mut budget),
+            Err(()),
+        );
+        assert_eq!(yielded.get(), 2);
+        assert_eq!(budget.used(), 4);
+    }
+
+    #[test]
+    fn kind_algebra_is_iterative_and_exactly_budgeted() {
+        // Folding charges every retained input node plus one new Arrow per domain.
+        // Here the inputs have five nodes and two domains retain two new arrows,
+        // so the complete tree has three arrows and four Type leaves: seven nodes.
+        const NODES: usize = 7;
+        let mut fold_exact = TypeWorkBudget::with_limit(NODES);
+        let kind = arrows_with_budget(
+            [
+                Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                Kind::Type,
+            ],
+            Kind::Type,
+            &mut fold_exact,
+        )
+        .expect("the exact arrow-fold budget should succeed");
+        let mut fold_short = TypeWorkBudget::with_limit(NODES - 1);
+        assert_eq!(
+            arrows_with_budget(
+                [
+                    Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                    Kind::Type,
+                ],
+                Kind::Type,
+                &mut fold_short,
+            ),
+            Err(()),
+        );
+        assert_eq!(kind.to_string(), "(Type -> Type) -> Type -> Type");
+
+        let mut clone_exact = TypeWorkBudget::with_limit(NODES);
+        let cloned = clone_kind_with_budget(&kind, &mut clone_exact)
+            .expect("the exact kind clone budget should succeed");
+        let mut clone_short = TypeWorkBudget::with_limit(NODES - 1);
+        assert_eq!(clone_kind_with_budget(&kind, &mut clone_short), Err(()));
+
+        let mut equality_exact = TypeWorkBudget::with_limit(NODES);
+        assert_eq!(
+            same_kind_with_budget(&kind, &cloned, &mut equality_exact),
+            Ok(true),
+        );
+        let mut equality_short = TypeWorkBudget::with_limit(NODES - 1);
+        assert_eq!(
+            same_kind_with_budget(&kind, &cloned, &mut equality_short),
+            Err(()),
+        );
+
+        let mut hash_exact = TypeWorkBudget::with_limit(NODES);
+        let mut exact_hasher = DefaultHasher::new();
+        assert_eq!(
+            hash_kind_with_budget(&kind, &mut exact_hasher, &mut hash_exact),
+            Ok(()),
+        );
+        let mut hash_short = TypeWorkBudget::with_limit(NODES - 1);
+        let mut short_hasher = DefaultHasher::new();
+        17_u8.hash(&mut short_hasher);
+        let mut untouched_hasher = DefaultHasher::new();
+        17_u8.hash(&mut untouched_hasher);
+        assert_eq!(
+            hash_kind_with_budget(&kind, &mut short_hasher, &mut hash_short),
+            Err(()),
+        );
+        assert_eq!(short_hasher.finish(), untouched_hasher.finish());
+        let mut ordinary_hasher = DefaultHasher::new();
+        kind.hash(&mut ordinary_hasher);
+        assert_eq!(exact_hasher.finish(), ordinary_hasher.finish());
+
+        let mut render_exact = TypeWorkBudget::with_limit(NODES);
+        assert_eq!(
+            render_kind_with_budget(&kind, &mut render_exact),
+            Ok("(Type -> Type) -> Type -> Type".to_owned()),
+        );
+        let mut render_short = TypeWorkBudget::with_limit(NODES - 1);
+        assert_eq!(render_kind_with_budget(&kind, &mut render_short), Err(()),);
+
+        let right_associated = Kind::Arrow(
+            Box::new(Kind::Type),
+            Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))),
+        );
+        assert_eq!(right_associated.to_string(), "Type -> Type -> Type");
+        assert_ne!(kind, right_associated);
+
+        drop(right_associated);
+        drop(cloned);
+        drop(kind);
+    }
+
+    #[test]
+    fn deep_kind_operations_and_destruction_are_stack_safe() {
+        const DEPTH: usize = 32_768;
+        const NODES: usize = 2 * DEPTH + 1;
+
+        std::thread::Builder::new()
+            .name("deep-kind-operations".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut kind = Kind::Type;
+                for _ in 0..DEPTH {
+                    kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+                }
+
+                let cloned = kind.clone();
+                assert_eq!(&kind, &cloned);
+
+                let mut kind_hasher = DefaultHasher::new();
+                kind.hash(&mut kind_hasher);
+                let mut clone_hasher = DefaultHasher::new();
+                cloned.hash(&mut clone_hasher);
+                assert_eq!(kind_hasher.finish(), clone_hasher.finish());
+
+                let rendered = kind.to_string();
+                assert!(rendered.starts_with("Type -> Type"));
+                assert!(rendered.ends_with("Type"));
+                assert_eq!(rendered.matches("Type").count(), DEPTH + 1);
+
+                let mut clone_exact = TypeWorkBudget::with_limit(NODES);
+                let charged_clone = clone_kind_with_budget(&kind, &mut clone_exact)
+                    .expect("the exact deep kind clone budget should succeed");
+                let mut clone_short = TypeWorkBudget::with_limit(NODES - 1);
+                assert_eq!(clone_kind_with_budget(&kind, &mut clone_short), Err(()));
+
+                let mut equality_exact = TypeWorkBudget::with_limit(NODES);
+                assert_eq!(
+                    same_kind_with_budget(&kind, &cloned, &mut equality_exact),
+                    Ok(true),
+                );
+                let mut equality_short = TypeWorkBudget::with_limit(NODES - 1);
+                assert_eq!(
+                    same_kind_with_budget(&kind, &cloned, &mut equality_short),
+                    Err(()),
+                );
+
+                let mut hash_exact = TypeWorkBudget::with_limit(NODES);
+                let mut exact_hasher = DefaultHasher::new();
+                assert_eq!(
+                    hash_kind_with_budget(&kind, &mut exact_hasher, &mut hash_exact),
+                    Ok(()),
+                );
+                let mut hash_short = TypeWorkBudget::with_limit(NODES - 1);
+                let mut short_hasher = DefaultHasher::new();
+                assert_eq!(
+                    hash_kind_with_budget(&kind, &mut short_hasher, &mut hash_short),
+                    Err(()),
+                );
+
+                let mut render_exact = TypeWorkBudget::with_limit(NODES);
+                assert_eq!(
+                    render_kind_with_budget(&kind, &mut render_exact),
+                    Ok(rendered),
+                );
+                let mut render_short = TypeWorkBudget::with_limit(NODES - 1);
+                assert_eq!(render_kind_with_budget(&kind, &mut render_short), Err(()),);
+
+                // Ordinary accepted values and the rejected clone's partial state all
+                // dismantle through the same bounded automatic owner path.
+                drop(charged_clone);
+                drop(cloned);
+                drop(kind);
+            })
+            .expect("deep-kind thread should start")
+            .join()
+            .expect("deep kind operations should remain within 256 KiB");
+    }
+
+    #[test]
+    fn kind_rendering_states_are_one_per_node_and_exact() {
+        const DEPTH: usize = 32_768;
+        const NODES: usize = 2 * DEPTH + 1;
+
+        let parenthesized = Kind::Arrow(
+            Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))),
+            Box::new(Kind::Type),
+        );
+        reset_kind_render_max_live_states();
+        let mut exact = TypeWorkBudget::with_limit(5);
+        assert_eq!(
+            render_kind_with_budget(&parenthesized, &mut exact),
+            Ok("(Type -> Type) -> Type".to_owned())
+        );
+        assert!(kind_render_max_live_states() <= 5);
+        let mut short = TypeWorkBudget::with_limit(4);
+        assert_eq!(render_kind_with_budget(&parenthesized, &mut short), Err(()));
+
+        std::thread::Builder::new()
+            .name("deep-left-kind-render".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut kind = Kind::Type;
+                for _ in 0..DEPTH {
+                    kind = Kind::Arrow(Box::new(kind), Box::new(Kind::Type));
+                }
+                reset_kind_render_max_live_states();
+                let mut exact = TypeWorkBudget::with_limit(NODES);
+                let rendered = render_kind_with_budget(&kind, &mut exact)
+                    .expect("the exact left-nested Kind-node budget should render");
+                assert_eq!(exact.used(), NODES);
+                assert_eq!(rendered.matches("Type").count(), DEPTH + 1);
+                assert!(
+                    kind_render_max_live_states() <= NODES,
+                    "rendering retained {} states for {NODES} Kind nodes",
+                    kind_render_max_live_states(),
+                );
+                let mut short = TypeWorkBudget::with_limit(NODES - 1);
+                assert_eq!(render_kind_with_budget(&kind, &mut short), Err(()));
+                drop(kind);
+            })
+            .expect("the deep left-render thread should start")
+            .join()
+            .expect("deep left rendering and teardown should fit 256 KiB");
+    }
+
+    #[test]
+    fn deep_wide_arrow_folding_is_exact_transactional_and_stack_safe() {
+        const DOMAINS: usize = 32_768;
+        const DOMAIN_DEPTH: usize = 32_768;
+        // Result Type + (DOMAINS-1) simple domains + the 2D+1-node deep
+        // domain + one Arrow per domain.
+        const EXACT_NODES: usize = 2 * DOMAINS + 2 * DOMAIN_DEPTH + 1;
+
+        std::thread::Builder::new()
+            .name("deep-wide-kind-arrow-fold".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let make_deep_domain = || {
+                    let mut kind = Kind::Type;
+                    for _ in 0..DOMAIN_DEPTH {
+                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+                    }
+                    kind
+                };
+
+                let mut exact = TypeWorkBudget::with_limit(EXACT_NODES);
+                let folded = arrows_with_budget(
+                    (0..DOMAINS).map(|index| {
+                        if index + 1 == DOMAINS {
+                            make_deep_domain()
+                        } else {
+                            Kind::Type
+                        }
+                    }),
+                    Kind::Type,
+                    &mut exact,
+                )
+                .expect("the published deep/wide arrow formula should fit exactly");
+                assert_eq!(exact.used(), EXACT_NODES);
+
+                let yielded = Cell::new(0);
+                let late_domains = std::iter::from_fn(|| {
+                    let next = yielded.get() + 1;
+                    yielded.set(next);
+                    assert!(
+                        next <= DOMAINS,
+                        "late failure requested a domain beyond the charged fold"
+                    );
+                    Some(if next == DOMAINS {
+                        make_deep_domain()
+                    } else {
+                        Kind::Type
+                    })
+                });
+                let mut short = TypeWorkBudget::with_limit(EXACT_NODES - 1);
+                assert_eq!(
+                    arrows_with_budget(late_domains, Kind::Type, &mut short),
+                    Err(())
+                );
+                assert_eq!(short.used(), EXACT_NODES - 1);
+                assert_eq!(yielded.get(), DOMAINS);
+                drop(folded);
+            })
+            .expect("the deep/wide fold thread should start")
+            .join()
+            .expect("fold success, late failure, and teardown must fit 256 KiB");
+    }
 
     #[test]
     fn canonical_application_is_unary_and_injective() {

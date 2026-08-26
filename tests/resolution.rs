@@ -13,7 +13,7 @@ use ash::{
         ResolvedLocalDeclaration, ResolvedModule, ResolvedPattern, ResolvedPatternKind,
         ResolvedTermName,
     },
-    types::Type,
+    types::{Kind, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -591,6 +591,230 @@ fn explicit_global_syntax_preserves_predecessor_resolution_until_kind_checking()
 }
 
 #[test]
+fn explicit_kind_binders_are_complete_and_ordered() {
+    let program = resolve_valid(
+        "type Pair<Left, Right> = Pair(Left, Right)\n\ninterface Witness<Value> {\nwitness : Value -> Bool\n}\n\nordered<B : Type, A : Type> : A -> B -> A\nordered left right = left\n\nrequirement_only<B : Type, A : Type> : A -> A where Witness<B>\nrequirement_only value = value\n\nfn operational<D : Type, C : Type>(left : C, right : D) -> C {\nleft\n}\n\nimpl<B : Type, A : Type> Witness<Pair<A, B>> {\nwitness value = true\n}\n",
+    );
+
+    let ResolvedDefinitionKind::Equational(ordered) = &program.definitions()[0].kind else {
+        panic!("expected the ordered equational global");
+    };
+    assert_eq!(
+        ordered
+            .interface
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["B", "A"],
+    );
+    assert!(
+        ordered
+            .interface
+            .type_parameters
+            .iter()
+            .all(|parameter| parameter.kind == Kind::Type),
+    );
+
+    let ResolvedDefinitionKind::Equational(requirement_only) = &program.definitions()[1].kind
+    else {
+        panic!("expected the requirement-only equational global");
+    };
+    assert_eq!(
+        requirement_only
+            .interface
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["B", "A"],
+    );
+
+    let ResolvedDefinitionKind::InlineOperational(operational) = &program.definitions()[2].kind
+    else {
+        panic!("expected the operational global");
+    };
+    assert_eq!(
+        operational
+            .header
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["D", "C"],
+    );
+
+    let [implementation] = program.implementations() else {
+        panic!("expected one implementation");
+    };
+    assert_eq!(
+        implementation
+            .head_parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["B", "A"],
+    );
+    assert!(
+        implementation
+            .head_parameters
+            .iter()
+            .all(|parameter| parameter.kind == Kind::Type),
+    );
+}
+
+#[test]
+fn explicit_global_binders_reject_duplicates_unused_names_and_omissions() {
+    let duplicate_source = "same<A : Type, A : Type> : A -> A\nsame value = value\n";
+    let duplicate = resolve_error(duplicate_source);
+    assert_eq!(duplicate.reason, ResolveReason::DuplicateTypeParameter);
+    assert_eq!(duplicate.primary.span().range().start(), 15);
+    assert_eq!(duplicate.primary.span().range().end(), 16);
+    assert_eq!(duplicate.related.len(), 1);
+    assert_eq!(duplicate.related[0].span().range().start(), 5);
+    assert_eq!(duplicate.related[0].span().range().end(), 6);
+
+    let unused_source = "same<A : Type, B : Type> : A -> A\nsame value = value\n";
+    let unused = resolve_error(unused_source);
+    assert_eq!(unused.reason.to_string(), "resolve.unused-type-parameter",);
+    assert_eq!(unused.primary.span().range().start(), 15);
+    assert_eq!(unused.primary.span().range().end(), 16);
+    assert_eq!(unused.found.as_deref(), Some("B"));
+
+    let omitted_source = "same<A : Type> : A -> B -> A\nsame left right = left\n";
+    let omitted = resolve_error(omitted_source);
+    assert_eq!(omitted.reason, ResolveReason::UnknownType);
+    assert_eq!(omitted.primary.span().range().start(), 22);
+    assert_eq!(omitted.primary.span().range().end(), 23);
+    assert_eq!(omitted.found.as_deref(), Some("B"));
+}
+
+#[test]
+fn explicit_global_unlisted_requirement_variable_is_unknown_at_its_occurrence() {
+    let source = "type Pair<Left, Right> = Pair(Left, Right)\n\ninterface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame<A : Type> : A -> Bool where Equal<Pair<A, B>>\nsame value = true\n";
+    let error = resolve_error(source);
+
+    assert_eq!(error.reason, ResolveReason::UnknownType);
+    assert_eq!(error.found.as_deref(), Some("B"));
+    let occurrence = u32::try_from(
+        source
+            .find("B>>")
+            .expect("the omitted occurrence is present"),
+    )
+    .expect("the test source fits in a span");
+    assert_eq!(error.primary.span().range().start(), occurrence);
+    assert_eq!(error.primary.span().range().end(), occurrence + 1);
+}
+
+#[test]
+fn explicit_implementation_binders_reject_duplicates_unused_names_and_omissions() {
+    let prelude = "type Pair<Left, Right> = Pair(Left, Right)\n\ninterface Witness<Value> {\nwitness : Value -> Bool\n}\n\n";
+
+    let duplicate_source = format!(
+        "{prelude}impl<A : Type, A : Type> Witness<Pair<A, A>> {{\nwitness value = true\n}}\n",
+    );
+    let duplicate = resolve_error(&duplicate_source);
+    assert_eq!(duplicate.reason, ResolveReason::DuplicateTypeParameter);
+    assert_eq!(duplicate.related.len(), 1);
+
+    let unused_source = format!(
+        "{prelude}impl<A : Type, B : Type> Witness<Pair<A, A>> {{\nwitness value = true\n}}\n",
+    );
+    let unused = resolve_error(&unused_source);
+    assert_eq!(unused.reason.to_string(), "resolve.unused-type-parameter",);
+    assert_eq!(unused.found.as_deref(), Some("B"));
+
+    let omitted_source =
+        format!("{prelude}impl<A : Type> Witness<Pair<A, B>> {{\nwitness value = true\n}}\n",);
+    let omitted = resolve_error(&omitted_source);
+    assert_eq!(omitted.reason, ResolveReason::UnknownType);
+    assert_eq!(omitted.found.as_deref(), Some("B"));
+}
+
+#[test]
+fn declaration_binder_defaults_and_legacy_order_are_fixed_at_type() {
+    let program = resolve_valid(
+        "type Phantom<F : Type -> Type, A> = Phantom(A)\n\ninterface Witness<Value> {\nwitness : Value -> Bool\n}\n\nlegacy : B -> A -> B\nlegacy left right = left\n\nimpl Witness<(B, A)> {\nwitness value = true\n}\n",
+    );
+
+    let phantom = program
+        .registry()
+        .nominal_parameters(program.registry().nominals()[0].id)
+        .expect("the phantom nominal should retain its parameters");
+    assert_eq!(phantom.len(), 2);
+    assert_eq!(
+        phantom[0].kind,
+        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+    );
+    assert_eq!(phantom[1].kind, Kind::Type);
+
+    let [interface] = program.interfaces() else {
+        panic!("expected one interface");
+    };
+    assert_eq!(interface.parameter.kind, Kind::Type);
+
+    let ResolvedDefinitionKind::Equational(legacy) = &program.definitions()[0].kind else {
+        panic!("expected the legacy equational global");
+    };
+    assert_eq!(
+        legacy
+            .interface
+            .type_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("B", &Kind::Type), ("A", &Kind::Type)],
+    );
+
+    let [implementation] = program.implementations() else {
+        panic!("expected one implementation");
+    };
+    assert_eq!(
+        implementation
+            .head_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("B", &Kind::Type), ("A", &Kind::Type)],
+    );
+}
+
+#[test]
+fn non_type_explicit_kinds_are_retained_on_every_declaration_binder_owner() {
+    let program = resolve_valid(
+        "type Holder<F : Type -> Type> = Holder\n\ninterface Transform<F : Type -> Type> {\ntransform : Holder<F> -> Bool\n}\n\ninterface Observe<A> {\nobserve : A -> Bool\n}\n\nuses<F : Type -> Type> : Holder<F> -> Bool\nuses value = true\n\nimpl<F : Type -> Type> Observe<Holder<F>> {\nobserve value = true\n}\n",
+    );
+    let expected = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+
+    let [nominal_parameter] = program
+        .registry()
+        .nominal_parameters(program.registry().nominals()[0].id)
+        .expect("the nominal should retain its binder")
+    else {
+        panic!("expected one nominal binder");
+    };
+    assert_eq!(nominal_parameter.kind, expected);
+
+    assert_eq!(program.interfaces()[0].parameter.kind, expected);
+
+    let ResolvedDefinitionKind::Equational(global) = &program.definitions()[0].kind else {
+        panic!("expected the kinded global");
+    };
+    let [global_parameter] = global.interface.type_parameters.as_ref() else {
+        panic!("expected one global binder");
+    };
+    assert_eq!(global_parameter.kind, expected);
+
+    let [implementation] = program.implementations() else {
+        panic!("expected one implementation");
+    };
+    let [implementation_parameter] = implementation.head_parameters.as_ref() else {
+        panic!("expected one implementation binder");
+    };
+    assert_eq!(implementation_parameter.kind, expected);
+}
+
+#[test]
 fn data_namespaces_report_stable_resolution_reasons() {
     let cases = [
         (
@@ -631,7 +855,12 @@ fn match_arm_pattern_scope_does_not_leak_to_later_arms() {
 
 fn resolve_error(text: &str) -> ash::resolve::ResolveError {
     with_loaded(text, |loaded| {
-        resolve_module(loaded, &[]).expect_err("the fixture should fail resolution")
+        match resolve_module(loaded, &[]).expect_err("the fixture should fail resolution") {
+            ash::resolve::ResolveModuleError::Resolution(error) => error,
+            ash::resolve::ResolveModuleError::Kind(error) => {
+                panic!("resolution fixture unexpectedly reached kind checking: {error:?}")
+            }
+        }
     })
 }
 

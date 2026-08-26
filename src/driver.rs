@@ -12,11 +12,15 @@ use crate::{
         validate_interface_evidence_with_budget,
     },
     interface::InterfaceConstraintBudget,
+    kind::KindFailure,
     lexer::LexReason,
     module::{LoadGraphError, ModuleId, ModuleRoots, load_module_graph},
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
     pattern::UsefulnessBudget,
-    resolve::{DependencyExports, ResolveError, ResolveReason, resolve_module_with_budget},
+    resolve::{
+        DependencyExports, ResolveError, ResolveModuleError, ResolveReason,
+        resolve_module_with_budget,
+    },
     resolved::ResolvedModuleProgram,
     source::{SourceError, SourceFile, SourceId, Span},
     types::{IterativeTypeOwner, Type, TypeWorkBudget},
@@ -348,6 +352,8 @@ pub enum PipelineFailure {
     Projection(ProjectionError),
     /// Name resolution rejected the source or lost an invariant.
     Resolution(ResolveError),
+    /// Total resolved kind checking rejected the source or lost an invariant.
+    Kind(KindFailure),
     /// Typed elaboration rejected the source or lost an invariant.
     Typing(TypeError),
     /// The entry module violated the local `main` contract.
@@ -371,6 +377,7 @@ impl PipelineFailure {
             }
             Self::Projection(error) => projection_reason(*error).into(),
             Self::Resolution(error) => error.reason.to_string(),
+            Self::Kind(error) => error.reason_code(),
             Self::Typing(TypeError::Source(diagnostic)) => diagnostic.reason.to_string(),
             Self::Typing(TypeError::Interface(diagnostic)) => diagnostic.reason.to_string(),
             Self::Typing(TypeError::Mismatch(_)) => "type.mismatch".into(),
@@ -397,6 +404,7 @@ impl PipelineFailure {
                     | ResolveReason::ConstraintResourceExhausted
                     | ResolveReason::InternalState
             ),
+            Self::Kind(error) => error.is_source_rejection(),
             Self::Typing(
                 TypeError::Source(_) | TypeError::Interface(_) | TypeError::Mismatch(_),
             ) => true,
@@ -418,6 +426,7 @@ impl fmt::Display for PipelineFailure {
             Self::Syntax(_) => "source syntax failure",
             Self::Projection(_) => "surface projection failure",
             Self::Resolution(_) => "name-resolution failure",
+            Self::Kind(_) => "resolved-kind failure",
             Self::Typing(_) => "typed-elaboration failure",
             Self::Entry(_) => "entry-contract failure",
             Self::EvidenceValidation(_) => "interface-evidence validation failure",
@@ -619,7 +628,10 @@ where
             &mut resolution_type_work,
             constraint_work,
         )
-        .map_err(PipelineFailure::Resolution)
+        .map_err(|error| match error {
+            ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
+            ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
+        })
         .map_err(FileFailure::Pipeline)?;
         drop(dependencies);
         let checked_module = check_module_with_budget(

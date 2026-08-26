@@ -48,6 +48,8 @@ pub fn pipeline_failure(failure: &PipelineFailure) -> String {
         PipelineFailure::Syntax(failure) => syntax_failure(failure),
         PipelineFailure::Projection(error) => projection_failure(*error),
         PipelineFailure::Resolution(error) => error.to_string(),
+        PipelineFailure::Kind(crate::kind::KindFailure::Source(error)) => error.to_string(),
+        PipelineFailure::Kind(error) => format!("{}\n{error}", error.reason_code()),
         PipelineFailure::Typing(error @ (TypeError::Source(_) | TypeError::Interface(_))) => {
             error.to_string()
         }

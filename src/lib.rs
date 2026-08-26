@@ -19,6 +19,7 @@ mod evidence_audit;
 pub mod evidence_validation;
 pub mod integer;
 pub mod interface;
+pub mod kind;
 pub mod lexer;
 pub mod module;
 pub mod parser;

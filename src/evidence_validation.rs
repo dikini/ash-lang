@@ -19,10 +19,11 @@ use crate::{
         ImplementationAuthorization, PublicImplementationAuthorization, ResolvedBlock,
         ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
         ResolvedLocalDeclaration, ResolvedModuleGroup, ResolvedModuleProgram, ResolvedOccurrence,
-        ResolvedRegistry, ResolvedTermName,
+        ResolvedRegistry, ResolvedTermName, ResolvedTypeVariable,
+        same_resolved_type_variables_with_charge,
     },
     source::{Origin, Span},
-    types::{IterativeTypeOwner, Type, TypeVariableId, discard_type_iteratively},
+    types::{IterativeTypeOwner, Kind, Type, TypeVariableId, discard_type_iteratively},
 };
 
 /// Stable reason owned by pre-Core interface-evidence validation.
@@ -388,10 +389,15 @@ impl LinkedInterfaceRegistry {
                     .schemes()
                     .get(scheme_index)
                     .ok_or_else(|| unknown(group.span()))?;
+                let variables = copy_kinded_parameter_ids(
+                    &scheme.scheme.type_parameters,
+                    budget,
+                    scheme.origin.primary_span(),
+                )?;
                 validate_requirements(
                     &scheme.scheme,
                     RequirementOwner::Global(scheme.binder),
-                    &scheme.scheme.type_parameters,
+                    &variables,
                     self,
                     program,
                     budget,
@@ -827,15 +833,33 @@ fn validate_group_consistency(
             || token.id != source.id
             || fact.id != source.id
             || fact.spelling != source.spelling
-            || fact.parameter != source.parameter
-            || fact.origin != source.origin
+        {
+            return Err(unknown(source.span));
+        }
+        if !same_binders_charged(
+            std::slice::from_ref(&fact.parameter),
+            std::slice::from_ref(&source.parameter),
+            budget,
+            source.span,
+        )? {
+            return Err(unknown(source.span));
+        }
+        if fact.origin != source.origin
             || fact.span != source.span
             || fact.methods.len() != source.methods.len()
-            || program
-                .registry()
-                .type_variable(fact.parameter.id)
-                .is_none_or(|parameter| parameter != &fact.parameter)
         {
+            return Err(unknown(source.span));
+        }
+        let canonical_parameter = program
+            .registry()
+            .type_variable(fact.parameter.id)
+            .ok_or_else(|| unknown(source.span))?;
+        if !same_binders_charged(
+            std::slice::from_ref(canonical_parameter),
+            std::slice::from_ref(&fact.parameter),
+            budget,
+            source.span,
+        )? {
             return Err(unknown(source.span));
         }
         for method_index in 0..fact.methods.len() {
@@ -927,6 +951,8 @@ fn validate_global_scheme(
             .saturating_add(1),
         span,
     )?;
+    let checked_parameters =
+        copy_kinded_parameter_ids(&checked.scheme.type_parameters, budget, span)?;
     if checked.binder != name.id
         || checked.spelling != name.spelling
         || checked.origin != name.origin
@@ -934,12 +960,12 @@ fn validate_global_scheme(
             .scheme
             .type_parameters
             .iter()
-            .copied()
+            .map(|(parameter, _)| *parameter)
             .eq(parameters.iter().map(|parameter| parameter.id))
         || !requirements_match(
             &checked.scheme.requirements,
             requirements,
-            &checked.scheme.type_parameters,
+            &checked_parameters,
             program,
             budget,
             span,
@@ -950,7 +976,7 @@ fn validate_global_scheme(
     validate_linked_type(
         &checked.scheme.value_type,
         program.registry(),
-        &checked.scheme.type_parameters,
+        &checked_parameters,
         budget,
         span,
     )?;
@@ -1066,8 +1092,13 @@ fn validate_implementation_consistency(
         || body.id() != source.id
         || fact.id != source.id
         || fact.interface != source.interface.id
-        || fact.head_parameters.as_ref() != source.head_parameters.as_ref()
-        || fact.origin != Origin::Source(source.span)
+    {
+        return Err(unknown(span));
+    }
+    if !same_binders_charged(&fact.head_parameters, &source.head_parameters, budget, span)? {
+        return Err(unknown(span));
+    }
+    if fact.origin != Origin::Source(source.span)
         || fact.span != source.span
         || fact.methods.len() != token.methods.len()
         || fact.methods.len()
@@ -1130,7 +1161,12 @@ fn validate_implementation_consistency(
             || group.identity != Some(method.id)
             || group.binder.id != method.binder
             || method.span != group.span
-            || method.scheme.type_parameters.as_ref() != variables.as_slice()
+            || !method
+                .scheme
+                .type_parameters
+                .iter()
+                .map(|(parameter, _)| *parameter)
+                .eq(variables.iter().copied())
             || !requirements_match(
                 &method.scheme.requirements,
                 &source.prerequisites,
@@ -1208,6 +1244,19 @@ fn validate_linked_type(
         }
         Err(_) => Err(unknown(span)),
     }
+}
+
+fn copy_kinded_parameter_ids(
+    parameters: &[(TypeVariableId, Kind)],
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<Vec<TypeVariableId>, EvidenceValidationFailure> {
+    charge(budget, parameters.len(), span)?;
+    let mut ids = Vec::new();
+    ids.try_reserve(parameters.len())
+        .map_err(|_| resource(span))?;
+    ids.extend(parameters.iter().map(|(parameter, _)| *parameter));
+    Ok(ids)
 }
 
 fn same_type_after_single_substitution(
@@ -1410,9 +1459,10 @@ fn validate_definition(
     let scheme = registry
         .scheme(program, binder)
         .ok_or_else(|| unknown(definition.span()))?;
+    let variables = copy_kinded_parameter_ids(&scheme.type_parameters, budget, definition.span())?;
     let scope = EvidenceScope {
         owner: Some(RequirementOwner::Global(binder)),
-        variables: &scheme.type_parameters,
+        variables: &variables,
     };
     match definition.kind() {
         ResolvedDefinitionKind::Equational(global) => {
@@ -2264,6 +2314,16 @@ fn same_type_charged(
     Ok(true)
 }
 
+fn same_binders_charged(
+    left: &[ResolvedTypeVariable],
+    right: &[ResolvedTypeVariable],
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<bool, EvidenceValidationFailure> {
+    same_resolved_type_variables_with_charge(left, right, |work| budget.charge(work))
+        .map_err(|()| resource(span))
+}
+
 fn reserve_type_pairs<'a>(
     pending: &mut Vec<(&'a Type, &'a Type)>,
     additional: usize,
@@ -2667,11 +2727,59 @@ mod tests {
         interface::{EvidenceSelectionBuilder, match_implementation_head},
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
-        resolved::{CheckedModule, ImplementationRoute, ImplementationRouteHop},
-        types::{InferenceVariableId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
+        resolved::{
+            CheckedModule, ImplementationRoute, ImplementationRouteHop, ResolvedTypeVariable,
+        },
+        source::{ByteRange, SourceFile},
+        types::{InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
     };
 
     static FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn fixed_kind_binder_authentication_uses_the_constraint_budget() {
+        // One binder record plus the Arrow and its two Type leaves.
+        const EXACT_WORK: usize = 4;
+        let source = SourceFile::new("constraint-kind-comparison.ash", "F")
+            .expect("the comparison fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the binder range should be ordered"))
+            .expect("the binder range should belong to the fixture");
+        let parameter = || ResolvedTypeVariable {
+            id: TypeVariableId::resolved(ModuleId::new(0), 0),
+            spelling: "F".to_owned(),
+            kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+            origin: Origin::Source(span),
+        };
+        let left = [parameter()];
+        let right = [parameter()];
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            same_binders_charged(&left, &right, &mut short, span)
+                .map_err(|failure| failure.reason()),
+            Err(EvidenceValidationReason::ConstraintResourceExhausted),
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            same_binders_charged(&left, &right, &mut exact, span),
+            Ok(true),
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+
+        let mismatched = [ResolvedTypeVariable {
+            kind: Kind::Type,
+            ..parameter()
+        }];
+        let mut mismatch = InterfaceConstraintBudget::with_limit(2);
+        assert_eq!(
+            same_binders_charged(&left, &mismatched, &mut mismatch, span),
+            Ok(false),
+        );
+        assert_eq!(mismatch.used(), 2);
+    }
 
     struct ValidationFixture(PathBuf);
 
@@ -3339,14 +3447,15 @@ mod tests {
         let selection = abstract_selection(
             first.scheme.requirements[0].id,
             &group.interface_facts()[0],
-            Type::Variable(first.scheme.type_parameters[0]),
+            Type::Variable(first.scheme.type_parameters[0].0),
         );
         let registry =
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
                 .expect("the valid linked registry should authenticate");
+        let variables = [second.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
             owner: Some(RequirementOwner::Global(second.binder)),
-            variables: &second.scheme.type_parameters,
+            variables: &variables,
         };
 
         let failure = validate_selection_in_scope(
@@ -3380,9 +3489,10 @@ mod tests {
         let registry =
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
                 .expect("the valid linked registry should authenticate");
+        let variables = [first.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
             owner: Some(RequirementOwner::Global(first.binder)),
-            variables: &first.scheme.type_parameters,
+            variables: &variables,
         };
 
         let failure = validate_selection_in_scope(
@@ -3605,9 +3715,10 @@ mod tests {
         let [scope_parameter] = shadowed.scheme.type_parameters.as_ref() else {
             panic!("the constrained global should retain one type parameter");
         };
+        let variables = [scope_parameter.0];
         let scope = EvidenceScope {
             owner: Some(RequirementOwner::Global(shadowed.binder)),
-            variables: &shadowed.scheme.type_parameters,
+            variables: &variables,
         };
         let registry =
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
@@ -3619,7 +3730,7 @@ mod tests {
                 wrapped.id,
                 single_substitution(
                     wrapped.head_parameters[0].id,
-                    &Type::Variable(*scope_parameter),
+                    &Type::Variable(scope_parameter.0),
                 ),
                 &[],
                 &wrapped
@@ -3644,7 +3755,7 @@ mod tests {
                 wrapped.id,
                 single_substitution(
                     wrapped.head_parameters[0].id,
-                    &Type::Variable(*scope_parameter),
+                    &Type::Variable(scope_parameter.0),
                 ),
                 &[],
                 &wrapped
@@ -3660,7 +3771,7 @@ mod tests {
                 outer.id,
                 single_substitution(
                     outer.head_parameters[0].id,
-                    &Type::Variable(*scope_parameter),
+                    &Type::Variable(scope_parameter.0),
                 ),
                 &[nested_child],
                 &outer
@@ -3769,9 +3880,10 @@ mod tests {
         let [requirement] = shadowed.scheme.requirements.as_ref() else {
             panic!("the constrained global should retain one abstract requirement");
         };
+        let variables = [shadowed.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
             owner: Some(RequirementOwner::Global(shadowed.binder)),
-            variables: &shadowed.scheme.type_parameters,
+            variables: &variables,
         };
         let registry =
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
@@ -4746,8 +4858,8 @@ mod tests {
         );
         let limit = measured.used();
         assert_eq!(
-            limit, 100,
-            "every retained registry relationship is charged"
+            limit, 104,
+            "every retained registry relationship, binder record, and Kind pair is charged"
         );
 
         assert_eq!(

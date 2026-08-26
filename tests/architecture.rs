@@ -22,7 +22,7 @@ use ash::{
     integer::Integer,
     resolved::BinderId,
     source::{ByteRange, Origin, SourceFile},
-    types::Type,
+    types::{Kind, Type},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,6 +53,7 @@ enum KindRule {
     Scheme,
     DeclaredKind,
     ApplicationStructure,
+    KindStructure,
     CoreInstantiation,
     CarrierRetention,
 }
@@ -65,6 +66,7 @@ enum RequiredKindResult {
     SchemeValue,
     Declared,
     StructuralSubtree,
+    KindSubtree,
     InstantiationArgument,
     PreservedCarrier,
 }
@@ -74,6 +76,7 @@ enum FailureOwner {
     Projection,
     ModuleStaging,
     Resolution,
+    ResolvedKind,
     InterfaceValidation,
     EvidenceSelection,
     EvidenceValidation,
@@ -97,12 +100,14 @@ enum BudgetOwner {
     Evaluation,
     PipelineType,
     Type,
+    Kind,
     PatternCoverage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DisposalOwner {
     TypeTree,
+    KindTree,
     SurfaceTree,
     ResolvedTree,
     SummaryTree,
@@ -208,9 +213,15 @@ define_kind_site_profiles! {
     FieldBorrowedTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, PatternCoverage, PatternCoverage, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageCoreTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, PatternCoverage, PatternCoverage, CoreTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Type, TypeTree),
+    FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Kind, KindTree),
+    FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, KindTree),
+    FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, ResolvedTree),
+    FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, TypeTree),
     FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree => (Field, Owned, Canonical, ApplicationStructure, StructuralSubtree, TypeOperation, Type, TypeTree),
+    FieldCanonicalKindStructureKindSubtreeTypeOperationKindKindTree => (Field, Owned, Canonical, KindStructure, KindSubtree, TypeOperation, Kind, KindTree),
     FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree => (Field, Owned, Checked, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, CheckedTree),
     FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree => (Field, Owned, Checked, CarrierRetention, PreservedCarrier, InterfaceValidation, InterfaceType, CheckedTree),
+    FieldCheckedDeclaredKindDeclaredInterfaceValidationInterfaceTypeCheckedTree => (Field, Owned, Checked, DeclaredKind, Declared, InterfaceValidation, InterfaceType, CheckedTree),
     FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree => (Field, Owned, Checked, InterfaceArgument, InterfaceParameter, InterfaceValidation, InterfaceType, CheckedTree),
     FieldCheckedSchemeSchemeValueInterfaceValidationInterfaceTypeCheckedTree => (Field, Owned, Checked, Scheme, SchemeValue, InterfaceValidation, InterfaceType, CheckedTree),
     FieldCheckedValueTypeValueInterfaceValidationInterfaceTypeCheckedTree => (Field, Owned, Checked, ValueType, Value, InterfaceValidation, InterfaceType, CheckedTree),
@@ -228,6 +239,7 @@ define_kind_site_profiles! {
     FieldRegistryCarrierRetentionPreservedCarrierEvaluationEvaluationRegistryTree => (Field, Owned, Registry, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, RegistryTree),
     FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree => (Field, Owned, Registry, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, RegistryTree),
     FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree => (Field, Owned, Resolved, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, ResolvedTree),
+    FieldResolvedDeclaredKindDeclaredResolutionResolutionTypeResolvedTree => (Field, Owned, Resolved, DeclaredKind, Declared, Resolution, ResolutionType, ResolvedTree),
     FieldResolvedInterfaceArgumentInterfaceParameterResolutionResolutionTypeResolvedTree => (Field, Owned, Resolved, InterfaceArgument, InterfaceParameter, Resolution, ResolutionType, ResolvedTree),
     FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree => (Field, Owned, Resolved, ValueType, Value, Resolution, ResolutionType, ResolvedTree),
     FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree => (Field, Owned, Summary, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, SummaryTree),
@@ -248,7 +260,10 @@ define_kind_site_profiles! {
     FieldTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, EvidenceValidation, EvidenceType, TransientWork),
     FieldTransientCarrierRetentionPreservedCarrierPipelineObservationPipelineTypeObservation => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, PipelineObservation, PipelineType, Observation),
     FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, TransientWork),
+    FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, KindTree),
+    FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, ResolvedTree),
     FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Type, TransientWork),
+    FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork => (Field, Owned, Transient, DeclaredKind, Declared, Elaboration, InferenceType, TransientWork),
     FieldTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, PatternCoverage, PatternCoverage, TransientWork),
     FieldSharedTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTransientWork => (Field, Shared, Transient, CarrierRetention, PreservedCarrier, PatternCoverage, PatternCoverage, TransientWork),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, InterfaceType, TypeTree),
@@ -273,6 +288,11 @@ define_kind_site_profiles! {
     TransientTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState => (Transient, Owned, Transient, CarrierRetention, PreservedCarrier, Evaluation, Evaluation, EvaluatorState),
     TransientTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork => (Transient, Owned, Transient, CarrierRetention, PreservedCarrier, EvidenceSelection, EvidenceType, TransientWork),
     TransientTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork => (Transient, Owned, Transient, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, TransientWork),
+    TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree => (Transient, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Kind, KindTree),
+    TransientBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree => (Transient, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, KindTree),
+    TransientBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree => (Transient, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, ResolvedTree),
+    TransientBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeTypeTree => (Transient, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, TypeTree),
+    TransientTransientCarrierRetentionPreservedCarrierTypeOperationKindTransientWork => (Transient, Owned, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Kind, TransientWork),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -312,10 +332,30 @@ macro_rules! kind_site_for {
     };
 }
 
-const TASK_3_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent only for this phase; explicit per-site kind checks remain Task 4 work";
+const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent only for this phase; total resolved kind checking uses fixed entries until Task 6 supplies OMEGA";
 
 #[rustfmt::skip]
 const KIND_SITES: &[KindSite] = &[
+    kind_site!("src/driver.rs::PipelineFailure.Kind.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize::Task.Sequence.types", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeTypeTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeTypeTree),
+    kind_site!("src/kind.rs::BodyWork.Declaration.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
+    kind_site!("src/kind.rs::BodyWork.Expression.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
+    kind_site!("src/kind.rs::BodyWork.RecursiveMember.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
+    kind_site!("src/kind.rs::InterfaceKindFact.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindEnvironments.delta", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindEnvironments.iota", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindEnvironments.omega", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindEnvironments.xi", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindError.expectation", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindError.found", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindExpectation.Exact.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindExpectation.Function.domain", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindFact.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::KindFailure.Source.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::NominalKindFact.kind", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/resolve.rs::ResolveModuleError.Kind.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/resolve.rs::ResolvedModuleAdmission.parts", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree, Mixed),
     kind_site!("src/core/binding.rs::BindingNode.binder", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/data.rs::$impl_CorePattern::$fn_discard_iteratively::Task.Sequence.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/data.rs::$impl_CorePattern::$fn_discard_iteratively::Task.Visit.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
@@ -523,6 +563,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::LoweredRequirementMethod.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredScheme.core_scheme", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredScheme.requirements", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::LoweredScheme.source_type_parameters", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::LoweredScheme.type_parameters", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredScheme.value_type", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::MatchProgress.expression", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
     kind_site!("src/elaborate.rs::MatchProgress.matrix", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -620,6 +662,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_type::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::CheckedRequirement.argument", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::ConstrainedScheme.requirements", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
+    kind_site!("src/interface.rs::ConstrainedScheme.type_parameters", FieldCheckedDeclaredKindDeclaredInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::ConstrainedScheme.value_type", FieldCheckedValueTypeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::EvidenceNode.Implementation.substitution", FieldBorrowedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::EvidenceNodeData.Implementation.substitution", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
@@ -654,12 +697,15 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/pattern.rs::TypeReplacementMap.0", FieldTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTransientWork),
     kind_site!("src/resolve.rs::$fn_collect_free_type_names::Task.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$fn_collect_free_type_names::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$fn_surface_kind_to_kind::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_type::Task.Application.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_type::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolve.rs::DependencyExports.summary", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Borrowed),
+    kind_site!("src/resolve.rs::PendingImplementation.head_parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::PendingImplementation.prerequisite_only_parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolveTaskBuffer.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::ResolvedConstructorOwnerBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolvedDeclarationBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
@@ -685,6 +731,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::ResolvedDeclarations.implementations", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::ResolvedDeclarations.interfaces", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolve.rs::ResolvedDeclarations.registry", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
+    kind_site!("src/resolve.rs::ResolvedDeclarationParts.$alias", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::ResolvedTypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::Resolver.imported", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_type_with_inference::Task.ApplicationSpine.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
@@ -694,10 +741,12 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::CheckedGlobalScheme.scheme", FieldCheckedSchemeSchemeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationBody.source", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
     kind_site!("src/resolved.rs::CheckedImplementationFact.argument", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
+    kind_site!("src/resolved.rs::CheckedImplementationFact.head_parameters", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationFact.methods", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationFact.prerequisites", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationMethodFact.scheme", FieldCheckedSchemeSchemeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedInterfaceFact.methods", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
+    kind_site!("src/resolved.rs::CheckedInterfaceFact.parameter", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedInterfaceMethodFact.value_type", FieldCheckedValueTypeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedModule.definitions", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
     kind_site!("src/resolved.rs::CheckedModule.exports", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
@@ -716,19 +765,26 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ExportSummary.constructors", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.hidden_constructors", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.hidden_interfaces", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportSummary.hidden_nominals", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.implementations", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.interfaces", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportSummary.nominals", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.terms", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedConstructor.payload", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedGlobal.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportedHiddenType.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportedType.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedConstructorFact.payload", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.constructors", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.globals", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.implementations", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.interfaces", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ImportedFacts.nominals", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedGlobalScheme.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedImplementationFact.fact", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedInterfaceFact.fact", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ImportedNominalFact.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ImportedNominalFactRef.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Borrowed),
     kind_site!("src/resolved.rs::ResolvedApplicationExpr.argument", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedApplicationExpr.function", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedBinaryExpr.left", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
@@ -757,9 +813,12 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedExprKind.Tuple.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedExternalInterface.annotation", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedExternalInterface.requirements", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedExternalInterface.type_parameters", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedFunctionExpr.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedImplementation.argument", FieldResolvedInterfaceArgumentInterfaceParameterResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedImplementation.head_parameters", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedImplementation.method_groups", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedImplementation.prerequisite_only_parameters", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedImplementation.prerequisites", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedImplementationMethodGroup.equations", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedInlineOperationalGlobal.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
@@ -767,8 +826,11 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedInlineOperationalHeader.parameters", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedInlineOperationalHeader.requirements", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedInlineOperationalHeader.result_type", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedInlineOperationalHeader.type_parameters", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedInterfaceDeclaration.methods", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedInterfaceDeclaration.parameter", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedInterfaceMethod.annotation", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedInterfaceMethod.type_parameters", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedLocalDeclaration.Binding.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedLocalDeclaration.Recursive.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedMatchArm.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
@@ -798,8 +860,11 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedRecursiveMember.annotation", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedRecursiveMember.initializer", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedRegistry.constructors", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
+    kind_site!("src/resolved.rs::ResolvedRegistry.nominal_parameters", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
+    kind_site!("src/resolved.rs::ResolvedRegistry.type_variables", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRequirement.argument", FieldResolvedInterfaceArgumentInterfaceParameterResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedType.ty", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedTypeVariable.kind", FieldResolvedDeclaredKindDeclaredResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedTypedPattern.annotation", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
     kind_site!("src/surface.rs::ApplicationExpr.argument", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::ApplicationExpr.function", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
@@ -869,6 +934,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/surface.rs::SurfaceTypeParameter.kind", FieldSurfaceDeclaredKindDeclaredProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceTypedBinder.annotation", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceTypedPattern.annotation", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
+    kind_site!("src/types.rs::Kind.Arrow.0", FieldCanonicalKindStructureKindSubtreeTypeOperationKindKindTree),
+    kind_site!("src/types.rs::Kind.Arrow.1", FieldCanonicalKindStructureKindSubtreeTypeOperationKindKindTree),
     kind_site!("src/types.rs::Type.Application.0", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::Type.Application.1", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::Type.Forall.1", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
@@ -877,12 +944,14 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/types.rs::Type.Tuple.0", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_charge_type_cells::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_charge_type_cells::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_clone_kind_with_budget::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::$fn_clone_type_with_budget::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_clone_type_with_budget::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_discard_type_iteratively::Task.Sequence.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
     kind_site!("src/types.rs::$fn_discard_type_iteratively::Task.Visit.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
     kind_site!("src/types.rs::$fn_hash_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_hash_type::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_render_kind_with_budget::RenderedKind.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::$fn_same_type::Task.Compare.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_same_type::Task.Compare.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_same_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
@@ -893,10 +962,24 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/types.rs::$fn_substitute_type_variables::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_write_kind::Task.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::$fn_write_type::Task.ApplicationSpine.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_write_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_write_type::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::IterativeTypeOwner.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
+    kind_site!("src/resolve.rs::$local.surface_kind_to_kind.rebuilt", TransientTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/types.rs::$local.Kind.drop.work", TransientTransientCarrierRetentionPreservedCarrierTypeOperationKindTransientWork),
+    kind_site!("src/types.rs::$local.arrows_with_budget.retained_domains", TransientTransientCarrierRetentionPreservedCarrierTypeOperationKindTransientWork),
+    kind_site!("src/types.rs::$local.charge_kind_nodes.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/types.rs::$local.clone_kinded_type_parameters_with_budget.cloned", TransientTransientCarrierRetentionPreservedCarrierTypeOperationKindTransientWork),
+    kind_site!("src/types.rs::$local.clone_kind_with_budget.rebuilt", TransientTransientCarrierRetentionPreservedCarrierTypeOperationKindTransientWork),
+    kind_site!("src/types.rs::$local.clone_kind_with_budget.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/types.rs::$local.hash_kind_with_budget.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/types.rs::$local.same_kind_with_charge.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/types.rs::$local.write_kind.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/kind.rs::$local.KindEnvironments.synthesize.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeTypeTree),
+    kind_site!("src/kind.rs::$local.KindEnvironments.synthesize.completed", TransientBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::$local.check_expression_work.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/core/type_ops.rs::TypeAbstractionNode.parameters", KindSiteCoreSchemeSchemeValueCoreAdmissionCoreTypeCoreTree),
     kind_site_for!("src/core/dialect.rs::$kind.ordinary_result", "src/core/dialect.rs::StoredNode.ty", KindSiteCoreValueTypeValueCoreAdmissionCoreTypeCoreTree),
     kind_site_for!("src/core/dialect.rs::$kind.type_abstraction_scheme", "src/core/dialect.rs::StoredNode.ty", KindSiteCoreSchemeSchemeValueCoreAdmissionCoreTypeCoreTree),
@@ -1024,6 +1107,12 @@ const CONTEXTUAL_ROLE_SETS: &[(&str, &[&str])] = &[
 
 #[test]
 fn kind_inventory_is_closed() {
+    fn exhaust_kind_variants(kind: &Kind) {
+        match kind {
+            Kind::Type | Kind::Arrow(_, _) => {}
+        }
+    }
+
     fn exhaust_type_variants(ty: &Type) {
         match ty {
             Type::Int
@@ -1039,6 +1128,7 @@ fn kind_inventory_is_closed() {
         }
     }
 
+    exhaust_kind_variants(&Kind::Type);
     exhaust_type_variants(&Type::Unit);
     let mut names = HashSet::new();
     for site in KIND_SITES {
@@ -1081,6 +1171,7 @@ fn kind_inventory_is_closed() {
                         KindRule::ApplicationStructure,
                         RequiredKindResult::StructuralSubtree
                     )
+                    | (KindRule::KindStructure, RequiredKindResult::KindSubtree)
                     | (
                         KindRule::CoreInstantiation,
                         RequiredKindResult::InstantiationArgument
@@ -1150,7 +1241,7 @@ fn kind_inventory_is_closed() {
             .sum::<usize>(),
         "every contextual kind site must belong to one exact carrier role set",
     );
-    assert!(TASK_3_PHASE_CONSTRAINT.contains("only for this phase"));
+    assert!(TASK_4_PHASE_CONSTRAINT.contains("only for this phase"));
 }
 
 const DRIVER_SOURCE: &str = include_str!("../src/driver.rs");
@@ -1437,6 +1528,7 @@ fn transitive_type_owners(fields: &[ProductionField]) -> BTreeSet<CarrierId> {
     let by_name = declaration_index(fields);
     let mut owners = [
         ("src/types.rs", "Type"),
+        ("src/types.rs", "Kind"),
         ("src/surface.rs", "SurfaceType"),
         ("src/surface.rs", "SurfaceKind"),
     ]
@@ -1597,6 +1689,7 @@ fn transitive_type_retention_sets(fields: &[ProductionField]) -> BTreeMap<Carrie
         fields,
         &[
             ("src/types.rs", "Type"),
+            ("src/types.rs", "Kind"),
             ("src/surface.rs", "SurfaceType"),
             ("src/surface.rs", "SurfaceKind"),
         ],
@@ -3450,6 +3543,60 @@ fn current_source_exposes_only_one_source_pipeline() {
 }
 
 #[test]
+fn resolved_modules_have_one_production_kind_gate_before_construction() {
+    const CONSTRUCTION: [&str; 5] = ["ResolvedModule", ":", ":", "new", "("];
+    const KIND_GATE: [&str; 2] = ["check_resolved_module_with_budget", "("];
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut paths = Vec::new();
+    collect_production_rust_sources(&root, &mut paths);
+    paths.sort();
+    let mut constructors = Vec::new();
+    let mut resolve_tokens = None;
+    for path in paths {
+        let relative = path
+            .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+            .expect("production source belongs to the crate")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let source = fs::read_to_string(&path).expect("production source should be readable");
+        let tokens = production_rust_code_tokens(&source);
+        for (index, window) in tokens.windows(CONSTRUCTION.len()).enumerate() {
+            if window == CONSTRUCTION {
+                constructors.push((relative.clone(), index));
+            }
+        }
+        if relative == "src/resolve.rs" {
+            resolve_tokens = Some(tokens.into_iter().map(str::to_owned).collect::<Vec<_>>());
+        }
+    }
+    assert_eq!(
+        constructors.len(),
+        1,
+        "production ResolvedModule construction must remain a single fail-closed gate: {constructors:?}",
+    );
+    assert_eq!(constructors[0].0, "src/resolve.rs");
+    let tokens = resolve_tokens.expect("resolution production source should be scanned");
+    let kind_gates = tokens
+        .windows(KIND_GATE.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == KIND_GATE).then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kind_gates.len(),
+        1,
+        "resolution must invoke total resolved kind checking exactly once: {kind_gates:?}",
+    );
+    let construction = tokens
+        .windows(CONSTRUCTION.len())
+        .position(|window| window == CONSTRUCTION)
+        .expect("resolution must publish the checked module once");
+    assert!(
+        kind_gates[0] < construction,
+        "resolved kind checking must complete before ResolvedModule construction",
+    );
+}
+
+#[test]
 fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories() {
     for (path, source) in CORE_AND_EVALUATOR_SOURCES {
         for identifier in rust_code_identifiers(source) {
@@ -3509,6 +3656,7 @@ fn recursively_unsafe_backing_fields(
         .collect::<BTreeMap<_, _>>();
     let mut unsafe_carriers = [
         ("src/types.rs", "Type"),
+        ("src/types.rs", "Kind"),
         ("src/source.rs", "Origin"),
         ("src/surface.rs", "SurfaceType"),
         ("src/surface.rs", "SurfaceKind"),

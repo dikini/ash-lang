@@ -15,7 +15,9 @@ use crate::{
     types::{ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
 };
 
-use super::{DependencyExports, ResolveError, ResolveReason, Resolver, resolve_module};
+use super::{
+    DependencyExports, ResolveError, ResolveModuleError, ResolveReason, Resolver, resolve_module,
+};
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -84,7 +86,12 @@ fn resolve_with(
             DependencyExports::new(edge, summary).expect("summary should match its import edge")
         })
         .collect::<Vec<_>>();
-    resolve_module(module, &dependencies)
+    resolve_module(module, &dependencies).map_err(|error| match error {
+        ResolveModuleError::Resolution(error) => error,
+        ResolveModuleError::Kind(error) => {
+            panic!("module resolution fixture unexpectedly reached kind failure: {error:?}")
+        }
+    })
 }
 
 #[test]
@@ -111,6 +118,9 @@ fn reordered_dependency_pairs_are_rejected_before_scope_installation() {
     let error = resolve_module(importer, &dependencies)
         .expect_err("source import order must authenticate dependency pairs");
 
+    let ResolveModuleError::Resolution(error) = error else {
+        panic!("mismatched dependencies should fail during resolution")
+    };
     assert_eq!(error.reason, ResolveReason::InternalState);
 }
 
@@ -1151,7 +1161,9 @@ fn scheme_only_nominal_retention_charges_only_hidden_metadata() {
         .map(|index| ConstructorId::new(nominal, index))
         .collect::<Vec<_>>();
     let origin = Origin::Source(module.surface().span);
-    let mut exact = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(0));
+    // A payload-free hidden nominal retains exactly one source-order record;
+    // its unretained constructor family adds no work.
+    let mut exact = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(1));
 
     exact
         .retain_scheme_nominal_fact(
@@ -1178,9 +1190,12 @@ fn scheme_only_nominal_retention_charges_only_hidden_metadata() {
     let parameter = ResolvedTypeVariable {
         id: TypeVariableId::resolved(module.id(), 0),
         spelling: "A".to_owned(),
+        kind: crate::types::Kind::Type,
         origin: origin.clone(),
     };
-    let mut short = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(0));
+    // One kinded parameter adds one binder record and one Kind node, for
+    // 1 order record + 1 binder record + 1 Kind node = 3.
+    let mut short = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(2));
     let error = short
         .retain_scheme_nominal_fact(
             ImportedNominalFactRef {
@@ -1195,7 +1210,7 @@ fn scheme_only_nominal_retention_charges_only_hidden_metadata() {
             },
             module.surface().span,
         )
-        .expect_err("one retained parameter must consume one hidden-metadata unit");
+        .expect_err("one retained kinded parameter needs the third metadata unit");
 
     assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
 }

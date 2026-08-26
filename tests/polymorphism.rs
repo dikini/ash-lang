@@ -380,20 +380,20 @@ fn unknown_type_variables_are_rejected_at_resolution() {
 }
 
 #[test]
-fn nominal_type_applications_must_be_saturated() {
+fn nominal_constructors_at_value_boundaries_must_end_at_type() {
     assert_eq!(
         reason(
             "type Option<A> =\nNone\n| Some(A)\n\nbad : Option -> Int\nbad _ = 0\n\nmain : Unit -> Int\nmain () = bad None\n"
         ),
-        "resolve.type-argument-count"
+        "kind.expected-type"
     );
 }
 
 #[test]
-fn type_parameters_of_kind_type_cannot_be_applied() {
+fn type_parameters_of_kind_type_are_not_applicable() {
     assert_eq!(
         reason("type Bad<A> =\nBad(A<Int>)\n\nmain : Unit -> Bad<Int>\nmain () = Bad(1)\n"),
-        "resolve.type-kind"
+        "kind.not-applicable"
     );
 }
 

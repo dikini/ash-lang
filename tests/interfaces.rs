@@ -14,7 +14,7 @@ use ash::{
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::CheckedModule,
-    types::Type,
+    types::{Kind, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -188,9 +188,27 @@ fn rejects_interface_method_local_type_variable() {
 }
 
 #[test]
+fn compound_method_local_variable_keeps_interface_failure_ownership() {
+    let error = check_error(
+        "type Pair<Left, Right> = Pair(Left, Right)\n\ninterface Combine<A> {\ncombine : Pair<A, B> -> A\n}\n",
+    );
+
+    assert_eq!(reason(&error), "interface.method-parameter");
+}
+
+#[test]
 fn rejects_undetermined_global_requirement_parameter() {
     let error = check_error(
         "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame : A -> Bool where Equal<B>\nsame value = true\n",
+    );
+
+    assert_eq!(reason(&error), "constraint.undetermined-parameter");
+}
+
+#[test]
+fn explicit_requirement_only_binder_keeps_determination_failure_ownership() {
+    let error = check_error(
+        "type Pair<Left, Right> = Pair(Left, Right)\n\ninterface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame<B : Type, A : Type> : A -> Bool where Equal<Pair<A, B>>\nsame value = true\n",
     );
 
     assert_eq!(reason(&error), "constraint.undetermined-parameter");
@@ -243,9 +261,36 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
         assert_eq!(requirement.id.declaration(), 0);
         assert_eq!(
             requirement.argument(),
-            &Type::Variable(scheme.scheme.type_parameters[0])
+            &Type::Variable(scheme.scheme.type_parameters[0].0)
         );
     }
+}
+
+#[test]
+fn checked_global_scheme_retains_declared_function_kind() {
+    let checked = checked_module(concat!(
+        "type Holder<F : Type -> Type> = Holder\n\n",
+        "uses<F : Type -> Type> : Holder<F> -> Bool\n",
+        "uses value = true\n",
+    ));
+    let [checked] = checked.schemes() else {
+        panic!("the fixture should retain one checked global scheme");
+    };
+    let [(parameter, kind)] = checked.scheme.type_parameters.as_ref() else {
+        panic!("the checked scheme should retain one canonical binder");
+    };
+
+    assert_eq!(
+        kind,
+        &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+    );
+    let Type::Function(domain, _) = checked.scheme.value_type() else {
+        panic!("the checked global should remain callable");
+    };
+    let Type::Application(_, argument) = domain.as_ref() else {
+        panic!("the Holder application should remain canonical");
+    };
+    assert_eq!(argument.as_ref(), &Type::Variable(*parameter));
 }
 
 #[test]

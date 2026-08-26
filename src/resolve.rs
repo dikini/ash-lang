@@ -21,9 +21,10 @@ use crate::{
         CheckedInterfaceMethodFact, DirectDependencyRoute, ExportSummary, ExportedConstructor,
         ExportedGlobal, ExportedType, ExportedTypeAccess, ImplementationAuthorization,
         ImplementationRouteRank, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
-        ImportedNominalFact, ImportedTypeAccess, ResolvedApplicationExpr, ResolvedBinaryExpr,
-        ResolvedBinding, ResolvedBlock, ResolvedConstructor, ResolvedConstructorOccurrence,
-        ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
+        ImportedNominalFact, ImportedNominalMergeFailure, ImportedTypeAccess,
+        ResolvedApplicationExpr, ResolvedBinaryExpr, ResolvedBinding, ResolvedBlock,
+        ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
+        ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
         ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
         ResolvedFunctionExpr, ResolvedImplementation, ResolvedImplementationMethodGroup,
         ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
@@ -33,24 +34,26 @@ use crate::{
         ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry,
         ResolvedRequirement, ResolvedTermName, ResolvedType, ResolvedTypeProvenance,
         ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern, WithheldExport,
-        WithheldExportKind, WithheldNamespace, discard_resolved_definition_iteratively,
-        discard_resolved_equation_iteratively, discard_resolved_expression_iteratively,
-        discard_resolved_implementation_iteratively, discard_resolved_interface_iteratively,
-        discard_resolved_local_declaration_iteratively, discard_resolved_pattern_iteratively,
-        discard_resolved_requirement,
+        WithheldExportKind, WithheldNamespace, clone_resolved_type_variable_with_budget,
+        discard_resolved_definition_iteratively, discard_resolved_equation_iteratively,
+        discard_resolved_expression_iteratively, discard_resolved_implementation_iteratively,
+        discard_resolved_interface_iteratively, discard_resolved_local_declaration_iteratively,
+        discard_resolved_pattern_iteratively, discard_resolved_requirement,
     },
     source::{Origin, discard_origin_iteratively},
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDeclarationIndex, SurfaceDefinition,
         SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceImplementation,
-        SurfaceImportItem, SurfaceImportSelection, SurfaceInterfaceDeclaration,
-        SurfaceLocalDeclaration, SurfaceModule, SurfacePattern, SurfacePatternKind,
-        SurfaceRecursiveGroup, SurfaceReference, SurfaceRequirement, SurfaceType,
-        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeVisibility,
+        SurfaceImportItem, SurfaceImportSelection, SurfaceInterfaceDeclaration, SurfaceKind,
+        SurfaceKindKind, SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfacePattern,
+        SurfacePatternKind, SurfaceRecursiveGroup, SurfaceReference, SurfaceRequirement,
+        SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter,
+        SurfaceTypeVisibility,
     },
     types::{
-        ConstructorId, IterativeTypeOwner, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
-        charge_type_cells, clone_type_with_budget, discard_type_iteratively,
+        ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
+        TypeWorkBudget, charge_type_cells, clone_type_with_budget, discard_type_iteratively,
+        same_kind_with_charge,
     },
 };
 
@@ -472,11 +475,11 @@ pub enum ResolveReason {
     OpaqueConstructor,
     /// A declaration repeats one type-parameter spelling.
     DuplicateTypeParameter,
+    /// An explicit declaration type parameter has no header occurrence.
+    UnusedTypeParameter,
     /// A source type occurrence names no declaration.
     UnknownType,
-    /// A nominal type constructor has the wrong number of arguments.
-    TypeArgumentCount,
-    /// A type of kind `Type` was used as a type constructor.
+    /// An interface identity was used where an ordinary value type is required.
     TypeKind,
     /// An interface position names no interface declaration.
     UnknownInterface,
@@ -511,8 +514,8 @@ impl fmt::Display for ResolveReason {
             Self::ImportConflict => "resolve.import-conflict",
             Self::OpaqueConstructor => "resolve.opaque-constructor",
             Self::DuplicateTypeParameter => "resolve.duplicate-type-parameter",
+            Self::UnusedTypeParameter => "resolve.unused-type-parameter",
             Self::UnknownType => "resolve.unknown-type",
-            Self::TypeArgumentCount => "resolve.type-argument-count",
             Self::TypeKind => "resolve.type-kind",
             Self::UnknownInterface => "resolve.unknown-interface",
             Self::InterfaceKind => "resolve.interface-kind",
@@ -567,6 +570,26 @@ impl fmt::Display for ResolveError {
 
 impl std::error::Error for ResolveError {}
 
+/// A failure from the complete resolved-module pipeline.
+#[derive(Debug)]
+pub enum ResolveModuleError {
+    /// Name and identity resolution rejected the source or lost an invariant.
+    Resolution(ResolveError),
+    /// Total resolved kind checking rejected the source or lost an invariant.
+    Kind(crate::kind::KindFailure),
+}
+
+impl fmt::Display for ResolveModuleError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resolution(error) => error.fmt(formatter),
+            Self::Kind(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ResolveModuleError {}
+
 /// One source import edge paired with its checked dependency summary.
 #[derive(Clone, Copy, Debug)]
 pub struct DependencyExports<'a> {
@@ -608,12 +631,12 @@ impl std::error::Error for DependencyExportMismatch {}
 ///
 /// # Errors
 ///
-/// Returns a structured resolution failure for invalid import scopes, local
-/// declarations, or source occurrences.
+/// Returns either a structured name/identity-resolution failure or a resolved
+/// kind-stage failure. A successful result has passed both stages.
 pub fn resolve_module(
     loaded: &LoadedModule,
     dependencies: &[DependencyExports<'_>],
-) -> Result<ResolvedModule, ResolveError> {
+) -> Result<ResolvedModule, ResolveModuleError> {
     let mut type_work = TypeWorkBudget::default();
     let mut constraint_work = InterfaceConstraintBudget::default();
     resolve_module_with_budget(loaded, dependencies, &mut type_work, &mut constraint_work)
@@ -625,7 +648,31 @@ pub(crate) fn resolve_module_with_budget(
     dependencies: &[DependencyExports<'_>],
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut InterfaceConstraintBudget,
-) -> Result<ResolvedModule, ResolveError> {
+) -> Result<ResolvedModule, ResolveModuleError> {
+    let admission =
+        resolve_module_names_with_budget(loaded, dependencies, type_work, constraint_work)
+            .map_err(ResolveModuleError::Resolution)?;
+    crate::kind::check_resolved_module_with_budget(
+        &admission.parts,
+        &admission.constructor_payload_provenance,
+        type_work,
+    )
+    .map_err(ResolveModuleError::Kind)?;
+    Ok(ResolvedModule::new(admission.parts))
+}
+
+struct ResolvedModuleAdmission {
+    parts: ResolvedModuleParts,
+    constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
+}
+
+/// Performs name and identity resolution without publishing unchecked output.
+fn resolve_module_names_with_budget(
+    loaded: &LoadedModule,
+    dependencies: &[DependencyExports<'_>],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<ResolvedModuleAdmission, ResolveError> {
     let module = loaded.id();
     let surface = loaded.surface();
     reject_duplicate_module_aliases(surface)?;
@@ -689,42 +736,69 @@ pub(crate) fn resolve_module_with_budget(
             std::mem::take(&mut resolver.public_import_candidate),
             &mut resolver.type_work,
         )?;
-        let (registry, interfaces, implementations, definitions) = declarations.into_parts();
-        let declaration_order = surface
-            .declaration_order
-            .iter()
-            .copied()
-            .map(|declaration| match declaration {
-                SurfaceDeclarationIndex::Type(index) => {
-                    crate::resolved::ResolvedDeclarationIndex::Type(index)
-                }
-                SurfaceDeclarationIndex::Interface(index) => {
-                    crate::resolved::ResolvedDeclarationIndex::Interface(index)
-                }
-                SurfaceDeclarationIndex::Global(index) => {
-                    crate::resolved::ResolvedDeclarationIndex::Global(index)
-                }
-                SurfaceDeclarationIndex::Implementation(index) => {
-                    crate::resolved::ResolvedDeclarationIndex::Implementation(index)
-                }
-            })
-            .collect();
-        Ok(ResolvedModule::new(ResolvedModuleParts {
-            module,
-            registry,
-            imported,
-            direct_dependencies,
-            declaration_order,
-            interfaces,
-            implementations,
-            definitions,
-            export_candidate,
-            span: surface.span,
-        }))
+        let declaration_order = retain_declaration_order(
+            &surface.declaration_order,
+            surface.span,
+            &mut resolver.type_work,
+        )?;
+        let (registry, constructor_payload_provenance, interfaces, implementations, definitions) =
+            declarations.into_parts();
+        Ok(ResolvedModuleAdmission {
+            parts: ResolvedModuleParts {
+                module,
+                registry,
+                imported,
+                direct_dependencies,
+                declaration_order,
+                interfaces,
+                implementations,
+                definitions,
+                export_candidate,
+                span: surface.span,
+            },
+            constructor_payload_provenance,
+        })
     })();
     *type_work = std::mem::take(&mut resolver.type_work);
     *constraint_work = std::mem::take(&mut resolver.constraint_work);
     result
+}
+
+fn retain_declaration_order(
+    source: &[SurfaceDeclarationIndex],
+    span: crate::source::Span,
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<crate::resolved::ResolvedDeclarationIndex>, ResolveError> {
+    budget.charge(source.len()).map_err(|()| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "resolved declaration-order retention exceeded its type-work budget",
+        )
+    })?;
+    let mut retained = Vec::new();
+    retained.try_reserve(source.len()).map_err(|_| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "resolved declaration-order retention could not reserve storage",
+        )
+    })?;
+    retained.extend(source.iter().map(|declaration| match *declaration {
+        SurfaceDeclarationIndex::Type(index) => {
+            crate::resolved::ResolvedDeclarationIndex::Type(index)
+        }
+        SurfaceDeclarationIndex::Interface(index) => {
+            crate::resolved::ResolvedDeclarationIndex::Interface(index)
+        }
+        SurfaceDeclarationIndex::Global(index) => {
+            crate::resolved::ResolvedDeclarationIndex::Global(index)
+        }
+        SurfaceDeclarationIndex::Implementation(index) => {
+            crate::resolved::ResolvedDeclarationIndex::Implementation(index)
+        }
+    }));
+    Ok(retained)
 }
 
 fn reject_duplicate_module_aliases(surface: &SurfaceModule) -> Result<(), ResolveError> {
@@ -1055,7 +1129,7 @@ struct Resolver {
     imported: ImportedFacts,
     implementation_route_ranks: HashMap<ImplId, ImplementationRouteRank>,
     public_implementation_route_ranks: HashMap<ImplId, ImplementationRouteRank>,
-    type_scopes: Vec<HashMap<String, ResolvedTypeVariable>>,
+    type_scopes: Vec<HashMap<String, TypeVariableId>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     type_work: TypeWorkBudget,
     constraint_work: InterfaceConstraintBudget,
@@ -1104,27 +1178,36 @@ struct PendingImplementationMethodGroup {
 
 struct ResolvedDeclarations {
     registry: Arc<ResolvedRegistry>,
+    constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
     interfaces: Vec<ResolvedInterfaceDeclaration>,
     implementations: Vec<ResolvedImplementation>,
     definitions: Vec<ResolvedDefinition>,
 }
 
+type ResolvedDeclarationParts = (
+    Arc<ResolvedRegistry>,
+    Vec<Vec<ConstructorPayloadProvenance>>,
+    Vec<ResolvedInterfaceDeclaration>,
+    Vec<ResolvedImplementation>,
+    Vec<ResolvedDefinition>,
+);
+
 impl ResolvedDeclarations {
-    fn into_parts(
-        mut self,
-    ) -> (
-        Arc<ResolvedRegistry>,
-        Vec<ResolvedInterfaceDeclaration>,
-        Vec<ResolvedImplementation>,
-        Vec<ResolvedDefinition>,
-    ) {
+    fn into_parts(mut self) -> ResolvedDeclarationParts {
         (
             std::mem::take(&mut self.registry),
+            std::mem::take(&mut self.constructor_payload_provenance),
             std::mem::take(&mut self.interfaces),
             std::mem::take(&mut self.implementations),
             std::mem::take(&mut self.definitions),
         )
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct ConstructorPayloadProvenance {
+    pub(crate) constructor: ConstructorId,
+    pub(crate) fields: Vec<ResolvedTypeProvenance>,
 }
 
 impl Drop for ResolvedDeclarations {
@@ -1171,7 +1254,6 @@ struct WithheldImport {
 #[derive(Clone, Copy, Debug)]
 struct ImportedNominalName {
     id: NominalTypeId,
-    parameter_count: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1460,34 +1542,46 @@ impl Resolver {
         let mut retained_type_variables = Vec::new();
         for (declaration, (id, method_ids)) in declarations.iter().zip(identities) {
             let parameter = self.allocate_type_variable(
-                &declaration.parameter.name.text,
-                declaration.parameter.name.span,
+                &declaration.parameter.name,
+                declaration.parameter.kind.as_ref(),
             )?;
-            retained_type_variables.push(parameter.clone());
+            retained_type_variables.push(self.clone_type_variable_for_retention(
+                &parameter,
+                declaration.parameter.name.span,
+                "interface parameter retention exceeded its type-work budget",
+            )?);
             let mut methods =
                 ResolvedInterfaceMethodBuffer(Vec::with_capacity(declaration.methods.len()));
             for (method, method_id) in declaration.methods.iter().zip(method_ids) {
                 let mut names = Vec::new();
                 let mut seen = HashSet::from([declaration.parameter.name.text.as_str()]);
+                let declared = HashSet::from([declaration.parameter.name.text.as_str()]);
                 collect_free_type_names(
                     &method.annotation,
                     &self.type_names,
                     &self.interface_names,
+                    &declared,
                     &mut seen,
                     &mut names,
                     &mut self.type_work,
                 )?;
                 let type_parameters = names
                     .into_iter()
-                    .map(|name| self.allocate_type_variable(&name.text, name.span))
+                    .map(|name| self.allocate_type_variable(&name, None))
                     .collect::<Result<Vec<_>, _>>()?;
-                retained_type_variables.extend(type_parameters.iter().cloned());
+                for type_parameter in &type_parameters {
+                    retained_type_variables.push(self.clone_type_variable_for_retention(
+                        type_parameter,
+                        method.span,
+                        "interface method parameter retention exceeded its type-work budget",
+                    )?);
+                }
                 self.type_scopes.push(
-                    std::iter::once((parameter.spelling.clone(), parameter.clone()))
+                    std::iter::once((parameter.spelling.clone(), parameter.id))
                         .chain(
                             type_parameters
                                 .iter()
-                                .map(|parameter| (parameter.spelling.clone(), parameter.clone())),
+                                .map(|parameter| (parameter.spelling.clone(), parameter.id)),
                         )
                         .collect(),
                 );
@@ -1532,20 +1626,23 @@ impl Resolver {
             })?;
             let id = ImplId::new(self.module, index);
 
+            let declared =
+                validate_explicit_type_parameters(implementation.type_parameters.as_deref())?;
             let mut seen = HashSet::new();
             let mut head_names = Vec::new();
             collect_free_type_names(
                 &implementation.argument,
                 &self.type_names,
                 &self.interface_names,
+                &declared,
                 &mut seen,
                 &mut head_names,
                 &mut self.type_work,
             )?;
-            let head_parameters = head_names
-                .into_iter()
-                .map(|name| self.allocate_type_variable(&name.text, name.span))
-                .collect::<Result<Vec<_>, _>>()?;
+            let head_parameters = self.allocate_declaration_type_parameters(
+                implementation.type_parameters.as_deref(),
+                &head_names,
+            )?;
 
             let mut prerequisite_only_names = Vec::new();
             for prerequisite in &implementation.prerequisites {
@@ -1553,6 +1650,7 @@ impl Resolver {
                     &prerequisite.argument,
                     &self.type_names,
                     &self.interface_names,
+                    &declared,
                     &mut seen,
                     &mut prerequisite_only_names,
                     &mut self.type_work,
@@ -1560,10 +1658,15 @@ impl Resolver {
             }
             let prerequisite_only_parameters = prerequisite_only_names
                 .into_iter()
-                .map(|name| self.allocate_type_variable(&name.text, name.span))
+                .map(|name| self.allocate_type_variable(&name, None))
                 .collect::<Result<Vec<_>, _>>()?;
-            retained_type_variables.extend(head_parameters.iter().cloned());
-            retained_type_variables.extend(prerequisite_only_parameters.iter().cloned());
+            for parameter in head_parameters.iter().chain(&prerequisite_only_parameters) {
+                retained_type_variables.push(self.clone_type_variable_for_retention(
+                    parameter,
+                    implementation.span,
+                    "implementation parameter retention exceeded its type-work budget",
+                )?);
+            }
 
             let mut method_groups = Vec::new();
             let mut start = 0;
@@ -2040,13 +2143,9 @@ impl Resolver {
         nominals.extend(summary.nominals());
         nominals.sort_unstable_by_key(|(spelling, _)| *spelling);
         for (spelling, exported) in nominals {
-            namespaces.nominals.insert(
-                spelling.to_owned(),
-                ImportedNominalName {
-                    id: exported.id,
-                    parameter_count: exported.parameter_count,
-                },
-            );
+            namespaces
+                .nominals
+                .insert(spelling.to_owned(), ImportedNominalName { id: exported.id });
             self.retain_imported_nominal(exported, summary, Some(spelling), import_span)?;
         }
 
@@ -2236,11 +2335,16 @@ impl Resolver {
                 span: method.span,
             });
         }
+        let parameter = self.clone_type_variable_for_retention(
+            &exported.parameter,
+            span,
+            "imported interface parameter exceeded its type-work budget",
+        )?;
         self.imported.insert_interface(
             CheckedInterfaceFact {
                 id: exported.id,
                 spelling: exported.spelling.clone(),
-                parameter: exported.parameter.clone(),
+                parameter,
                 methods: methods.into_boxed_slice(),
                 origin: exported.origin.clone(),
                 span: exported.span,
@@ -2385,12 +2489,7 @@ impl Resolver {
         self.retain_type_nominals(&fact.argument, summary, span)?;
 
         self.type_work
-            .charge(
-                fact.head_parameters
-                    .len()
-                    .saturating_add(fact.prerequisites.len())
-                    .saturating_add(fact.methods.len()),
-            )
+            .charge(fact.prerequisites.len().saturating_add(fact.methods.len()))
             .map_err(|()| {
                 error(
                     ResolveReason::TypeResourceExhausted,
@@ -2453,7 +2552,13 @@ impl Resolver {
                     "imported implementation parameters exceeded their work budget",
                 )
             })?;
-        head_parameters.extend(fact.head_parameters.iter().cloned());
+        for parameter in &fact.head_parameters {
+            head_parameters.push(self.clone_type_variable_for_retention(
+                parameter,
+                span,
+                "imported implementation parameters exceeded their type-work budget",
+            )?);
+        }
         let mut methods = Vec::new();
         methods.try_reserve(fact.methods.len()).map_err(|_| {
             error(
@@ -2484,13 +2589,27 @@ impl Resolver {
                 && method.method.interface() == fact.interface
                 && usize::try_from(method.method.declaration()) == Ok(index)
                 && method.binder.module() == Some(fact.id.module())
-                && method.scheme.type_parameters.len() == fact.head_parameters.len()
-                && method
-                    .scheme
-                    .type_parameters
-                    .iter()
-                    .copied()
-                    .eq(fact.head_parameters.iter().map(|parameter| parameter.id))
+                && method.scheme.type_parameters.len() == fact.head_parameters.len();
+            if !method_identity_is_valid {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an implementation summary contains an unauthenticated method scheme",
+                ));
+            }
+            let parameters_match = same_kinded_parameters_with_constraint_budget(
+                &method.scheme.type_parameters,
+                &fact.head_parameters,
+                &mut self.constraint_work,
+            )
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported implementation method binder authentication exceeded its work budget",
+                )
+            })?;
+            let method_identity_is_valid = parameters_match
                 && method.scheme.requirements.len() == fact.prerequisites.len()
                 && method
                     .scheme
@@ -2829,11 +2948,22 @@ impl Resolver {
                     "imported type retention exceeded its work budget",
                 )
             })?;
-        self.imported.insert_global(ImportedGlobalScheme {
-            binder: exported.binder,
-            scheme,
-            origin: exported.origin.clone(),
-        });
+        self.imported
+            .insert_global(
+                ImportedGlobalScheme {
+                    binder: exported.binder,
+                    scheme,
+                    origin: exported.origin.clone(),
+                },
+                &mut self.type_work,
+            )
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported global order retention exceeded its type-work budget",
+                )
+            })?;
         self.global_requirement_counts
             .insert(exported.binder, exported.scheme.requirements.len());
         self.retain_scheme_nominals(&exported.scheme, summary, span)?;
@@ -2864,6 +2994,7 @@ impl Resolver {
             Sequence(std::slice::Iter<'a, Type>),
         }
 
+        let type_work_start = self.type_work.used();
         charge_type_cells(scheme, &mut self.type_work).map_err(|()| {
             error(
                 ResolveReason::TypeResourceExhausted,
@@ -2871,8 +3002,24 @@ impl Resolver {
                 "imported nominal retention exceeded its work budget",
             )
         })?;
-        let mut pending = vec![Task::Type(scheme)];
-        let mut seen = HashSet::new();
+        let type_cells = self.type_work.used().saturating_sub(type_work_start);
+        let mut pending = Vec::new();
+        pending.try_reserve(type_cells).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported nominal traversal could not reserve work storage",
+            )
+        })?;
+        pending.push(Task::Type(scheme));
+        let mut seen = Vec::new();
+        seen.try_reserve(type_cells).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported nominal ordering could not reserve storage",
+            )
+        })?;
         while let Some(task) = pending.pop() {
             let Task::Type(ty) = task else {
                 let Task::Sequence(mut remaining) = task else {
@@ -2886,7 +3033,30 @@ impl Resolver {
             };
             match ty {
                 Type::Nominal(id) => {
-                    seen.insert(*id);
+                    let mut already_seen = false;
+                    for retained in &seen {
+                        self.type_work.charge(1).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "imported nominal membership exceeded its type-work budget",
+                            )
+                        })?;
+                        if retained == id {
+                            already_seen = true;
+                            break;
+                        }
+                    }
+                    if !already_seen {
+                        self.type_work.charge(1).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "imported nominal ordering exceeded its type-work budget",
+                            )
+                        })?;
+                        seen.push(*id);
+                    }
                 }
                 Type::Application(function, argument) => {
                     pending.push(Task::Type(argument));
@@ -2919,25 +3089,27 @@ impl Resolver {
         exported: crate::resolved::ImportedNominalFactRef<'_>,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
-        self.charge_imported_nominal_metadata(exported.parameters.len(), 0, span)?;
+        self.charge_imported_nominal_metadata(0, span)?;
+        let parameters = self.clone_type_variables_for_retention(
+            exported.parameters,
+            span,
+            "imported nominal parameters exceeded their type-work budget",
+        )?;
         self.imported
-            .merge_nominal(ImportedNominalFact {
-                id: exported.id,
-                parameter_count: exported.parameter_count,
-                parameters: exported.parameters.to_vec().into_boxed_slice(),
-                constructors: Vec::new().into_boxed_slice(),
-                access: ImportedTypeAccess::Hidden,
-                display_spelling: exported.display_spelling.map(str::to_owned),
-                display_is_private: exported.display_is_private,
-                origin: exported.origin.clone(),
-            })
-            .map_err(|_| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "imported routes disagree about nominal metadata",
-                )
-            })
+            .merge_nominal(
+                ImportedNominalFact {
+                    id: exported.id,
+                    parameter_count: exported.parameter_count,
+                    parameters,
+                    constructors: Vec::new().into_boxed_slice(),
+                    access: ImportedTypeAccess::Hidden,
+                    display_spelling: exported.display_spelling.map(str::to_owned),
+                    display_is_private: exported.display_is_private,
+                    origin: exported.origin.clone(),
+                },
+                &mut self.type_work,
+            )
+            .map_err(|failure| imported_nominal_merge_error(failure, span))
     }
 
     fn retain_imported_nominal_fact(
@@ -2945,29 +3117,27 @@ impl Resolver {
         exported: crate::resolved::ImportedNominalFactRef<'_>,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
-        self.charge_imported_nominal_metadata(
-            exported.parameters.len(),
-            exported.constructors.len(),
+        self.charge_imported_nominal_metadata(exported.constructors.len(), span)?;
+        let parameters = self.clone_type_variables_for_retention(
+            exported.parameters,
             span,
+            "imported nominal parameters exceeded their type-work budget",
         )?;
         self.imported
-            .merge_nominal(ImportedNominalFact {
-                id: exported.id,
-                parameter_count: exported.parameter_count,
-                parameters: exported.parameters.to_vec().into_boxed_slice(),
-                constructors: exported.constructors.to_vec().into_boxed_slice(),
-                access: exported.access,
-                display_spelling: exported.display_spelling.map(str::to_owned),
-                display_is_private: exported.display_is_private,
-                origin: exported.origin.clone(),
-            })
-            .map_err(|_| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "imported routes disagree about nominal metadata",
-                )
-            })
+            .merge_nominal(
+                ImportedNominalFact {
+                    id: exported.id,
+                    parameter_count: exported.parameter_count,
+                    parameters,
+                    constructors: exported.constructors.to_vec().into_boxed_slice(),
+                    access: exported.access,
+                    display_spelling: exported.display_spelling.map(str::to_owned),
+                    display_is_private: exported.display_is_private,
+                    origin: exported.origin.clone(),
+                },
+                &mut self.type_work,
+            )
+            .map_err(|failure| imported_nominal_merge_error(failure, span))
     }
 
     fn retain_imported_nominal(
@@ -2977,29 +3147,27 @@ impl Resolver {
         display_spelling: Option<&str>,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
-        self.charge_imported_nominal_metadata(
-            exported.parameters.len(),
-            exported.constructors.len(),
+        self.charge_imported_nominal_metadata(exported.constructors.len(), span)?;
+        let parameters = self.clone_type_variables_for_retention(
+            &exported.parameters,
             span,
+            "imported nominal parameters exceeded their type-work budget",
         )?;
         self.imported
-            .merge_nominal(ImportedNominalFact {
-                id: exported.id,
-                parameter_count: exported.parameter_count,
-                parameters: exported.parameters.to_vec().into_boxed_slice(),
-                constructors: exported.constructors.to_vec().into_boxed_slice(),
-                access: exported.access.into(),
-                display_spelling: display_spelling.map(str::to_owned),
-                display_is_private: false,
-                origin: exported.origin.clone(),
-            })
-            .map_err(|_| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "imported routes disagree about nominal metadata",
-                )
-            })?;
+            .merge_nominal(
+                ImportedNominalFact {
+                    id: exported.id,
+                    parameter_count: exported.parameter_count,
+                    parameters,
+                    constructors: exported.constructors.to_vec().into_boxed_slice(),
+                    access: exported.access.into(),
+                    display_spelling: display_spelling.map(str::to_owned),
+                    display_is_private: false,
+                    origin: exported.origin.clone(),
+                },
+                &mut self.type_work,
+            )
+            .map_err(|failure| imported_nominal_merge_error(failure, span))?;
         for constructor in &exported.constructors {
             let constructor = summary.constructor_by_id(*constructor).ok_or_else(|| {
                 error(
@@ -3015,19 +3183,54 @@ impl Resolver {
 
     fn charge_imported_nominal_metadata(
         &mut self,
-        parameter_count: usize,
         constructor_count: usize,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
-        self.type_work
-            .charge(parameter_count.saturating_add(constructor_count))
-            .map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    span,
-                    "imported nominal metadata retention exceeded its work budget",
-                )
+        self.type_work.charge(constructor_count).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported nominal metadata retention exceeded its work budget",
+            )
+        })
+    }
+
+    fn clone_type_variables_for_retention(
+        &mut self,
+        parameters: &[ResolvedTypeVariable],
+        span: crate::source::Span,
+        message: &'static str,
+    ) -> Result<Box<[ResolvedTypeVariable]>, ResolveError> {
+        let mut cloned = Vec::new();
+        cloned
+            .try_reserve(parameters.len())
+            .map_err(|_| error(ResolveReason::TypeResourceExhausted, span, message))?;
+        for parameter in parameters {
+            cloned.push(self.clone_type_variable_for_retention(parameter, span, message)?);
+        }
+        Ok(cloned.into_boxed_slice())
+    }
+
+    fn clone_global_type_parameters_for_registry(
+        &mut self,
+        parameters: &[Vec<ResolvedTypeVariable>],
+        span: crate::source::Span,
+    ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
+        const MESSAGE: &str = "global type-parameter registry retention exceeded its work budget";
+        let retained_count = parameters
+            .iter()
+            .try_fold(0_usize, |count, parameters| {
+                count.checked_add(parameters.len())
             })
+            .ok_or_else(|| error(ResolveReason::TypeResourceExhausted, span, MESSAGE))?;
+        let mut retained = Vec::new();
+        retained
+            .try_reserve(retained_count)
+            .map_err(|_| error(ResolveReason::TypeResourceExhausted, span, MESSAGE))?;
+        for parameter in parameters.iter().flatten() {
+            retained.push(self.clone_type_variable_for_retention(parameter, span, MESSAGE)?);
+        }
+        Ok(retained)
     }
 
     fn retain_imported_constructor(
@@ -3176,17 +3379,7 @@ impl Resolver {
             diagnostic.found = Some(name.text.clone());
             ResolveError::from(diagnostic)
         })?;
-        let parameter_count = self.nominal_parameter_count(id).ok_or_else(|| {
-            error(
-                ResolveReason::InternalState,
-                name.span,
-                "the resolver lost nominal parameter metadata",
-            )
-        })?;
-        Ok(ImportedNominalName {
-            id,
-            parameter_count,
-        })
+        Ok(ImportedNominalName { id })
     }
 
     fn interface_reference(
@@ -3431,7 +3624,8 @@ impl Resolver {
         &mut self,
         surface: &SurfaceModule,
     ) -> Result<ResolvedDeclarations, ResolveError> {
-        let registry = self.resolve_registry(&surface.type_declarations)?;
+        let (registry, constructor_payload_provenance) =
+            self.resolve_registry(&surface.type_declarations)?;
         let (interfaces, interface_type_parameters) =
             self.resolve_interface_declarations(&surface.interfaces)?;
         let interfaces = ResolvedInterfaceBuffer(interfaces);
@@ -3442,11 +3636,13 @@ impl Resolver {
         }
         let (mut pending_implementations, implementation_type_parameters) =
             self.prepare_implementations(&surface.implementations)?;
+        let global_registry_type_parameters =
+            self.clone_global_type_parameters_for_registry(&global_type_parameters, surface.span)?;
         let registry = Arc::new(
             registry.with_additional_type_variables(
                 interface_type_parameters
                     .into_iter()
-                    .chain(global_type_parameters.iter().flatten().cloned())
+                    .chain(global_registry_type_parameters)
                     .chain(implementation_type_parameters),
             ),
         );
@@ -3530,7 +3726,7 @@ impl Resolver {
             self.type_scopes.push(
                 type_parameters
                     .iter()
-                    .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
+                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
                     .collect(),
             );
             let kind = (|| -> Result<ResolvedDefinitionKind, ResolveError> {
@@ -3582,7 +3778,7 @@ impl Resolver {
                                 name: global.clone(),
                                 annotation: annotation.into_inner(),
                                 requirements: requirements.into_boxed_slice(),
-                                type_parameters: type_parameters.clone().into_boxed_slice(),
+                                type_parameters: type_parameters.into_boxed_slice(),
                                 span: equational.interface.span,
                             },
                             equations: equations.into_vec(),
@@ -3674,7 +3870,7 @@ impl Resolver {
                                 parameters: parameters.into_vec(),
                                 result_type: result_type.into_inner(),
                                 requirements: requirements.into_boxed_slice(),
-                                type_parameters: type_parameters.clone().into_boxed_slice(),
+                                type_parameters: type_parameters.into_boxed_slice(),
                                 span: operational.header.span,
                             },
                             body,
@@ -3699,6 +3895,7 @@ impl Resolver {
 
         Ok(ResolvedDeclarations {
             registry,
+            constructor_payload_provenance,
             interfaces: interfaces.into_vec(),
             implementations: implementations.into_vec(),
             definitions: definitions.into_vec(),
@@ -3728,7 +3925,7 @@ impl Resolver {
                     .head_parameters
                     .iter()
                     .chain(&pending.prerequisite_only_parameters)
-                    .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
+                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
                     .collect(),
             );
 
@@ -3857,7 +4054,7 @@ impl Resolver {
     fn resolve_registry(
         &mut self,
         type_declarations: &[SurfaceTypeDeclaration],
-    ) -> Result<ResolvedRegistry, ResolveError> {
+    ) -> Result<(ResolvedRegistry, Vec<Vec<ConstructorPayloadProvenance>>), ResolveError> {
         let mut first_types = HashMap::new();
         let mut nominal_ids = Vec::with_capacity(type_declarations.len());
         for (index, declaration) in type_declarations.iter().enumerate() {
@@ -3947,27 +4144,11 @@ impl Resolver {
 
         let mut nominal_parameters = Vec::with_capacity(type_declarations.len());
         for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
-            let mut first = HashMap::new();
+            validate_explicit_type_parameters(Some(&declaration.parameters))?;
             let mut parameters = Vec::with_capacity(declaration.parameters.len());
             for parameter in &declaration.parameters {
-                if let Some(first_span) =
-                    first.insert(parameter.name.text.as_str(), parameter.name.span)
-                {
-                    let mut diagnostic = Diagnostic::new(
-                        ResolveReason::DuplicateTypeParameter,
-                        SourceLabel::new(
-                            parameter.name.span,
-                            "this type parameter is already declared",
-                        ),
-                    );
-                    diagnostic.related.push(SourceLabel::new(
-                        first_span,
-                        "the first type parameter is here",
-                    ));
-                    return Err(diagnostic.into());
-                }
                 parameters
-                    .push(self.allocate_type_variable(&parameter.name.text, parameter.name.span)?);
+                    .push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
             }
             nominal_parameters.push((*owner, parameters));
         }
@@ -3989,20 +4170,79 @@ impl Resolver {
             })
             .collect::<Vec<_>>();
         let mut constructors = ResolvedConstructorOwnerBuffer(Vec::new());
+        let mut constructor_payload_provenance = Vec::new();
+        if let Some(last) = type_declarations.last() {
+            self.type_work
+                .charge(type_declarations.len())
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        last.span,
+                        "nominal payload-provenance retention exceeded its type-work budget",
+                    )
+                })?;
+            constructor_payload_provenance
+                .try_reserve(type_declarations.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        last.span,
+                        "nominal payload-provenance retention could not reserve storage",
+                    )
+                })?;
+        }
         for (((declaration, owner), ids), (_, parameters)) in type_declarations
             .iter()
             .zip(&nominal_ids)
             .zip(&constructor_ids)
             .zip(&nominal_parameters)
         {
+            let mut nominal_payload_provenance = Vec::new();
+            self.type_work
+                .charge(declaration.constructors.len())
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "constructor payload-provenance retention exceeded its type-work budget",
+                    )
+                })?;
+            nominal_payload_provenance
+                .try_reserve(declaration.constructors.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "constructor payload-provenance retention could not reserve storage",
+                    )
+                })?;
             self.type_scopes.push(
                 parameters
                     .iter()
-                    .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
+                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
                     .collect(),
             );
             let result = (|| -> Result<(), ResolveError> {
                 for (constructor, id) in declaration.constructors.iter().zip(ids) {
+                    let mut field_provenance = Vec::new();
+                    self.type_work
+                        .charge(constructor.fields.len())
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                constructor.span,
+                                "constructor field-provenance retention exceeded its type-work budget",
+                            )
+                        })?;
+                    field_provenance
+                        .try_reserve(constructor.fields.len())
+                        .map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                constructor.span,
+                                "constructor field provenance could not reserve storage",
+                            )
+                        })?;
                     let payload = match constructor.fields.as_slice() {
                         [] => None,
                         [field] => {
@@ -4012,7 +4252,7 @@ impl Resolver {
                                 origin,
                                 ..
                             } = self.resolve_type(field)?;
-                            drop(provenance);
+                            field_provenance.push(provenance);
                             discard_origin_iteratively(origin);
                             Some(IterativeTypeOwner::new(ty))
                         }
@@ -4039,7 +4279,7 @@ impl Resolver {
                                     origin,
                                     ..
                                 } = self.resolve_type(field)?;
-                                drop(provenance);
+                                field_provenance.push(provenance);
                                 discard_origin_iteratively(origin);
                                 elements.push(IterativeTypeOwner::new(ty));
                             }
@@ -4059,14 +4299,30 @@ impl Resolver {
                         payload: payload.map(IterativeTypeOwner::into_inner),
                         origin: Origin::Source(constructor.span),
                     });
+                    nominal_payload_provenance.push(ConstructorPayloadProvenance {
+                        constructor: *id,
+                        fields: field_provenance,
+                    });
                 }
                 Ok(())
             })();
             let _ = self.type_scopes.pop();
             result?;
+            constructor_payload_provenance.push(nominal_payload_provenance);
         }
-        Ok(ResolvedRegistry::new(nominals, constructors.into_vec())
-            .with_type_parameters(nominal_parameters))
+        let registry = ResolvedRegistry::new(nominals, constructors.into_vec())
+            .with_type_parameters_with_budget(nominal_parameters, &mut self.type_work)
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    type_declarations
+                        .last()
+                        .expect("nonempty nominal parameters have a declaration")
+                        .span,
+                    "nominal parameter retention exceeded its type-work budget",
+                )
+            })?;
+        Ok((registry, constructor_payload_provenance))
     }
 
     fn push_binder_scope_many(&mut self, binders: &[Binder]) {
@@ -4084,13 +4340,17 @@ impl Resolver {
     }
 
     fn resolve_type(&mut self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
+        enum ApplicationHead {
+            Nominal(NominalTypeId),
+            Variable(TypeVariableId),
+        }
         enum Task<'a> {
             Visit(&'a SurfaceType),
             Sequence(std::slice::Iter<'a, SurfaceType>),
             Tuple(usize, crate::source::Span),
             Function(crate::source::Span),
             Application(
-                NominalTypeId,
+                ApplicationHead,
                 &'a [SurfaceType],
                 crate::source::Span,
                 crate::source::Span,
@@ -4135,20 +4395,11 @@ impl Resolver {
                                     .find_map(|scope| scope.get(&name.member().text))
                             {
                                 provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
-                                completed.push((Type::Variable(variable.id), provenance.len() - 1));
+                                completed.push((Type::Variable(*variable), provenance.len() - 1));
                                 continue;
                             }
                             let nominal = self.nominal_reference(name)?;
                             let id = nominal.id;
-                            let expected = nominal.parameter_count;
-                            if expected != 0 {
-                                return Err(type_argument_count(
-                                    name.span(),
-                                    &name.member().text,
-                                    expected,
-                                    0,
-                                ));
-                            }
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
                             completed.push((Type::Nominal(id), provenance.len() - 1));
                         }
@@ -4156,32 +4407,19 @@ impl Resolver {
                             constructor,
                             arguments,
                         } => {
-                            if matches!(constructor, SurfaceReference::Unqualified(_))
-                                && self
+                            let head = if matches!(constructor, SurfaceReference::Unqualified(_))
+                                && let Some(variable) = self
                                     .type_scopes
                                     .iter()
                                     .rev()
-                                    .any(|scope| scope.contains_key(&constructor.member().text))
+                                    .find_map(|scope| scope.get(&constructor.member().text))
                             {
-                                return Err(error(
-                                    ResolveReason::TypeKind,
-                                    constructor.span(),
-                                    "a parameter of kind Type cannot be applied",
-                                ));
-                            }
-                            let nominal = self.nominal_reference(constructor)?;
-                            let id = nominal.id;
-                            let expected = nominal.parameter_count;
-                            if expected != arguments.len() {
-                                return Err(type_argument_count(
-                                    current.span,
-                                    &constructor.member().text,
-                                    expected,
-                                    arguments.len(),
-                                ));
-                            }
+                                ApplicationHead::Variable(*variable)
+                            } else {
+                                ApplicationHead::Nominal(self.nominal_reference(constructor)?.id)
+                            };
                             tasks.push(Task::Application(
-                                id,
+                                head,
                                 arguments,
                                 current.span,
                                 constructor.span(),
@@ -4263,7 +4501,7 @@ impl Resolver {
                         provenance.len() - 1,
                     ));
                 }
-                Task::Application(owner, source_arguments, span, constructor_span) => {
+                Task::Application(head, source_arguments, span, constructor_span) => {
                     let count = source_arguments.len();
                     self.type_work.charge(count).map_err(|()| {
                         error(
@@ -4281,7 +4519,10 @@ impl Resolver {
                     })?;
                     let arguments = completed.split_off(split);
                     provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
-                    let mut function = Type::Nominal(owner);
+                    let mut function = match head {
+                        ApplicationHead::Nominal(owner) => Type::Nominal(owner),
+                        ApplicationHead::Variable(variable) => Type::Variable(variable),
+                    };
                     let mut function_root = provenance.len() - 1;
                     for ((argument, argument_root), source_argument) in
                         arguments.into_vec().into_iter().zip(source_arguments)
@@ -4422,30 +4663,102 @@ impl Resolver {
         })
     }
 
+    fn clone_type_variable_for_retention(
+        &mut self,
+        parameter: &ResolvedTypeVariable,
+        span: crate::source::Span,
+        message: &'static str,
+    ) -> Result<ResolvedTypeVariable, ResolveError> {
+        clone_resolved_type_variable_with_budget(parameter, &mut self.type_work)
+            .map_err(|()| error(ResolveReason::TypeResourceExhausted, span, message))
+    }
+
     fn allocate_type_variable(
         &mut self,
-        spelling: &str,
-        span: crate::source::Span,
+        name: &SurfaceName,
+        surface_kind: Option<&SurfaceKind>,
     ) -> Result<ResolvedTypeVariable, ResolveError> {
+        let kind = match surface_kind {
+            Some(kind) => surface_kind_to_kind(kind, &mut self.type_work),
+            None => self.type_work.charge(1).map(|()| Kind::Type),
+        }
+        .map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                name.span,
+                "type-parameter kind retention exceeded its type-work budget",
+            )
+        })?;
+        self.type_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                name.span,
+                "type-parameter record retention exceeded its type-work budget",
+            )
+        })?;
         let id = TypeVariableId::resolved(self.module, self.next_type_variable);
         self.next_type_variable = self.next_type_variable.checked_add(1).ok_or_else(|| {
             error(
                 ResolveReason::BinderIdExhausted,
-                span,
+                name.span,
                 "the program contains too many type binders",
             )
         })?;
         Ok(ResolvedTypeVariable {
             id,
-            spelling: spelling.to_owned(),
-            origin: Origin::Source(span),
+            spelling: name.text.clone(),
+            kind,
+            origin: Origin::Source(name.span),
         })
+    }
+
+    fn allocate_declaration_type_parameters(
+        &mut self,
+        explicit: Option<&[SurfaceTypeParameter]>,
+        free_names: &[SurfaceName],
+    ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
+        let Some(explicit) = explicit else {
+            return free_names
+                .iter()
+                .map(|name| self.allocate_type_variable(name, None))
+                .collect();
+        };
+
+        let free = free_names
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<HashSet<_>>();
+        let mut parameters = Vec::with_capacity(explicit.len());
+        for parameter in explicit {
+            if !free.contains(parameter.name.text.as_str()) {
+                let mut diagnostic = Diagnostic::new(
+                    ResolveReason::UnusedTypeParameter,
+                    SourceLabel::new(
+                        parameter.name.span,
+                        "this explicit type parameter is not used in the declaration header",
+                    ),
+                );
+                diagnostic.found = Some(parameter.name.text.clone());
+                return Err(diagnostic.into());
+            }
+            parameters.push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
+        }
+        Ok(parameters)
     }
 
     fn allocate_global_type_parameters(
         &mut self,
         definition: &crate::surface::SurfaceDefinition,
     ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
+        let explicit = match &definition.kind {
+            SurfaceDefinitionKind::Equational(equational) => {
+                equational.interface.type_parameters.as_deref()
+            }
+            SurfaceDefinitionKind::InlineOperational(operational) => {
+                operational.header.type_parameters.as_deref()
+            }
+        };
+        let declared = validate_explicit_type_parameters(explicit)?;
         let mut names = Vec::new();
         let mut seen = HashSet::new();
         match &definition.kind {
@@ -4454,6 +4767,7 @@ impl Resolver {
                     &equational.interface.annotation,
                     &self.type_names,
                     &self.interface_names,
+                    &declared,
                     &mut seen,
                     &mut names,
                     &mut self.type_work,
@@ -4463,6 +4777,7 @@ impl Resolver {
                         &requirement.argument,
                         &self.type_names,
                         &self.interface_names,
+                        &declared,
                         &mut seen,
                         &mut names,
                         &mut self.type_work,
@@ -4475,6 +4790,7 @@ impl Resolver {
                         &parameter.annotation,
                         &self.type_names,
                         &self.interface_names,
+                        &declared,
                         &mut seen,
                         &mut names,
                         &mut self.type_work,
@@ -4484,6 +4800,7 @@ impl Resolver {
                     &operational.header.result_type,
                     &self.type_names,
                     &self.interface_names,
+                    &declared,
                     &mut seen,
                     &mut names,
                     &mut self.type_work,
@@ -4493,6 +4810,7 @@ impl Resolver {
                         &requirement.argument,
                         &self.type_names,
                         &self.interface_names,
+                        &declared,
                         &mut seen,
                         &mut names,
                         &mut self.type_work,
@@ -4500,14 +4818,7 @@ impl Resolver {
                 }
             }
         }
-        names
-            .into_iter()
-            .map(|name| self.allocate_type_variable(&name.text, name.span))
-            .collect()
-    }
-
-    fn nominal_parameter_count(&self, id: NominalTypeId) -> Option<usize> {
-        self.nominal_parameter_counts.get(&id).copied()
+        self.allocate_declaration_type_parameters(explicit, &names)
     }
 
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
@@ -5205,6 +5516,44 @@ fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> Res
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
 }
 
+fn imported_nominal_merge_error(
+    failure: ImportedNominalMergeFailure,
+    span: crate::source::Span,
+) -> ResolveError {
+    match failure {
+        ImportedNominalMergeFailure::Conflict => error(
+            ResolveReason::InternalState,
+            span,
+            "imported routes disagree about nominal metadata",
+        ),
+        ImportedNominalMergeFailure::TypeResource => error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "imported nominal authentication exceeded its type-work budget",
+        ),
+    }
+}
+
+fn same_kinded_parameters_with_constraint_budget(
+    parameters: &[(TypeVariableId, Kind)],
+    binders: &[ResolvedTypeVariable],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    if parameters.len() != binders.len() {
+        return Ok(false);
+    }
+    for ((parameter, kind), binder) in parameters.iter().zip(binders) {
+        budget.charge(1)?;
+        if *parameter != binder.id {
+            return Ok(false);
+        }
+        if !same_kind_with_charge(kind, &binder.kind, || budget.charge(1))? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn import_conflict(span: crate::source::Span, spelling: &str) -> ResolveError {
     let mut diagnostic = Diagnostic::new(
         ResolveReason::ImportConflict,
@@ -5244,21 +5593,6 @@ fn withheld_export_error(
     diagnostic.into()
 }
 
-fn type_argument_count(
-    span: crate::source::Span,
-    spelling: &str,
-    expected: usize,
-    found: usize,
-) -> ResolveError {
-    let mut diagnostic = Diagnostic::new(
-        ResolveReason::TypeArgumentCount,
-        SourceLabel::new(span, "this nominal type has the wrong number of arguments"),
-    );
-    diagnostic.expected = Some(format!("{spelling} with {expected} type arguments"));
-    diagnostic.found = Some(found.to_string());
-    diagnostic.into()
-}
-
 fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> ResolveError {
     let mut diagnostic = Diagnostic::new(
         ResolveReason::UnknownInterface,
@@ -5288,10 +5622,109 @@ fn type_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
     diagnostic.into()
 }
 
+fn validate_explicit_type_parameters(
+    parameters: Option<&[SurfaceTypeParameter]>,
+) -> Result<HashSet<&str>, ResolveError> {
+    let Some(parameters) = parameters else {
+        return Ok(HashSet::new());
+    };
+    let mut declared = HashSet::with_capacity(parameters.len());
+    let mut first = HashMap::with_capacity(parameters.len());
+    for parameter in parameters {
+        if let Some(first_span) = first.insert(parameter.name.text.as_str(), parameter.name.span) {
+            let mut diagnostic = Diagnostic::new(
+                ResolveReason::DuplicateTypeParameter,
+                SourceLabel::new(
+                    parameter.name.span,
+                    "this type parameter is already declared",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                first_span,
+                "the first type parameter is here",
+            ));
+            return Err(diagnostic.into());
+        }
+        declared.insert(parameter.name.text.as_str());
+    }
+    Ok(declared)
+}
+
+#[cfg(test)]
+thread_local! {
+    static SURFACE_KIND_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SURFACE_KIND_ARROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SURFACE_KIND_REBUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_surface_kind_conversion_counts() {
+    SURFACE_KIND_VISITS.set(0);
+    SURFACE_KIND_ARROWS.set(0);
+    SURFACE_KIND_REBUILT.set(0);
+}
+
+#[cfg(test)]
+fn surface_kind_conversion_counts() -> (usize, usize, usize) {
+    (
+        SURFACE_KIND_VISITS.get(),
+        SURFACE_KIND_ARROWS.get(),
+        SURFACE_KIND_REBUILT.get(),
+    )
+}
+
+fn surface_kind_to_kind(root: &SurfaceKind, budget: &mut TypeWorkBudget) -> Result<Kind, ()> {
+    enum Task<'a> {
+        Visit(&'a SurfaceKind),
+        Arrow,
+    }
+
+    // Every source node has one lifecycle slot. A leaf moves from `Visit` to
+    // one rebuilt `Kind::Type`; a function node moves from `Visit` through one
+    // `Arrow` continuation to one rebuilt `Kind::Arrow`. Only `Visit` is new
+    // semantic work and is charged exactly once. Therefore D source arrows and
+    // D+1 leaves have the complete boundary N=2D+1; continuation and rebuilt
+    // states do not add a second traversal charge.
+    let mut work = vec![Task::Visit(root)];
+    let mut rebuilt = Vec::new();
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Visit(kind) => {
+                #[cfg(test)]
+                SURFACE_KIND_VISITS.set(SURFACE_KIND_VISITS.get().saturating_add(1));
+                budget.charge(1)?;
+                match &kind.kind {
+                    SurfaceKindKind::Type => {
+                        rebuilt.push(Kind::Type);
+                        #[cfg(test)]
+                        SURFACE_KIND_REBUILT.set(SURFACE_KIND_REBUILT.get().saturating_add(1));
+                    }
+                    SurfaceKindKind::Function { domain, codomain } => {
+                        work.push(Task::Arrow);
+                        work.push(Task::Visit(codomain));
+                        work.push(Task::Visit(domain));
+                    }
+                }
+            }
+            Task::Arrow => {
+                #[cfg(test)]
+                SURFACE_KIND_ARROWS.set(SURFACE_KIND_ARROWS.get().saturating_add(1));
+                let codomain = rebuilt.pop().ok_or(())?;
+                let domain = rebuilt.pop().ok_or(())?;
+                rebuilt.push(Kind::Arrow(Box::new(domain), Box::new(codomain)));
+                #[cfg(test)]
+                SURFACE_KIND_REBUILT.set(SURFACE_KIND_REBUILT.get().saturating_add(1));
+            }
+        }
+    }
+    rebuilt.pop().ok_or(())
+}
+
 fn collect_free_type_names<'a>(
     root: &'a SurfaceType,
     nominals: &HashMap<String, NominalTypeId>,
     interfaces: &HashMap<String, InterfaceId>,
+    declared: &HashSet<&str>,
     seen: &mut HashSet<&'a str>,
     output: &mut Vec<crate::surface::SurfaceName>,
     budget: &mut TypeWorkBudget,
@@ -5325,8 +5758,8 @@ fn collect_free_type_names<'a>(
                 let SurfaceReference::Unqualified(name) = name else {
                     continue;
                 };
-                if !nominals.contains_key(&name.text)
-                    && !interfaces.contains_key(&name.text)
+                if (declared.contains(name.text.as_str())
+                    || (!nominals.contains_key(&name.text) && !interfaces.contains_key(&name.text)))
                     && seen.insert(&name.text)
                 {
                     output.push(name.clone());
@@ -5337,8 +5770,9 @@ fn collect_free_type_names<'a>(
                 arguments,
             } => {
                 if let SurfaceReference::Unqualified(constructor) = constructor
-                    && !nominals.contains_key(&constructor.text)
-                    && !interfaces.contains_key(&constructor.text)
+                    && (declared.contains(constructor.text.as_str())
+                        || (!nominals.contains_key(&constructor.text)
+                            && !interfaces.contains_key(&constructor.text)))
                     && seen.insert(&constructor.text)
                 {
                     output.push(constructor.clone());
@@ -5372,7 +5806,7 @@ mod tests {
     use crate::module::{ModuleRoots, load_module_graph};
     use crate::source::{ByteRange, SourceFile};
     use crate::surface::{SurfaceDefinitionKind, SurfaceName, SurfaceTypeKind};
-    use crate::types::TYPE_WORK_LIMIT;
+    use crate::types::{TYPE_WORK_LIMIT, kind_node_charge_visits, reset_kind_node_charge_visits};
     use crate::{
         lexer::lex,
         parser::{parse, project_module},
@@ -5609,8 +6043,13 @@ mod tests {
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::default();
         let mut constraint_work = InterfaceConstraintBudget::with_limit(limit);
-        let result =
-            resolve_module_with_budget(entry, &dependencies, &mut type_work, &mut constraint_work);
+        let result = resolve_module_names_with_budget(
+            entry,
+            &dependencies,
+            &mut type_work,
+            &mut constraint_work,
+        )
+        .map(|admission| ResolvedModule::new(admission.parts));
         (result, constraint_work.used())
     }
 
@@ -5643,8 +6082,13 @@ mod tests {
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::with_limit(limit);
         let mut constraint_work = InterfaceConstraintBudget::default();
-        let result =
-            resolve_module_with_budget(entry, &dependencies, &mut type_work, &mut constraint_work);
+        let result = resolve_module_names_with_budget(
+            entry,
+            &dependencies,
+            &mut type_work,
+            &mut constraint_work,
+        )
+        .map(|admission| ResolvedModule::new(admission.parts));
         (result, type_work.used())
     }
 
@@ -6443,6 +6887,342 @@ mod tests {
         project_module(&source, &tree).expect("the declaration fixture should project")
     }
 
+    #[test]
+    fn fixed_kind_binder_allocation_is_exact_and_atomic() {
+        // One Arrow, two Type leaves, and one retained binder record cost four units.
+        const EXACT_WORK: usize = 4;
+        let surface = declaration_fixture(
+            "kind-binder-budget.ash",
+            "type Holder<F : Type -> Type> = Holder\n",
+        );
+        let parameter = &surface.type_declarations[0].parameters[0];
+
+        let mut short =
+            Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK - 1));
+        let error = short
+            .allocate_type_variable(&parameter.name, parameter.kind.as_ref())
+            .expect_err("one missing record unit must reject the whole binder");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(short.type_work.used(), EXACT_WORK - 1);
+        assert_eq!(short.next_type_variable, 0);
+
+        let mut exact =
+            Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK));
+        let retained = exact
+            .allocate_type_variable(&parameter.name, parameter.kind.as_ref())
+            .expect("the exact kind-and-record budget should retain one binder");
+        assert_eq!(exact.type_work.used(), EXACT_WORK);
+        assert_eq!(exact.next_type_variable, 1);
+        assert_eq!(
+            retained.kind,
+            Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+        );
+    }
+
+    #[test]
+    fn global_registry_binder_retention_is_exact_and_atomic() {
+        // One retained binder record plus one Arrow and two Type leaves.
+        const EXACT_WORK: usize = 4;
+        let surface = declaration_fixture(
+            "global-registry-kind-budget.ash",
+            "uses<F : Type -> Type> : F -> F\nuses value = value\n",
+        );
+        let span = surface.definitions[0].span;
+        let parameter = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(ModuleId::new(0), 41),
+            spelling: "F".to_owned(),
+            kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+            origin: Origin::Source(span),
+        };
+        let parameters = vec![vec![parameter]];
+
+        let mut short =
+            Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK - 1));
+        short.next_type_variable = 43;
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        let error = short
+            .clone_global_type_parameters_for_registry(&parameters, span)
+            .expect_err("one missing Kind node must reject the staged registry copy");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(short.type_work.used(), EXACT_WORK - 1);
+        assert_eq!(short.next_type_variable, 43);
+        assert!(registry.type_variable(parameters[0][0].id).is_none());
+
+        let mut exact =
+            Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK));
+        exact.next_type_variable = 43;
+        let retained = exact
+            .clone_global_type_parameters_for_registry(&parameters, span)
+            .expect("the exact binder-kind budget should stage the complete registry copy");
+        let registry = registry.with_additional_type_variables(retained);
+        assert_eq!(exact.type_work.used(), EXACT_WORK);
+        assert_eq!(exact.next_type_variable, 43);
+        let retained = registry
+            .type_variable(parameters[0][0].id)
+            .expect("the successful staged copy should publish one registry record");
+        assert_eq!(retained.kind, parameters[0][0].kind);
+    }
+
+    #[test]
+    fn imported_implementation_kinded_head_retention_is_exact_and_atomic() {
+        // M is one method record, A is the argument, H is one head binder,
+        // K is its three-node Kind, and V is the three-cell method value type:
+        // M + A + (H + K) + V + (H + K + V) + A
+        // = 1 + 1 + 4 + 3 + 7 + 1 = 17.
+        const METHOD_RECORDS: usize = 1;
+        const ARGUMENT_CELLS: usize = 1;
+        const HEAD_RECORDS: usize = 1;
+        const KIND_NODES: usize = 3;
+        const VALUE_CELLS: usize = 3;
+        const EXACT_WORK: usize = METHOD_RECORDS
+            + ARGUMENT_CELLS
+            + (HEAD_RECORDS + KIND_NODES)
+            + VALUE_CELLS
+            + (HEAD_RECORDS + KIND_NODES + VALUE_CELLS)
+            + ARGUMENT_CELLS;
+        const ENTRY: &str = "import dependency (impl Marker)\n";
+        const DEPENDENCY: &str = "pub interface Marker<A> {\nmark : A -> A\n}\n";
+
+        let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the implementation-retention graph should load");
+        let dependency = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name()
+                    == Some("dependency.ash".as_ref())
+            })
+            .expect("the implementation-retention dependency should load");
+        let checked_dependency =
+            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
+                .expect("the dependency interface should check");
+        let entry = graph
+            .module(graph.entry())
+            .expect("the implementation-retention entry should load");
+        let import = entry
+            .surface()
+            .imports
+            .first()
+            .expect("the entry should retain its implementation selector");
+        let SurfaceImportSelection::Targeted(items) = &import.selection else {
+            panic!("the fixture should contain a targeted import");
+        };
+        let SurfaceImportItem::Implementation { span, .. } = &items[0] else {
+            panic!("the fixture should select implementations");
+        };
+
+        let module = checked_dependency.module();
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let implementation = ImplId::new(module, 0);
+        let implementation_method = ImplMethodId::new(implementation, method);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let kind = || Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let source_span = dependency.surface().span;
+        let fact = CheckedImplementationFact {
+            id: implementation,
+            interface,
+            head_parameters: Box::new([ResolvedTypeVariable {
+                id: parameter,
+                spelling: "F".to_owned(),
+                kind: kind(),
+                origin: Origin::Source(source_span),
+            }]),
+            argument: Type::Variable(parameter),
+            prerequisites: Box::new([]),
+            methods: Box::new([crate::resolved::CheckedImplementationMethodFact {
+                id: implementation_method,
+                method,
+                binder: BinderId::resolved(module, 0),
+                scheme: ConstrainedScheme {
+                    type_parameters: Box::new([(parameter, kind())]),
+                    requirements: Box::new([]),
+                    value_type: Type::Function(
+                        Box::new(Type::Variable(parameter)),
+                        Box::new(Type::Variable(parameter)),
+                    ),
+                },
+                origin: Origin::Source(source_span),
+                span: source_span,
+            }]),
+            origin: Origin::Source(source_span),
+            span: source_span,
+        };
+        let exported = AuthorizedImplementationFact::local_for_test(fact);
+        let selection = ImplementationImportSelection {
+            direct_dependency: module,
+            selector_span: *span,
+            import_span: import.span,
+            public: false,
+            route_rank: ImplementationRouteRank::new(0, 0, 0),
+        };
+
+        let retain_with_limit = |limit| {
+            let mut resolver = Resolver::with_budgets(
+                entry.id(),
+                TypeWorkBudget::with_limit(limit),
+                InterfaceConstraintBudget::default(),
+            );
+            let result = resolver.retain_imported_implementation_fact(
+                &exported,
+                checked_dependency.exports(),
+                selection,
+            );
+            let retained_kind = resolver
+                .imported
+                .implementation(implementation)
+                .map(|fact| fact.head_parameters[0].kind.clone());
+            let retained_identity = resolver
+                .implementation_route_ranks
+                .contains_key(&implementation)
+                || resolver
+                    .public_implementation_route_ranks
+                    .contains_key(&implementation);
+            (
+                result,
+                resolver.type_work.used(),
+                retained_kind,
+                retained_identity,
+            )
+        };
+
+        let (short, short_used, short_kind, short_identity) = retain_with_limit(EXACT_WORK - 1);
+        let error = short.expect_err("one missing type-work unit must reject the whole fact");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(short_used, EXACT_WORK - 1);
+        assert_eq!(short_kind, None);
+        assert!(!short_identity);
+
+        let (exact, exact_used, exact_kind, exact_identity) = retain_with_limit(EXACT_WORK);
+        exact.expect("the exact implementation-retention budget should fit");
+        assert_eq!(exact_used, EXACT_WORK);
+        assert_eq!(exact_kind, Some(kind()));
+        assert!(exact_identity);
+    }
+
+    #[test]
+    fn imported_method_binder_kind_authentication_is_exact() {
+        // One compared binder record plus one Arrow and two Type pairs.
+        const EXACT_WORK: usize = 4;
+        let surface = declaration_fixture(
+            "imported-method-kind-authentication.ash",
+            "uses<F : Type -> Type> : F -> F\nuses value = value\n",
+        );
+        let span = surface.definitions[0].span;
+        let id = TypeVariableId::resolved(ModuleId::new(0), 0);
+        let kind = || Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let scheme = [(id, kind())];
+        let binders = [ResolvedTypeVariable {
+            id,
+            spelling: "F".to_owned(),
+            kind: kind(),
+            origin: Origin::Source(span),
+        }];
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            same_kinded_parameters_with_constraint_budget(&scheme, &binders, &mut short),
+            Err(()),
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            same_kinded_parameters_with_constraint_budget(&scheme, &binders, &mut exact),
+            Ok(true),
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+
+        let mismatched = [(id, Kind::Type)];
+        let mut mismatch = InterfaceConstraintBudget::with_limit(2);
+        assert_eq!(
+            same_kinded_parameters_with_constraint_budget(&mismatched, &binders, &mut mismatch),
+            Ok(false),
+        );
+        assert_eq!(mismatch.used(), 2);
+    }
+
+    #[test]
+    fn deep_surface_kind_conversion_is_linear_exact_and_stack_safe() {
+        const DEPTH: usize = 32_768;
+        const NODES: usize = 2 * DEPTH + 1;
+
+        struct SurfaceKindOwner(Option<SurfaceKind>);
+
+        impl Drop for SurfaceKindOwner {
+            fn drop(&mut self) {
+                let Some(surface) = self.0.take() else {
+                    return;
+                };
+                let mut work = vec![surface];
+                while let Some(SurfaceKind { kind, .. }) = work.pop() {
+                    if let SurfaceKindKind::Function { domain, codomain } = kind {
+                        work.push(*codomain);
+                        work.push(*domain);
+                    }
+                }
+            }
+        }
+
+        std::thread::Builder::new()
+            .name("deep-surface-kind-conversion".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-kind.ash", "Type")
+                    .expect("the deep kind fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 4).expect("the kind range should be ordered"))
+                    .expect("the kind range should belong to the fixture");
+                let mut surface = SurfaceKind {
+                    kind: SurfaceKindKind::Type,
+                    span,
+                };
+                for _ in 0..DEPTH {
+                    surface = SurfaceKind {
+                        kind: SurfaceKindKind::Function {
+                            domain: Box::new(SurfaceKind {
+                                kind: SurfaceKindKind::Type,
+                                span,
+                            }),
+                            codomain: Box::new(surface),
+                        },
+                        span,
+                    };
+                }
+
+                let surface_owner = SurfaceKindOwner(Some(surface));
+                let surface = surface_owner
+                    .0
+                    .as_ref()
+                    .expect("the fixture should remain owned");
+                reset_surface_kind_conversion_counts();
+                reset_kind_node_charge_visits();
+                let mut exact = TypeWorkBudget::with_limit(NODES);
+                let converted = surface_kind_to_kind(surface, &mut exact)
+                    .expect("the exact source-kind node budget should convert the deep kind");
+                assert_eq!(exact.used(), NODES);
+                assert_eq!(
+                    surface_kind_conversion_counts(),
+                    (NODES, DEPTH, NODES),
+                    "each source node must transition Visit -> Arrow when needed -> rebuilt exactly once",
+                );
+                assert_eq!(
+                    kind_node_charge_visits(),
+                    0,
+                    "surface conversion must not retraverse rebuilt semantic kinds",
+                );
+
+                let mut short = TypeWorkBudget::with_limit(NODES - 1);
+                assert_eq!(surface_kind_to_kind(surface, &mut short), Err(()));
+                assert_eq!(short.used(), NODES - 1);
+                drop(converted);
+            })
+            .expect("the deep surface-kind thread should start")
+            .join()
+            .expect("surface-kind conversion should fit within 256 KiB");
+    }
+
     fn declaration_name(text: &str, span: crate::source::Span) -> SurfaceReference {
         SurfaceReference::Unqualified(SurfaceName {
             text: text.to_owned(),
@@ -6765,6 +7545,7 @@ mod tests {
             &annotation,
             &HashMap::new(),
             &HashMap::new(),
+            &HashSet::new(),
             &mut seen,
             &mut output,
             &mut budget,
@@ -6786,6 +7567,10 @@ mod tests {
 
     #[test]
     fn constructor_tuple_payloads_charge_the_synthesized_wrapper_exactly() {
+        // One outer nominal provenance record, one constructor provenance
+        // record, two field-provenance slots, one synthesized Tuple node, and
+        // two resolved Int nodes: 1 + 1 + 2 + 1 + 2 = 7.
+        const EXACT_WORK: usize = 7;
         let source = SourceFile::new(
             "constructor-tuple-budget.ash",
             "type Pair =\nPair(Int, Int)\n",
@@ -6798,9 +7583,9 @@ mod tests {
         let mut exact = Resolver::new(ModuleId::new(0));
         exact
             .type_work
-            .charge(TYPE_WORK_LIMIT - 3)
-            .expect("the fixture leaves the wrapper and two field cells");
-        let registry = exact
+            .charge(TYPE_WORK_LIMIT - EXACT_WORK)
+            .expect("the fixture leaves every named provenance and payload term");
+        let (registry, _) = exact
             .resolve_registry(&module.type_declarations)
             .expect("the exact constructor payload allowance should fit");
         assert_eq!(
@@ -6812,13 +7597,106 @@ mod tests {
         let mut short = Resolver::new(ModuleId::new(0));
         short
             .type_work
-            .charge(TYPE_WORK_LIMIT - 2)
-            .expect("the fixture leaves one cell fewer than the retained payload");
+            .charge(TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+            .expect("the fixture leaves one cell fewer than the complete transaction");
         let error = short
             .resolve_registry(&module.type_declarations)
             .expect_err("the tuple wrapper must consume the remaining budget");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(error.primary.span().range(), second_field_span.range());
+    }
+
+    #[test]
+    fn wide_constructor_provenance_is_exact_atomic_and_stack_safe() {
+        const WIDTH: usize = 32_768;
+        // One nominal provenance record, one constructor record, WIDTH field
+        // provenance slots, one Tuple wrapper, and WIDTH field Type nodes.
+        const EXACT_WORK: usize = 2 * WIDTH + 3;
+        std::thread::Builder::new()
+            .name("wide-constructor-provenance".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let fields = std::iter::repeat_n("Int", WIDTH)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let text = format!("type Wide =\nWide({fields})\n");
+                let source = SourceFile::new("wide-constructor-provenance.ash", &text)
+                    .expect("the wide provenance fixture should fit");
+                let tree = parse(lex(&source).expect("the wide fixture should lex"));
+                let module = project_module(&source, &tree)
+                    .expect("the wide fixture should project iteratively");
+
+                for limit in [0, 1, EXACT_WORK - 1] {
+                    let mut resolver = Resolver::with_type_work(
+                        ModuleId::new(0),
+                        TypeWorkBudget::with_limit(limit),
+                    );
+                    let failure = resolver
+                        .resolve_registry(&module.type_declarations)
+                        .expect_err("every named one-short transaction must reject atomically");
+                    assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+                }
+
+                let mut resolver = Resolver::with_type_work(
+                    ModuleId::new(0),
+                    TypeWorkBudget::with_limit(EXACT_WORK),
+                );
+                let (registry, provenance) = resolver
+                    .resolve_registry(&module.type_declarations)
+                    .expect("the published wide provenance formula should fit exactly");
+                assert_eq!(resolver.type_work.used(), EXACT_WORK);
+                assert_eq!(provenance.len(), 1);
+                assert_eq!(provenance[0].len(), 1);
+                assert_eq!(provenance[0][0].fields.len(), WIDTH);
+                let Some(Type::Tuple(elements)) = &registry.constructors()[0].payload else {
+                    panic!("the wide constructor should retain its synthetic Tuple root");
+                };
+                assert_eq!(elements.len(), WIDTH);
+                drop(provenance);
+                drop(registry);
+            })
+            .expect("the wide provenance thread should start")
+            .join()
+            .expect("wide success, rejection, and teardown should fit 256 KiB");
+    }
+
+    #[test]
+    fn declaration_order_retention_is_exact_atomic_and_stack_safe() {
+        const DECLARATIONS: usize = 32_768;
+        std::thread::Builder::new()
+            .name("wide-declaration-order-retention".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("wide-declaration-order.ash", "x")
+                    .expect("the declaration-order fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the range is ordered"))
+                    .expect("the range belongs to the fixture");
+                let order = (0..DECLARATIONS)
+                    .map(SurfaceDeclarationIndex::Global)
+                    .collect::<Vec<_>>();
+
+                let mut short = TypeWorkBudget::with_limit(DECLARATIONS - 1);
+                let failure = retain_declaration_order(&order, span, &mut short)
+                    .expect_err("one missing record unit must publish no order");
+                assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+                assert_eq!(short.used(), 0);
+
+                let mut exact = TypeWorkBudget::with_limit(DECLARATIONS);
+                let retained = retain_declaration_order(&order, span, &mut exact)
+                    .expect("one unit per declaration-order record should fit exactly");
+                assert_eq!(exact.used(), DECLARATIONS);
+                assert_eq!(retained.len(), DECLARATIONS);
+                assert_eq!(
+                    retained.last(),
+                    Some(&crate::resolved::ResolvedDeclarationIndex::Global(
+                        DECLARATIONS - 1,
+                    ))
+                );
+            })
+            .expect("the declaration-order thread should start")
+            .join()
+            .expect("order success, failure, and teardown should fit 256 KiB");
     }
 
     #[test]

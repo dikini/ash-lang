@@ -11,7 +11,7 @@ use ash::{
     elaborate::{TypeError, check_module},
     interface::InterfaceReason,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
-    resolve::{DependencyExports, ResolveReason, resolve_module},
+    resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{ImportedTypeAccess, ResolvedDefinitionKind, ResolvedExprKind, ResolvedTermName},
     source::{SourceFile, Span},
     surface::{SurfaceImportItem, SurfaceImportSelection},
@@ -129,7 +129,12 @@ fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
             .collect::<Vec<_>>();
         let resolved = resolve_module(module, &dependencies);
         if module.id() == entry.id() {
-            return resolved.expect_err("the entry fixture should fail resolution");
+            return match resolved.expect_err("the entry fixture should fail resolution") {
+                ResolveModuleError::Resolution(error) => error,
+                ResolveModuleError::Kind(error) => {
+                    panic!("resolution fixture unexpectedly reached kind checking: {error:?}")
+                }
+            };
         }
         checked.push(
             check_module(resolved.expect("a dependency fixture should resolve"))

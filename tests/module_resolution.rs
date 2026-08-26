@@ -7,7 +7,7 @@ use std::{
 use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
-    resolve::{DependencyExports, ResolveReason, resolve_module},
+    resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{Binder, ResolvedDefinition, ResolvedDefinitionKind, ResolvedModule},
     types::TYPE_WORK_LIMIT,
 };
@@ -189,8 +189,11 @@ fn duplicate_module_aliases_are_rejected_before_export_lookup() {
     let entry = module_named(&graph, "entry.ash");
     let no_exports: &[DependencyExports<'_>] = &[];
 
-    let error = resolve_module(entry, no_exports)
-        .expect_err("a duplicate alias should fail before dependency export lookup");
+    let ResolveModuleError::Resolution(error) = resolve_module(entry, no_exports)
+        .expect_err("a duplicate alias should fail before dependency export lookup")
+    else {
+        panic!("duplicate aliases should fail in resolution")
+    };
 
     assert_eq!(error.reason, ResolveReason::DuplicateModuleAlias);
 }

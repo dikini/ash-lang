@@ -39,12 +39,13 @@ use crate::{
         ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleGroup, ResolvedModuleProgram,
         ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry,
         ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        clone_resolved_type_variable_with_budget,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
-        InferenceVariableId, IterativeTypeOwner, Type, TypeVariableId, TypeWorkBudget,
-        charge_type_cells, discard_type_iteratively, replace_type_iteratively, same_type,
-        substitute_type_variables_with,
+        InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
+        charge_type_cells, clone_kind_with_budget, discard_type_iteratively,
+        replace_type_iteratively, same_type, substitute_type_variables_with,
     },
 };
 
@@ -337,11 +338,21 @@ struct LoweredRequirement {
 
 #[derive(Debug)]
 struct LoweredScheme {
-    source_type_parameters: Option<Box<[TypeVariableId]>>,
-    type_parameters: Box<[TypeVariableId]>,
+    source_type_parameters: Option<Box<[(TypeVariableId, Kind)]>>,
+    type_parameters: Box<[(TypeVariableId, Kind)]>,
     requirements: Box<[LoweredRequirement]>,
     value_type: Type,
     core_scheme: Type,
+}
+
+impl LoweredScheme {
+    fn source_binder_parameters(&self) -> Option<&[(TypeVariableId, Kind)]> {
+        self.source_type_parameters.as_deref()
+    }
+
+    fn binder_parameters(&self) -> &[(TypeVariableId, Kind)] {
+        &self.type_parameters
+    }
 }
 
 impl Drop for LoweredScheme {
@@ -1222,7 +1233,13 @@ impl Elaborator {
             quantified
                 .try_reserve(imported.scheme.type_parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            quantified.extend_from_slice(&imported.scheme.type_parameters);
+            quantified.extend(
+                imported
+                    .scheme
+                    .type_parameters
+                    .iter()
+                    .map(|(parameter, _)| *parameter),
+            );
             let quantified = quantified.into_boxed_slice();
             let body = IterativeTypeOwner::new(
                 clone_type_with_budget(&imported.scheme.value_type, &mut type_work)
@@ -1444,17 +1461,14 @@ impl Elaborator {
         freshen_core_parameters: bool,
     ) -> Result<LoweredScheme, TypeError> {
         self.type_work
-            .charge(
-                scheme
-                    .type_parameters
-                    .len()
-                    .saturating_add(scheme.requirements.len()),
-            )
+            .charge(scheme.requirements.len())
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let original_type_parameters =
-            clone_type_variables_with_budget(&scheme.type_parameters, &mut self.type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-                .into_boxed_slice();
+        let original_type_parameters = crate::types::clone_kinded_type_parameters_with_budget(
+            &scheme.type_parameters,
+            &mut self.type_work,
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+        .into_boxed_slice();
         let value_type = IterativeTypeOwner::new(self.clone_type(&scheme.value_type)?);
         let mut parameter_replacements = TypeReplacementBuffer::new();
         let (source_type_parameters, type_parameters) = if freshen_core_parameters {
@@ -1465,9 +1479,17 @@ impl Elaborator {
             type_parameters
                 .try_reserve(original_type_parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for source in &original_type_parameters {
+            for (source, kind) in &original_type_parameters {
                 let core = self.fresh_type_variable()?;
-                type_parameters.push(core);
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                type_parameters.push((
+                    core,
+                    clone_kind_with_budget(kind, &mut self.type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+                ));
                 parameter_replacements
                     .try_insert_unique(*source, Type::Variable(core))
                     .map_err(|()| invalid_state())?;
@@ -1555,11 +1577,18 @@ impl Elaborator {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let parameters =
-                clone_type_variables_with_budget(&type_parameters, &mut self.type_work)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-                    .into_boxed_slice();
-            Type::Forall(parameters, Box::new(core_body.into_inner()))
+            self.type_work
+                .charge(type_parameters.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut parameters = Vec::new();
+            parameters
+                .try_reserve(type_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            parameters.extend(type_parameters.iter().map(|(parameter, _)| *parameter));
+            Type::Forall(
+                parameters.into_boxed_slice(),
+                Box::new(core_body.into_inner()),
+            )
         };
         Ok(LoweredScheme {
             source_type_parameters,
@@ -1943,7 +1972,12 @@ impl Elaborator {
         head_parameters
             .try_reserve(implementation.head_parameters.len())
             .map_err(|_| constraint_resource())?;
-        head_parameters.extend(implementation.head_parameters.iter().cloned());
+        for parameter in &implementation.head_parameters {
+            head_parameters.push(
+                clone_resolved_type_variable_with_budget(parameter, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            );
+        }
         let prerequisites =
             self.clone_implementation_requirements(&implementation.prerequisites)?;
         self.constraint_work
@@ -1985,12 +2019,13 @@ impl Elaborator {
         type_parameters
             .try_reserve(implementation.head_parameters.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        type_parameters.extend(
-            implementation
-                .head_parameters
-                .iter()
-                .map(|parameter| parameter.id),
-        );
+        for parameter in &implementation.head_parameters {
+            type_parameters.push((
+                parameter.id,
+                clone_kind_with_budget(&parameter.kind, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            ));
+        }
         Ok(ConstrainedScheme {
             type_parameters: type_parameters.into_boxed_slice(),
             requirements: self.clone_implementation_requirements(&implementation.prerequisites)?,
@@ -2049,7 +2084,14 @@ impl Elaborator {
             type_parameters
                 .try_reserve(parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            type_parameters.extend(parameters.iter().map(|parameter| parameter.id));
+            for parameter in parameters {
+                type_parameters.push((
+                    parameter.id,
+                    clone_kind_with_budget(&parameter.kind, &mut self.type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+                ));
+            }
             let mut checked_requirements = Vec::new();
             checked_requirements
                 .try_reserve(requirements.len())
@@ -2329,7 +2371,7 @@ impl Elaborator {
                 replacements
                     .try_reserve(scheme.type_parameters.len())
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                for (parameter, argument) in scheme.type_parameters.iter().zip(arguments) {
+                for ((parameter, _), argument) in scheme.type_parameters.iter().zip(arguments) {
                     if replacements
                         .try_insert_unique(*parameter, self.clone_type(argument)?)
                         .is_err()
@@ -2735,7 +2777,7 @@ impl Elaborator {
         scheme: &LoweredScheme,
         arguments: &[Type],
     ) -> Result<Type, TypeError> {
-        if scheme.type_parameters.len() != arguments.len() {
+        if scheme.binder_parameters().len() != arguments.len() {
             return Err(invalid_state());
         }
         if arguments.is_empty() {
@@ -2744,7 +2786,11 @@ impl Elaborator {
         let Type::Forall(parameters, body) = &scheme.core_scheme else {
             return Err(invalid_state());
         };
-        if parameters.as_ref() != scheme.type_parameters.as_ref() {
+        if !parameters.iter().copied().eq(scheme
+            .binder_parameters()
+            .iter()
+            .map(|(parameter, _)| *parameter))
+        {
             return Err(invalid_state());
         }
         self.type_work
@@ -2899,13 +2945,12 @@ impl Elaborator {
                                     .ok_or_else(invalid_state)?;
                                 let source_parameters = lowered
                                     .scheme
-                                    .source_type_parameters
-                                    .as_deref()
+                                    .source_binder_parameters()
                                     .ok_or_else(invalid_state)?;
                                 if source_parameters.len() != substitution.len()
                                     || source_parameters.iter().zip(substitution).any(
                                         |(parameter, substitution)| {
-                                            *parameter != substitution.parameter()
+                                            parameter.0 != substitution.parameter()
                                         },
                                     )
                                 {
@@ -3446,8 +3491,16 @@ impl Elaborator {
                     .and_then(|lowering| lowering.implementation_methods.get(&method.id))
                     .ok_or_else(invalid_state)?;
                 if lowered.binder != method.binder
-                    || lowered.scheme.source_type_parameters.as_deref()
-                        != Some(method.scheme.type_parameters.as_ref())
+                    || lowered
+                        .scheme
+                        .source_binder_parameters()
+                        .is_none_or(|parameters| {
+                            !parameters.iter().map(|(parameter, _)| *parameter).eq(method
+                                .scheme
+                                .type_parameters
+                                .iter()
+                                .map(|(parameter, _)| *parameter))
+                        })
                     || !same_type(&lowered.scheme.value_type, &method.scheme.value_type)
                 {
                     return Err(invalid_state());
@@ -3481,16 +3534,19 @@ impl Elaborator {
                 {
                     return Err(invalid_state());
                 }
-                let source_quantified = clone_type_variables_with_budget(
-                    lowered
-                        .scheme
-                        .source_type_parameters
-                        .as_deref()
-                        .ok_or_else(invalid_state)?,
-                    &mut self.type_work,
-                )
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-                .into_boxed_slice();
+                let source_parameters = lowered
+                    .scheme
+                    .source_binder_parameters()
+                    .ok_or_else(invalid_state)?;
+                self.type_work
+                    .charge(source_parameters.len())
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let mut source_quantified = Vec::new();
+                source_quantified
+                    .try_reserve(source_parameters.len())
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                source_quantified.extend(source_parameters.iter().map(|(parameter, _)| *parameter));
+                let source_quantified = source_quantified.into_boxed_slice();
                 prepared
                     .context
                     .set_quantified(method.binder, source_quantified.clone())?;
@@ -3566,21 +3622,20 @@ impl Elaborator {
                 .ok_or_else(invalid_state)?;
             let source_type_parameters = lowered
                 .scheme
-                .source_type_parameters
-                .as_deref()
+                .source_binder_parameters()
                 .ok_or_else(invalid_state)?;
-            if source_type_parameters.len() != lowered.scheme.type_parameters.len() {
+            if source_type_parameters.len() != lowered.scheme.binder_parameters().len() {
                 return Err(invalid_state());
             }
             self.type_work
-                .charge(lowered.scheme.type_parameters.len())
+                .charge(lowered.scheme.binder_parameters().len())
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             core_type_replacements
-                .try_reserve(lowered.scheme.type_parameters.len())
+                .try_reserve(lowered.scheme.binder_parameters().len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for (source, core) in source_type_parameters
+            for ((source, _), (core, _)) in source_type_parameters
                 .iter()
-                .zip(&lowered.scheme.type_parameters)
+                .zip(lowered.scheme.binder_parameters())
             {
                 if core_type_replacements
                     .try_insert_unique(*source, Type::Variable(*core))
@@ -3665,7 +3720,7 @@ impl Elaborator {
             .as_ref()
             .and_then(|lowering| lowering.implementation_methods.get(&fact.id))
             .ok_or_else(invalid_state)?;
-        if lowered.scheme.type_parameters.is_empty() {
+        if lowered.scheme.binder_parameters().is_empty() {
             if !same_type(&function.ty, &lowered.scheme.core_scheme) {
                 return Err(invalid_state());
             }
@@ -3676,11 +3731,20 @@ impl Elaborator {
             if !same_type(&function.ty, expected_body) {
                 return Err(invalid_state());
             }
-            let parameters = clone_type_variables_with_budget(
-                &lowered.scheme.type_parameters,
-                &mut self.type_work,
-            )
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.type_work
+                .charge(lowered.scheme.binder_parameters().len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut parameters = Vec::new();
+            parameters
+                .try_reserve(lowered.scheme.binder_parameters().len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            parameters.extend(
+                lowered
+                    .scheme
+                    .binder_parameters()
+                    .iter()
+                    .map(|(parameter, _)| *parameter),
+            );
             let core_scheme =
                 clone_type_with_budget(&lowered.scheme.core_scheme, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -3835,7 +3899,12 @@ impl Elaborator {
                         },
                     );
                 if checked.spelling != name.spelling
-                    || checked.scheme.type_parameters.as_ref() != quantified.as_ref()
+                    || !checked
+                        .scheme
+                        .type_parameters
+                        .iter()
+                        .map(|(parameter, _)| *parameter)
+                        .eq(quantified.iter().copied())
                     || !same_type(&checked.scheme.value_type, &function_type.ty)
                     || !requirements_match
                 {
@@ -3852,7 +3921,11 @@ impl Elaborator {
                     .as_ref()
                     .and_then(|lowering| lowering.global_schemes.get(&name.id))
                     .ok_or_else(invalid_state)?;
-                if lowered.type_parameters.as_ref() != quantified.as_ref()
+                if !lowered
+                    .type_parameters
+                    .iter()
+                    .map(|(parameter, _)| *parameter)
+                    .eq(quantified.iter().copied())
                     || !same_type(&lowered.value_type, &function_type.ty)
                 {
                     return Err(invalid_state());
@@ -7614,7 +7687,8 @@ fn checked_interface_facts(
         facts.push(CheckedInterfaceFact {
             id: interface.id,
             spelling: interface.spelling.clone(),
-            parameter: interface.parameter.clone(),
+            parameter: clone_resolved_type_variable_with_budget(&interface.parameter, type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
             methods: methods.into_boxed_slice(),
             origin: interface.origin.clone(),
             span: interface.span,
@@ -9967,6 +10041,36 @@ mod tests {
 
     static MODULE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
 
+    #[test]
+    fn lowered_scheme_retains_source_and_core_binder_kinds() {
+        let source = TypeVariableId::resolved(ModuleId::new(3), 5);
+        let core = TypeVariableId::generated(7);
+        let kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let lowered = LoweredScheme {
+            source_type_parameters: Some(Box::new([(source, kind.clone())])),
+            type_parameters: Box::new([(core, kind)]),
+            requirements: Box::new([]),
+            value_type: Type::Unit,
+            core_scheme: Type::Forall(Box::new([core]), Box::new(Type::Unit)),
+        };
+
+        let [(retained_source, source_kind)] = lowered
+            .source_binder_parameters()
+            .expect("the lowered implementation scheme should retain source binders")
+        else {
+            panic!("the lowered implementation scheme should retain one source binder");
+        };
+        let [(retained_core, core_kind)] = lowered.binder_parameters() else {
+            panic!("the lowered scheme should retain one Core binder");
+        };
+        assert_eq!((*retained_source, source_kind), (source, core_kind));
+        assert_eq!(*retained_core, core);
+        assert_eq!(
+            core_kind,
+            &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+        );
+    }
+
     struct ModuleFixtureFile(PathBuf);
 
     impl ModuleFixtureFile {
@@ -10597,6 +10701,7 @@ mod tests {
                         parameter: ResolvedTypeVariable {
                             id: parameter_id,
                             spelling: "A".to_owned(),
+                            kind: crate::types::Kind::Type,
                             origin: Origin::Source(span),
                         },
                         methods: vec![ResolvedInterfaceMethod {
@@ -10942,7 +11047,9 @@ mod tests {
 
     #[test]
     fn inferred_anonymous_function_type_precharges_three_cells_before_inference_origins() {
-        const EXACT_WORK: usize = 26;
+        // The module view retains one fixed Type-kind binder (record plus kind node)
+        // before the existing 26-unit expression synthesis boundary.
+        const EXACT_WORK: usize = 28;
         let resolved = resolved_module_fixture(
             "inferred-anonymous-function-budget.ash",
             "",
@@ -11495,6 +11602,7 @@ mod tests {
             .map(|local| ResolvedTypeVariable {
                 id: TypeVariableId::resolved(ModuleId::new(0), local),
                 spelling: format!("A{local}"),
+                kind: crate::types::Kind::Type,
                 origin: Origin::Source(span),
             })
             .collect::<Vec<_>>();
@@ -13247,6 +13355,7 @@ mod tests {
                             u32::try_from(index).expect("the parameter identity should fit"),
                         ),
                         spelling: format!("T{index}"),
+                        kind: crate::types::Kind::Type,
                         origin: Origin::Source(span),
                     })
                     .collect::<Vec<_>>();
@@ -13359,7 +13468,10 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(|| {
                 const DEPTH: usize = 10_000;
-                const EXACT_WORK: usize = 2 * DEPTH + 4;
+                // One parameter record, one requirement record, one retained
+                // Kind::Type node, one requirement-argument Type node, and the
+                // 2 * DEPTH + 1 value-Type nodes.
+                const EXACT_WORK: usize = 2 * DEPTH + 5;
                 let resolved = resolved_module_fixture(
                     "constrained-scheme-budget.ash",
                     "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nvalue : A -> Bool where Equal<A>\nvalue argument = true\n",

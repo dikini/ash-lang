@@ -883,6 +883,7 @@ mod tests {
             .map(|index| ResolvedTypeVariable {
                 id: TypeVariableId::new(u32::try_from(index).expect("parameter identity")),
                 spelling: format!("T{index}"),
+                kind: crate::types::Kind::Type,
                 origin: origin.clone(),
             })
             .collect();

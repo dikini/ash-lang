@@ -110,6 +110,38 @@ permanent language principle.
   warnings denied, formatting, all-target checking, test enumeration,
   `cargo xtask verify`, Rust documentation, Markdown lint, and diff hygiene pass
   on the final change.
+- Task 4 assigns every declaration binder one canonical fixed `Kind` and makes
+  present explicit binder lists complete and ordered. Omitted annotations and
+  absent global or implementation lists receive `Type` in this phase; this is
+  the accepted no-inference boundary, not a permanent language principle.
+  Checked schemes and body-free summaries retain the ordered identity-kind
+  pairs.
+- Task 4 also adds iterative, budgeted Kind operations and one total resolved
+  kind stage. The stage freezes local nominal and interface environments before
+  declaration checking, uses owner-specific declaration environments, leaves
+  the resolved-stage inference environment empty, authenticates direct
+  body-free kind facts, and admits partial constructors where the enclosing
+  rule accepts their residual kind. The public resolution pipeline has one
+  fail-closed kind gate before it constructs a `ResolvedModule`.
+- The new stage takes ownership of predecessor saturation and type-parameter
+  application failures. Value-boundary failures now use
+  `kind.expected-type`, non-function applications use `kind.not-applicable`,
+  and application-domain or interface-argument mismatches use
+  `kind.argument`. Structured diagnostics retain expected and found kinds,
+  causal occurrence spans, and relevant declaration spans. Exact budgets,
+  one-short atomic failures, and 32,768-level or 32,768-wide tests on 256 KiB
+  threads cover Kind operations, synthesis, environments, provenance, body
+  traversal, diagnostics, and teardown. The architecture inventory closes the
+  new carriers and enforces the sole public gate.
+- Task 4 closure authenticates declaration order as a complete, duplicate-free
+  partition and authenticates constructor-provenance cardinality before any
+  consumer uses the frozen environments. The kind stage stops at the first
+  candidate owned by the later method-local, determination, or
+  prerequisite-only check, so a later declaration cannot preempt that owner.
+  Rendering and surface-kind conversion now publish and test their
+  one-state-per-node resource formulas. The unused predecessor arity reason is
+  removed; `resolve.type-kind` remains only for using an interface identity as
+  an ordinary value type.
 
 ## Verification
 

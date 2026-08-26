@@ -9,18 +9,20 @@ mod support;
 use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
     elaborate::{TypeError, TypeReason, check_module},
+    kind::{KindExpectation, KindFailure, KindReason},
     lexer::lex,
     module::{LoadGraphError, LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     parser::{
         ParseContext, ParseReason, ProjectionError, SynchronizationBoundary, parse, project_module,
     },
     render,
-    resolve::{ResolveReason, resolve_module},
+    resolve::{ResolveError, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{
         ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
         ResolvedLocalDeclaration, ResolvedModule,
     },
     source::SourceFile,
+    types::Kind,
 };
 use support::run_module;
 
@@ -101,6 +103,15 @@ fn source(name: &str, text: &str) -> SourceFile {
 
 fn offset(value: usize) -> u32 {
     u32::try_from(value).expect("fixture offset should fit the source representation")
+}
+
+fn expect_resolution_error(error: ResolveModuleError) -> ResolveError {
+    match error {
+        ResolveModuleError::Resolution(error) => error,
+        ResolveModuleError::Kind(error) => {
+            panic!("resolution diagnostic fixture unexpectedly reached kind checking: {error:?}")
+        }
+    }
 }
 
 fn binding(block: &ResolvedBlock, index: usize) -> &ResolvedBinding {
@@ -362,7 +373,9 @@ fn complete_declaration_without_a_logical_line_end_remains_diagnosed() {
 #[test]
 fn r001_reports_only_the_unknown_occurrence_without_an_unjustified_suggestion() {
     let fixture = ModuleFixture::load("r001.ash", R001);
-    let error = resolve_module(fixture.loaded(), &[]).expect_err("R-001 should fail in resolution");
+    let error = expect_resolution_error(
+        resolve_module(fixture.loaded(), &[]).expect_err("R-001 should fail in resolution"),
+    );
 
     assert_eq!(error.reason, ResolveReason::UnknownName);
     let missing = R001.find("missing").expect("unknown occurrence");
@@ -382,7 +395,9 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
     let duplicate_text =
         "type Thing =\nFirst\n\ntype Thing =\nSecond\n\nmain : Unit -> Thing\nmain () = First\n";
     let duplicate = ModuleFixture::load("duplicate-type.ash", duplicate_text);
-    let error = resolve_module(duplicate.loaded(), &[]).expect_err("duplicate type should fail");
+    let error = expect_resolution_error(
+        resolve_module(duplicate.loaded(), &[]).expect_err("duplicate type should fail"),
+    );
     assert_eq!(error.reason, ResolveReason::DuplicateType);
     let first = duplicate_text.find("type Thing").expect("first type name") + "type ".len();
     let second = duplicate_text
@@ -396,8 +411,9 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
 
     let binder_text = "main : Unit -> Int\nmain () = {\nlet (value, value) = (1, 2)\nvalue\n}\n";
     let binder_fixture = ModuleFixture::load("duplicate-pattern-binder.ash", binder_text);
-    let error =
-        resolve_module(binder_fixture.loaded(), &[]).expect_err("duplicate binder should fail");
+    let error = expect_resolution_error(
+        resolve_module(binder_fixture.loaded(), &[]).expect_err("duplicate binder should fail"),
+    );
     assert_eq!(error.reason, ResolveReason::DuplicatePatternBinder);
     let first = binder_text.find("value").expect("first binder");
     let second = binder_text[first + 1..]
@@ -410,7 +426,9 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
 
     let unknown_text = "main : Unit -> Unit\nmain () = Missing\n";
     let unknown = ModuleFixture::load("unknown-constructor.ash", unknown_text);
-    let error = resolve_module(unknown.loaded(), &[]).expect_err("unknown constructor should fail");
+    let error = expect_resolution_error(
+        resolve_module(unknown.loaded(), &[]).expect_err("unknown constructor should fail"),
+    );
     assert_eq!(error.reason, ResolveReason::UnknownConstructor);
     assert_eq!(
         error.primary.span().range().start(),
@@ -572,7 +590,9 @@ fn r002_relates_the_second_global_to_the_first_name_and_definition() {
     let surface = fixture.loaded().surface();
     let first = &surface.definitions[0];
     let second = &surface.definitions[1];
-    let error = resolve_module(fixture.loaded(), &[]).expect_err("R-002 should fail in resolution");
+    let error = expect_resolution_error(
+        resolve_module(fixture.loaded(), &[]).expect_err("R-002 should fail in resolution"),
+    );
 
     assert_eq!(error.reason, ResolveReason::DuplicateGlobal);
     assert_eq!(
@@ -595,8 +615,9 @@ fn r002_relates_the_second_global_to_the_first_name_and_definition() {
 #[test]
 fn equation_name_mismatch_retains_both_names_and_a_justified_correction() {
     let fixture = ModuleFixture::load("equation-name.ash", EQUATION_NAME_MISMATCH);
-    let error =
-        resolve_module(fixture.loaded(), &[]).expect_err("the equation head should disagree");
+    let error = expect_resolution_error(
+        resolve_module(fixture.loaded(), &[]).expect_err("the equation head should disagree"),
+    );
 
     assert_eq!(error.reason, ResolveReason::EquationNameMismatch);
     assert_eq!(error.expected.as_deref(), Some("identity"));
@@ -942,7 +963,7 @@ fn nested_block_preserves_the_outer_binding_synthesis_context() {
 }
 
 #[test]
-fn rank_one_resolution_diagnostics_retain_exact_type_sites() {
+fn rank_one_resolution_and_kind_diagnostics_retain_exact_type_sites() {
     let duplicate_text =
         "type Pair<A, A> =\n    Pair(Int, Int)\n\nmain : Unit -> Int\nmain () = 0\n";
     let duplicate = failure("duplicate-type-parameter.ash", duplicate_text);
@@ -964,28 +985,33 @@ fn rank_one_resolution_diagnostics_retain_exact_type_sites() {
 
     let arity_text = "type Option<A> =\n    None\n    | Some(A)\n\nbad : Option -> Int\nbad _ = 0\n\nmain : Unit -> Int\nmain () = bad None\n";
     let arity = failure("type-argument-count.ash", arity_text);
-    let PipelineFailure::Resolution(arity) = arity else {
-        panic!("wrong nominal arity should fail during resolution");
+    let PipelineFailure::Kind(KindFailure::Source(arity)) = arity else {
+        panic!("a bare constructor at a value boundary should fail during kind checking");
     };
-    assert_eq!(arity.reason, ResolveReason::TypeArgumentCount);
+    assert_eq!(arity.reason, KindReason::ExpectedType);
     let bare = arity_text.find("Option ->").expect("bare nominal");
     assert_eq!(arity.primary.span().range().start(), offset(bare));
     assert_eq!(arity.primary.span().range().end(), offset(bare + 6));
+    assert_eq!(arity.expected_kind(), Some(&Kind::Type));
     assert_eq!(
-        arity.expected.as_deref(),
-        Some("Option with 1 type arguments")
+        arity.found_kind(),
+        Some(&Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)))
     );
-    assert_eq!(arity.found.as_deref(), Some("0"));
 
     let kind_text = "type Bad<A> =\n    Bad(A<Int>)\n\nmain : Unit -> Int\nmain () = 0\n";
     let kind = failure("type-kind.ash", kind_text);
-    let PipelineFailure::Resolution(kind) = kind else {
-        panic!("type kind errors should fail during resolution");
+    let PipelineFailure::Kind(KindFailure::Source(kind)) = kind else {
+        panic!("an applied Type-kinded binder should fail during kind checking");
     };
-    assert_eq!(kind.reason, ResolveReason::TypeKind);
+    assert_eq!(kind.reason, KindReason::NotApplicable);
+    assert_eq!(
+        kind.expectation(),
+        &KindExpectation::Function { domain: Kind::Type }
+    );
+    assert_eq!(kind.found_kind(), Some(&Kind::Type));
     let applied = kind_text.find("A<Int>").expect("applied parameter");
     assert_eq!(kind.primary.span().range().start(), offset(applied));
-    assert_eq!(kind.primary.span().range().end(), offset(applied + 1));
+    assert_eq!(kind.primary.span().range().end(), offset(applied + 6));
 
     let unknown_text = "type Wrapped<A> =\n    Wrapped(B)\n\nmain : Unit -> Int\nmain () = 0\n";
     let unknown = failure("unknown-type-variable.ash", unknown_text);

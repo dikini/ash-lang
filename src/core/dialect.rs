@@ -2331,7 +2331,11 @@ mod tests {
 
     #[test]
     fn validated_program_discards_a_wide_application_on_a_small_stack() {
-        const WIDTH: usize = 32_768;
+        // Registry validation, canonical binder authentication, envelope
+        // validation, and type-scope analysis consume 10W + 4 type-work
+        // units for this fixture. Keep the application one cell below 32K so
+        // the valid disposal witness remains inside the public ledger.
+        const WIDTH: usize = 32_767;
 
         std::thread::Builder::new()
             .name("validated-wide-type-disposal".to_owned())
@@ -2361,6 +2365,7 @@ mod tests {
                                 u32::try_from(index).expect("the fixture index should fit"),
                             ),
                             spelling: format!("A{index}"),
+                            kind: crate::types::Kind::Type,
                             origin: Origin::Source(
                                 source
                                     .span(

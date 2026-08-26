@@ -315,6 +315,7 @@ fn rejects_constructor_payload_variables_outside_the_owner_parameters() {
             vec![ResolvedTypeVariable {
                 id: parameter,
                 spelling: "A".into(),
+                kind: ash::types::Kind::Type,
                 origin: range_origin(&file, 2, 3),
             }],
         )]),
@@ -390,11 +391,13 @@ fn rejects_registry_type_parameter_identities_out_of_source_order() {
                 ResolvedTypeVariable {
                     id: TypeVariableId::new(1),
                     spelling: "A".into(),
+                    kind: ash::types::Kind::Type,
                     origin: range_origin(&file, 1, 2),
                 },
                 ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "B".into(),
+                    kind: ash::types::Kind::Type,
                     origin: range_origin(&file, 2, 3),
                 },
             ],
@@ -437,6 +440,7 @@ fn rejects_nominal_parameters_reused_as_type_abstraction_binders() {
             vec![ResolvedTypeVariable {
                 id: parameter,
                 spelling: "A".into(),
+                kind: ash::types::Kind::Type,
                 origin: range_origin(&file, 3, 4),
             }],
         )]),
@@ -727,6 +731,7 @@ fn rejects_and_destroys_overdeep_registry_parameter_origins_on_a_small_stack() {
                         vec![ResolvedTypeVariable {
                             id: parameter,
                             spelling: "A".into(),
+                            kind: ash::types::Kind::Type,
                             origin: deep_parameter_origin,
                         }],
                     )]),
@@ -777,11 +782,13 @@ fn rejects_and_destroys_replaced_registry_parameter_ids_on_a_small_stack() {
                             ResolvedTypeVariable {
                                 id: parameter,
                                 spelling: "A".into(),
+                                kind: ash::types::Kind::Type,
                                 origin: mixed_origin(&file, 5_000),
                             },
                             ResolvedTypeVariable {
                                 id: parameter,
                                 spelling: "B".into(),
+                                kind: ash::types::Kind::Type,
                                 origin: range_origin(&file, 2, 3),
                             },
                         ],
@@ -839,6 +846,7 @@ fn rejects_and_destroys_replaced_registry_parameter_owners_on_a_small_stack() {
                         vec![ResolvedTypeVariable {
                             id: first_parameter,
                             spelling: "A".into(),
+                            kind: ash::types::Kind::Type,
                             origin: mixed_origin(&file, 5_000),
                         }],
                     )])
@@ -847,6 +855,7 @@ fn rejects_and_destroys_replaced_registry_parameter_owners_on_a_small_stack() {
                         vec![ResolvedTypeVariable {
                             id: second_parameter,
                             spelling: "B".into(),
+                            kind: ash::types::Kind::Type,
                             origin: range_origin(&file, 2, 3),
                         }],
                     )]),

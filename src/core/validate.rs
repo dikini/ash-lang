@@ -22,7 +22,10 @@ use crate::{
     core::{CorePattern, CorePatternKind},
     module::ModuleId,
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
-    resolved::{BinderId, ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable},
+    resolved::{
+        BinderId, ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable,
+        same_resolved_type_variables_with_charge,
+    },
     source::{Origin, SourceFile, SourceId, Span},
     types::{
         ConstructorId, IterativeTypeOwner, TYPE_WORK_LIMIT, Type, discard_type_iteratively,
@@ -572,7 +575,13 @@ impl<'program, 'source> Validator<'program, 'source> {
                 let parameter_range = parameter_span.range();
                 if parameter_owners.insert(parameter.id, nominal.id).is_some()
                     || !parameter_names.insert(parameter.spelling.as_str())
-                    || registry.type_variable(parameter.id) != Some(parameter)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                let canonical = registry
+                    .type_variable(parameter.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                if !self.same_registry_type_variable(canonical, parameter)?
                     || parameter_range.start() < nominal_range.start()
                     || parameter_range.end() > nominal_range.end()
                     || previous_parameter_start
@@ -766,7 +775,13 @@ impl<'program, 'source> Validator<'program, 'source> {
                 if parameter.id.module() != Some(nominal.id.module())
                     || parameter_owners.insert(parameter.id, nominal.id).is_some()
                     || !parameter_names.insert(parameter.spelling.as_str())
-                    || registry.type_variable(parameter.id) != Some(parameter)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                let canonical = registry
+                    .type_variable(parameter.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                if !self.same_registry_type_variable(canonical, parameter)?
                     || parameter_range.start() < nominal_range.start()
                     || parameter_range.end() > nominal_range.end()
                     || previous_parameter_start
@@ -1029,6 +1044,19 @@ impl<'program, 'source> Validator<'program, 'source> {
             .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
         self.type_work.set(next);
         Ok(())
+    }
+
+    fn same_registry_type_variable(
+        &self,
+        left: &ResolvedTypeVariable,
+        right: &ResolvedTypeVariable,
+    ) -> Result<bool, ValidationError> {
+        same_resolved_type_variables_with_charge(
+            std::slice::from_ref(left),
+            std::slice::from_ref(right),
+            |work| self.charge_type_work(work).map_err(|_| ()),
+        )
+        .map_err(|()| ValidationError::new(ValidationReason::Resource, None))
     }
 
     fn charge_type_structure(&self, ty: &Type) -> Result<(), ValidationError> {
@@ -2532,6 +2560,7 @@ mod tests {
                     vec![crate::resolved::ResolvedTypeVariable {
                         id: first_parameter,
                         spelling: "A".into(),
+                        kind: crate::types::Kind::Type,
                         origin: range_origin(first_source, 7, 8),
                     }],
                 ),
@@ -2540,6 +2569,7 @@ mod tests {
                     vec![crate::resolved::ResolvedTypeVariable {
                         id: second_parameter,
                         spelling: "A".into(),
+                        kind: crate::types::Kind::Type,
                         origin: range_origin(second_source, 7, 8),
                     }],
                 ),
@@ -2708,6 +2738,7 @@ mod tests {
                         u32::try_from(index).expect("wide type parameter identity"),
                     ),
                     spelling: format!("T{index}"),
+                    kind: crate::types::Kind::Type,
                     origin: node_origin.clone(),
                 })
                 .collect(),
@@ -3469,6 +3500,7 @@ mod tests {
                     u32::try_from(index).expect("parameter identity"),
                 ),
                 spelling: format!("T{index}"),
+                kind: crate::types::Kind::Type,
                 origin: node_origin.clone(),
             })
             .collect();
@@ -3711,6 +3743,7 @@ mod tests {
                 .map(|index| crate::resolved::ResolvedTypeVariable {
                     id: crate::types::TypeVariableId::new(index),
                     spelling: format!("A{index}"),
+                    kind: crate::types::Kind::Type,
                     origin: Origin::Source(
                         file.span(
                             ByteRange::new(index, index + 1).expect("ordered parameter range"),
@@ -3741,6 +3774,147 @@ mod tests {
     }
 
     #[test]
+    fn registry_canonical_binder_kind_authentication_is_exact_and_stack_safe() {
+        const DEPTH: usize = 32_768;
+        const KIND_NODES: usize = 2 * DEPTH + 1;
+        // The canonical registry scan visits one binder record. Authenticating
+        // it against its ordered nominal record visits a second record plus
+        // every pair of Kind nodes.
+        const EXACT_WORK: usize = KIND_NODES + 2;
+
+        fn deep_kind() -> crate::types::Kind {
+            let mut kind = crate::types::Kind::Type;
+            for _ in 0..DEPTH {
+                kind =
+                    crate::types::Kind::Arrow(Box::new(crate::types::Kind::Type), Box::new(kind));
+            }
+            kind
+        }
+
+        fn registry_program(
+            file: &SourceFile,
+            module: Option<ModuleId>,
+            canonical_kind: Option<crate::types::Kind>,
+        ) -> UnvalidatedProgram {
+            let owner = module.unwrap_or_else(|| file.id().into());
+            let nominal = crate::types::NominalTypeId::new(owner, 0);
+            let constructor = ConstructorId::new(nominal, 0);
+            let parameter = module.map_or_else(
+                || crate::types::TypeVariableId::new(0),
+                |module| crate::types::TypeVariableId::resolved(module, 0),
+            );
+            let registry = crate::resolved::ResolvedRegistry::new(
+                vec![crate::resolved::ResolvedNominalType {
+                    id: nominal,
+                    spelling: "Holder".into(),
+                    constructors: Box::new([constructor]),
+                    origin: range_origin(file, 0, 13),
+                }],
+                vec![crate::resolved::ResolvedConstructor {
+                    id: constructor,
+                    owner: nominal,
+                    spelling: "Make".into(),
+                    payload: None,
+                    origin: range_origin(file, 9, 13),
+                }],
+            )
+            .with_type_parameters(vec![(
+                nominal,
+                vec![crate::resolved::ResolvedTypeVariable {
+                    id: parameter,
+                    spelling: "F".into(),
+                    kind: deep_kind(),
+                    origin: range_origin(file, 7, 8),
+                }],
+            )]);
+            let registry = match canonical_kind {
+                Some(kind) => registry.with_additional_type_variables([
+                    crate::resolved::ResolvedTypeVariable {
+                        id: parameter,
+                        spelling: "F".into(),
+                        kind,
+                        origin: range_origin(file, 7, 8),
+                    },
+                ]),
+                None => registry,
+            };
+            let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+            let root = builder
+                .unit(Type::Unit, range_origin(file, 0, 13))
+                .expect("the registry fixture root should fit");
+            builder
+                .finish(root)
+                .expect("the registry fixture should finish")
+        }
+
+        std::thread::Builder::new()
+            .name("core-registry-kind-authentication".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let file = SourceFile::new("registry-kind.ash", "Holder F Make")
+                    .expect("the registry fixture source should fit");
+
+                let exact_program = registry_program(&file, None, None);
+                let exact = Validator::new(&exact_program, &[&file]);
+                exact
+                    .charge_type_work(TYPE_WORK_LIMIT - EXACT_WORK)
+                    .expect("the exact fixture precharge should fit");
+                exact
+                    .validate_registry()
+                    .expect("the exact binder-kind authentication budget should fit");
+                assert_eq!(exact.type_work.get(), TYPE_WORK_LIMIT);
+
+                let short_program = registry_program(&file, None, None);
+                let short = Validator::new(&short_program, &[&file]);
+                short
+                    .charge_type_work(TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .expect("the one-short fixture precharge should fit");
+                let error = short
+                    .validate_registry()
+                    .expect_err("one missing Kind-pair visit must reject validation");
+                assert_eq!(error.reason(), ValidationReason::Resource);
+                assert_eq!(short.type_work.get(), TYPE_WORK_LIMIT);
+
+                let mismatched_program =
+                    registry_program(&file, None, Some(crate::types::Kind::Type));
+                let mismatched = Validator::new(&mismatched_program, &[&file]);
+                let error = mismatched
+                    .validate_registry()
+                    .expect_err("canonical and ordered binder kinds must agree");
+                assert_eq!(error.reason(), ValidationReason::Registry);
+
+                let module = ModuleId::new(47);
+                let module_program = registry_program(&file, Some(module), None);
+                let module_validator =
+                    Validator::new_modules(&module_program, &[&file], &[(module, file.id())])
+                        .expect("the module/source relation should be valid");
+                module_validator
+                    .charge_type_work(TYPE_WORK_LIMIT - EXACT_WORK)
+                    .expect("the module fixture precharge should fit");
+                module_validator
+                    .validate_registry()
+                    .expect("the module registry Kind authentication budget should fit");
+                assert_eq!(module_validator.type_work.get(), TYPE_WORK_LIMIT);
+
+                let short_module_program = registry_program(&file, Some(module), None);
+                let short_module_validator =
+                    Validator::new_modules(&short_module_program, &[&file], &[(module, file.id())])
+                        .expect("the one-short module/source relation should be valid");
+                short_module_validator
+                    .charge_type_work(TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .expect("the one-short module fixture precharge should fit");
+                let error = short_module_validator.validate_registry().expect_err(
+                    "one missing module-registry Kind-pair visit must reject validation",
+                );
+                assert_eq!(error.reason(), ValidationReason::Resource);
+                assert_eq!(short_module_validator.type_work.get(), TYPE_WORK_LIMIT);
+            })
+            .expect("the Core registry authentication thread should start")
+            .join()
+            .expect("deep Core registry Kind authentication must remain stack-safe");
+    }
+
+    #[test]
     fn rejects_malformed_additional_registry_type_variable_metadata() {
         let file = source();
         let foreign = SourceFile::new("foreign.ash", "A").expect("foreign source");
@@ -3753,6 +3927,7 @@ mod tests {
                 crate::resolved::ResolvedTypeVariable {
                     id: crate::types::TypeVariableId::new(0),
                     spelling: "lowercase".into(),
+                    kind: crate::types::Kind::Type,
                     origin: parameter_origin,
                 },
             ]);
@@ -3769,6 +3944,7 @@ mod tests {
                 crate::resolved::ResolvedTypeVariable {
                     id: crate::types::TypeVariableId::new(0),
                     spelling: "A".into(),
+                    kind: crate::types::Kind::Type,
                     origin: Origin::Source(
                         foreign
                             .span(ByteRange::new(0, 1).expect("ordered foreign range"))
@@ -3789,6 +3965,7 @@ mod tests {
                 crate::resolved::ResolvedTypeVariable {
                     id: crate::types::TypeVariableId::new(1),
                     spelling: "A".into(),
+                    kind: crate::types::Kind::Type,
                     origin: Origin::Source(
                         file.span(ByteRange::new(0, 1).expect("ordered parameter range"))
                             .expect("parameter span"),
@@ -3812,6 +3989,7 @@ mod tests {
                 crate::resolved::ResolvedTypeVariable {
                     id: crate::types::TypeVariableId::new(0),
                     spelling: "A".into(),
+                    kind: crate::types::Kind::Type,
                     origin: Origin::Source(
                         file.span(ByteRange::new(0, 1).expect("ordered parameter range"))
                             .expect("parameter span"),
@@ -3845,6 +4023,7 @@ mod tests {
         let parameters = vec![crate::resolved::ResolvedTypeVariable {
             id: parameter,
             spelling: "A".into(),
+            kind: crate::types::Kind::Type,
             origin: node_origin.clone(),
         }];
         let constructor_type = Type::Forall(
@@ -4043,6 +4222,7 @@ mod tests {
             vec![crate::resolved::ResolvedTypeVariable {
                 id: parameter,
                 spelling: "A".into(),
+                kind: crate::types::Kind::Type,
                 origin: node_origin.clone(),
             }],
         )]);
@@ -4502,6 +4682,7 @@ mod tests {
                         vec![crate::resolved::ResolvedTypeVariable {
                             id: parameter,
                             spelling: "T".into(),
+                            kind: crate::types::Kind::Type,
                             origin: node_origin.clone(),
                         }],
                     ),
@@ -4589,6 +4770,7 @@ mod tests {
                         vec![crate::resolved::ResolvedTypeVariable {
                             id: parameter,
                             spelling: "T".into(),
+                            kind: crate::types::Kind::Type,
                             origin: node_origin.clone(),
                         }],
                     ),

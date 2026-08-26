@@ -9,7 +9,7 @@ use ash::{
     interface::{ImplId, ImplMethodId, InterfaceId, MethodId, RequirementOwner},
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
-    types::{NominalTypeId, Type, TypeVariableId},
+    types::{Kind, NominalTypeId, Type, TypeVariableId},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -158,7 +158,10 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     assert_eq!(method.id, defining_implementation.methods[0].id);
     assert_eq!(method.method, expected_method);
     assert_eq!(method.method, defining_implementation.methods[0].method);
-    assert_eq!(method.scheme.type_parameters.as_ref(), &[parameter]);
+    assert_eq!(
+        method.scheme.type_parameters.as_ref(),
+        &[(parameter, Kind::Type)]
+    );
 
     let [method_requirement] = method.scheme.requirements.as_ref() else {
         panic!("the implementation method scheme should retain its prerequisite");

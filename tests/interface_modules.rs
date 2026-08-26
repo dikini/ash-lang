@@ -8,7 +8,7 @@ use ash::{
     elaborate::{TypeError, check_module},
     interface::{InterfaceReason, MethodId, RequirementOwner},
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
-    resolve::{DependencyExports, ResolveReason, resolve_module},
+    resolve::{DependencyExports, ResolveError, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{CheckedModule, ResolvedDefinitionKind, ResolvedExprKind, ResolvedTermName},
 };
 
@@ -104,7 +104,9 @@ fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
             .collect::<Vec<_>>();
         let resolved = resolve_module(module, &dependencies);
         if module.id() == entry.id() {
-            return resolved.expect_err("the entry fixture should fail resolution");
+            return expect_resolution_error(
+                resolved.expect_err("the entry fixture should fail resolution"),
+            );
         }
         checked.push(
             check_module(resolved.expect("a dependency fixture should resolve"))
@@ -112,6 +114,15 @@ fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
         );
     }
     panic!("the graph should contain its entry module")
+}
+
+fn expect_resolution_error(error: ResolveModuleError) -> ResolveError {
+    match error {
+        ResolveModuleError::Resolution(error) => error,
+        ResolveModuleError::Kind(error) => {
+            panic!("resolution fixture unexpectedly reached kind checking: {error:?}")
+        }
+    }
 }
 
 #[test]
@@ -369,8 +380,10 @@ fn private_interface_and_method_are_not_qualified_import_bindings() {
         .iter()
         .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
         .collect::<Vec<_>>();
-    let error = resolve_module(entry, &dependencies)
-        .expect_err("a private qualified interface should remain unavailable");
+    let error = expect_resolution_error(
+        resolve_module(entry, &dependencies)
+            .expect_err("a private qualified interface should remain unavailable"),
+    );
 
     assert_eq!(error.reason, ResolveReason::UnavailableExport);
 }
@@ -396,8 +409,10 @@ fn private_method_is_not_a_qualified_import_binding() {
         .iter()
         .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
         .collect::<Vec<_>>();
-    let error = resolve_module(entry, &dependencies)
-        .expect_err("a private qualified method should remain unavailable");
+    let error = expect_resolution_error(
+        resolve_module(entry, &dependencies)
+            .expect_err("a private qualified method should remain unavailable"),
+    );
 
     assert_eq!(error.reason, ResolveReason::UnavailableExport);
 }
@@ -460,8 +475,10 @@ fn hidden_interface_metadata_in_a_constrained_summary_is_not_reexported() {
         })
         .collect::<Vec<_>>();
 
-    let error = resolve_module(entry, &dependencies)
-        .expect_err("hidden interface shape must not create a targeted source binding");
+    let error = expect_resolution_error(
+        resolve_module(entry, &dependencies)
+            .expect_err("hidden interface shape must not create a targeted source binding"),
+    );
     assert_eq!(error.reason, ResolveReason::UnavailableExport);
 }
 
@@ -608,8 +625,10 @@ fn private_impl_head_spelling_and_constructor_remain_unavailable() {
         .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
         .collect::<Vec<_>>();
 
-    let error = resolve_module(entry, &dependencies)
-        .expect_err("hidden impl-head names must not become targeted exports");
+    let error = expect_resolution_error(
+        resolve_module(entry, &dependencies)
+            .expect_err("hidden impl-head names must not become targeted exports"),
+    );
     assert_eq!(error.reason, ResolveReason::UnavailableExport);
 }
 
@@ -778,8 +797,10 @@ fn rejects_external_opaque_constructor_and_pattern_in_impl_body() {
             .map(|edge| DependencyExports::new(edge, token_checked.exports()).unwrap())
             .collect::<Vec<_>>();
 
-        let error = resolve_module(entry, &dependencies)
-            .expect_err("the imported opaque constructor should remain inaccessible");
+        let error = expect_resolution_error(
+            resolve_module(entry, &dependencies)
+                .expect_err("the imported opaque constructor should remain inaccessible"),
+        );
         assert_eq!(
             error.reason,
             ResolveReason::OpaqueConstructor,

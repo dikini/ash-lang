@@ -9,7 +9,7 @@ use ash::{
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::CheckedModule,
-    types::Type,
+    types::{Kind, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -212,6 +212,20 @@ fn rejects_prerequisite_only_impl_variable() {
 }
 
 #[test]
+fn explicit_impl_prerequisite_only_candidate_keeps_interface_failure_ownership() {
+    let error = check_error(concat!(
+        "type Head<A> = Head(A)\n",
+        "type Pair<Left, Right> = Pair(Left, Right)\n",
+        "interface Equal<A> {\nequal : A -> A\n}\n\n",
+        "impl<A : Type> Equal<Head<A>> where Equal<Pair<A, B>> {\n",
+        "equal value = value\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.prerequisite-variable");
+}
+
+#[test]
 fn accepts_impl_for_local_interface() {
     check_valid(
         "interface Equal<A> {\nequal : A -> A\n}\n\nimpl Equal<Int> {\nequal value = value\n}\n",
@@ -384,7 +398,11 @@ fn checked_impl_method_owns_substituted_constrained_scheme() {
         panic!("the implementation should retain its prerequisite");
     };
 
-    assert_eq!(method.scheme.type_parameters.as_ref(), &[parameter.id]);
+    let [(method_parameter, method_kind)] = method.scheme.type_parameters.as_ref() else {
+        panic!("the method scheme should retain its generic head parameter");
+    };
+    assert_eq!(*method_parameter, parameter.id);
+    assert_eq!(method_kind, &parameter.kind);
     let [method_requirement] = method.scheme.requirements.as_ref() else {
         panic!("the method scheme should retain its implementation prerequisite");
     };
@@ -398,6 +416,35 @@ fn checked_impl_method_owns_substituted_constrained_scheme() {
     assert_eq!(codomain.as_ref(), implementation.argument());
     assert_eq!(method.id.implementation(), implementation.id);
     assert_eq!(method.id.method(), method.method);
+}
+
+#[test]
+fn checked_impl_method_scheme_retains_declared_function_kind() {
+    let checked = checked_valid(concat!(
+        "type Holder<F : Type -> Type> = Holder\n\n",
+        "interface Observe<A> {\nobserve : A -> Bool\n}\n\n",
+        "impl<F : Type -> Type> Observe<Holder<F>> {\n",
+        "observe value = true\n",
+        "}\n",
+    ));
+    let module = checked
+        .last()
+        .expect("the fixture should retain its module");
+    let [implementation] = module.implementation_facts() else {
+        panic!("the module should retain one checked implementation fact");
+    };
+    let [method] = implementation.methods.as_ref() else {
+        panic!("the implementation should retain one checked method fact");
+    };
+    let [(parameter, kind)] = method.scheme.type_parameters.as_ref() else {
+        panic!("the method scheme should retain one canonical binder");
+    };
+
+    assert_eq!(*parameter, implementation.head_parameters[0].id);
+    assert_eq!(
+        kind,
+        &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+    );
 }
 
 #[test]

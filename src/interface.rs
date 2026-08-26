@@ -11,8 +11,8 @@ use crate::{
     resolved::BinderId,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget, discard_type_iteratively,
-        same_type,
+        Kind, Type, TypeVariableId, TypeWorkBudget, clone_kinded_type_parameters_with_budget,
+        clone_type_with_budget, discard_type_iteratively, same_type,
     },
 };
 
@@ -1525,8 +1525,8 @@ impl CheckedRequirement {
 /// A checked source scheme whose requirements remain outside ordinary types.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ConstrainedScheme {
-    /// Ordered outer rank-1 type parameters.
-    pub type_parameters: Box<[TypeVariableId]>,
+    /// Ordered outer rank-1 type parameters and their fixed kinds.
+    pub type_parameters: Box<[(TypeVariableId, Kind)]>,
     /// Ordered explicit interface requirements.
     pub requirements: Box<[CheckedRequirement]>,
     /// Source value type without an enclosing `forall` node.
@@ -1579,7 +1579,11 @@ impl ConstrainedScheme {
     pub(crate) fn from_rank1_type(scheme: Type) -> Self {
         match scheme {
             Type::Forall(type_parameters, value_type) => Self {
-                type_parameters,
+                type_parameters: type_parameters
+                    .into_vec()
+                    .into_iter()
+                    .map(|parameter| (parameter, Kind::Type))
+                    .collect(),
                 requirements: Box::new([]),
                 value_type: *value_type,
             },
@@ -1592,16 +1596,9 @@ impl ConstrainedScheme {
     }
 
     pub(crate) fn clone_with_budget(&self, budget: &mut TypeWorkBudget) -> Result<Self, ()> {
-        budget.charge(
-            self.type_parameters
-                .len()
-                .saturating_add(self.requirements.len()),
-        )?;
-        let mut type_parameters = Vec::new();
-        type_parameters
-            .try_reserve(self.type_parameters.len())
-            .map_err(|_| ())?;
-        type_parameters.extend_from_slice(&self.type_parameters);
+        budget.charge(self.requirements.len())?;
+        let type_parameters =
+            clone_kinded_type_parameters_with_budget(&self.type_parameters, budget)?;
         let mut requirements = Vec::new();
         requirements
             .try_reserve(self.requirements.len())
@@ -1643,7 +1640,52 @@ mod tests {
     use std::any::TypeId;
 
     use super::*;
-    use crate::{module::ModuleId, resolved::BinderId};
+    use crate::{
+        module::ModuleId,
+        resolved::BinderId,
+        types::{Kind, TypeVariableId},
+    };
+
+    #[test]
+    fn rank1_type_binders_default_to_kind_type() {
+        let parameter = TypeVariableId::resolved(ModuleId::new(5), 7);
+        let scheme = ConstrainedScheme::from_rank1_type(Type::Forall(
+            Box::new([parameter]),
+            Box::new(Type::Variable(parameter)),
+        ));
+
+        let [(retained, kind)] = scheme.type_parameters.as_ref() else {
+            panic!("the predecessor scheme should retain one canonical binder");
+        };
+        assert_eq!(*retained, parameter);
+        assert_eq!(kind, &Kind::Type);
+    }
+
+    #[test]
+    fn constrained_scheme_clone_charges_binder_record_and_kind_nodes() {
+        // One binder record, three Kind nodes, and one value-Type node.
+        const WORK: usize = 5;
+        let parameter = TypeVariableId::resolved(ModuleId::new(5), 9);
+        let scheme = ConstrainedScheme {
+            type_parameters: Box::new([(
+                parameter,
+                Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+            )]),
+            requirements: Box::new([]),
+            value_type: Type::Variable(parameter),
+        };
+
+        let mut short = TypeWorkBudget::with_limit(WORK - 1);
+        assert_eq!(scheme.clone_with_budget(&mut short), Err(()));
+        assert_eq!(short.used(), WORK - 1);
+
+        let mut exact = TypeWorkBudget::with_limit(WORK);
+        let cloned = scheme
+            .clone_with_budget(&mut exact)
+            .expect("the exact scheme-clone budget should succeed");
+        assert_eq!(exact.used(), WORK);
+        assert_eq!(cloned, scheme);
+    }
 
     #[test]
     fn interface_and_method_identities_preserve_their_components() {

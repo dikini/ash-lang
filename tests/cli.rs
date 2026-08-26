@@ -251,6 +251,20 @@ fn type_failure_reports_the_argument_and_declared_domain() {
 }
 
 #[test]
+fn kind_failure_reports_the_causal_occurrence_and_declared_constructor() {
+    assert_source_failure(
+        b"type Option<A> =\nNone\n| Some(A)\n\nbad : Option -> Int\nbad _ = 0\n",
+        "kind.expected-type",
+        &[
+            "this function domain must have kind Type",
+            "the found kind is fixed by this declaration",
+            "expected Type",
+            "found Type -> Type",
+        ],
+    );
+}
+
+#[test]
 fn annotated_binding_failure_reports_the_initializer_and_annotation() {
     assert_source_failure(
         include_bytes!("fixtures/first-stratum/type/binding-initializer.ash"),

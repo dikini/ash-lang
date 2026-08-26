@@ -149,7 +149,10 @@ fn check_graph_with_fresh_stage_budgets(graph: &ModuleGraph) -> Vec<CheckedModul
 
 #[test]
 fn one_constraint_budget_persists_from_dependency_admission_through_validation() {
-    const WIDTH: usize = 6_000;
+    // This width keeps the complete resolved-kind pass below its independent
+    // type-work limit while the three constraint stages still exceed their one
+    // shared constraint-work limit.
+    const WIDTH: usize = 5_000;
     let fixture = ResourceFixture::create(concat!(
         "import dependency as Dependency\n",
         "main : Unit -> Int\n",
@@ -182,7 +185,9 @@ fn one_constraint_budget_persists_from_dependency_admission_through_validation()
 
 #[test]
 fn cycle_precedes_constraint_resource_exhaustion_after_import_admission() {
-    const WIDTH: usize = 6_000;
+    // Keep dependency kind authentication below the independent type-work
+    // limit so this witness reaches the intended constraint-owner collision.
+    const WIDTH: usize = 5_000;
     let fixture = ResourceFixture::create(concat!(
         "import dependency as Dependency\n\n",
         "interface First<A> {\nfirst : A -> A\n}\n\n",
