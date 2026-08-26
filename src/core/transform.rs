@@ -6,7 +6,54 @@ use super::{
     BuildError, CoreBuilder, CoreMatchArm, CorePattern, CorePatternKind, NodeId, Primitive,
     PureComputation, PureExprKind, PureValue, UnvalidatedProgram, ValidatedProgram,
 };
-use crate::source::{GeneratedReason, Origin};
+use crate::{
+    source::{GeneratedReason, Origin},
+    types::{IterativeTypeOwner, Type, discard_type_iteratively},
+};
+
+struct IterativeTypeBuffer(Vec<Type>);
+
+impl IterativeTypeBuffer {
+    fn push(&mut self, ty: Type) {
+        self.0.push(ty);
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn into_vec(mut self) -> Vec<Type> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for IterativeTypeBuffer {
+    fn drop(&mut self) {
+        for ty in self.0.drain(..) {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+struct CorePatternOwner(Option<CorePattern>);
+
+impl CorePatternOwner {
+    const fn new(pattern: CorePattern) -> Self {
+        Self(Some(pattern))
+    }
+
+    fn into_inner(mut self) -> CorePattern {
+        self.0.take().expect("a Core pattern transfers once")
+    }
+}
+
+impl Drop for CorePatternOwner {
+    fn drop(&mut self) {
+        if let Some(pattern) = self.0.take() {
+            pattern.discard_iteratively();
+        }
+    }
+}
 
 struct CorePatternBuffer(Vec<CorePattern>);
 
@@ -15,8 +62,8 @@ impl CorePatternBuffer {
         self.0.push(pattern);
     }
 
-    fn pop(&mut self) -> Option<CorePattern> {
-        self.0.pop()
+    fn pop(&mut self) -> Option<CorePatternOwner> {
+        self.0.pop().map(CorePatternOwner::new)
     }
 
     fn len(&self) -> usize {
@@ -27,8 +74,12 @@ impl CorePatternBuffer {
         self.0.is_empty()
     }
 
-    fn split_off(&mut self, at: usize) -> Vec<CorePattern> {
-        self.0.split_off(at)
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
+    }
+
+    fn into_boxed_slice(mut self) -> Box<[CorePattern]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
     }
 }
 
@@ -110,8 +161,20 @@ fn rebuild(
     program: &ValidatedProgram,
     fold_literal_primitives: bool,
 ) -> Result<UnvalidatedProgram, TransformError> {
+    rebuild_with_initial_type_work(program, fold_literal_primitives, 0)
+}
+
+fn rebuild_with_initial_type_work(
+    program: &ValidatedProgram,
+    fold_literal_primitives: bool,
+    initial_type_work: usize,
+) -> Result<UnvalidatedProgram, TransformError> {
     let order = postorder(program, fold_literal_primitives)?;
     let mut builder = CoreBuilder::with_registry(Arc::clone(program.registry()));
+    #[cfg(test)]
+    builder.charge_type_work_for_test(initial_type_work)?;
+    #[cfg(not(test))]
+    debug_assert_eq!(initial_type_work, 0);
     let mut binders = Vec::new();
     for id in &order {
         let expression = program
@@ -184,10 +247,11 @@ fn rebuild_node(
         && let PureExprKind::Computation(PureComputation::Primitive(operation)) = &expression.kind
         && let Some(value) = folded_literal(program, *operation)
     {
+        let ty = builder.clone_type_for_rebuild(&expression.ty)?;
         return builder
             .integer(
                 value,
-                expression.ty.clone(),
+                ty,
                 Origin::Generated {
                     cause: Box::new(expression.origin.clone()),
                     reason: GeneratedReason::ConstantFolding,
@@ -197,151 +261,157 @@ fn rebuild_node(
     }
 
     match &expression.kind {
-        PureExprKind::Value(PureValue::Integer(node)) => builder
-            .integer(
-                node.value().clone(),
-                expression.ty.clone(),
-                expression.origin.clone(),
-            )
-            .map_err(TransformError::from),
-        PureExprKind::Value(PureValue::Boolean(node)) => builder
-            .boolean(
-                node.value(),
-                expression.ty.clone(),
-                expression.origin.clone(),
-            )
-            .map_err(TransformError::from),
-        PureExprKind::Value(PureValue::Unit(_)) => builder
-            .unit(expression.ty.clone(), expression.origin.clone())
-            .map_err(TransformError::from),
-        PureExprKind::Value(PureValue::Constructor(node)) => builder
-            .constructor(
-                node.constructor(),
-                expression.ty.clone(),
-                expression.origin.clone(),
-            )
-            .map_err(TransformError::from),
-        PureExprKind::Value(PureValue::Function(node)) => {
-            let parameter = builder.resolved_binder(
-                node.parameter().id(),
-                node.parameter().ty().clone(),
-                node.parameter().origin().clone(),
-            )?;
+        PureExprKind::Value(PureValue::Integer(node)) => {
+            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
             builder
-                .function(
-                    parameter,
-                    remap(remapped, node.body())?,
-                    expression.ty.clone(),
-                    expression.origin.clone(),
-                )
+                .integer(node.value().clone(), ty, expression.origin.clone())
                 .map_err(TransformError::from)
         }
-        PureExprKind::Variable(node) => builder
-            .variable(
-                node.binder(),
-                expression.ty.clone(),
-                expression.origin.clone(),
-            )
-            .map_err(TransformError::from),
+        PureExprKind::Value(PureValue::Boolean(node)) => {
+            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
+            builder
+                .boolean(node.value(), ty, expression.origin.clone())
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Value(PureValue::Unit(_)) => {
+            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
+            builder
+                .unit(ty, expression.origin.clone())
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Value(PureValue::Constructor(node)) => {
+            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
+            builder
+                .constructor(node.constructor(), ty, expression.origin.clone())
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Value(PureValue::Function(node)) => {
+            let parameter_type = builder.clone_type_for_rebuild(node.parameter().ty())?;
+            let parameter = builder.resolved_binder(
+                node.parameter().id(),
+                parameter_type,
+                node.parameter().origin().clone(),
+            )?;
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let body = remap(remapped, node.body())?;
+            let origin = expression.origin.clone();
+            builder
+                .function(parameter, body, ty.into_inner(), origin)
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Variable(node) => {
+            let ty = builder.clone_type_for_rebuild(&expression.ty)?;
+            builder
+                .variable(node.binder(), ty, expression.origin.clone())
+                .map_err(TransformError::from)
+        }
         PureExprKind::Computation(PureComputation::Bind(node)) => {
+            let binder_type = builder.clone_type_for_rebuild(node.binder().ty())?;
             let binder = builder.resolved_binder(
                 node.binder().id(),
-                node.binder().ty().clone(),
+                binder_type,
                 node.binder().origin().clone(),
             )?;
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let initializer = remap(remapped, node.initializer())?;
+            let body = remap(remapped, node.body())?;
+            let origin = expression.origin.clone();
             builder
-                .binding(
-                    binder,
-                    remap(remapped, node.initializer())?,
-                    remap(remapped, node.body())?,
-                    expression.ty.clone(),
-                    expression.origin.clone(),
-                )
+                .binding(binder, initializer, body, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::RecursiveBind(node)) => {
-            let mut members = Vec::with_capacity(node.members().len());
+            let mut members = Vec::new();
+            members
+                .try_reserve(node.members().len())
+                .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
             for member in node.members() {
+                let binder_type = builder.clone_type_for_rebuild(member.binder().ty())?;
                 let binder = builder.resolved_binder(
                     member.binder().id(),
-                    member.binder().ty().clone(),
+                    binder_type,
                     member.binder().origin().clone(),
                 )?;
                 members.push((binder, remap(remapped, member.initializer())?));
             }
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let body = remap(remapped, node.body())?;
+            let origin = expression.origin.clone();
             builder
-                .recursive_binding(
-                    members,
-                    remap(remapped, node.body())?,
-                    expression.ty.clone(),
-                    expression.origin.clone(),
-                )
+                .recursive_binding(members, body, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
-        PureExprKind::Computation(PureComputation::Apply(node)) => builder
-            .application(
-                remap(remapped, node.function())?,
-                remap(remapped, node.argument())?,
-                expression.ty.clone(),
-                expression.origin.clone(),
-            )
-            .map_err(TransformError::from),
-        PureExprKind::Computation(PureComputation::Primitive(node)) => builder
-            .primitive(
-                node.primitive(),
-                remap(remapped, node.left())?,
-                remap(remapped, node.right())?,
-                expression.ty.clone(),
-                expression.origin.clone(),
-            )
-            .map_err(TransformError::from),
-        PureExprKind::Computation(PureComputation::Tuple(node)) => builder
-            .tuple(
-                node.elements()
-                    .iter()
-                    .map(|element| remap(remapped, *element))
-                    .collect::<Result<Vec<_>, _>>()?,
-                expression.ty.clone(),
-                expression.origin.clone(),
-            )
-            .map_err(TransformError::from),
+        PureExprKind::Computation(PureComputation::Apply(node)) => {
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let function = remap(remapped, node.function())?;
+            let argument = remap(remapped, node.argument())?;
+            let origin = expression.origin.clone();
+            builder
+                .application(function, argument, ty.into_inner(), origin)
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Computation(PureComputation::Primitive(node)) => {
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let left = remap(remapped, node.left())?;
+            let right = remap(remapped, node.right())?;
+            let origin = expression.origin.clone();
+            builder
+                .primitive(node.primitive(), left, right, ty.into_inner(), origin)
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Computation(PureComputation::Tuple(node)) => {
+            let elements = node
+                .elements()
+                .iter()
+                .map(|element| remap(remapped, *element))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let origin = expression.origin.clone();
+            builder
+                .tuple(elements, ty.into_inner(), origin)
+                .map_err(TransformError::from)
+        }
         PureExprKind::Computation(PureComputation::Match(node)) => {
             let arms = node
                 .arms()
                 .iter()
                 .map(|arm| {
-                    Ok(CoreMatchArm::new(
-                        rebuild_pattern(builder, arm.pattern())?,
-                        remap(remapped, arm.body())?,
-                        arm.origin().clone(),
-                    ))
+                    let pattern = CorePatternOwner::new(rebuild_pattern(builder, arm.pattern())?);
+                    let body = remap(remapped, arm.body())?;
+                    let origin = arm.origin().clone();
+                    Ok(CoreMatchArm::new(pattern.into_inner(), body, origin))
                 })
                 .collect::<Result<Vec<_>, TransformError>>()?;
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let scrutinee = remap(remapped, node.scrutinee())?;
+            let origin = expression.origin.clone();
             builder
-                .match_expression(
-                    remap(remapped, node.scrutinee())?,
-                    arms,
-                    expression.ty.clone(),
-                    expression.origin.clone(),
-                )
+                .match_expression(scrutinee, arms, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
-        PureExprKind::Computation(PureComputation::TypeAbstraction(node)) => builder
-            .type_abstraction(
-                node.parameters().to_vec(),
-                remap(remapped, node.body())?,
-                expression.ty.clone(),
-                expression.origin.clone(),
-            )
-            .map_err(TransformError::from),
-        PureExprKind::Computation(PureComputation::TypeApplication(node)) => builder
-            .type_application(
-                remap(remapped, node.function())?,
-                node.arguments().to_vec(),
-                expression.ty.clone(),
-                expression.origin.clone(),
-            )
-            .map_err(TransformError::from),
+        PureExprKind::Computation(PureComputation::TypeAbstraction(node)) => {
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let body = remap(remapped, node.body())?;
+            let origin = expression.origin.clone();
+            builder
+                .type_abstraction_from_borrowed(node.parameters(), body, ty.into_inner(), origin)
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Computation(PureComputation::TypeApplication(node)) => {
+            let mut arguments = IterativeTypeBuffer(Vec::new());
+            arguments
+                .try_reserve(node.arguments().len())
+                .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
+            for argument in node.arguments() {
+                arguments.push(builder.clone_type_for_rebuild(argument)?);
+            }
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let function = remap(remapped, node.function())?;
+            let origin = expression.origin.clone();
+            builder
+                .type_application(function, arguments.into_vec(), ty.into_inner(), origin)
+                .map_err(TransformError::from)
+        }
     }
 }
 
@@ -361,32 +431,43 @@ fn rebuild_pattern(
         match task {
             Task::Visit(pattern) => match &pattern.kind {
                 CorePatternKind::Binder(binder) => {
+                    let binder_type = builder.clone_type_for_rebuild(binder.ty())?;
                     let binder = builder.resolved_binder(
                         binder.id(),
-                        binder.ty().clone(),
+                        binder_type,
                         binder.origin().clone(),
                     )?;
+                    let ty = builder.clone_type_for_rebuild(&pattern.ty)?;
                     rebuilt.push(CorePattern::new(
-                        pattern.ty.clone(),
+                        ty,
                         pattern.origin.clone(),
                         CorePatternKind::Binder(binder),
                     ));
                 }
-                CorePatternKind::Wildcard => rebuilt.push(CorePattern::new(
-                    pattern.ty.clone(),
-                    pattern.origin.clone(),
-                    CorePatternKind::Wildcard,
-                )),
-                CorePatternKind::Boolean(value) => rebuilt.push(CorePattern::new(
-                    pattern.ty.clone(),
-                    pattern.origin.clone(),
-                    CorePatternKind::Boolean(*value),
-                )),
-                CorePatternKind::Unit => rebuilt.push(CorePattern::new(
-                    pattern.ty.clone(),
-                    pattern.origin.clone(),
-                    CorePatternKind::Unit,
-                )),
+                CorePatternKind::Wildcard => {
+                    let ty = builder.clone_type_for_rebuild(&pattern.ty)?;
+                    rebuilt.push(CorePattern::new(
+                        ty,
+                        pattern.origin.clone(),
+                        CorePatternKind::Wildcard,
+                    ));
+                }
+                CorePatternKind::Boolean(value) => {
+                    let ty = builder.clone_type_for_rebuild(&pattern.ty)?;
+                    rebuilt.push(CorePattern::new(
+                        ty,
+                        pattern.origin.clone(),
+                        CorePatternKind::Boolean(*value),
+                    ));
+                }
+                CorePatternKind::Unit => {
+                    let ty = builder.clone_type_for_rebuild(&pattern.ty)?;
+                    rebuilt.push(CorePattern::new(
+                        ty,
+                        pattern.origin.clone(),
+                        CorePatternKind::Unit,
+                    ));
+                }
                 CorePatternKind::Tuple(elements) => {
                     work.push(Task::FinishTuple(pattern, elements.len()));
                     work.extend(elements.iter().rev().map(Task::Visit));
@@ -410,26 +491,26 @@ fn rebuild_pattern(
                     return Err(TransformError::InvalidValidatedInput);
                 }
                 let elements = rebuilt.split_off(rebuilt.len() - count);
+                let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&pattern.ty)?);
                 rebuilt.push(CorePattern::new(
-                    pattern.ty.clone(),
+                    ty.into_inner(),
                     pattern.origin.clone(),
                     CorePatternKind::Tuple(elements.into_boxed_slice()),
                 ));
             }
             Task::FinishConstructor(pattern, constructor, has_payload) => {
                 let payload = if has_payload {
-                    Some(Box::new(
-                        rebuilt.pop().ok_or(TransformError::InvalidValidatedInput)?,
-                    ))
+                    Some(rebuilt.pop().ok_or(TransformError::InvalidValidatedInput)?)
                 } else {
                     None
                 };
+                let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&pattern.ty)?);
                 rebuilt.push(CorePattern::new(
-                    pattern.ty.clone(),
+                    ty.into_inner(),
                     pattern.origin.clone(),
                     CorePatternKind::Constructor {
                         constructor,
-                        payload,
+                        payload: payload.map(|payload| Box::new(payload.into_inner())),
                     },
                 ));
             }
@@ -437,9 +518,8 @@ fn rebuild_pattern(
     }
     let result = rebuilt.pop().ok_or(TransformError::InvalidValidatedInput)?;
     if rebuilt.is_empty() {
-        Ok(result)
+        Ok(result.into_inner())
     } else {
-        result.discard_iteratively();
         Err(TransformError::InvalidValidatedInput)
     }
 }
@@ -547,7 +627,7 @@ mod tests {
     use crate::{
         resolved::BinderId,
         source::{ByteRange, SourceFile},
-        types::Type,
+        types::{ConstructorId, Kind, NominalTypeId, TYPE_WORK_LIMIT, Type, TypeVariableId},
     };
 
     fn application_type(depth: usize) -> Type {
@@ -556,6 +636,54 @@ mod tests {
             result = Type::Application(Box::new(result), Box::new(Type::Unit));
         }
         result
+    }
+
+    #[test]
+    fn higher_kinded_transform_copies_have_an_exact_type_budget() {
+        // Body: one retained clone + one admission visit = 2.
+        // Abstraction scheme: six clone units and six admission units.
+        // Abstraction parameters: one binder record + three Kind nodes = 4.
+        const EXACT_WORK: usize = 18;
+        let source =
+            SourceFile::new("transform-kinds.ash", "higher").expect("transform fixture source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 6).expect("transform fixture range"))
+                .expect("transform fixture span"),
+        );
+        let parameter = TypeVariableId::new(0);
+        let kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let mut builder = CoreBuilder::new();
+        let body = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("fixture body");
+        let root = builder
+            .type_abstraction(
+                vec![(parameter, kind.clone())],
+                body,
+                Type::Forall(
+                    vec![(parameter, kind.clone())].into_boxed_slice(),
+                    Box::new(Type::Unit),
+                ),
+                origin,
+            )
+            .expect("fixture abstraction");
+        let program = super::super::validate::validate(
+            builder.finish(root).expect("fixture root"),
+            &[&source],
+        )
+        .expect("fixture validates");
+
+        let short =
+            rebuild_with_initial_type_work(&program, false, TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                .expect_err("one-short transform must reject before publishing output");
+        assert_eq!(short, TransformError::Build(BuildError::TypeWorkExceeded));
+
+        let transformed =
+            rebuild_with_initial_type_work(&program, false, TYPE_WORK_LIMIT - EXACT_WORK)
+                .expect("the exact transform allowance fits");
+        super::super::validate::validate(transformed, &[&source])
+            .expect("the exact transform preserves canonical binder kinds");
     }
 
     #[test]
@@ -608,5 +736,213 @@ mod tests {
             .expect("small-stack transform thread should start")
             .join()
             .expect("late pattern-transform teardown must fit the small stack");
+    }
+
+    #[test]
+    fn deep_type_application_arguments_survive_a_late_missing_remap() {
+        std::thread::Builder::new()
+            .name("transform-type-argument-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_768;
+                let source = SourceFile::new("transform-argument.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("test span"),
+                );
+                let mut input = CoreBuilder::new();
+                let input_root = input.unit(Type::Unit, origin.clone()).expect("input root");
+                let program = super::super::validate::validate(
+                    input.finish(input_root).expect("input program"),
+                    &[&source],
+                )
+                .expect("input validates");
+                let expression = super::super::TypedExpr {
+                    ty: Type::Unit,
+                    origin: origin.clone(),
+                    kind: PureExprKind::Computation(PureComputation::TypeApplication(
+                        super::super::type_ops::TypeApplicationNode::new(
+                            program.root(),
+                            vec![application_type(DEPTH)],
+                        ),
+                    )),
+                };
+                let mut output = CoreBuilder::new();
+                let remapped = vec![None; program.node_count()];
+
+                let error = rebuild_node(&mut output, &program, &remapped, &expression, false)
+                    .expect_err("the deliberately absent function remap is an invariant failure");
+                assert_eq!(error, TransformError::InvalidValidatedInput);
+
+                expression.discard_iteratively();
+            })
+            .expect("small-stack argument-owner thread should start")
+            .join()
+            .expect("late missing-remap teardown must fit the small stack");
+    }
+
+    #[test]
+    fn accumulated_type_arguments_survive_one_short_result_clone() {
+        std::thread::Builder::new()
+            .name("transform-result-clone-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_768;
+                const DEEP_CELLS: usize = 2 * DEPTH + 1;
+                const ARGUMENT_CELLS: usize = DEEP_CELLS + 1;
+                let source = SourceFile::new("transform-result.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("test span"),
+                );
+                let mut input = CoreBuilder::new();
+                let input_root = input.unit(Type::Unit, origin.clone()).expect("input root");
+                let program = super::super::validate::validate(
+                    input.finish(input_root).expect("input program"),
+                    &[&source],
+                )
+                .expect("input validates");
+                let expression = super::super::TypedExpr {
+                    ty: Type::Unit,
+                    origin,
+                    kind: PureExprKind::Computation(PureComputation::TypeApplication(
+                        super::super::type_ops::TypeApplicationNode::new(
+                            program.root(),
+                            vec![application_type(DEPTH), Type::Unit],
+                        ),
+                    )),
+                };
+                let mut output = CoreBuilder::new();
+                output
+                    .charge_type_work_for_test(TYPE_WORK_LIMIT - ARGUMENT_CELLS)
+                    .expect("the exact argument-clone allowance remains");
+
+                let error = rebuild_node(&mut output, &program, &[], &expression, false)
+                    .expect_err("the one-short result clone must fail after both arguments");
+                assert_eq!(error, TransformError::Build(BuildError::TypeWorkExceeded));
+
+                expression.discard_iteratively();
+            })
+            .expect("small-stack result-owner thread should start")
+            .join()
+            .expect("late result-clone teardown must fit the small stack");
+    }
+
+    #[test]
+    fn extracted_tuple_and_constructor_children_survive_parent_clone_failure() {
+        std::thread::Builder::new()
+            .name("transform-pattern-child-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_768;
+                const DEEP_CELLS: usize = 2 * DEPTH + 1;
+                let source = SourceFile::new("transform-pattern.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("test span"),
+                );
+
+                let tuple = CorePattern::new(
+                    Type::Unit,
+                    origin.clone(),
+                    CorePatternKind::Tuple(
+                        vec![
+                            CorePattern::new(
+                                application_type(DEPTH),
+                                origin.clone(),
+                                CorePatternKind::Wildcard,
+                            ),
+                            CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard),
+                        ]
+                        .into_boxed_slice(),
+                    ),
+                );
+                let mut tuple_builder = CoreBuilder::new();
+                tuple_builder
+                    .charge_type_work_for_test(TYPE_WORK_LIMIT - (DEEP_CELLS + 1))
+                    .expect("the exact tuple-child allowance remains");
+                assert_eq!(
+                    rebuild_pattern(&mut tuple_builder, &tuple),
+                    Err(TransformError::Build(BuildError::TypeWorkExceeded))
+                );
+                tuple.discard_iteratively();
+
+                let constructor = CorePattern::new(
+                    Type::Unit,
+                    origin.clone(),
+                    CorePatternKind::Constructor {
+                        constructor: ConstructorId::new(NominalTypeId::new(source.id(), 0), 0),
+                        payload: Some(Box::new(CorePattern::new(
+                            application_type(DEPTH),
+                            origin,
+                            CorePatternKind::Wildcard,
+                        ))),
+                    },
+                );
+                let mut constructor_builder = CoreBuilder::new();
+                constructor_builder
+                    .charge_type_work_for_test(TYPE_WORK_LIMIT - DEEP_CELLS)
+                    .expect("the exact constructor-child allowance remains");
+                assert_eq!(
+                    rebuild_pattern(&mut constructor_builder, &constructor),
+                    Err(TransformError::Build(BuildError::TypeWorkExceeded))
+                );
+                constructor.discard_iteratively();
+            })
+            .expect("small-stack pattern-child thread should start")
+            .join()
+            .expect("extracted pattern-child teardown must fit the small stack");
+    }
+
+    #[test]
+    fn rebuilt_deep_match_pattern_survives_missing_body_remap() {
+        std::thread::Builder::new()
+            .name("transform-match-pattern-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_768;
+                let source = SourceFile::new("transform-match.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("test span"),
+                );
+                let mut input = CoreBuilder::new();
+                let input_root = input.unit(Type::Unit, origin.clone()).expect("input root");
+                let program = super::super::validate::validate(
+                    input.finish(input_root).expect("input program"),
+                    &[&source],
+                )
+                .expect("input validates");
+                let pattern = CorePattern::new(
+                    application_type(DEPTH),
+                    origin.clone(),
+                    CorePatternKind::Wildcard,
+                );
+                let expression = super::super::TypedExpr {
+                    ty: Type::Unit,
+                    origin: origin.clone(),
+                    kind: PureExprKind::Computation(PureComputation::Match(
+                        super::super::MatchNode::new(
+                            program.root(),
+                            vec![CoreMatchArm::new(pattern, program.root(), origin)],
+                        ),
+                    )),
+                };
+                let mut output = CoreBuilder::new();
+                let remapped = vec![None; program.node_count()];
+
+                let error = rebuild_node(&mut output, &program, &remapped, &expression, false)
+                    .expect_err("the deliberately absent arm-body remap is an invariant failure");
+                assert_eq!(error, TransformError::InvalidValidatedInput);
+
+                expression.discard_iteratively();
+            })
+            .expect("small-stack match-pattern thread should start")
+            .join()
+            .expect("missing-remap pattern teardown must fit the small stack");
     }
 }

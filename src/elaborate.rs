@@ -44,8 +44,9 @@ use crate::{
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
         InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
-        charge_type_cells, clone_kind_with_budget, discard_type_iteratively,
-        replace_type_iteratively, same_type, substitute_type_variables_with,
+        charge_type_cells, clone_kind_with_budget, clone_kinded_type_parameters_with_budget,
+        discard_type_iteratively, replace_type_iteratively,
+        same_kinded_type_parameters_with_budget, same_type, substitute_type_variables_with,
     },
 };
 
@@ -297,8 +298,10 @@ impl Drop for TypeContext {
 struct TypeFact {
     ty: Type,
     provenance: TypeProvenance,
-    quantified: Box<[TypeVariableId]>,
+    quantified: Box<[(TypeVariableId, Kind)]>,
 }
+
+type KindedTypeParameters = Box<[(TypeVariableId, Kind)]>;
 
 fn discard_type_fact(mut fact: TypeFact) {
     discard_type_iteratively(std::mem::replace(&mut fact.ty, Type::Unit));
@@ -811,7 +814,7 @@ impl TypeContext {
     fn set_quantified(
         &mut self,
         binder: BinderId,
-        quantified: Box<[TypeVariableId]>,
+        quantified: Box<[(TypeVariableId, Kind)]>,
     ) -> Result<(), TypeError> {
         let fact = self.binders.get_mut(&binder).ok_or_else(invalid_state)?;
         fact.quantified = quantified;
@@ -1226,21 +1229,12 @@ impl Elaborator {
             .map_err(TypeError::from)?;
         let mut base_context = TypeContext::new();
         for imported in module.imported_facts().globals() {
-            type_work
-                .charge(imported.scheme.type_parameters.len())
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let mut quantified = Vec::new();
-            quantified
-                .try_reserve(imported.scheme.type_parameters.len())
-                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            quantified.extend(
-                imported
-                    .scheme
-                    .type_parameters
-                    .iter()
-                    .map(|(parameter, _)| *parameter),
-            );
-            let quantified = quantified.into_boxed_slice();
+            let quantified = clone_kinded_type_parameters_with_budget(
+                &imported.scheme.type_parameters,
+                &mut type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            .into_boxed_slice();
             let body = IterativeTypeOwner::new(
                 clone_type_with_budget(&imported.scheme.value_type, &mut type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
@@ -1577,14 +1571,9 @@ impl Elaborator {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            self.type_work
-                .charge(type_parameters.len())
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let mut parameters = Vec::new();
-            parameters
-                .try_reserve(type_parameters.len())
-                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            parameters.extend(type_parameters.iter().map(|(parameter, _)| *parameter));
+            let parameters =
+                clone_kinded_type_parameters_with_budget(&type_parameters, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             Type::Forall(
                 parameters.into_boxed_slice(),
                 Box::new(core_body.into_inner()),
@@ -2239,7 +2228,7 @@ impl Elaborator {
                 .try_reserve(count)
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         }
-        for binder in &fact.quantified {
+        for (binder, _) in &fact.quantified {
             let argument = if rigid {
                 Type::Variable(*binder)
             } else {
@@ -2433,12 +2422,18 @@ impl Elaborator {
             let method_fact = selector.method(method).ok_or_else(invalid_state)?;
             let interface = method_fact.interface();
             let parameter = method_fact.interface_parameter();
+            let (fact_parameters, scheme_parameters) = retain_method_occurrence_parameters(
+                parameter,
+                method_fact.interface_parameter_kind(),
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let value_type = IterativeTypeOwner::new(self.clone_type(method_fact.value_type())?);
             let method_span = method_fact.declaration_span();
             let fact = TypeFactOwner::new(TypeFact {
                 provenance: self.at_span_provenance(&value_type, method_span)?,
                 ty: value_type.into_inner(),
-                quantified: vec![parameter].into_boxed_slice(),
+                quantified: fact_parameters,
             });
             let (ty, arguments) = self.instantiate(&fact, false, span)?;
             let ty = IterativeTypeOwner::new(ty);
@@ -2461,11 +2456,8 @@ impl Elaborator {
                 )
                 .map_err(|failure| selection_failure(failure, Some(span)))?;
 
-            self.type_work
-                .charge(2)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let core_scheme = IterativeTypeOwner::new(Type::Forall(
-                vec![parameter].into_boxed_slice(),
+                scheme_parameters,
                 Box::new(self.clone_type(&fact.ty)?),
             ));
             let binder = if let Some(binder) = self.method_binders.get(&method).copied() {
@@ -2786,10 +2778,12 @@ impl Elaborator {
         let Type::Forall(parameters, body) = &scheme.core_scheme else {
             return Err(invalid_state());
         };
-        if !parameters.iter().copied().eq(scheme
-            .binder_parameters()
-            .iter()
-            .map(|(parameter, _)| *parameter))
+        if !same_kinded_type_parameters_with_budget(
+            parameters,
+            scheme.binder_parameters(),
+            &mut self.type_work,
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
         {
             return Err(invalid_state());
         }
@@ -2800,7 +2794,7 @@ impl Elaborator {
         replacements
             .try_reserve(arguments.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for (parameter, argument) in parameters.iter().zip(arguments) {
+        for ((parameter, _), argument) in parameters.iter().zip(arguments) {
             if replacements
                 .try_insert_unique(*parameter, self.clone_type(argument)?)
                 .is_err()
@@ -3495,11 +3489,7 @@ impl Elaborator {
                         .scheme
                         .source_binder_parameters()
                         .is_none_or(|parameters| {
-                            !parameters.iter().map(|(parameter, _)| *parameter).eq(method
-                                .scheme
-                                .type_parameters
-                                .iter()
-                                .map(|(parameter, _)| *parameter))
+                            parameters.len() != method.scheme.type_parameters.len()
                         })
                     || !same_type(&lowered.scheme.value_type, &method.scheme.value_type)
                 {
@@ -3538,15 +3528,21 @@ impl Elaborator {
                     .scheme
                     .source_binder_parameters()
                     .ok_or_else(invalid_state)?;
-                self.type_work
-                    .charge(source_parameters.len())
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let mut source_quantified = Vec::new();
-                source_quantified
-                    .try_reserve(source_parameters.len())
-                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                source_quantified.extend(source_parameters.iter().map(|(parameter, _)| *parameter));
-                let source_quantified = source_quantified.into_boxed_slice();
+                if !same_kinded_type_parameters_with_budget(
+                    source_parameters,
+                    &method.scheme.type_parameters,
+                    &mut self.type_work,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                {
+                    return Err(invalid_state());
+                }
+                let source_quantified = clone_kinded_type_parameters_with_budget(
+                    source_parameters,
+                    &mut self.type_work,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                .into_boxed_slice();
                 prepared
                     .context
                     .set_quantified(method.binder, source_quantified.clone())?;
@@ -3731,20 +3727,11 @@ impl Elaborator {
             if !same_type(&function.ty, expected_body) {
                 return Err(invalid_state());
             }
-            self.type_work
-                .charge(lowered.scheme.binder_parameters().len())
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let mut parameters = Vec::new();
-            parameters
-                .try_reserve(lowered.scheme.binder_parameters().len())
-                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            parameters.extend(
-                lowered
-                    .scheme
-                    .binder_parameters()
-                    .iter()
-                    .map(|(parameter, _)| *parameter),
-            );
+            let parameters = clone_kinded_type_parameters_with_budget(
+                lowered.scheme.binder_parameters(),
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let core_scheme =
                 clone_type_with_budget(&lowered.scheme.core_scheme, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -3868,7 +3855,14 @@ impl Elaborator {
             quantified
                 .try_reserve(type_parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            quantified.extend(type_parameters.iter().map(|parameter| parameter.id));
+            for parameter in type_parameters {
+                quantified.push((
+                    parameter.id,
+                    clone_kind_with_budget(&parameter.kind, &mut self.type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+                ));
+            }
             let quantified = quantified.into_boxed_slice();
             let binder_body = IterativeTypeOwner::new(self.clone_type(&function_type.ty)?);
             let binder_type = if quantified.is_empty() {
@@ -3878,7 +3872,7 @@ impl Elaborator {
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let binder_parameters =
-                    clone_type_variables_with_budget(&quantified, &mut self.type_work)
+                    clone_kinded_type_parameters_with_budget(&quantified, &mut self.type_work)
                         .map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?
@@ -3899,12 +3893,12 @@ impl Elaborator {
                         },
                     );
                 if checked.spelling != name.spelling
-                    || !checked
-                        .scheme
-                        .type_parameters
-                        .iter()
-                        .map(|(parameter, _)| *parameter)
-                        .eq(quantified.iter().copied())
+                    || !same_kinded_type_parameters_with_budget(
+                        &checked.scheme.type_parameters,
+                        &quantified,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
                     || !same_type(&checked.scheme.value_type, &function_type.ty)
                     || !requirements_match
                 {
@@ -3921,11 +3915,12 @@ impl Elaborator {
                     .as_ref()
                     .and_then(|lowering| lowering.global_schemes.get(&name.id))
                     .ok_or_else(invalid_state)?;
-                if !lowered
-                    .type_parameters
-                    .iter()
-                    .map(|(parameter, _)| *parameter)
-                    .eq(quantified.iter().copied())
+                if !same_kinded_type_parameters_with_budget(
+                    &lowered.type_parameters,
+                    &quantified,
+                    &mut self.type_work,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
                     || !same_type(&lowered.value_type, &function_type.ty)
                 {
                     return Err(invalid_state());
@@ -3953,7 +3948,7 @@ impl Elaborator {
                 return Err(invalid_state());
             }
             let context_quantified =
-                clone_type_variables_with_budget(&quantified, &mut self.type_work)
+                clone_kinded_type_parameters_with_budget(&quantified, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
                     .into_boxed_slice();
             context.set_quantified(name.id, context_quantified)?;
@@ -4107,14 +4102,14 @@ impl Elaborator {
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let scheme_parameters =
-                clone_type_variables_with_budget(quantified, &mut self.type_work)
+                clone_kinded_type_parameters_with_budget(quantified, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
                     .into_boxed_slice();
             let scheme_body = self.clone_type(&function.ty)?;
             let scheme =
                 IterativeTypeOwner::new(Type::Forall(scheme_parameters, Box::new(scheme_body)));
             let abstraction_parameters =
-                clone_type_variables_with_budget(quantified, &mut self.type_work)
+                clone_kinded_type_parameters_with_budget(quantified, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let node = self.builder.type_abstraction(
                 abstraction_parameters,
@@ -4434,7 +4429,17 @@ impl Elaborator {
                         quantified.try_reserve(parameter_count).map_err(|_| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?;
-                        quantified.extend(parameters.iter().map(|parameter| parameter.id));
+                        for parameter in parameters {
+                            quantified.push((
+                                parameter.id,
+                                clone_kind_with_budget(&parameter.kind, &mut self.type_work)
+                                    .map_err(|()| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?,
+                            ));
+                        }
                         let result = if parameters.is_empty() {
                             Type::Nominal(constructor.owner)
                         } else {
@@ -5071,7 +5076,7 @@ impl Elaborator {
                             let binder = self.fresh_type_variable()?;
                             self.inference_solutions
                                 .insert(variable, Type::Variable(binder));
-                            generalized.push(binder);
+                            generalized.push((binder, Kind::Type));
                         }
                         let zonked = self.zonk(&initializer.ty)?;
                         initializer.replace_type(zonked);
@@ -5143,14 +5148,14 @@ impl Elaborator {
                             discard_type_iteratively(ty);
                             discard_origin_iteratively(pattern_origin);
                             let quantified = generalized.into_boxed_slice();
-                            let context_quantified =
-                                clone_type_variables_with_budget(&quantified, &mut self.type_work)
-                                    .map_err(|()| {
-                                        TypeError::Internal(
-                                            ElaborationFailure::TypeResourceExhausted,
-                                        )
-                                    })?
-                                    .into_boxed_slice();
+                            let context_quantified = clone_kinded_type_parameters_with_budget(
+                                &quantified,
+                                &mut self.type_work,
+                            )
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?
+                            .into_boxed_slice();
                             let abstraction = if quantified.is_empty() {
                                 None
                             } else {
@@ -5166,7 +5171,7 @@ impl Elaborator {
                                     IterativeTypeOwner::new(self.clone_type(&scheme)?);
                                 let abstraction_parameters = match &*scheme {
                                     Type::Forall(parameters, _) => {
-                                        clone_type_variables_with_budget(
+                                        clone_kinded_type_parameters_with_budget(
                                             parameters,
                                             &mut self.type_work,
                                         )
@@ -8161,7 +8166,7 @@ struct PreparedGlobals {
     context: TypeContext,
     globals: Vec<ElaboratedBinding>,
     binders: HashMap<BinderId, TypedBinder>,
-    quantifiers: HashMap<BinderId, Box<[TypeVariableId]>>,
+    quantifiers: HashMap<BinderId, Box<[(TypeVariableId, Kind)]>>,
 }
 
 impl Drop for PreparedGlobals {
@@ -9435,32 +9440,40 @@ fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type
     Ok(zonk_type(ty, &HashMap::new()))
 }
 
+fn retain_method_occurrence_parameters(
+    parameter: TypeVariableId,
+    kind: &Kind,
+    budget: &mut TypeWorkBudget,
+) -> Result<(KindedTypeParameters, KindedTypeParameters), ()> {
+    budget.charge(1)?;
+    let mut fact_parameters = Vec::new();
+    fact_parameters.try_reserve(1).map_err(|_| ())?;
+    fact_parameters.push((parameter, clone_kind_with_budget(kind, budget)?));
+
+    // The Core scheme retains a distinct Forall wrapper, binder record, and
+    // Kind copy from the elaboration fact above.
+    budget.charge(2)?;
+    let mut scheme_parameters = Vec::new();
+    scheme_parameters.try_reserve(1).map_err(|_| ())?;
+    scheme_parameters.push((parameter, clone_kind_with_budget(kind, budget)?));
+
+    Ok((
+        fact_parameters.into_boxed_slice(),
+        scheme_parameters.into_boxed_slice(),
+    ))
+}
+
 fn clone_scheme_with_budget(fact: &TypeFact, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
     charge_type_cells(&fact.ty, budget)?;
     if fact.quantified.is_empty() {
         return Ok(zonk_type(&fact.ty, &HashMap::new()));
     }
-    budget.charge(fact.quantified.len().saturating_add(1))?;
-    let mut quantified = Vec::new();
-    quantified
-        .try_reserve(fact.quantified.len())
-        .map_err(|_| ())?;
-    quantified.extend_from_slice(&fact.quantified);
+    budget.charge(1)?;
+    let quantified = clone_kinded_type_parameters_with_budget(&fact.quantified, budget)?;
     Ok(Type::Forall(
         quantified.into_boxed_slice(),
         Box::new(zonk_type(&fact.ty, &HashMap::new())),
     ))
-}
-
-fn clone_type_variables_with_budget(
-    variables: &[TypeVariableId],
-    budget: &mut TypeWorkBudget,
-) -> Result<Vec<TypeVariableId>, ()> {
-    budget.charge(variables.len())?;
-    let mut copy = Vec::new();
-    copy.try_reserve(variables.len()).map_err(|_| ())?;
-    copy.extend_from_slice(variables);
-    Ok(copy)
 }
 
 fn charge_pattern_binder_storage(ty: &Type, budget: &mut TypeWorkBudget) -> Result<(), ()> {
@@ -9659,7 +9672,17 @@ fn zonk_type_with_status<E>(
             }
             ChargeTask::Visit(Type::Forall(parameters, body)) => {
                 charge(1)?;
-                charge(parameters.len())?;
+                for (_, kind) in parameters {
+                    charge(1)?;
+                    let mut kinds = vec![kind];
+                    while let Some(kind) = kinds.pop() {
+                        charge(1)?;
+                        if let Kind::Arrow(domain, codomain) = kind {
+                            kinds.push(codomain);
+                            kinds.push(domain);
+                        }
+                    }
+                }
                 work.push(ChargeTask::Visit(body));
             }
             ChargeTask::Visit(
@@ -9688,7 +9711,7 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
-        FinishForall(Box<[TypeVariableId]>),
+        FinishForall(Box<[(TypeVariableId, Kind)]>),
     }
 
     let mut work = vec![Task::Visit(ty)];
@@ -10048,10 +10071,10 @@ mod tests {
         let kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
         let lowered = LoweredScheme {
             source_type_parameters: Some(Box::new([(source, kind.clone())])),
-            type_parameters: Box::new([(core, kind)]),
+            type_parameters: Box::new([(core, kind.clone())]),
             requirements: Box::new([]),
             value_type: Type::Unit,
-            core_scheme: Type::Forall(Box::new([core]), Box::new(Type::Unit)),
+            core_scheme: Type::Forall(Box::new([(core, kind)]), Box::new(Type::Unit)),
         };
 
         let [(retained_source, source_kind)] = lowered
@@ -10407,9 +10430,14 @@ mod tests {
     #[test]
     fn zonking_charges_forall_quantifiers_before_cloning_them() {
         const WIDTH: usize = 4_096;
-        const EXACT_WORK: usize = WIDTH + 2;
+        const EXACT_WORK: usize = 2 * WIDTH + 2;
         let parameters = (0..WIDTH)
-            .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+            .map(|index| {
+                (
+                    TypeVariableId::new(u32::try_from(index).expect("parameter identity")),
+                    Kind::Type,
+                )
+            })
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let source = Type::Forall(parameters, Box::new(Type::Unit));
@@ -11146,22 +11174,22 @@ mod tests {
             ty: Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice()),
             provenance: TypeProvenance::atom(None),
             quantified: vec![
-                TypeVariableId::new(0),
-                TypeVariableId::new(1),
-                TypeVariableId::new(2),
+                (TypeVariableId::new(0), Kind::Type),
+                (TypeVariableId::new(1), Kind::Type),
+                (TypeVariableId::new(2), Kind::Type),
             ]
             .into_boxed_slice(),
         };
 
         let mut short = TypeWorkBudget::default();
         short
-            .charge(crate::types::TYPE_WORK_LIMIT - 7)
+            .charge(crate::types::TYPE_WORK_LIMIT - 10)
             .expect("the fixture leaves one fewer unit than the complete scheme copy");
         assert_eq!(clone_scheme_with_budget(&fact, &mut short), Err(()));
 
         let mut exact = TypeWorkBudget::default();
         exact
-            .charge(crate::types::TYPE_WORK_LIMIT - 8)
+            .charge(crate::types::TYPE_WORK_LIMIT - 11)
             .expect("the fixture leaves the body, quantifiers, and wrapper");
         assert_eq!(
             clone_scheme_with_budget(&fact, &mut exact),
@@ -11171,6 +11199,59 @@ mod tests {
             ))
         );
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn method_occurrence_parameter_copies_are_exact_atomic_and_stack_safe() {
+        const DEPTH: usize = 32_768;
+        const KIND_NODES: usize = 2 * DEPTH + 1;
+        // One TypeFact binder record and K Kind nodes, followed by one Core
+        // Forall wrapper, one Core binder record, and the second K-node copy.
+        const EXACT_WORK: usize = 1 + KIND_NODES + 1 + 1 + KIND_NODES;
+
+        fn deep_kind() -> Kind {
+            let mut kind = Kind::Type;
+            for _ in 0..DEPTH {
+                kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+            }
+            kind
+        }
+
+        std::thread::Builder::new()
+            .name("method-occurrence-kind-copies".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let parameter = TypeVariableId::new(0);
+
+                let mut short = TypeWorkBudget::default();
+                short
+                    .charge(crate::types::TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .expect("one-short method-occurrence precharge");
+                assert_eq!(
+                    retain_method_occurrence_parameters(parameter, &deep_kind(), &mut short),
+                    Err(())
+                );
+                assert_eq!(short.used(), crate::types::TYPE_WORK_LIMIT);
+
+                let source_kind = deep_kind();
+                let mut exact = TypeWorkBudget::default();
+                exact
+                    .charge(crate::types::TYPE_WORK_LIMIT - EXACT_WORK)
+                    .expect("exact method-occurrence precharge");
+                let (fact, scheme) =
+                    retain_method_occurrence_parameters(parameter, &source_kind, &mut exact)
+                        .expect("both physical binder/Kind copies fit exactly");
+                assert_eq!(fact.len(), 1);
+                assert_eq!(scheme.len(), 1);
+                assert_eq!(fact[0].0, parameter);
+                assert_eq!(scheme[0].0, parameter);
+                assert_eq!(fact[0].1, source_kind);
+                assert_eq!(scheme[0].1, source_kind);
+                assert_eq!(exact.used(), crate::types::TYPE_WORK_LIMIT);
+            })
+            .expect("small-stack method-occurrence thread")
+            .join()
+            .expect("partial and complete Kind-copy teardown must remain iterative");
     }
 
     #[test]
@@ -11391,9 +11472,9 @@ mod tests {
             ty: Type::Unit,
             provenance: TypeProvenance::atom(Some(span)),
             quantified: vec![
-                TypeVariableId::new(0),
-                TypeVariableId::new(1),
-                TypeVariableId::new(2),
+                (TypeVariableId::new(0), Kind::Type),
+                (TypeVariableId::new(1), Kind::Type),
+                (TypeVariableId::new(2), Kind::Type),
             ]
             .into_boxed_slice(),
         };
@@ -11443,7 +11524,12 @@ mod tests {
             panic!("the fixture parameter should be a binder");
         };
         let quantified = (0..WIDTH)
-            .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+            .map(|index| {
+                (
+                    TypeVariableId::new(u32::try_from(index).expect("parameter identity")),
+                    Kind::Type,
+                )
+            })
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let mut context = TypeContext::new();
@@ -11709,22 +11795,22 @@ mod tests {
     #[test]
     fn retained_forall_clones_charge_quantifier_identities_before_allocation() {
         let parameters = vec![
-            TypeVariableId::new(0),
-            TypeVariableId::new(1),
-            TypeVariableId::new(2),
+            (TypeVariableId::new(0), Kind::Type),
+            (TypeVariableId::new(1), Kind::Type),
+            (TypeVariableId::new(2), Kind::Type),
         ]
         .into_boxed_slice();
         let ty = Type::Forall(parameters, Box::new(Type::Int));
 
         let mut short = TypeWorkBudget::default();
         short
-            .charge(crate::types::TYPE_WORK_LIMIT - 4)
+            .charge(crate::types::TYPE_WORK_LIMIT - 7)
             .expect("the fixture leaves one fewer cell than the retained clone requires");
         assert_eq!(clone_type_with_budget(&ty, &mut short), Err(()));
 
         let mut exact = TypeWorkBudget::default();
         exact
-            .charge(crate::types::TYPE_WORK_LIMIT - 5)
+            .charge(crate::types::TYPE_WORK_LIMIT - 8)
             .expect("the fixture leaves the wrapper, binder identities, and body");
         assert_eq!(clone_type_with_budget(&ty, &mut exact), Ok(ty));
         assert_eq!(exact.charge(1), Err(()));
@@ -11733,9 +11819,9 @@ mod tests {
     #[test]
     fn function_part_clones_charge_forall_domain_binders() {
         let parameters = vec![
-            TypeVariableId::new(0),
-            TypeVariableId::new(1),
-            TypeVariableId::new(2),
+            (TypeVariableId::new(0), Kind::Type),
+            (TypeVariableId::new(1), Kind::Type),
+            (TypeVariableId::new(2), Kind::Type),
         ]
         .into_boxed_slice();
         let domain = Type::Forall(parameters, Box::new(Type::Int));
@@ -11743,7 +11829,7 @@ mod tests {
 
         let mut short = TypeWorkBudget::default();
         short
-            .charge(crate::types::TYPE_WORK_LIMIT - 5)
+            .charge(crate::types::TYPE_WORK_LIMIT - 8)
             .expect("the fixture leaves one fewer cell than both retained children require");
         assert_eq!(
             clone_function_parts_with_budget(&function, &mut short),
@@ -11752,7 +11838,7 @@ mod tests {
 
         let mut exact = TypeWorkBudget::default();
         exact
-            .charge(crate::types::TYPE_WORK_LIMIT - 6)
+            .charge(crate::types::TYPE_WORK_LIMIT - 9)
             .expect("the fixture leaves the exact two-child clone cost");
         assert_eq!(
             clone_function_parts_with_budget(&function, &mut exact),
@@ -11964,7 +12050,10 @@ mod tests {
         context.insert(BinderId::new(1), Type::Unit);
         let ids = context.binders.keys().copied().collect::<Vec<_>>();
         context
-            .set_quantified(ids[0], vec![TypeVariableId::new(0)].into_boxed_slice())
+            .set_quantified(
+                ids[0],
+                vec![(TypeVariableId::new(0), Kind::Type)].into_boxed_slice(),
+            )
             .expect("the fact exists");
         context.insert(ids[1], Type::Tuple(vec![Type::Int; 8].into_boxed_slice()));
         let mut elaborator = Elaborator::new();
@@ -12007,7 +12096,12 @@ mod tests {
             "fn(value) {\n42\n}",
         );
         let parameters = (0..crate::types::TYPE_WORK_LIMIT)
-            .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+            .map(|index| {
+                (
+                    TypeVariableId::new(u32::try_from(index).expect("parameter identity")),
+                    Kind::Type,
+                )
+            })
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let expected = Type::Function(

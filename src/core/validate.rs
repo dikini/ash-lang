@@ -28,10 +28,17 @@ use crate::{
     },
     source::{Origin, SourceFile, SourceId, Span},
     types::{
-        ConstructorId, IterativeTypeOwner, TYPE_WORK_LIMIT, Type, discard_type_iteratively,
-        same_type, substitute_type_variables_with,
+        ConstructorId, IterativeTypeOwner, Kind, TYPE_WORK_LIMIT, Type, discard_type_iteratively,
+        same_type_with_budget, substitute_type_variables_with,
     },
 };
+
+/// Cumulative structural-work capacity for independent Core validation.
+///
+/// Validation reauthenticates the complete admitted Core program, including
+/// fixed Kind structure. Construction, rebuilding, and every other type-work
+/// owner retain [`TYPE_WORK_LIMIT`].
+const CORE_VALIDATION_TYPE_WORK_LIMIT: usize = 3 * TYPE_WORK_LIMIT;
 
 struct TypeReplacementMap(HashMap<crate::types::TypeVariableId, Type>);
 
@@ -97,6 +104,18 @@ impl OwnedTypeSequence {
     fn next(&mut self) -> Option<Type> {
         self.0.next()
     }
+}
+
+type CoreTypeBinders<'a> = HashMap<crate::types::TypeVariableId, (&'a Kind, NodeId)>;
+
+#[derive(Clone, Copy)]
+enum MonotypeVariableKinds<'scope, 'kind> {
+    Core(&'scope CoreTypeBinders<'kind>),
+    Registry {
+        owner: crate::types::NominalTypeId,
+        parameter_owners:
+            &'scope HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>,
+    },
 }
 
 impl Drop for OwnedTypeSequence {
@@ -179,6 +198,13 @@ impl ValidationError {
         Self { reason, node }
     }
 
+    const fn at_node(mut self, node: NodeId) -> Self {
+        if self.node.is_none() {
+            self.node = Some(node);
+        }
+        self
+    }
+
     /// Returns the violated invariant category.
     #[must_use]
     pub const fn reason(&self) -> ValidationReason {
@@ -218,72 +244,6 @@ fn constructor_belongs_to_owner(owner: &ResolvedNominalType, constructor: Constr
         .ok()
         .and_then(|index| owner.constructors.get(index))
         .is_some_and(|owned| *owned == constructor)
-}
-
-fn function_value_type_matches(annotation: &Type, domain: &Type, codomain: &Type) -> bool {
-    let Type::Function(actual_domain, actual_codomain) = annotation else {
-        return false;
-    };
-    same_type(actual_domain, domain) && same_type(actual_codomain, codomain)
-}
-
-fn nominal_application_head_and_arity(ty: &Type) -> Option<(crate::types::NominalTypeId, usize)> {
-    let mut arity = 0usize;
-    let mut function = ty;
-    while let Type::Application(next, argument) = function {
-        let _ = argument;
-        arity = arity.checked_add(1)?;
-        function = next;
-    }
-    let Type::Nominal(owner) = function else {
-        return None;
-    };
-    Some((*owner, arity))
-}
-
-fn constructor_value_type_matches(
-    annotation: &Type,
-    constructor: &ResolvedConstructor,
-    parameters: &[ResolvedTypeVariable],
-) -> bool {
-    let monotype = if parameters.is_empty() {
-        annotation
-    } else {
-        let Type::Forall(actual_parameters, body) = annotation else {
-            return false;
-        };
-        if actual_parameters.len() != parameters.len()
-            || !actual_parameters
-                .iter()
-                .zip(parameters)
-                .all(|(actual, expected)| *actual == expected.id)
-        {
-            return false;
-        }
-        body
-    };
-    let result = if let Some(payload) = constructor.payload.as_ref() {
-        let Type::Function(actual_payload, result) = monotype else {
-            return false;
-        };
-        if !same_type(actual_payload, payload) {
-            return false;
-        }
-        result.as_ref()
-    } else {
-        monotype
-    };
-    let mut current = result;
-    for parameter in parameters.iter().rev() {
-        let Type::Application(function, argument) = current else {
-            return false;
-        };
-        if !matches!(argument.as_ref(), Type::Variable(identity) if *identity == parameter.id) {
-            return false;
-        }
-        current = function;
-    }
-    matches!(current, Type::Nominal(owner) if *owner == constructor.owner)
 }
 
 /// Consumes unchecked Core and returns the capability required by consumers.
@@ -443,7 +403,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         self.validate_envelopes()?;
         self.validate_graph()?;
         self.collect_binders()?;
-        self.validate_node_types(&nominal_parameter_owners)?;
+        let type_binders = self.collect_type_binders(&nominal_parameter_owners)?;
+        self.validate_node_types(&nominal_parameter_owners, &type_binders)?;
         self.validate_scopes()?;
         self.validate_type_scopes()
     }
@@ -604,6 +565,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                 constructor.owner,
                 &parameter_owners,
             )?;
+            let payload_kind_valid = payload_valid
+                && self.valid_registry_payload_kind(
+                    constructor.payload.as_ref(),
+                    constructor.owner,
+                    &parameter_owners,
+                )?;
             if constructor.id.owner() != constructor.owner
                 || !nominal_ids.contains(&constructor.owner)
                 || Some(constructor.origin.primary_span().source()) != registry_source
@@ -611,7 +578,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 || !valid_upper_spelling(&constructor.spelling)
                 || !constructor_ids.insert(constructor.id)
                 || !constructor_names.insert(constructor.spelling.as_str())
-                || !payload_valid
+                || !payload_kind_valid
                 || owner_range.is_none_or(|owner| {
                     constructor_range.start() < owner.start()
                         || constructor_range.end() > owner.end()
@@ -811,6 +778,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                 constructor.owner,
                 &parameter_owners,
             )?;
+            let payload_kind_valid = payload_valid
+                && self.valid_registry_payload_kind(
+                    constructor.payload.as_ref(),
+                    constructor.owner,
+                    &parameter_owners,
+                )?;
             let names = constructor_names.entry(module).or_default();
             if constructor.id.owner() != constructor.owner
                 || !nominal_ids.contains(&constructor.owner)
@@ -819,7 +792,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 || !valid_upper_spelling(&constructor.spelling)
                 || !constructor_ids.insert(constructor.id)
                 || !names.insert(constructor.spelling.as_str())
-                || !payload_valid
+                || !payload_kind_valid
                 || owner_range.is_none_or(|owner| {
                     constructor_range.start() < owner.start()
                         || constructor_range.end() > owner.end()
@@ -901,20 +874,13 @@ impl<'program, 'source> Validator<'program, 'source> {
                     }
                     self.charge_type_work(1)?;
                     match ty {
-                        Type::Int | Type::Bool | Type::Unit if applied_arguments == 0 => {}
-                        Type::Int | Type::Bool | Type::Unit => return Ok(false),
+                        Type::Int | Type::Bool | Type::Unit => {}
                         Type::Nominal(id) => {
-                            let Some(parameters) = self.program.registry.nominal_parameters(*id)
-                            else {
-                                return Ok(false);
-                            };
-                            if parameters.len() != applied_arguments {
+                            if self.program.registry.nominal_parameters(*id).is_none() {
                                 return Ok(false);
                             }
                         }
-                        Type::Variable(_) if applied_arguments == 0 => {}
-                        Type::Variable(_) => return Ok(false),
-                        Type::Inference(_) => return Ok(false),
+                        Type::Variable(_) | Type::Inference(_) => {}
                         Type::Application(function, argument) => {
                             let child_depth = depth.saturating_add(1);
                             work.push(Task::Visit(argument, false, child_depth, 0));
@@ -928,7 +894,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Type::Forall(parameters, body)
                             if allow_scheme && applied_arguments == 0 =>
                         {
-                            self.charge_type_work(parameters.len())?;
+                            self.charge_kinded_parameters(parameters)?;
                             let mut unique = HashSet::new();
                             unique.try_reserve(parameters.len()).map_err(|_| {
                                 ValidationError::new(ValidationReason::Resource, None)
@@ -936,24 +902,22 @@ impl<'program, 'source> Validator<'program, 'source> {
                             if parameters.is_empty()
                                 || !parameters
                                     .iter()
-                                    .copied()
-                                    .all(|parameter| unique.insert(parameter))
+                                    .all(|(parameter, _)| unique.insert(*parameter))
                             {
                                 return Ok(false);
                             }
                             work.push(Task::Visit(body, false, depth.saturating_add(1), 0));
                         }
                         Type::Forall(_, _) => return Ok(false),
-                        Type::Tuple(elements) if applied_arguments == 0 && elements.len() >= 2 => {
+                        Type::Tuple(elements) if elements.len() >= 2 => {
                             work.push(Task::Sequence(elements.iter(), depth.saturating_add(1)));
                         }
                         Type::Tuple(_) => return Ok(false),
-                        Type::Function(domain, codomain) if applied_arguments == 0 => {
+                        Type::Function(domain, codomain) => {
                             let child_depth = depth.saturating_add(1);
                             work.push(Task::Visit(codomain, false, child_depth, 0));
                             work.push(Task::Visit(domain, false, child_depth, 0));
                         }
-                        Type::Function(_, _) => return Ok(false),
                     }
                 }
                 Task::Sequence(mut remaining, depth) => {
@@ -977,18 +941,18 @@ impl<'program, 'source> Validator<'program, 'source> {
             return Ok(true);
         };
         enum Task<'a> {
-            Visit(&'a Type, usize, usize),
+            Visit(&'a Type, usize),
             Sequence(std::slice::Iter<'a, Type>, usize),
         }
-        let mut work = vec![Task::Visit(root, 0, 0)];
+        let mut work = vec![Task::Visit(root, 0)];
         while let Some(task) = work.pop() {
-            let Task::Visit(ty, depth, applied_arguments) = task else {
+            let Task::Visit(ty, depth) = task else {
                 let Task::Sequence(mut remaining, depth) = task else {
                     unreachable!()
                 };
                 if let Some(ty) = remaining.next() {
                     work.push(Task::Sequence(remaining, depth));
-                    work.push(Task::Visit(ty, depth, 0));
+                    work.push(Task::Visit(ty, depth));
                 }
                 continue;
             };
@@ -997,53 +961,453 @@ impl<'program, 'source> Validator<'program, 'source> {
             }
             self.charge_type_work(1)?;
             match ty {
-                Type::Int | Type::Bool | Type::Unit if applied_arguments == 0 => {}
-                Type::Int | Type::Bool | Type::Unit => return Ok(false),
+                Type::Int | Type::Bool | Type::Unit => {}
                 Type::Nominal(id) => {
-                    let Some(parameters) = self.program.registry.nominal_parameters(*id) else {
-                        return Ok(false);
-                    };
-                    if parameters.len() != applied_arguments {
+                    if self.program.registry.nominal_parameters(*id).is_none() {
                         return Ok(false);
                     }
                 }
-                Type::Variable(variable)
-                    if applied_arguments == 0 && parameter_owners.get(variable) == Some(&owner) => {
-                }
+                Type::Variable(variable) if parameter_owners.get(variable) == Some(&owner) => {}
                 Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return Ok(false),
                 Type::Application(function, argument) => {
                     let child_depth = depth.saturating_add(1);
-                    work.push(Task::Visit(argument, child_depth, 0));
-                    work.push(Task::Visit(
-                        function,
-                        depth,
-                        applied_arguments.saturating_add(1),
-                    ));
+                    work.push(Task::Visit(argument, child_depth));
+                    work.push(Task::Visit(function, depth));
                 }
-                Type::Tuple(elements) if applied_arguments == 0 && elements.len() >= 2 => {
+                Type::Tuple(elements) if elements.len() >= 2 => {
                     work.push(Task::Sequence(elements.iter(), depth.saturating_add(1)));
                 }
                 Type::Tuple(_) => return Ok(false),
-                Type::Function(domain, codomain) if applied_arguments == 0 => {
+                Type::Function(domain, codomain) => {
                     let child_depth = depth.saturating_add(1);
-                    work.push(Task::Visit(codomain, child_depth, 0));
-                    work.push(Task::Visit(domain, child_depth, 0));
+                    work.push(Task::Visit(codomain, child_depth));
+                    work.push(Task::Visit(domain, child_depth));
                 }
-                Type::Function(_, _) => return Ok(false),
             }
         }
         Ok(true)
     }
 
+    fn valid_registry_payload_kind(
+        &self,
+        root: Option<&Type>,
+        owner: crate::types::NominalTypeId,
+        parameter_owners: &HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>,
+    ) -> Result<bool, ValidationError> {
+        let Some(root) = root else {
+            return Ok(true);
+        };
+        let Some(kind) = self.synthesize_monotype_kind(
+            root,
+            MonotypeVariableKinds::Registry {
+                owner,
+                parameter_owners,
+            },
+        )?
+        else {
+            return Ok(false);
+        };
+        self.same_kind_charged(&kind, &Kind::Type)
+    }
+
     fn charge_type_work(&self, cells: usize) -> Result<(), ValidationError> {
-        let next = self
+        let attempted = self
             .type_work
             .get()
             .checked_add(cells)
-            .filter(|next| *next <= TYPE_WORK_LIMIT)
             .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+        if attempted > CORE_VALIDATION_TYPE_WORK_LIMIT {
+            return Err(ValidationError::new(ValidationReason::Resource, None));
+        }
+        let next = attempted;
         self.type_work.set(next);
         Ok(())
+    }
+
+    fn charge_kind(&self, root: &Kind) -> Result<(), ValidationError> {
+        let mut work = vec![root];
+        while let Some(kind) = work.pop() {
+            self.charge_type_work(1)?;
+            if let Kind::Arrow(domain, codomain) = kind {
+                work.push(codomain);
+                work.push(domain);
+            }
+        }
+        Ok(())
+    }
+
+    fn charge_kinded_parameters(
+        &self,
+        parameters: &[(crate::types::TypeVariableId, Kind)],
+    ) -> Result<(), ValidationError> {
+        for (_, kind) in parameters {
+            self.charge_type_work(1)?;
+            self.charge_kind(kind)?;
+        }
+        Ok(())
+    }
+
+    fn same_kinded_parameters(
+        &self,
+        left: &[(crate::types::TypeVariableId, Kind)],
+        right: &[(crate::types::TypeVariableId, Kind)],
+    ) -> Result<bool, ValidationError> {
+        if left.len() != right.len() {
+            return Ok(false);
+        }
+        for ((left_id, left_kind), (right_id, right_kind)) in left.iter().zip(right) {
+            self.charge_type_work(1)?;
+            if left_id != right_id {
+                return Ok(false);
+            }
+            if !self.same_kind_charged(left_kind, right_kind)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn same_kind_charged(&self, left: &Kind, right: &Kind) -> Result<bool, ValidationError> {
+        let mut work = vec![(left, right)];
+        while let Some((left, right)) = work.pop() {
+            self.charge_type_work(1)?;
+            match (left, right) {
+                (Kind::Type, Kind::Type) => {}
+                (
+                    Kind::Arrow(left_domain, left_codomain),
+                    Kind::Arrow(right_domain, right_codomain),
+                ) => {
+                    work.push((left_codomain, right_codomain));
+                    work.push((left_domain, right_domain));
+                }
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    fn same_type_charged(&self, left: &Type, right: &Type) -> Result<bool, ValidationError> {
+        let mut budget = crate::types::TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = same_type_with_budget(left, right, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn constructor_value_type_matches(
+        &self,
+        annotation: &Type,
+        constructor: &ResolvedConstructor,
+        parameters: &[ResolvedTypeVariable],
+    ) -> Result<bool, ValidationError> {
+        let monotype = if parameters.is_empty() {
+            annotation
+        } else {
+            let Type::Forall(actual_parameters, body) = annotation else {
+                return Ok(false);
+            };
+            if actual_parameters.len() != parameters.len() {
+                return Ok(false);
+            }
+            for ((actual, actual_kind), expected) in actual_parameters.iter().zip(parameters) {
+                self.charge_type_work(1)?;
+                if *actual != expected.id || !self.same_kind_charged(actual_kind, &expected.kind)? {
+                    return Ok(false);
+                }
+            }
+            body
+        };
+        let result = if let Some(payload) = constructor.payload.as_ref() {
+            let Type::Function(actual_payload, result) = monotype else {
+                return Ok(false);
+            };
+            if !self.same_type_charged(actual_payload, payload)? {
+                return Ok(false);
+            }
+            result.as_ref()
+        } else {
+            monotype
+        };
+        let mut current = result;
+        for parameter in parameters.iter().rev() {
+            self.charge_type_work(1)?;
+            let Type::Application(function, argument) = current else {
+                return Ok(false);
+            };
+            if !matches!(argument.as_ref(), Type::Variable(identity) if *identity == parameter.id) {
+                return Ok(false);
+            }
+            current = function;
+        }
+        self.charge_type_work(1)?;
+        Ok(matches!(current, Type::Nominal(owner) if *owner == constructor.owner))
+    }
+
+    fn nominal_application_head_and_arity(
+        &self,
+        ty: &Type,
+    ) -> Result<Option<(crate::types::NominalTypeId, usize)>, ValidationError> {
+        let mut arity = 0usize;
+        let mut function = ty;
+        loop {
+            self.charge_type_work(1)?;
+            let Type::Application(next, _) = function else {
+                break;
+            };
+            arity = arity
+                .checked_add(1)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+            function = next;
+        }
+        let Type::Nominal(owner) = function else {
+            return Ok(None);
+        };
+        Ok(Some((*owner, arity)))
+    }
+
+    fn clone_kind_charged(&self, kind: &Kind) -> Result<Kind, ValidationError> {
+        self.charge_kind(kind)?;
+        Ok(kind.clone())
+    }
+
+    fn synthesize_monotype_kind(
+        &self,
+        root: &Type,
+        variable_kinds: MonotypeVariableKinds<'_, '_>,
+    ) -> Result<Option<Kind>, ValidationError> {
+        enum Task<'a> {
+            Visit(&'a Type),
+            Sequence(std::slice::Iter<'a, Type>),
+            FinishTuple(usize),
+            FinishApplication,
+            FinishFunction,
+        }
+
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        let mut work = Vec::new();
+        work.try_reserve(1).map_err(|_| resource())?;
+        work.push(Task::Visit(root));
+        let mut completed = Vec::new();
+        while let Some(task) = work.pop() {
+            match task {
+                Task::Visit(Type::Int | Type::Bool | Type::Unit) => {
+                    self.charge_type_work(1)?;
+                    completed.try_reserve(1).map_err(|_| resource())?;
+                    completed.push(Kind::Type);
+                }
+                Task::Visit(Type::Nominal(identity)) => {
+                    let Some(parameters) = self.program.registry.nominal_parameters(*identity)
+                    else {
+                        self.charge_type_work(1)?;
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    };
+                    self.charge_type_work(1)?;
+                    let mut result = Kind::Type;
+                    for parameter in parameters.iter().rev() {
+                        let domain = self.clone_kind_charged(&parameter.kind)?;
+                        self.charge_type_work(1)?;
+                        result = Kind::Arrow(Box::new(domain), Box::new(result));
+                    }
+                    completed.try_reserve(1).map_err(|_| resource())?;
+                    completed.push(result);
+                }
+                Task::Visit(Type::Variable(identity)) => {
+                    let kind = match variable_kinds {
+                        MonotypeVariableKinds::Registry {
+                            owner,
+                            parameter_owners,
+                        } => {
+                            if parameter_owners.get(identity) != Some(&owner) {
+                                self.charge_type_work(1)?;
+                                return Err(ValidationError::new(ValidationReason::Registry, None));
+                            }
+                            let Some(parameter) = self.program.registry.type_variable(*identity)
+                            else {
+                                self.charge_type_work(1)?;
+                                return Err(ValidationError::new(ValidationReason::Registry, None));
+                            };
+                            &parameter.kind
+                        }
+                        MonotypeVariableKinds::Core(type_binders) => match identity {
+                            crate::types::TypeVariableId::Resolved { .. } => {
+                                let Some(parameter) =
+                                    self.program.registry.type_variable(*identity)
+                                else {
+                                    self.charge_type_work(1)?;
+                                    return Err(ValidationError::new(
+                                        ValidationReason::Registry,
+                                        None,
+                                    ));
+                                };
+                                &parameter.kind
+                            }
+                            crate::types::TypeVariableId::Generated(_) => {
+                                let Some((kind, _)) = type_binders.get(identity) else {
+                                    self.charge_type_work(1)?;
+                                    return Err(ValidationError::new(
+                                        ValidationReason::TypeScope,
+                                        None,
+                                    ));
+                                };
+                                *kind
+                            }
+                        },
+                    };
+                    let retained = self.clone_kind_charged(kind)?;
+                    completed.try_reserve(1).map_err(|_| resource())?;
+                    completed.push(retained);
+                }
+                Task::Visit(Type::Inference(_)) => {
+                    self.charge_type_work(1)?;
+                    return Err(ValidationError::new(
+                        match variable_kinds {
+                            MonotypeVariableKinds::Core(_) => ValidationReason::TypeScope,
+                            MonotypeVariableKinds::Registry { .. } => ValidationReason::Registry,
+                        },
+                        None,
+                    ));
+                }
+                Task::Visit(Type::Forall(_, _)) => {
+                    self.charge_type_work(1)?;
+                    return Ok(None);
+                }
+                Task::Visit(Type::Tuple(elements)) => {
+                    self.charge_type_work(1)?;
+                    work.try_reserve(2).map_err(|_| resource())?;
+                    work.push(Task::FinishTuple(elements.len()));
+                    work.push(Task::Sequence(elements.iter()));
+                }
+                Task::Visit(Type::Application(function, argument)) => {
+                    self.charge_type_work(1)?;
+                    work.try_reserve(3).map_err(|_| resource())?;
+                    work.push(Task::FinishApplication);
+                    work.push(Task::Visit(argument));
+                    work.push(Task::Visit(function));
+                }
+                Task::Visit(Type::Function(domain, codomain)) => {
+                    self.charge_type_work(1)?;
+                    work.try_reserve(3).map_err(|_| resource())?;
+                    work.push(Task::FinishFunction);
+                    work.push(Task::Visit(codomain));
+                    work.push(Task::Visit(domain));
+                }
+                Task::Sequence(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        work.try_reserve(2).map_err(|_| resource())?;
+                        work.push(Task::Sequence(remaining));
+                        work.push(Task::Visit(next));
+                    }
+                }
+                Task::FinishTuple(count) => {
+                    if completed.len() < count {
+                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                    }
+                    let kinds = completed.split_off(completed.len() - count);
+                    for kind in kinds {
+                        if !self.same_kind_charged(&kind, &Kind::Type)? {
+                            return Ok(None);
+                        }
+                    }
+                    completed.try_reserve(1).map_err(|_| resource())?;
+                    completed.push(Kind::Type);
+                }
+                Task::FinishApplication => {
+                    let Some(argument) = completed.pop() else {
+                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                    };
+                    let Some(mut function) = completed.pop() else {
+                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                    };
+                    let Kind::Arrow(domain, codomain) = &mut function else {
+                        return Ok(None);
+                    };
+                    if !self.same_kind_charged(domain, &argument)? {
+                        return Ok(None);
+                    }
+                    let result = std::mem::replace(codomain.as_mut(), Kind::Type);
+                    completed.try_reserve(1).map_err(|_| resource())?;
+                    completed.push(result);
+                }
+                Task::FinishFunction => {
+                    let Some(codomain) = completed.pop() else {
+                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                    };
+                    let Some(domain) = completed.pop() else {
+                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                    };
+                    if !self.same_kind_charged(&domain, &Kind::Type)?
+                        || !self.same_kind_charged(&codomain, &Kind::Type)?
+                    {
+                        return Ok(None);
+                    }
+                    completed.try_reserve(1).map_err(|_| resource())?;
+                    completed.push(Kind::Type);
+                }
+            }
+        }
+        if completed.len() == 1 {
+            Ok(completed.pop())
+        } else {
+            Err(ValidationError::new(ValidationReason::TypeOperation, None))
+        }
+    }
+
+    fn valid_core_type_kind(
+        &self,
+        ty: &Type,
+        type_binders: &CoreTypeBinders<'program>,
+    ) -> Result<bool, ValidationError> {
+        let body = if let Type::Forall(parameters, body) = ty {
+            if parameters.is_empty() {
+                return Ok(false);
+            }
+            let mut seen = HashSet::new();
+            seen.try_reserve(parameters.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            for (parameter, kind) in parameters {
+                self.charge_type_work(1)?;
+                if !seen.insert(*parameter) {
+                    return Ok(false);
+                }
+                let canonical = match parameter {
+                    crate::types::TypeVariableId::Resolved { .. } => self
+                        .program
+                        .registry
+                        .type_variable(*parameter)
+                        .map(|parameter| &parameter.kind),
+                    crate::types::TypeVariableId::Generated(_) => {
+                        type_binders.get(parameter).map(|(kind, _)| *kind)
+                    }
+                };
+                let Some(canonical) = canonical else {
+                    self.charge_type_work(1)?;
+                    return Err(ValidationError::new(
+                        match parameter {
+                            crate::types::TypeVariableId::Resolved { .. } => {
+                                ValidationReason::Registry
+                            }
+                            crate::types::TypeVariableId::Generated(_) => {
+                                ValidationReason::TypeScope
+                            }
+                        },
+                        None,
+                    ));
+                };
+                if !self.same_kind_charged(canonical, kind)? {
+                    return Ok(false);
+                }
+            }
+            body.as_ref()
+        } else {
+            ty
+        };
+        let Some(kind) =
+            self.synthesize_monotype_kind(body, MonotypeVariableKinds::Core(type_binders))?
+        else {
+            return Ok(false);
+        };
+        self.same_kind_charged(&kind, &Kind::Type)
     }
 
     fn same_registry_type_variable(
@@ -1090,7 +1454,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.push(Task::Visit(domain));
                 }
                 Type::Forall(parameters, body) => {
-                    self.charge_type_work(parameters.len())?;
+                    self.charge_kinded_parameters(parameters)?;
                     work.push(Task::Visit(body));
                 }
                 Type::Int
@@ -1335,23 +1699,89 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(())
     }
 
+    fn collect_type_binders(
+        &self,
+        nominal_parameter_owners: &HashMap<
+            crate::types::TypeVariableId,
+            crate::types::NominalTypeId,
+        >,
+    ) -> Result<CoreTypeBinders<'program>, ValidationError> {
+        let mut definitions = HashMap::new();
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                &node.kind
+            else {
+                continue;
+            };
+            let id = node_id(self.program.arena, index)?;
+            for (parameter, kind) in abstraction.parameters() {
+                match parameter {
+                    crate::types::TypeVariableId::Resolved { .. } => {
+                        let Some(canonical) = self.program.registry.type_variable(*parameter)
+                        else {
+                            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                        };
+                        if nominal_parameter_owners.contains_key(parameter)
+                            || !self.same_kind_charged(&canonical.kind, kind)?
+                        {
+                            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                        }
+                    }
+                    crate::types::TypeVariableId::Generated(_) => {
+                        self.charge_type_work(1)?;
+                        self.charge_kind(kind)?;
+                    }
+                }
+                if definitions.contains_key(parameter) {
+                    return Err(ValidationError::new(
+                        match parameter {
+                            crate::types::TypeVariableId::Resolved { .. } => {
+                                ValidationReason::Registry
+                            }
+                            crate::types::TypeVariableId::Generated(_) => {
+                                ValidationReason::TypeOperation
+                            }
+                        },
+                        Some(id),
+                    ));
+                }
+                definitions
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                definitions.insert(*parameter, (kind, id));
+            }
+        }
+        Ok(definitions)
+    }
+
     fn validate_node_types(
         &self,
         nominal_parameter_owners: &HashMap<
             crate::types::TypeVariableId,
             crate::types::NominalTypeId,
         >,
+        type_binders: &CoreTypeBinders<'program>,
     ) -> Result<(), ValidationError> {
-        let mut type_abstraction_definitions = HashMap::new();
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
+            if !matches!(
+                &node.kind,
+                PureExprKind::Computation(PureComputation::TypeAbstraction(_))
+            ) && !self
+                .valid_core_type_kind(&node.ty, type_binders)
+                .map_err(|error| error.at_node(id))?
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
             match &node.kind {
-                PureExprKind::Value(value) => self.validate_value(id, node, value)?,
+                PureExprKind::Value(value) => self
+                    .validate_value(id, node, value)
+                    .map_err(|error| error.at_node(id))?,
                 PureExprKind::Variable(variable) => {
                     let Some(binder) = self.binders.get(&variable.binder()) else {
                         return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
                     };
-                    if !same_type(&node.ty, binder.ty()) {
+                    if !self.same_type_charged(&node.ty, binder.ty())? {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                 }
@@ -1360,9 +1790,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                         id,
                         node,
                         computation,
-                        &mut type_abstraction_definitions,
+                        type_binders,
                         nominal_parameter_owners,
-                    )?;
+                    )
+                    .map_err(|error| error.at_node(id))?;
                 }
             }
         }
@@ -1381,7 +1812,12 @@ impl<'program, 'source> Validator<'program, 'source> {
             PureValue::Unit(unit) => unit.expected_type(),
             PureValue::Function(function) => {
                 let body = self.node(function.body())?;
-                if !function_value_type_matches(&node.ty, function.parameter().ty(), &body.ty) {
+                let Type::Function(actual_domain, actual_codomain) = &node.ty else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                if !self.same_type_charged(actual_domain, function.parameter().ty())?
+                    || !self.same_type_charged(actual_codomain, &body.ty)?
+                {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
                 return Ok(());
@@ -1396,13 +1832,13 @@ impl<'program, 'source> Validator<'program, 'source> {
                     .registry
                     .nominal_parameters(info.owner)
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
-                if !constructor_value_type_matches(&node.ty, info, parameters) {
+                if !self.constructor_value_type_matches(&node.ty, info, parameters)? {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
                 return Ok(());
             }
         };
-        if !same_type(&node.ty, &expected) {
+        if !self.same_type_charged(&node.ty, &expected)? {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
         Ok(())
@@ -1413,7 +1849,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         id: NodeId,
         node: &StoredNode,
         computation: &PureComputation,
-        type_abstraction_definitions: &mut HashMap<crate::types::TypeVariableId, NodeId>,
+        type_binders: &CoreTypeBinders<'program>,
         nominal_parameter_owners: &HashMap<
             crate::types::TypeVariableId,
             crate::types::NominalTypeId,
@@ -1423,8 +1859,8 @@ impl<'program, 'source> Validator<'program, 'source> {
             PureComputation::Bind(binding) => {
                 let initializer = self.node(binding.initializer())?;
                 let body = self.node(binding.body())?;
-                if !same_type(&initializer.ty, binding.binder().ty())
-                    || !same_type(&node.ty, &body.ty)
+                if !self.same_type_charged(&initializer.ty, binding.binder().ty())?
+                    || !self.same_type_charged(&node.ty, &body.ty)?
                 {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
@@ -1466,11 +1902,13 @@ impl<'program, 'source> Validator<'program, 'source> {
                                     Some(id),
                                 ));
                             };
-                            abstraction.parameters() == parameters.as_ref()
-                                && matches!(
-                                    self.node(abstraction.body())?.kind,
-                                    PureExprKind::Value(PureValue::Function(_))
-                                )
+                            self.same_kinded_parameters(
+                                abstraction.parameters(),
+                                parameters.as_ref(),
+                            )? && matches!(
+                                self.node(abstraction.body())?.kind,
+                                PureExprKind::Value(PureValue::Function(_))
+                            )
                         }
                         Type::Int
                         | Type::Bool
@@ -1488,12 +1926,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                             Some(id),
                         ));
                     }
-                    if !same_type(&initializer.ty, member.binder().ty()) {
+                    if !self.same_type_charged(&initializer.ty, member.binder().ty())? {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                 }
                 let body = self.node(group.body())?;
-                if !same_type(&node.ty, &body.ty) {
+                if !self.same_type_charged(&node.ty, &body.ty)? {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
             }
@@ -1506,7 +1944,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Some(id),
                     ));
                 };
-                if !same_type(domain, &argument.ty) || !same_type(codomain, &node.ty) {
+                if !self.same_type_charged(domain, &argument.ty)?
+                    || !self.same_type_charged(codomain, &node.ty)?
+                {
                     return Err(ValidationError::new(
                         ValidationReason::ApplicationType,
                         Some(id),
@@ -1517,9 +1957,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                 let left = self.node(primitive.left())?;
                 let right = self.node(primitive.right())?;
                 let (left_type, right_type, result_type) = primitive.primitive().signature();
-                if !same_type(&left.ty, &left_type)
-                    || !same_type(&right.ty, &right_type)
-                    || !same_type(&node.ty, &result_type)
+                if !self.same_type_charged(&left.ty, &left_type)?
+                    || !self.same_type_charged(&right.ty, &right_type)?
+                    || !self.same_type_charged(&node.ty, &result_type)?
                 {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
@@ -1532,7 +1972,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
                 for (element, expected) in tuple.elements().iter().zip(element_types) {
-                    if !same_type(&self.node(*element)?.ty, expected) {
+                    if !self.same_type_charged(&self.node(*element)?.ty, expected)? {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                 }
@@ -1550,7 +1990,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 for arm in match_node.arms() {
                     self.validate_origin(arm.origin(), id)?;
                     self.validate_pattern(arm.pattern(), &scrutinee.ty, id)?;
-                    if !same_type(&self.node(arm.body())?.ty, &node.ty) {
+                    if !self.same_type_charged(&self.node(arm.body())?.ty, &node.ty)? {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                     let row = CorePatternRow(vec![arm.pattern().clone()]);
@@ -1598,26 +2038,28 @@ impl<'program, 'source> Validator<'program, 'source> {
                         .source();
                     if abstraction.parameters().iter().any(|parameter| {
                         parameter
+                            .0
                             .module()
                             .is_some_and(|module| relation.get(&module).copied() != Some(source))
                     }) {
                         return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                     }
                 }
-                type_abstraction_definitions
-                    .try_reserve(abstraction.parameters().len())
-                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
                 if abstraction.parameters().is_empty()
-                    || !abstraction.parameters().iter().copied().all(|parameter| {
-                        type_abstraction_definitions.insert(parameter, id).is_none()
+                    || abstraction.parameters().iter().any(|(parameter, _)| {
+                        type_binders
+                            .get(parameter)
+                            .is_none_or(|(_, owner)| *owner != id)
                     })
                     || abstraction
                         .parameters()
                         .iter()
-                        .any(|parameter| nominal_parameter_owners.contains_key(parameter))
-                    || abstraction.parameters() != parameters.as_ref()
-                    || !same_type(&body.ty, scheme_body)
+                        .any(|(parameter, _)| nominal_parameter_owners.contains_key(parameter))
+                    || !self
+                        .same_kinded_parameters(abstraction.parameters(), parameters.as_ref())?
+                    || !self.same_type_charged(&body.ty, scheme_body)?
                     || matches!(scheme_body.as_ref(), Type::Forall(_, _))
+                    || !self.valid_core_type_kind(&node.ty, type_binders)?
                 {
                     return Err(ValidationError::new(
                         ValidationReason::TypeOperation,
@@ -1634,9 +2076,17 @@ impl<'program, 'source> Validator<'program, 'source> {
                     ));
                 };
                 let mut invalid_argument = false;
-                for argument in application.arguments() {
-                    invalid_argument |= matches!(argument, Type::Forall(_, _))
-                        || !self.valid_type(Some(argument))?;
+                for ((_, expected_kind), argument) in parameters.iter().zip(application.arguments())
+                {
+                    let Some(argument_kind) = self.synthesize_monotype_kind(
+                        argument,
+                        MonotypeVariableKinds::Core(type_binders),
+                    )?
+                    else {
+                        invalid_argument = true;
+                        continue;
+                    };
+                    invalid_argument |= !self.same_kind_charged(expected_kind, &argument_kind)?;
                 }
                 if parameters.len() != application.arguments().len() || invalid_argument {
                     return Err(ValidationError::new(
@@ -1652,7 +2102,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 replacements
                     .try_reserve(parameters.len())
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
-                for (parameter, argument) in parameters.iter().zip(application.arguments()) {
+                for ((parameter, _), argument) in parameters.iter().zip(application.arguments()) {
                     replacements.insert_replacing(*parameter, argument.clone());
                 }
                 let instantiated = IterativeTypeOwner::new(substitute_type_variables_with(
@@ -1660,7 +2110,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     replacements.as_map(),
                     |cells| self.charge_type_work(cells),
                 )?);
-                if !same_type(&node.ty, &instantiated) {
+                if !self.same_type_charged(&node.ty, &instantiated)? {
                     return Err(ValidationError::new(
                         ValidationReason::TypeOperation,
                         Some(id),
@@ -1880,7 +2330,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
             }
             self.validate_origin(&pattern.origin, node)?;
-            if !same_type(&pattern.ty, expected.as_type())
+            if !self.same_type_charged(&pattern.ty, expected.as_type())?
                 || !self.valid_monotype(Some(&pattern.ty))?
             {
                 return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
@@ -1888,7 +2338,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             match &pattern.kind {
                 CorePatternKind::Binder(binder) => {
                     if binder.arena() != self.program.arena
-                        || !same_type(binder.ty(), expected.as_type())
+                        || !self.same_type_charged(binder.ty(), expected.as_type())?
                         || !binders.insert(binder.id())
                     {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
@@ -1939,7 +2389,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     payload,
                 } => {
                     let Some((owner, arity)) =
-                        nominal_application_head_and_arity(expected.as_type())
+                        self.nominal_application_head_and_arity(expected.as_type())?
                     else {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     };
@@ -2102,7 +2552,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                             }
                         }
                         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
-                            for parameter in operation.parameters() {
+                            for (parameter, _) in operation.parameters() {
                                 free.remove(parameter);
                             }
                         }
@@ -2250,7 +2700,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             }
         }
         for parameters in quantified {
-            for parameter in parameters {
+            for (parameter, _) in parameters {
                 discovered.remove(parameter);
             }
         }
@@ -2506,6 +2956,18 @@ mod tests {
                 .span(ByteRange::new(start, end).expect("ordered range"))
                 .expect("source span"),
         )
+    }
+
+    fn type_parameter(
+        identity: crate::types::TypeVariableId,
+    ) -> (crate::types::TypeVariableId, Kind) {
+        (identity, Kind::Type)
+    }
+
+    fn type_parameters(
+        identities: impl IntoIterator<Item = crate::types::TypeVariableId>,
+    ) -> Vec<(crate::types::TypeVariableId, Kind)> {
+        identities.into_iter().map(type_parameter).collect()
     }
 
     fn modular_registry_program(
@@ -2965,6 +3427,72 @@ mod tests {
     }
 
     #[test]
+    fn core_validation_type_work_capacity_is_exact_and_atomic() {
+        const EXPECTED_CAPACITY: usize = CORE_VALIDATION_TYPE_WORK_LIMIT;
+
+        let file = source();
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena: super::super::dialect::ArenaId::new(195),
+            nodes: Vec::new(),
+            root: NodeId::new(super::super::dialect::ArenaId::new(195), 0),
+        };
+        let validator = Validator::new(&program, &[&file]);
+
+        validator
+            .charge_type_work(EXPECTED_CAPACITY)
+            .expect("the independent Core validator admits its exact cumulative capacity");
+        assert_eq!(validator.type_work.get(), EXPECTED_CAPACITY);
+        let error = validator
+            .charge_type_work(1)
+            .expect_err("one unit beyond the cumulative capacity must fail");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(
+            validator.type_work.get(),
+            EXPECTED_CAPACITY,
+            "failed charges leave the cumulative ledger unchanged"
+        );
+    }
+
+    #[test]
+    fn one_cell_type_operation_observes_exact_validator_capacity() {
+        const EXPECTED_CAPACITY: usize = CORE_VALIDATION_TYPE_WORK_LIMIT;
+
+        let file = source();
+        let program = UnvalidatedProgram {
+            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+            arena: super::super::dialect::ArenaId::new(196),
+            nodes: Vec::new(),
+            root: NodeId::new(super::super::dialect::ArenaId::new(196), 0),
+        };
+
+        let exact = Validator::new(&program, &[&file]);
+        exact
+            .charge_type_work(EXPECTED_CAPACITY - 1)
+            .expect("test setup leaves one comparison unit");
+        assert!(
+            exact
+                .same_type_charged(&Type::Int, &Type::Int)
+                .expect("one compared Type pair fits the final unit")
+        );
+        assert_eq!(exact.type_work.get(), EXPECTED_CAPACITY);
+
+        let short = Validator::new(&program, &[&file]);
+        short
+            .charge_type_work(EXPECTED_CAPACITY)
+            .expect("test setup exhausts the exact cumulative capacity");
+        let error = short
+            .same_type_charged(&Type::Int, &Type::Int)
+            .expect_err("a one-cell comparison cannot cross the capacity");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(
+            short.type_work.get(),
+            EXPECTED_CAPACITY,
+            "the rejected comparison leaves the cumulative ledger unchanged"
+        );
+    }
+
+    #[test]
     fn wide_type_validation_retains_constant_pending_work() {
         let file = source();
         let arena = super::super::dialect::ArenaId::new(184);
@@ -2974,7 +3502,7 @@ mod tests {
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
                 ty: Type::Tuple(
-                    vec![Type::Int; crate::types::TYPE_WORK_LIMIT + 1].into_boxed_slice(),
+                    vec![Type::Int; CORE_VALIDATION_TYPE_WORK_LIMIT + 1].into_boxed_slice(),
                 ),
                 origin: Some(origin(&file)),
                 kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -3040,7 +3568,7 @@ mod tests {
         };
         let mut validator = Validator::new(&program, &[&file]);
         validator
-            .charge_type_work(TYPE_WORK_LIMIT - ALLOWANCE)
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - ALLOWANCE)
             .expect("test setup leaves a small exact allowance");
         super::super::data::reset_binder_traversal_pending_peak();
 
@@ -3058,9 +3586,11 @@ mod tests {
     fn oversized_malformed_forall_maps_directly_to_validation_resource() {
         let file = source();
         let arena = super::super::dialect::ArenaId::new(100);
-        let parameters = (0..crate::types::TYPE_WORK_LIMIT)
+        let parameters = (0..CORE_VALIDATION_TYPE_WORK_LIMIT)
             .map(|index| {
-                crate::types::TypeVariableId::new(u32::try_from(index).expect("parameter identity"))
+                type_parameter(crate::types::TypeVariableId::new(
+                    u32::try_from(index).expect("parameter identity"),
+                ))
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
@@ -3098,13 +3628,13 @@ mod tests {
                 StoredNode {
                     dialect: DialectId::PURE,
                     ty: Type::Forall(
-                        vec![parameter].into_boxed_slice(),
+                        vec![type_parameter(parameter)].into_boxed_slice(),
                         Box::new(Type::Variable(parameter)),
                     ),
                     origin: Some(origin(&file)),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
                         super::super::type_ops::TypeAbstractionNode::new(
-                            vec![parameter],
+                            vec![type_parameter(parameter)],
                             NodeId::new(arena, 0),
                         ),
                     )),
@@ -3114,7 +3644,7 @@ mod tests {
         };
         let validator = Validator::new(&program, &[&file]);
         validator
-            .charge_type_work(TYPE_WORK_LIMIT - 3)
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 3)
             .expect("test setup leaves the old structural allowance");
 
         let error = validator
@@ -3126,11 +3656,13 @@ mod tests {
     #[test]
     fn linear_type_scope_chain_uses_the_exact_proportional_budget() {
         const WIDTH: usize = 4_096;
-        const EXPECTED_WORK: usize = 5 * WIDTH + 2;
+        // The predecessor scope formula is 5W + 2. The outer Forall now also
+        // visits one fixed Kind node for each of its W binder records.
+        const EXPECTED_WORK: usize = 6 * WIDTH + 2;
         let file = source();
         let origin = origin(&file);
         let arena = super::super::dialect::ArenaId::new(104);
-        let parameters = (0..WIDTH)
+        let parameter_ids = (0..WIDTH)
             .map(|index| {
                 crate::types::TypeVariableId::new(u32::try_from(index).expect("parameter identity"))
             })
@@ -3141,7 +3673,7 @@ mod tests {
             origin: Some(origin.clone()),
             kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
         }];
-        for (index, parameter) in parameters.iter().copied().enumerate() {
+        for (index, parameter) in parameter_ids.iter().copied().enumerate() {
             nodes.push(StoredNode {
                 dialect: DialectId::PURE,
                 ty: Type::Unit,
@@ -3158,10 +3690,16 @@ mod tests {
         let root = NodeId::new(arena, u32::try_from(WIDTH + 1).expect("root node identity"));
         nodes.push(StoredNode {
             dialect: DialectId::PURE,
-            ty: Type::Forall(parameters.clone().into_boxed_slice(), Box::new(Type::Unit)),
+            ty: Type::Forall(
+                type_parameters(parameter_ids.iter().copied()).into_boxed_slice(),
+                Box::new(Type::Unit),
+            ),
             origin: Some(origin),
             kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
-                super::super::type_ops::TypeAbstractionNode::new(parameters, body),
+                super::super::type_ops::TypeAbstractionNode::new(
+                    type_parameters(parameter_ids),
+                    body,
+                ),
             )),
         });
         let program = UnvalidatedProgram {
@@ -3172,7 +3710,7 @@ mod tests {
         };
         let validator = Validator::new(&program, &[&file]);
         validator
-            .charge_type_work(TYPE_WORK_LIMIT - EXPECTED_WORK)
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXPECTED_WORK)
             .expect("test setup leaves the exact proportional allowance");
 
         validator
@@ -3200,7 +3738,7 @@ mod tests {
         let right = NodeId::new(arena, 3);
         let root = NodeId::new(arena, 4);
         let scheme = Type::Forall(
-            vec![parameter].into_boxed_slice(),
+            vec![type_parameter(parameter)].into_boxed_slice(),
             Box::new(Type::Variable(parameter)),
         );
         let program = UnvalidatedProgram {
@@ -3219,7 +3757,7 @@ mod tests {
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
                         super::super::type_ops::TypeAbstractionNode::new(
-                            vec![parameter],
+                            vec![type_parameter(parameter)],
                             occurrence,
                         ),
                     )),
@@ -3227,13 +3765,13 @@ mod tests {
                 StoredNode {
                     dialect: DialectId::PURE,
                     ty: Type::Forall(
-                        vec![outer_parameter].into_boxed_slice(),
+                        vec![type_parameter(outer_parameter)].into_boxed_slice(),
                         Box::new(Type::Unit),
                     ),
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
                         super::super::type_ops::TypeAbstractionNode::new(
-                            vec![outer_parameter],
+                            vec![type_parameter(outer_parameter)],
                             inner,
                         ),
                     )),
@@ -3244,7 +3782,7 @@ mod tests {
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
                         super::super::type_ops::TypeAbstractionNode::new(
-                            vec![parameter],
+                            vec![type_parameter(parameter)],
                             occurrence,
                         ),
                     )),
@@ -3271,8 +3809,8 @@ mod tests {
         let file = source();
         let arena = super::super::dialect::ArenaId::new(102);
         let parameters = vec![
-            crate::types::TypeVariableId::new(0),
-            crate::types::TypeVariableId::new(1),
+            type_parameter(crate::types::TypeVariableId::new(0)),
+            type_parameter(crate::types::TypeVariableId::new(1)),
         ]
         .into_boxed_slice();
         let program = UnvalidatedProgram {
@@ -3288,13 +3826,13 @@ mod tests {
         };
         let validator = Validator::new(&program, &[&file]);
         validator
-            .charge_type_work(TYPE_WORK_LIMIT - 4)
-            .expect("test setup leaves four type-work cells");
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 6)
+            .expect("test setup leaves six type-work cells");
 
         assert!(
             validator
                 .valid_type(Some(&Type::Forall(parameters, Box::new(Type::Unit))))
-                .expect("the exact quantifier boundary validates")
+                .expect("the exact Forall, binder-record, Kind-node, and body boundary validates")
         );
         let error = validator
             .valid_type(Some(&Type::Unit))
@@ -3323,10 +3861,16 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
-                    ty: Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+                    ty: Type::Forall(
+                        vec![type_parameter(parameter)].into_boxed_slice(),
+                        Box::new(Type::Unit),
+                    ),
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
-                        super::super::type_ops::TypeAbstractionNode::new(vec![parameter], body),
+                        super::super::type_ops::TypeAbstractionNode::new(
+                            vec![type_parameter(parameter)],
+                            body,
+                        ),
                     )),
                 },
                 StoredNode {
@@ -3343,11 +3887,13 @@ mod tests {
             ],
             root: application,
         };
+        let binder_kind = Kind::Type;
+        let type_binders = HashMap::from([(parameter, (&binder_kind, abstraction))]);
 
         let abstraction_validator = Validator::new(&program, &[&file]);
         abstraction_validator
-            .charge_type_work(TYPE_WORK_LIMIT - 1)
-            .expect("test setup leaves one abstraction-binder entry");
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 8)
+            .expect("test setup leaves the exact abstraction allowance");
         abstraction_validator
             .validate_computation(
                 abstraction,
@@ -3356,10 +3902,10 @@ mod tests {
                     PureExprKind::Computation(computation) => computation,
                     _ => unreachable!("test abstraction computation"),
                 },
-                &mut HashMap::new(),
+                &type_binders,
                 &HashMap::new(),
             )
-            .expect("one abstraction binder fits exactly");
+            .expect("binder payload, scheme pair, body, and result kind fit exactly");
         assert_eq!(
             abstraction_validator
                 .charge_type_work(1)
@@ -3370,8 +3916,8 @@ mod tests {
 
         let application_validator = Validator::new(&program, &[&file]);
         application_validator
-            .charge_type_work(TYPE_WORK_LIMIT - 4)
-            .expect("test setup leaves argument validation, clone, index, and substitution work");
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 6)
+            .expect("test setup leaves synthesis, comparison, clone, index, substitution, and result comparison work");
         application_validator
             .validate_computation(
                 application,
@@ -3380,7 +3926,7 @@ mod tests {
                     PureExprKind::Computation(computation) => computation,
                     _ => unreachable!("test application computation"),
                 },
-                &mut HashMap::new(),
+                &type_binders,
                 &HashMap::new(),
             )
             .expect("one argument validation, clone, replacement entry, and result fit exactly");
@@ -3397,7 +3943,11 @@ mod tests {
     fn phantom_type_application_charges_argument_clones_at_the_exact_boundary() {
         const WIDTH: usize = 64;
         const ARGUMENT_CELLS: usize = WIDTH + 1;
-        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 2 + 2;
+        // Synthesis visits each Type cell and compares each tuple child to
+        // Kind::Type, then validation revisits the argument for its retained
+        // substitution clone. The final three units are expected-Kind
+        // comparison, replacement storage, and substituted-result comparison.
+        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 3 + 3;
         let file = source();
         let origin = origin(&file);
         let arena = super::super::dialect::ArenaId::new(106);
@@ -3418,10 +3968,16 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
-                    ty: Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+                    ty: Type::Forall(
+                        vec![type_parameter(parameter)].into_boxed_slice(),
+                        Box::new(Type::Unit),
+                    ),
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
-                        super::super::type_ops::TypeAbstractionNode::new(vec![parameter], body),
+                        super::super::type_ops::TypeAbstractionNode::new(
+                            vec![type_parameter(parameter)],
+                            body,
+                        ),
                     )),
                 },
                 StoredNode {
@@ -3445,14 +4001,14 @@ mod tests {
 
         let exact_validator = Validator::new(&program, &[&file]);
         exact_validator
-            .charge_type_work(TYPE_WORK_LIMIT - EXPECTED_WORK)
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXPECTED_WORK)
             .expect("test setup leaves the exact retained-work allowance");
         exact_validator
             .validate_computation(
                 application,
                 &program.nodes[2],
                 computation,
-                &mut HashMap::new(),
+                &HashMap::new(),
                 &HashMap::new(),
             )
             .expect("the exact argument-validation and clone allowance fits");
@@ -3466,14 +4022,14 @@ mod tests {
 
         let short_validator = Validator::new(&program, &[&file]);
         short_validator
-            .charge_type_work(TYPE_WORK_LIMIT - (EXPECTED_WORK - 1))
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXPECTED_WORK - 1))
             .expect("test setup leaves one cell less than the retained work");
         let error = short_validator
             .validate_computation(
                 application,
                 &program.nodes[2],
                 computation,
-                &mut HashMap::new(),
+                &HashMap::new(),
                 &HashMap::new(),
             )
             .expect_err("argument clones must not cross the validation budget");
@@ -3485,9 +4041,17 @@ mod tests {
         const WIDTH: usize = 64;
         // W application nodes + W argument leaves + one nominal head.
         const ROOT_TYPE_CELLS: usize = WIDTH * 2 + 1;
+        const HEAD_INSPECTION: usize = WIDTH + 1;
         const REPLACEMENT_STORAGE: usize = WIDTH * 2;
-        const PAYLOAD_WORK: usize = 2;
-        const EXACT_WORK: usize = ROOT_TYPE_CELLS + REPLACEMENT_STORAGE + PAYLOAD_WORK;
+        const PAYLOAD_WORK: usize = 3;
+        // The pattern/expected agreement comparison visits the complete root
+        // before replacement storage and substitution are admitted.
+        const ROOT_COMPARISON: usize = ROOT_TYPE_CELLS;
+        const EXACT_WORK: usize = ROOT_COMPARISON
+            + ROOT_TYPE_CELLS
+            + HEAD_INSPECTION
+            + REPLACEMENT_STORAGE
+            + PAYLOAD_WORK;
 
         let file = source();
         let node_origin = origin(&file);
@@ -3548,7 +4112,7 @@ mod tests {
 
         let exact = Validator::new(&program, &[&file]);
         exact
-            .charge_type_work(TYPE_WORK_LIMIT - EXACT_WORK)
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
             .expect("test setup leaves the exact complete allowance");
         exact
             .validate_pattern(&pattern, &expected, node)
@@ -3563,7 +4127,11 @@ mod tests {
 
         let preflight_short = Validator::new(&program, &[&file]);
         preflight_short
-            .charge_type_work(TYPE_WORK_LIMIT - (ROOT_TYPE_CELLS + REPLACEMENT_STORAGE - 1))
+            .charge_type_work(
+                CORE_VALIDATION_TYPE_WORK_LIMIT
+                    - (ROOT_COMPARISON + ROOT_TYPE_CELLS + HEAD_INSPECTION + REPLACEMENT_STORAGE
+                        - 1),
+            )
             .expect("test setup leaves one cell fewer than replacement preflight");
         let error = preflight_short
             .validate_pattern(&pattern, &expected, node)
@@ -3584,7 +4152,10 @@ mod tests {
         let left = NodeId::new(arena, 4);
         let right = NodeId::new(arena, 5);
         let root = NodeId::new(arena, 6);
-        let scheme = Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit));
+        let scheme = Type::Forall(
+            vec![type_parameter(parameter)].into_boxed_slice(),
+            Box::new(Type::Unit),
+        );
         let program = UnvalidatedProgram {
             registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
             arena,
@@ -3607,7 +4178,7 @@ mod tests {
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
                         super::super::type_ops::TypeAbstractionNode::new(
-                            vec![parameter],
+                            vec![type_parameter(parameter)],
                             left_body,
                         ),
                     )),
@@ -3618,7 +4189,7 @@ mod tests {
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
                         super::super::type_ops::TypeAbstractionNode::new(
-                            vec![parameter],
+                            vec![type_parameter(parameter)],
                             right_body,
                         ),
                     )),
@@ -3857,23 +4428,23 @@ mod tests {
                 let exact_program = registry_program(&file, None, None);
                 let exact = Validator::new(&exact_program, &[&file]);
                 exact
-                    .charge_type_work(TYPE_WORK_LIMIT - EXACT_WORK)
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
                     .expect("the exact fixture precharge should fit");
                 exact
                     .validate_registry()
                     .expect("the exact binder-kind authentication budget should fit");
-                assert_eq!(exact.type_work.get(), TYPE_WORK_LIMIT);
+                assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
 
                 let short_program = registry_program(&file, None, None);
                 let short = Validator::new(&short_program, &[&file]);
                 short
-                    .charge_type_work(TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
                     .expect("the one-short fixture precharge should fit");
                 let error = short
                     .validate_registry()
                     .expect_err("one missing Kind-pair visit must reject validation");
                 assert_eq!(error.reason(), ValidationReason::Resource);
-                assert_eq!(short.type_work.get(), TYPE_WORK_LIMIT);
+                assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
 
                 let mismatched_program =
                     registry_program(&file, None, Some(crate::types::Kind::Type));
@@ -3889,29 +4460,318 @@ mod tests {
                     Validator::new_modules(&module_program, &[&file], &[(module, file.id())])
                         .expect("the module/source relation should be valid");
                 module_validator
-                    .charge_type_work(TYPE_WORK_LIMIT - EXACT_WORK)
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
                     .expect("the module fixture precharge should fit");
                 module_validator
                     .validate_registry()
                     .expect("the module registry Kind authentication budget should fit");
-                assert_eq!(module_validator.type_work.get(), TYPE_WORK_LIMIT);
+                assert_eq!(
+                    module_validator.type_work.get(),
+                    CORE_VALIDATION_TYPE_WORK_LIMIT
+                );
 
                 let short_module_program = registry_program(&file, Some(module), None);
                 let short_module_validator =
                     Validator::new_modules(&short_module_program, &[&file], &[(module, file.id())])
                         .expect("the one-short module/source relation should be valid");
                 short_module_validator
-                    .charge_type_work(TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
                     .expect("the one-short module fixture precharge should fit");
                 let error = short_module_validator.validate_registry().expect_err(
                     "one missing module-registry Kind-pair visit must reject validation",
                 );
                 assert_eq!(error.reason(), ValidationReason::Resource);
-                assert_eq!(short_module_validator.type_work.get(), TYPE_WORK_LIMIT);
+                assert_eq!(
+                    short_module_validator.type_work.get(),
+                    CORE_VALIDATION_TYPE_WORK_LIMIT
+                );
             })
             .expect("the Core registry authentication thread should start")
             .join()
             .expect("deep Core registry Kind authentication must remain stack-safe");
+    }
+
+    #[test]
+    fn registry_payload_kind_validation_is_exact_and_stack_safe() {
+        const DEPTH: usize = 32_768;
+        const KIND_NODES: usize = 2 * DEPTH + 1;
+        // Synthesizing the payload variable retains every canonical Kind node;
+        // the final comparison to Kind::Type visits one mismatching root pair.
+        const EXACT_WORK: usize = KIND_NODES + 1;
+
+        fn deep_kind() -> Kind {
+            let mut kind = Kind::Type;
+            for _ in 0..DEPTH {
+                kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+            }
+            kind
+        }
+
+        fn program(
+            file: &SourceFile,
+        ) -> (
+            UnvalidatedProgram,
+            crate::types::NominalTypeId,
+            crate::types::TypeVariableId,
+        ) {
+            let owner = crate::types::NominalTypeId::new(file.id(), 0);
+            let constructor = ConstructorId::new(owner, 0);
+            let parameter = crate::types::TypeVariableId::new(0);
+            let registry = crate::resolved::ResolvedRegistry::new(
+                vec![crate::resolved::ResolvedNominalType {
+                    id: owner,
+                    spelling: "Holder".into(),
+                    constructors: Box::new([constructor]),
+                    origin: range_origin(file, 0, 13),
+                }],
+                vec![crate::resolved::ResolvedConstructor {
+                    id: constructor,
+                    owner,
+                    spelling: "Make".into(),
+                    payload: Some(Type::Variable(parameter)),
+                    origin: range_origin(file, 9, 13),
+                }],
+            )
+            .with_type_parameters(vec![(
+                owner,
+                vec![crate::resolved::ResolvedTypeVariable {
+                    id: parameter,
+                    spelling: "F".into(),
+                    kind: deep_kind(),
+                    origin: range_origin(file, 7, 8),
+                }],
+            )]);
+            let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+            let root = builder
+                .unit(Type::Unit, range_origin(file, 0, 13))
+                .expect("registry payload fixture root");
+            (
+                builder.finish(root).expect("registry payload fixture"),
+                owner,
+                parameter,
+            )
+        }
+
+        std::thread::Builder::new()
+            .name("core-registry-payload-kind".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let file = SourceFile::new("payload-kind.ash", "Holder F Make")
+                    .expect("registry payload fixture source");
+
+                let (exact_program, owner, parameter) = program(&file);
+                let exact_owners = HashMap::from([(parameter, owner)]);
+                let exact = Validator::new(&exact_program, &[&file]);
+                exact
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                    .expect("exact payload-kind precharge");
+                assert_eq!(
+                    exact.valid_registry_payload_kind(
+                        Some(&Type::Variable(parameter)),
+                        owner,
+                        &exact_owners,
+                    ),
+                    Ok(false)
+                );
+                assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+                let (short_program, owner, parameter) = program(&file);
+                let short_owners = HashMap::from([(parameter, owner)]);
+                let short = Validator::new(&short_program, &[&file]);
+                short
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .expect("one-short payload-kind precharge");
+                let error = short
+                    .valid_registry_payload_kind(
+                        Some(&Type::Variable(parameter)),
+                        owner,
+                        &short_owners,
+                    )
+                    .expect_err("one missing Kind-pair visit must reject validation");
+                assert_eq!(error.reason(), ValidationReason::Resource);
+                assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            })
+            .expect("small-stack payload-kind thread")
+            .join()
+            .expect("payload Kind failure teardown must remain stack-safe");
+    }
+
+    #[test]
+    fn registry_payload_accepts_owner_parameter_application() {
+        let file = source();
+        let owner = crate::types::NominalTypeId::new(file.id(), 0);
+        let parameter = crate::types::TypeVariableId::new(0);
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![crate::resolved::ResolvedNominalType {
+                id: owner,
+                spelling: "Holder".into(),
+                constructors: Box::new([]),
+                origin: origin(&file),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(
+            owner,
+            vec![crate::resolved::ResolvedTypeVariable {
+                id: parameter,
+                spelling: "F".into(),
+                kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                origin: origin(&file),
+            }],
+        )]);
+        let arena = super::super::dialect::ArenaId::new(197);
+        let program = UnvalidatedProgram {
+            registry: Arc::new(registry),
+            arena,
+            nodes: Vec::new(),
+            root: NodeId::new(arena, 0),
+        };
+        let validator = Validator::new(&program, &[&file]);
+        let parameter_owners = HashMap::from([(parameter, owner)]);
+        let payload = Type::Application(Box::new(Type::Variable(parameter)), Box::new(Type::Int));
+
+        assert_eq!(
+            validator.valid_registry_payload(Some(&payload), owner, &parameter_owners),
+            Ok(true),
+            "structural admission must leave parameter applicability to total kind synthesis"
+        );
+        assert_eq!(
+            validator.valid_registry_payload_kind(Some(&payload), owner, &parameter_owners),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn registry_payload_accepts_partial_nominal_higher_kind_argument() {
+        let file = source();
+        let pair = crate::types::NominalTypeId::new(file.id(), 0);
+        let higher = crate::types::NominalTypeId::new(file.id(), 1);
+        let owner = crate::types::NominalTypeId::new(file.id(), 2);
+        let left = crate::types::TypeVariableId::new(0);
+        let right = crate::types::TypeVariableId::new(1);
+        let constructor_parameter = crate::types::TypeVariableId::new(2);
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![
+                crate::resolved::ResolvedNominalType {
+                    id: pair,
+                    spelling: "Pair".into(),
+                    constructors: Box::new([]),
+                    origin: origin(&file),
+                },
+                crate::resolved::ResolvedNominalType {
+                    id: higher,
+                    spelling: "Higher".into(),
+                    constructors: Box::new([]),
+                    origin: origin(&file),
+                },
+                crate::resolved::ResolvedNominalType {
+                    id: owner,
+                    spelling: "Use".into(),
+                    constructors: Box::new([]),
+                    origin: origin(&file),
+                },
+            ],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![
+            (
+                pair,
+                vec![
+                    crate::resolved::ResolvedTypeVariable {
+                        id: left,
+                        spelling: "A".into(),
+                        kind: Kind::Type,
+                        origin: origin(&file),
+                    },
+                    crate::resolved::ResolvedTypeVariable {
+                        id: right,
+                        spelling: "B".into(),
+                        kind: Kind::Type,
+                        origin: origin(&file),
+                    },
+                ],
+            ),
+            (
+                higher,
+                vec![crate::resolved::ResolvedTypeVariable {
+                    id: constructor_parameter,
+                    spelling: "F".into(),
+                    kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                    origin: origin(&file),
+                }],
+            ),
+        ]);
+        let arena = super::super::dialect::ArenaId::new(198);
+        let program = UnvalidatedProgram {
+            registry: Arc::new(registry),
+            arena,
+            nodes: Vec::new(),
+            root: NodeId::new(arena, 0),
+        };
+        let validator = Validator::new(&program, &[&file]);
+        let parameter_owners =
+            HashMap::from([(left, pair), (right, pair), (constructor_parameter, higher)]);
+        let partial_pair = Type::Application(Box::new(Type::Nominal(pair)), Box::new(Type::Int));
+        let payload = Type::Application(Box::new(Type::Nominal(higher)), Box::new(partial_pair));
+
+        assert_eq!(
+            validator.valid_registry_payload(Some(&payload), owner, &parameter_owners),
+            Ok(true),
+            "partial nominal constructors are structurally valid monotypes"
+        );
+        assert_eq!(
+            validator.valid_registry_payload_kind(Some(&payload), owner, &parameter_owners),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn registry_payload_wrong_domain_is_owned_by_kind_synthesis() {
+        let file = source();
+        let owner = crate::types::NominalTypeId::new(file.id(), 0);
+        let parameter = crate::types::TypeVariableId::new(0);
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![crate::resolved::ResolvedNominalType {
+                id: owner,
+                spelling: "Holder".into(),
+                constructors: Box::new([]),
+                origin: origin(&file),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(
+            owner,
+            vec![crate::resolved::ResolvedTypeVariable {
+                id: parameter,
+                spelling: "F".into(),
+                kind: Kind::Arrow(
+                    Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))),
+                    Box::new(Kind::Type),
+                ),
+                origin: origin(&file),
+            }],
+        )]);
+        let arena = super::super::dialect::ArenaId::new(199);
+        let program = UnvalidatedProgram {
+            registry: Arc::new(registry),
+            arena,
+            nodes: Vec::new(),
+            root: NodeId::new(arena, 0),
+        };
+        let validator = Validator::new(&program, &[&file]);
+        let parameter_owners = HashMap::from([(parameter, owner)]);
+        let payload = Type::Application(Box::new(Type::Variable(parameter)), Box::new(Type::Int));
+
+        assert_eq!(
+            validator.valid_registry_payload(Some(&payload), owner, &parameter_owners),
+            Ok(true),
+            "structural validation must not duplicate the Kind domain rule"
+        );
+        assert_eq!(
+            validator.valid_registry_payload_kind(Some(&payload), owner, &parameter_owners),
+            Ok(false),
+            "the total Kind judgment owns the wrong-domain rejection"
+        );
     }
 
     #[test]
@@ -4004,8 +4864,49 @@ mod tests {
     }
 
     #[test]
+    fn resolved_abstraction_kinds_must_match_the_canonical_registry_record() {
+        let file = source();
+        let node_origin = origin(&file);
+        let parameter = crate::types::TypeVariableId::resolved(file.id().into(), 0);
+        let registry =
+            crate::resolved::ResolvedRegistry::default().with_additional_type_variables([
+                crate::resolved::ResolvedTypeVariable {
+                    id: parameter,
+                    spelling: "F".into(),
+                    kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                    origin: node_origin.clone(),
+                },
+            ]);
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let body = builder
+            .unit(Type::Unit, node_origin.clone())
+            .expect("outer abstraction body");
+        let root = builder
+            .type_abstraction(
+                vec![(parameter, Kind::Type)],
+                body,
+                Type::Forall(
+                    vec![(parameter, Kind::Type)].into_boxed_slice(),
+                    Box::new(Type::Unit),
+                ),
+                node_origin,
+            )
+            .expect("unchecked resolved abstraction");
+
+        let error = validate(builder.finish(root).expect("root"), &[&file])
+            .expect_err("resolved Core binders must match their canonical registry kinds");
+
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(root));
+    }
+
+    #[test]
     fn borrowed_value_type_matching_handles_wide_function_and_constructor_shapes() {
         const WIDTH: usize = 4_096;
+        // Function: tuple-domain pairs plus Bool codomain = W + 2.
+        // Constructor: binder record + Kind pair, tuple payload pairs,
+        // application link, and nominal head = W + 5.
+        const EXACT_SUCCESS_WORK: usize = 2 * WIDTH + 7;
         let file = source();
         let node_origin = origin(&file);
         let arena = super::super::dialect::ArenaId::new(106);
@@ -4027,7 +4928,7 @@ mod tests {
             origin: node_origin.clone(),
         }];
         let constructor_type = Type::Forall(
-            vec![parameter].into_boxed_slice(),
+            vec![type_parameter(parameter)].into_boxed_slice(),
             Box::new(Type::Function(
                 Box::new(payload.clone()),
                 Box::new(Type::apply_arguments(
@@ -4047,7 +4948,7 @@ mod tests {
             Box::new(Type::Bool),
         );
         let malformed_constructor_type = Type::Forall(
-            vec![parameter].into_boxed_slice(),
+            vec![type_parameter(parameter)].into_boxed_slice(),
             Box::new(Type::Function(
                 Box::new(payload.clone()),
                 Box::new(Type::apply_arguments(Type::Nominal(nominal), [Type::Int])),
@@ -4126,8 +5027,8 @@ mod tests {
         };
         let validator = Validator::new(&program, &[&file]);
         validator
-            .charge_type_work(TYPE_WORK_LIMIT)
-            .expect("test setup reaches the exact validation boundary");
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_SUCCESS_WORK)
+            .expect("test setup leaves the exact borrowed-comparison allowance");
 
         for id in [function, constructor_node] {
             let node = validator.node(id).expect("test value node");
@@ -4136,22 +5037,25 @@ mod tests {
             };
             validator
                 .validate_value(id, node, value)
-                .expect("borrowed value-type validation retains no derived type tree");
+                .expect("borrowed value-type validation visits without retaining a derived tree");
         }
-        assert_eq!(validator.type_work.get(), TYPE_WORK_LIMIT);
+        assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
 
+        let malformed_validator = Validator::new(&program, &[&file]);
         for id in [malformed_function, malformed_constructor] {
-            let node = validator.node(id).expect("malformed test value node");
+            let node = malformed_validator
+                .node(id)
+                .expect("malformed test value node");
             let PureExprKind::Value(value) = &node.kind else {
                 unreachable!("test node is a value")
             };
-            let error = validator
+            let error = malformed_validator
                 .validate_value(id, node, value)
                 .expect_err("malformed value types remain node-type failures at the budget edge");
             assert_eq!(error.reason(), ValidationReason::NodeType);
             assert_eq!(error.node(), Some(id));
         }
-        assert_eq!(validator.type_work.get(), TYPE_WORK_LIMIT);
+        assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
     }
 
     #[test]
@@ -4168,8 +5072,12 @@ mod tests {
         let parameter = crate::types::TypeVariableId::new(0);
         let parameterized_result =
             || Type::apply_arguments(Type::Nominal(parameterized), [Type::Variable(parameter)]);
-        let parameterized_scheme =
-            |body| Type::Forall(vec![parameter].into_boxed_slice(), Box::new(body));
+        let parameterized_scheme = |body| {
+            Type::Forall(
+                vec![type_parameter(parameter)].into_boxed_slice(),
+                Box::new(body),
+            )
+        };
         let constructors = [
             crate::resolved::ResolvedConstructor {
                 id: mono_nullary,
@@ -4405,6 +5313,9 @@ mod tests {
             .name("type-application-validation-owner".into())
             .stack_size(256 * 1024)
             .spawn(|| {
+                // Synthesis, retained argument admission, substitution, and
+                // final comparison visit 11D + 6 units. D=32,000 remains a
+                // deep small-stack success inside the module-wide ledger.
                 const DEPTH: usize = 32_000;
                 let file = source();
                 let node_origin = origin(&file);
@@ -4427,7 +5338,7 @@ mod tests {
                         StoredNode {
                             dialect: DialectId::PURE,
                             ty: Type::Forall(
-                                vec![parameter].into_boxed_slice(),
+                                vec![type_parameter(parameter)].into_boxed_slice(),
                                 Box::new(Type::Variable(parameter)),
                             ),
                             origin: Some(node_origin.clone()),
@@ -4458,7 +5369,7 @@ mod tests {
                         application,
                         &program.nodes[1],
                         computation,
-                        &mut HashMap::new(),
+                        &HashMap::new(),
                         &HashMap::new(),
                     )
                     .expect("the deep type application is valid");
@@ -4538,7 +5449,7 @@ mod tests {
                         match_id,
                         &program.nodes[2],
                         computation,
-                        &mut HashMap::new(),
+                        &HashMap::new(),
                         &HashMap::new(),
                     )
                     .expect("the exhaustive deep match is valid");
@@ -4629,7 +5540,7 @@ mod tests {
                         match_id,
                         &program.nodes[2],
                         computation,
-                        &mut HashMap::new(),
+                        &HashMap::new(),
                         &HashMap::new(),
                     )
                     .expect_err("the second wildcard is redundant");

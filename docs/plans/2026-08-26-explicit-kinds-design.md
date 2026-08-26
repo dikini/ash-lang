@@ -199,6 +199,17 @@ comparisons charge graph constraint work, with structural retention additionally
 charging type work. Core construction, transforms, and validation keep their
 independent ledgers.
 
+Those ledgers remain separate, but their numeric capacities need not be
+identical after their formulas diverge. Core construction and both transforms
+remain bounded by `TYPE_WORK_LIMIT` (327,680). Independent Core validation
+keeps one cumulative ledger across all of its passes and uses
+`3 * TYPE_WORK_LIMIT` (983,040). The unchanged depth-96 generic-prerequisite
+pipeline uses 275,398 predecessor units plus 145,151 required Kind units, or
+420,549 total. The unchanged width-32,767 Core validation and disposal witness
+uses `22 * width + 7`, or 720,881 units. The validator-local multiplier
+preserves both predecessor witnesses with deliberate headroom; it does not
+reset the ledger, create a separate Kind allowance, or change Ash semantics.
+
 Each kind node, canonical application node, and binder-kind record is charged
 before its owning visit or retention. Record retention additionally charges all
 copied type and kind nodes. Every operation publishes its additive formula and
@@ -237,6 +248,10 @@ The product checkpoint must retain:
   construction, clone, equality, hashing, rendering, kind checking,
   substitution, occurs checking, unification, matching, summary/import/link
   admission, Core construction, transforms, validation, and disposal cases;
+- exact and one-short evidence for the validator-local 983,040-unit capacity,
+  atomic exhaustion, and the unchanged depth-96 generic-prerequisite pipeline
+  and width-32,767 Core disposal witnesses while construction and transform
+  limits remain 327,680;
 - all predecessor tests, specification examples, CLI observations, and the
   full repository verification gate without a compatibility grammar or second
   pipeline.

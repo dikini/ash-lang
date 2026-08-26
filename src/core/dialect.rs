@@ -24,7 +24,11 @@ use crate::{
     integer::Integer,
     resolved::{BinderId, ResolvedRegistry},
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
-    types::{Type, TypeWorkBudget, discard_type_iteratively, replace_type_iteratively},
+    types::{
+        Kind, Type, TypeVariableId, TypeWorkBudget, charge_kinded_type_parameters,
+        clone_kinded_type_parameters_with_budget, clone_type_with_budget, discard_type_iteratively,
+        replace_type_iteratively,
+    },
 };
 
 /// Names the closed pure Core dialect selected by Ash.
@@ -957,23 +961,48 @@ impl CoreBuilder {
     /// Adds an unchecked explicit type abstraction.
     pub fn type_abstraction(
         &mut self,
-        parameters: Vec<crate::types::TypeVariableId>,
+        parameters: Vec<(TypeVariableId, Kind)>,
         body: NodeId,
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let parameter_admission = self
-            .type_work
-            .charge(parameters.len())
+        let parameter_admission = charge_kinded_type_parameters(&parameters, &mut self.type_work)
+            .map(|()| parameters)
             .map_err(|()| BuildError::TypeWorkExceeded);
+        self.type_abstraction_after_parameter_admission(parameter_admission, body, ty, origin)
+    }
+
+    pub(super) fn type_abstraction_from_borrowed(
+        &mut self,
+        parameters: &[(TypeVariableId, Kind)],
+        body: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        let parameter_admission =
+            clone_kinded_type_parameters_with_budget(parameters, &mut self.type_work)
+                .map_err(|()| BuildError::TypeWorkExceeded);
+        self.type_abstraction_after_parameter_admission(parameter_admission, body, ty, origin)
+    }
+
+    fn type_abstraction_after_parameter_admission(
+        &mut self,
+        parameter_admission: Result<Vec<(TypeVariableId, Kind)>, BuildError>,
+        body: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
         let payloads = admit_payloads(ty, origin, &mut self.type_work);
-        let (ty, origin, requires_type_rewrite) = match (parameter_admission, payloads) {
+        let (parameters, ty, origin, requires_type_rewrite) = match (parameter_admission, payloads)
+        {
             (Err(error), Ok((ty, origin, _))) => {
                 discard_admitted_payload(ty, origin);
                 return Err(error);
             }
-            (Err(error), Err(_)) | (Ok(()), Err(error)) => return Err(error),
-            (Ok(()), Ok(payloads)) => payloads,
+            (Err(error), Err(_)) | (Ok(_), Err(error)) => return Err(error),
+            (Ok(parameters), Ok((ty, origin, requires_type_rewrite))) => {
+                (parameters, ty, origin, requires_type_rewrite)
+            }
         };
         self.push_admitted_tracking(
             ty,
@@ -983,6 +1012,17 @@ impl CoreBuilder {
             ))),
             requires_type_rewrite,
         )
+    }
+
+    pub(super) fn clone_type_for_rebuild(&mut self, ty: &Type) -> Result<Type, BuildError> {
+        clone_type_with_budget(ty, &mut self.type_work).map_err(|()| BuildError::TypeWorkExceeded)
+    }
+
+    #[cfg(test)]
+    pub(super) fn charge_type_work_for_test(&mut self, work: usize) -> Result<(), BuildError> {
+        self.type_work
+            .charge(work)
+            .map_err(|()| BuildError::TypeWorkExceeded)
     }
 
     /// Adds an unchecked explicit type application.
@@ -1703,7 +1743,7 @@ enum TypeAdmissionTask {
     FinishFunction,
     FinishTuple(usize),
     FinishApplication,
-    FinishForall(Box<[crate::types::TypeVariableId]>),
+    FinishForall(Box<[(TypeVariableId, Kind)]>),
 }
 
 enum TypeToken {
@@ -1716,7 +1756,7 @@ enum TypeToken {
     Application,
     Tuple(usize),
     Function,
-    Forall(Box<[crate::types::TypeVariableId]>),
+    Forall(Box<[(TypeVariableId, Kind)]>),
 }
 
 #[cfg(test)]
@@ -1788,7 +1828,7 @@ fn admit_type_with_status(
             TypeAdmissionTask::Visit(Type::Forall(parameters, body), depth) => {
                 let child_depth = depth.saturating_add(1);
                 exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
-                if type_work.charge(parameters.len()).is_err() {
+                if charge_kinded_type_parameters(&parameters, type_work).is_err() {
                     work.push(TypeAdmissionTask::Visit(*body, child_depth));
                     discard_type_admission_work(work);
                     return Err(BuildError::TypeWorkExceeded);
@@ -2331,10 +2371,10 @@ mod tests {
 
     #[test]
     fn validated_program_discards_a_wide_application_on_a_small_stack() {
-        // Registry validation, canonical binder authentication, envelope
-        // validation, and type-scope analysis consume 10W + 4 type-work
-        // units for this fixture. Keep the application one cell below 32K so
-        // the valid disposal witness remains inside the public ledger.
+        // The predecessor registry/envelope/scope passes consume 10W + 4;
+        // Kind nodes in the envelope and scope Forall add 2W. Independent Core
+        // kind synthesis consumes 7W + 2, and charged constructor-scheme
+        // agreement consumes 3W + 1, for 22W + 7 total units.
         const WIDTH: usize = 32_767;
 
         std::thread::Builder::new()
@@ -2406,7 +2446,13 @@ mod tests {
                     result =
                         Type::Application(Box::new(result), Box::new(Type::Variable(*parameter)));
                 }
-                let annotation = Type::Forall(parameter_ids.into_boxed_slice(), Box::new(result));
+                let annotation = Type::Forall(
+                    parameter_ids
+                        .into_iter()
+                        .map(|parameter| (parameter, Kind::Type))
+                        .collect(),
+                    Box::new(result),
+                );
                 let mut builder = CoreBuilder::with_registry(Arc::new(registry));
                 let root = builder
                     .constructor(constructor, annotation, origin)
@@ -2819,8 +2865,11 @@ mod tests {
                     .expect("the setup should leave exactly one deep result");
                 let parameters = (0..=DEEP_CELLS)
                     .map(|index| {
-                        crate::types::TypeVariableId::new(
-                            u32::try_from(index).expect("the parameter identity should fit"),
+                        (
+                            TypeVariableId::new(
+                                u32::try_from(index).expect("the parameter identity should fit"),
+                            ),
+                            Kind::Type,
                         )
                     })
                     .collect();
@@ -2862,11 +2911,11 @@ mod tests {
     fn forall_quantifiers_consume_the_exact_admission_budget() {
         let mut type_work = TypeWorkBudget::default();
         type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 4)
-            .expect("test setup leaves four type-work cells");
+            .charge(crate::types::TYPE_WORK_LIMIT - 6)
+            .expect("test setup leaves six type-work cells");
         let parameters = vec![
-            crate::types::TypeVariableId::new(0),
-            crate::types::TypeVariableId::new(1),
+            (TypeVariableId::new(0), Kind::Type),
+            (TypeVariableId::new(1), Kind::Type),
         ]
         .into_boxed_slice();
 
@@ -2874,7 +2923,9 @@ mod tests {
             Type::Forall(parameters, Box::new(Type::Unit)),
             &mut type_work,
         )
-        .expect("one forall cell, two quantifiers, and one body cell fit exactly");
+        .expect(
+            "one forall cell, two binder records, two Kind nodes, and one body cell fit exactly",
+        );
         assert_eq!(
             admit_type(Type::Unit, &mut type_work),
             Err(BuildError::TypeWorkExceeded)
@@ -2886,8 +2937,8 @@ mod tests {
         let source = SourceFile::new("type-abstraction.ash", "()").expect("test source");
         let origin = generated_origin(&source, 0);
         let parameters = vec![
-            crate::types::TypeVariableId::new(0),
-            crate::types::TypeVariableId::new(1),
+            (TypeVariableId::new(0), Kind::Type),
+            (TypeVariableId::new(1), Kind::Type),
         ];
         let mut builder = CoreBuilder::new();
         let body = builder
@@ -2895,12 +2946,12 @@ mod tests {
             .expect("small body");
         builder
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 4)
-            .expect("test setup leaves three cells after the body");
+            .charge(crate::types::TYPE_WORK_LIMIT - 6)
+            .expect("test setup leaves five cells after the body");
 
         builder
             .type_abstraction(parameters, body, Type::Unit, origin.clone())
-            .expect("two binders and one result type fit exactly");
+            .expect("two binder records, two Kind nodes, and one result type fit exactly");
         assert_eq!(
             builder.unit(Type::Unit, origin),
             Err(BuildError::TypeWorkExceeded)
@@ -2912,8 +2963,8 @@ mod tests {
         let source = SourceFile::new("type-application.ash", "()").expect("test source");
         let origin = generated_origin(&source, 0);
         let parameters = vec![
-            crate::types::TypeVariableId::new(0),
-            crate::types::TypeVariableId::new(1),
+            (TypeVariableId::new(0), Kind::Type),
+            (TypeVariableId::new(1), Kind::Type),
         ]
         .into_boxed_slice();
         let mut builder = CoreBuilder::new();
@@ -2922,8 +2973,8 @@ mod tests {
             .expect("small function placeholder");
         builder
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 6)
-            .expect("test setup leaves five cells after the function");
+            .charge(crate::types::TYPE_WORK_LIMIT - 8)
+            .expect("test setup leaves seven cells after the function");
 
         builder
             .type_application(
@@ -2932,7 +2983,9 @@ mod tests {
                 Type::Unit,
                 origin.clone(),
             )
-            .expect("the argument scheme and result fit exactly");
+            .expect(
+                "the argument Forall, binder records, Kind nodes, body, and result fit exactly",
+            );
         assert_eq!(
             builder.unit(Type::Unit, origin),
             Err(BuildError::TypeWorkExceeded)
@@ -2945,7 +2998,10 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let parameters = (0..=crate::types::TYPE_WORK_LIMIT)
             .map(|index| {
-                crate::types::TypeVariableId::new(u32::try_from(index).expect("parameter identity"))
+                (
+                    TypeVariableId::new(u32::try_from(index).expect("parameter identity")),
+                    Kind::Type,
+                )
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
@@ -2966,7 +3022,10 @@ mod tests {
         let origin = generated_origin(&source, 0);
         let parameters = (0..=crate::types::TYPE_WORK_LIMIT)
             .map(|index| {
-                crate::types::TypeVariableId::new(u32::try_from(index).expect("parameter identity"))
+                (
+                    TypeVariableId::new(u32::try_from(index).expect("parameter identity")),
+                    Kind::Type,
+                )
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
@@ -3083,8 +3142,8 @@ mod tests {
                 let source = SourceFile::new("quantifiers.ash", "()").expect("test source");
                 let origin = generated_origin(&source, 0);
                 let parameters = vec![
-                    crate::types::TypeVariableId::new(0),
-                    crate::types::TypeVariableId::new(1),
+                    (TypeVariableId::new(0), Kind::Type),
+                    (TypeVariableId::new(1), Kind::Type),
                 ];
                 let mut builder = CoreBuilder::new();
                 let body = builder

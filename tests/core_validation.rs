@@ -2,14 +2,376 @@ use ash::{
     core::{
         BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
         CorePatternKind, Primitive, PureComputation, PureExprKind, PureValue, ValidationReason,
+        transform::{fold_literal_primitives, identity_traversal},
         validate,
     },
     integer::Integer,
     resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry, ResolvedTypeVariable},
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
-    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, same_type},
+    types::{
+        ConstructorId, InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, same_type,
+    },
 };
 use std::sync::Arc;
+
+#[test]
+fn structurally_validates_higher_kinded_outer_instantiation() {
+    let file = source("PairPairValueABF");
+    let origin = whole_origin(&file);
+    let pair = NominalTypeId::new(file.id(), 0);
+    let pair_value = ConstructorId::new(pair, 0);
+    let pair_left = TypeVariableId::new(0);
+    let pair_right = TypeVariableId::new(1);
+    let outer = ResolvedTypeVariable {
+        id: TypeVariableId::new(2),
+        spelling: "F".into(),
+        kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+        origin: range_origin(&file, 15, 16),
+    };
+    let registry = Arc::new(
+        ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: pair,
+                spelling: "Pair".into(),
+                constructors: vec![pair_value].into_boxed_slice(),
+                origin: range_origin(&file, 0, 15),
+            }],
+            vec![ResolvedConstructor {
+                id: pair_value,
+                owner: pair,
+                spelling: "PairValue".into(),
+                payload: None,
+                origin: range_origin(&file, 4, 13),
+            }],
+        )
+        .with_type_parameters(vec![(
+            pair,
+            vec![
+                ResolvedTypeVariable {
+                    id: pair_left,
+                    spelling: "A".into(),
+                    kind: Kind::Type,
+                    origin: range_origin(&file, 13, 14),
+                },
+                ResolvedTypeVariable {
+                    id: pair_right,
+                    spelling: "B".into(),
+                    kind: Kind::Type,
+                    origin: range_origin(&file, 14, 15),
+                },
+            ],
+        )]),
+    );
+
+    let mut builder = CoreBuilder::with_registry(registry);
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("outer abstraction body");
+    let outer_scheme = Type::Forall(
+        vec![(outer.id, outer.kind.clone())].into_boxed_slice(),
+        Box::new(Type::Unit),
+    );
+    let abstraction = builder
+        .type_abstraction(
+            vec![(outer.id, outer.kind.clone())],
+            body,
+            outer_scheme,
+            origin.clone(),
+        )
+        .expect("function-kinded outer abstraction");
+    let partial_pair = Type::Application(Box::new(Type::Nominal(pair)), Box::new(Type::Int));
+    let root = builder
+        .type_application(abstraction, vec![partial_pair], Type::Unit, origin)
+        .expect("simultaneous outer instantiation");
+
+    validate(builder.finish(root).expect("Core root"), &[&file])
+        .expect("a matching higher-kinded outer instantiation should validate");
+}
+
+#[test]
+fn core_transforms_preserve_higher_kinded_outer_binders() {
+    let file = source("transformed higher kind");
+    let origin = whole_origin(&file);
+    let parameter = TypeVariableId::new(0);
+    let parameter_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+    let mut builder = CoreBuilder::new();
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("outer abstraction body");
+    let root = builder
+        .type_abstraction(
+            vec![(parameter, parameter_kind.clone())],
+            body,
+            Type::Forall(
+                vec![(parameter, parameter_kind.clone())].into_boxed_slice(),
+                Box::new(Type::Unit),
+            ),
+            origin,
+        )
+        .expect("unchecked higher-kinded abstraction");
+    let validated = validate(builder.finish(root).expect("Core root"), &[&file])
+        .expect("source Core validates");
+
+    for transformed in [
+        identity_traversal(&validated).expect("identity transform"),
+        fold_literal_primitives(&validated).expect("folding transform"),
+    ] {
+        let transformed = validate(transformed, &[&file]).expect("transformed Core revalidates");
+        let node = transformed
+            .node(transformed.root())
+            .expect("transformed abstraction root");
+        let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) = &node.kind
+        else {
+            panic!("transformed root remains a type abstraction");
+        };
+        assert_eq!(
+            abstraction.parameters(),
+            &[(parameter, parameter_kind.clone())]
+        );
+        assert!(matches!(
+            &node.ty,
+            Type::Forall(parameters, _) if parameters.as_ref() == [(parameter, parameter_kind.clone())]
+        ));
+    }
+}
+
+#[test]
+fn rejects_outer_instantiation_argument_of_the_wrong_kind() {
+    let file = source("wrong outer kind");
+    let origin = whole_origin(&file);
+    let parameter = TypeVariableId::new(0);
+    let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+    let mut builder = CoreBuilder::new();
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("outer abstraction body");
+    let abstraction = builder
+        .type_abstraction(
+            vec![(parameter, function_kind.clone())],
+            body,
+            Type::Forall(
+                vec![(parameter, function_kind)].into_boxed_slice(),
+                Box::new(Type::Unit),
+            ),
+            origin.clone(),
+        )
+        .expect("unchecked higher-kinded abstraction");
+    let root = builder
+        .type_application(abstraction, vec![Type::Int], Type::Unit, origin)
+        .expect("unchecked wrong-kind instantiation");
+
+    let error = validate(builder.finish(root).expect("Core root"), &[&file])
+        .expect_err("a Type argument cannot instantiate a Type-to-Type binder");
+
+    assert_eq!(error.reason(), ValidationReason::TypeOperation);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn rejects_disagreement_between_abstraction_and_outer_scheme_kinds() {
+    let file = source("forged abstraction kind");
+    let origin = whole_origin(&file);
+    let parameter = TypeVariableId::new(0);
+    let mut builder = CoreBuilder::new();
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("outer abstraction body");
+    let root = builder
+        .type_abstraction(
+            vec![(
+                parameter,
+                Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+            )],
+            body,
+            Type::Forall(
+                vec![(parameter, Kind::Type)].into_boxed_slice(),
+                Box::new(Type::Unit),
+            ),
+            origin,
+        )
+        .expect("unchecked mismatched abstraction");
+
+    let error = validate(builder.finish(root).expect("Core root"), &[&file])
+        .expect_err("the abstraction payload and scheme must retain the same kinds");
+
+    assert_eq!(error.reason(), ValidationReason::TypeOperation);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn rejects_reordered_abstraction_and_outer_scheme_binders() {
+    let file = source("reordered abstraction scheme");
+    let origin = whole_origin(&file);
+    let value_parameter = TypeVariableId::new(0);
+    let constructor_parameter = TypeVariableId::new(1);
+    let constructor_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+    let mut builder = CoreBuilder::new();
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("outer abstraction body");
+    let root = builder
+        .type_abstraction(
+            vec![
+                (value_parameter, Kind::Type),
+                (constructor_parameter, constructor_kind.clone()),
+            ],
+            body,
+            Type::Forall(
+                vec![
+                    (constructor_parameter, constructor_kind),
+                    (value_parameter, Kind::Type),
+                ]
+                .into_boxed_slice(),
+                Box::new(Type::Unit),
+            ),
+            origin,
+        )
+        .expect("unchecked reordered abstraction");
+
+    let error = validate(builder.finish(root).expect("Core root"), &[&file])
+        .expect_err("the abstraction payload and outer scheme have one canonical order");
+
+    assert_eq!(error.reason(), ValidationReason::TypeOperation);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn rejects_nested_forall_as_an_outer_instantiation_argument() {
+    let file = source("nested scheme argument");
+    let origin = whole_origin(&file);
+    let outer = TypeVariableId::new(0);
+    let nested = TypeVariableId::new(1);
+    let mut builder = CoreBuilder::new();
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("outer abstraction body");
+    let abstraction = builder
+        .type_abstraction(
+            vec![(outer, Kind::Type)],
+            body,
+            Type::Forall(
+                vec![(outer, Kind::Type)].into_boxed_slice(),
+                Box::new(Type::Unit),
+            ),
+            origin.clone(),
+        )
+        .expect("unchecked outer abstraction");
+    let nested_scheme = Type::Forall(
+        vec![(nested, Kind::Type)].into_boxed_slice(),
+        Box::new(Type::Int),
+    );
+    let root = builder
+        .type_application(abstraction, vec![nested_scheme], Type::Unit, origin)
+        .expect("unchecked nested-scheme instantiation");
+
+    let error = validate(builder.finish(root).expect("Core root"), &[&file])
+        .expect_err("Core type-application arguments must remain monomorphic");
+
+    assert_eq!(error.reason(), ValidationReason::TypeOperation);
+    assert_eq!(error.node(), Some(root));
+}
+
+#[test]
+fn rejects_non_type_ordinary_core_annotation() {
+    let file = source("OptionParameterValue");
+    let origin = whole_origin(&file);
+    let option = NominalTypeId::new(file.id(), 0);
+    let option_value = ConstructorId::new(option, 0);
+    let parameter = ResolvedTypeVariable {
+        id: TypeVariableId::new(0),
+        spelling: "A".into(),
+        kind: Kind::Type,
+        origin: range_origin(&file, 6, 7),
+    };
+    let registry = ResolvedRegistry::new(
+        vec![ResolvedNominalType {
+            id: option,
+            spelling: "Option".into(),
+            constructors: Box::new([option_value]),
+            origin: range_origin(&file, 0, 12),
+        }],
+        vec![ResolvedConstructor {
+            id: option_value,
+            owner: option,
+            spelling: "Value".into(),
+            payload: None,
+            origin: range_origin(&file, 7, 12),
+        }],
+    )
+    .with_type_parameters(vec![(option, vec![parameter])]);
+    let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+    let binder = builder
+        .binder(Type::Nominal(option), origin.clone())
+        .expect("unchecked constructor-kinded binder");
+    let body = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("function body");
+    let root = builder
+        .function(
+            binder,
+            body,
+            Type::Function(Box::new(Type::Nominal(option)), Box::new(Type::Unit)),
+            origin,
+        )
+        .expect("unchecked constructor-kinded function");
+
+    let error = validate(builder.finish(root).expect("Core root"), &[&file])
+        .expect_err("ordinary Core binders and node annotations must have kind Type");
+
+    assert_eq!(error.reason(), ValidationReason::NodeType);
+}
+
+#[test]
+fn rejects_higher_kinded_variable_as_ordinary_core_annotation() {
+    let file = source("higher kind ordinary annotation");
+    let origin = whole_origin(&file);
+    let parameter = TypeVariableId::new(0);
+    let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+    let mut builder = CoreBuilder::new();
+    let binder = builder
+        .binder(Type::Variable(parameter), origin.clone())
+        .expect("unchecked constructor-kinded binder");
+    let unit = builder
+        .unit(Type::Unit, origin.clone())
+        .expect("function body");
+    let function_type = Type::Function(Box::new(Type::Variable(parameter)), Box::new(Type::Unit));
+    let function = builder
+        .function(binder, unit, function_type.clone(), origin.clone())
+        .expect("unchecked constructor-kinded function");
+    let root = builder
+        .type_abstraction(
+            vec![(parameter, function_kind.clone())],
+            function,
+            Type::Forall(
+                vec![(parameter, function_kind)].into_boxed_slice(),
+                Box::new(function_type),
+            ),
+            origin,
+        )
+        .expect("unchecked outer abstraction");
+
+    let error = validate(builder.finish(root).expect("Core root"), &[&file])
+        .expect_err("ordinary Core annotations must synthesize Kind::Type");
+
+    assert_eq!(error.reason(), ValidationReason::NodeType);
+    assert_eq!(error.node(), Some(function));
+}
+
+#[test]
+fn rejects_inference_escape_as_type_scope() {
+    let file = source("escaped inference");
+    let origin = whole_origin(&file);
+    let mut builder = CoreBuilder::new();
+    let root = builder
+        .unit(Type::Inference(InferenceVariableId::new(0)), origin)
+        .expect("unchecked inference annotation");
+
+    let error = validate(builder.finish(root).expect("Core root"), &[&file])
+        .expect_err("inference variables cannot escape into Core");
+
+    assert_eq!(error.reason(), ValidationReason::TypeScope);
+    assert_eq!(error.node(), Some(root));
+}
 
 #[test]
 fn rejects_malformed_explicit_type_operations_and_free_type_variables() {
@@ -21,9 +383,12 @@ fn rejects_malformed_explicit_type_operations_and_free_type_variables() {
     let body = builder.unit(Type::Unit, origin.clone()).expect("unit body");
     let abstraction = builder
         .type_abstraction(
-            vec![parameter],
+            vec![(parameter, Kind::Type)],
             body,
-            Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+            Type::Forall(
+                vec![(parameter, Kind::Type)].into_boxed_slice(),
+                Box::new(Type::Unit),
+            ),
             origin.clone(),
         )
         .expect("unchecked abstraction");
@@ -67,13 +432,21 @@ fn rejects_polymorphic_match_domains() {
     let file = source("polymorphic match domain");
     let origin = whole_origin(&file);
     let parameter = TypeVariableId::new(0);
-    let scheme = Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit));
+    let scheme = Type::Forall(
+        vec![(parameter, Kind::Type)].into_boxed_slice(),
+        Box::new(Type::Unit),
+    );
     let mut builder = CoreBuilder::new();
     let body = builder
         .unit(Type::Unit, origin.clone())
         .expect("abstraction body");
     let scrutinee = builder
-        .type_abstraction(vec![parameter], body, scheme.clone(), origin.clone())
+        .type_abstraction(
+            vec![(parameter, Kind::Type)],
+            body,
+            scheme.clone(),
+            origin.clone(),
+        )
         .expect("unchecked type abstraction");
     let arm_body = builder
         .unit(Type::Unit, origin.clone())
@@ -117,7 +490,12 @@ fn core_construction_charges_forall_quantifiers_before_storage() {
     let file = source("bounded forall construction");
     let origin = whole_origin(&file);
     let parameters = (0..ash::types::TYPE_WORK_LIMIT)
-        .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+        .map(|index| {
+            (
+                TypeVariableId::new(u32::try_from(index).expect("parameter identity")),
+                Kind::Type,
+            )
+        })
         .collect::<Vec<_>>()
         .into_boxed_slice();
     let mut builder = CoreBuilder::new();
@@ -134,7 +512,12 @@ fn core_construction_charges_type_abstraction_binders_before_storage() {
     let file = source("bounded type abstraction construction");
     let origin = whole_origin(&file);
     let parameters = (0..ash::types::TYPE_WORK_LIMIT)
-        .map(|index| TypeVariableId::new(u32::try_from(index).expect("parameter identity")))
+        .map(|index| {
+            (
+                TypeVariableId::new(u32::try_from(index).expect("parameter identity")),
+                Kind::Type,
+            )
+        })
         .collect::<Vec<_>>();
     let mut builder = CoreBuilder::new();
     let body = builder
@@ -150,7 +533,12 @@ fn core_construction_charges_type_abstraction_binders_before_storage() {
 
 #[test]
 fn expanded_malformed_type_application_maps_to_validation_resource() {
-    const WIDTH: usize = 700;
+    // Simultaneous substitution expands the W-element argument at each of the
+    // W occurrences in the result tuple. W=1,000 therefore requires at least
+    // 1,000,000 retained Type cells, beyond Core validation's 983,040-unit
+    // cumulative ledger, while the compact Core construction remains within
+    // its unchanged TYPE_WORK_LIMIT ledger.
+    const WIDTH: usize = 1_000;
     let file = source("expanded malformed type application");
     let origin = whole_origin(&file);
     let type_parameter = TypeVariableId::new(0);
@@ -173,10 +561,10 @@ fn expanded_malformed_type_application_maps_to_validation_resource() {
         .expect("polymorphic function body");
     let abstraction = builder
         .type_abstraction(
-            vec![type_parameter],
+            vec![(type_parameter, Kind::Type)],
             function,
             Type::Forall(
-                vec![type_parameter].into_boxed_slice(),
+                vec![(type_parameter, Kind::Type)].into_boxed_slice(),
                 Box::new(function_type),
             ),
             origin.clone(),
@@ -330,6 +718,48 @@ fn rejects_constructor_payload_variables_outside_the_owner_parameters() {
 }
 
 #[test]
+fn rejects_higher_kinded_constructor_payload_as_a_value_type() {
+    let file = source("HolderFMake");
+    let origin = whole_origin(&file);
+    let nominal = NominalTypeId::new(file.id(), 0);
+    let constructor = ConstructorId::new(nominal, 0);
+    let parameter = TypeVariableId::new(0);
+    let registry = Arc::new(
+        ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Holder".into(),
+                constructors: Box::new([constructor]),
+                origin: origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner: nominal,
+                spelling: "Make".into(),
+                payload: Some(Type::Variable(parameter)),
+                origin: range_origin(&file, 7, 11),
+            }],
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![ResolvedTypeVariable {
+                id: parameter,
+                spelling: "F".into(),
+                kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                origin: range_origin(&file, 6, 7),
+            }],
+        )]),
+    );
+    let mut builder = CoreBuilder::with_registry(registry);
+    let root = builder.unit(Type::Unit, origin).expect("unit root");
+
+    let error = validate(builder.finish(root).expect("root"), &[&file])
+        .expect_err("constructor payloads are ordinary value types of kind Type");
+
+    assert_eq!(error.reason(), ValidationReason::Registry);
+}
+
+#[test]
 fn rejects_polymorphic_constructor_payloads_in_the_registry() {
     let file = source("polymorphic registry payload");
     let origin = whole_origin(&file);
@@ -348,7 +778,7 @@ fn rejects_polymorphic_constructor_payloads_in_the_registry() {
             owner: nominal,
             spelling: "Wrapped".into(),
             payload: Some(Type::Forall(
-                vec![parameter].into_boxed_slice(),
+                vec![(parameter, Kind::Type)].into_boxed_slice(),
                 Box::new(Type::Variable(parameter)),
             )),
             origin: range_origin(&file, 1, 2),
@@ -451,9 +881,12 @@ fn rejects_nominal_parameters_reused_as_type_abstraction_binders() {
         .expect("unit abstraction body");
     let root = builder
         .type_abstraction(
-            vec![parameter],
+            vec![(parameter, Kind::Type)],
             body,
-            Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Unit)),
+            Type::Forall(
+                vec![(parameter, Kind::Type)].into_boxed_slice(),
+                Box::new(Type::Unit),
+            ),
             origin,
         )
         .expect("unchecked type abstraction");

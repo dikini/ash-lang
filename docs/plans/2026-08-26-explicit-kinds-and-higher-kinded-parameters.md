@@ -507,6 +507,13 @@ kind, scope, ownership, abstraction/scheme agreement, type-argument count and
 kind, simultaneous substitution, inference exclusion, and kind-`Type` value
 annotations without consuming a checker success capability.
 
+Keep one cumulative Core-validation ledger across all passes, but use the
+accepted validator-local capacity `3 * TYPE_WORK_LIMIT`; construction,
+transform rebuilding, and every other phase remain at `TYPE_WORK_LIMIT`. Prove
+the new capacity at exact and one-short boundaries and keep the predecessor
+depth-96 generic-prerequisite pipeline and width-32,767 Core disposal witnesses
+unchanged on their 256 KiB workers.
+
 Add focused wrong-kind and wrong-count mutations to prove the validator, not
 the builder, owns independent rejection. Task 9 later closes the full linked
 tampering matrix after body-free and linked facts exist.

@@ -4708,7 +4708,7 @@ impl ResolvedRegistry {
                 Task::ApplicationSpine(_) => unreachable!("application spine tasks are closed"),
                 Task::Type(Type::Forall(parameters, body)) => {
                     output.push_str("forall ");
-                    for (index, parameter) in parameters.iter().enumerate() {
+                    for (index, (parameter, kind)) in parameters.iter().enumerate() {
                         if index > 0 {
                             output.push_str(", ");
                         }
@@ -4717,6 +4717,8 @@ impl ResolvedRegistry {
                         } else {
                             output.push_str(&format!("T{}", parameter.local()));
                         }
+                        output.push_str(" : ");
+                        output.push_str(&kind.to_string());
                     }
                     output.push_str(". ");
                     work.push(Task::Type(body));
@@ -5914,14 +5916,14 @@ mod tests {
 
         let quantified_head = Type::Application(
             Box::new(Type::Forall(
-                vec![parameter].into_boxed_slice(),
+                vec![(parameter, crate::types::Kind::Type)].into_boxed_slice(),
                 Box::new(Type::Variable(parameter)),
             )),
             Box::new(Type::Unit),
         );
         assert_eq!(
             registry.display_type(&quantified_head),
-            "(forall A. A)<Unit>"
+            "(forall A : Type. A)<Unit>"
         );
     }
 

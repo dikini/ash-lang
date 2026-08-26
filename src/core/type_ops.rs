@@ -1,26 +1,28 @@
 //! Explicit rank-1 type abstraction and application Core payloads.
 
 use super::NodeId;
-use crate::types::{Type, TypeVariableId, discard_type_iteratively, replace_type_iteratively};
+use crate::types::{
+    Kind, Type, TypeVariableId, discard_type_iteratively, replace_type_iteratively,
+};
 
 /// A type-erased abstraction over one or more rank-1 type parameters.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypeAbstractionNode {
-    parameters: Box<[TypeVariableId]>,
+    parameters: Box<[(TypeVariableId, Kind)]>,
     body: NodeId,
 }
 
 impl TypeAbstractionNode {
-    pub(crate) fn new(parameters: Vec<TypeVariableId>, body: NodeId) -> Self {
+    pub(crate) fn new(parameters: Vec<(TypeVariableId, Kind)>, body: NodeId) -> Self {
         Self {
             parameters: parameters.into_boxed_slice(),
             body,
         }
     }
 
-    /// Returns the ordered bound type-variable identities.
+    /// Returns the ordered bound type-variable identities and fixed kinds.
     #[must_use]
-    pub fn parameters(&self) -> &[TypeVariableId] {
+    pub fn parameters(&self) -> &[(TypeVariableId, Kind)] {
         &self.parameters
     }
 

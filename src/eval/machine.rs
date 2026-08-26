@@ -1306,9 +1306,12 @@ mod tests {
             .expect("integer should fit");
         let abstraction = builder
             .type_abstraction(
-                vec![parameter],
+                vec![(parameter, crate::types::Kind::Type)],
                 body,
-                Type::Forall(vec![parameter].into_boxed_slice(), Box::new(Type::Int)),
+                Type::Forall(
+                    vec![(parameter, crate::types::Kind::Type)].into_boxed_slice(),
+                    Box::new(Type::Int),
+                ),
                 origin.clone(),
             )
             .expect("type abstraction should fit");

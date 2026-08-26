@@ -142,6 +142,48 @@ permanent language principle.
   one-state-per-node resource formulas. The unused predecessor arity reason is
   removed; `resolve.type-kind` remains only for using an interface identity as
   an ordinary value type.
+- Task 5 makes each Core outer scheme one ordered identity-kind carrier in
+  `Type::Forall` and gives `TypeAbstractionNode` an independently retained copy
+  of the same pairs. Elaboration, both Core transforms, interface selection,
+  and evidence comparison preserve and authenticate those pairs. The existing
+  n-ary `TypeApplicationNode` remains simultaneous outer-scheme instantiation;
+  its arguments remain canonical unary monotypes.
+- Independent Core validation now derives nominal constructor kinds from the
+  immutable registry and checks binder ownership, order, scope, scheme and
+  abstraction agreement, argument kinds, simultaneous substitution, and the
+  kind-`Type` boundary for ordinary annotations. Inference escape and nested
+  schemes remain invalid in monotype positions. Core evaluation values,
+  frames, lookups, transitions, and runtime behavior are unchanged.
+- Task 5 necessarily extends the plan's file scope into `src/types.rs` for the
+  canonical `Type::Forall` carrier and into the private interface/evidence
+  selector path that supplies the selected parameter kind during elaboration.
+  This is the recorded carrier-scope deviation; it does not pull later linked
+  authentication or inference integration into this task.
+- Core construction and transform rebuilding remain bounded by
+  `TYPE_WORK_LIMIT`. Independent Core validation retains one cumulative ledger
+  across all passes with the accepted validator-local capacity
+  `3 * TYPE_WORK_LIMIT`, or 983,040 units. The unchanged depth-96 interface
+  witness uses 275,398 predecessor units plus 145,151 required Kind units, or
+  420,549 total. The unchanged width-32,767 Core validation witness uses
+  `22 * width + 7`, or 720,881 units. Exact and one-short tests cover the local
+  capacity and operation boundary without a reset or separate Kind allowance.
+- Task 5 semantic review found that structural registry admission still
+  rejected valid higher-kinded payload applications before kind synthesis.
+  The corrected split leaves application shape, domains, residual kinds, and
+  the final kind-`Type` obligation to total kind synthesis while structural
+  admission retains depth, nominal existence, ownership, inference escape,
+  and nested-scheme checks. Exact direct-registry tests cover owner-parameter
+  application, partial nominal arguments, and wrong-domain ownership; repeat
+  semantic review approves the correction.
+- Task 5 resource and Rust review found recursive error-path teardown in
+  transform temporaries retained across later fallible work. Transform result
+  types, type-application argument buffers, extracted tuple or constructor
+  children, and rebuilt match patterns now remain in iterative owners until
+  their terminal transfer. Four 32,768-deep probes on 256 KiB stacks cover a
+  missing function remap, a one-short result clone after argument retention,
+  parent-clone failure after child extraction, and a missing arm-body remap.
+  Repeat resource and Rust review approves the correction with no unresolved
+  finding.
 
 ## Verification
 
@@ -208,6 +250,17 @@ fields through borrowing accessors. `TypeContext::insert` now disposes
 a displaced binding fact iteratively and returns nothing; repository callers
 already ignored its previous raw `Option<Type>` result. Ash semantics, library
 and CLI rendering, and evaluator behavior do not change.
+
+Task 5 extends the planned carrier scope into `src/types.rs`, `src/interface.rs`,
+`src/evidence.rs`, and `tests/interfaces.rs`. The first three own the canonical
+kinded scheme and the private selected-interface kind needed to construct it;
+the fourth proves that retention. This boundary does not implement linked
+evidence authentication or inference integration assigned to later tasks.
+
+The malformed-Core resource fixture grows from width 700 to width 1,000 so its
+expanded work remains above the accepted validator-local `3 * TYPE_WORK_LIMIT`
+capacity. Its expected `Resource` result is unchanged. The predecessor-valid
+depth-96, width-32,767, and depth-32,000 witnesses retain their dimensions.
 
 No semantic deviation from CP-0009 is currently known. Any product evidence
 that exposes missing or incorrect semantics returns to proposal or design work

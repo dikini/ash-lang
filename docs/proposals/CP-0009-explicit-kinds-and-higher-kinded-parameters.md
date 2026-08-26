@@ -349,6 +349,19 @@ resource ledgers are:
 - Core construction, transform rebuilding, and independent Core validation use
   their existing independent type-work ledgers.
 
+The independent Core validator keeps one cumulative ledger across registry,
+envelope, graph, binder, node, term-scope, and type-scope validation, but this
+increment raises that ledger's numeric capacity from `TYPE_WORK_LIMIT` to
+`3 * TYPE_WORK_LIMIT`. Core construction, transform rebuilding, and every
+other phase retain `TYPE_WORK_LIMIT`. This is a bounded implementation-resource
+policy change, not an Ash semantic change, a ledger reset, or a separate Kind
+allowance. The retained depth-96 generic-prerequisite pipeline now consumes
+275,398 predecessor units plus 145,151 required Kind units, or 420,549 total.
+The retained width-32,767 Core validation and disposal witness now consumes
+`22 * width + 7`, or 720,881 units. A validator-local capacity of 983,040
+preserves both unchanged predecessor witnesses without making either measured
+result a brittle limit boundary.
+
 One unit is charged per visited or retained `Kind` node, per visited or retained
 canonical `Type::Application` node, and per binder-kind record before storage.
 An arrow schedules and charges both child visits. A compared kind pair charges
@@ -602,6 +615,13 @@ hashing, rendering, kind checking, substitution, occurs checking, unification,
 implementation matching, summary/import/link admission, Core construction,
 both transforms, independent validation, and disposal. Wide source argument
 vectors must exercise their deep folded unary application tree.
+
+Core-validation evidence must additionally prove the validator-local 983,040
+capacity at its exact and one-short boundaries, retain one cumulative ledger
+through every validation pass, leave failed charges atomic, and pass the
+unchanged depth-96 generic-prerequisite pipeline and width-32,767 Core disposal
+witnesses on 256 KiB stacks. The construction and transform limits remain
+327,680.
 
 Retain a `docs/design/lib-ash/kinds-evidence.md` report that names the final
 semantic boundary, production and maintenance sites, exact resource results,

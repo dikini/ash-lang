@@ -8,8 +8,12 @@ use std::{
 
 use crate::module::ModuleId;
 
-/// Maximum cumulative structural Type cells, Kind nodes, and retained or
-/// visited binder-kind records processed by one compiler phase.
+/// Shared base capacity for cumulative structural Type cells, Kind nodes, and
+/// retained or visited binder-kind records.
+///
+/// Most compiler phases use this capacity directly. Independent Core
+/// validation has an accepted validator-local multiplier because it
+/// reauthenticates the complete Core program across several cumulative passes.
 pub const TYPE_WORK_LIMIT: usize = 327_680;
 
 /// Cumulative accounting for compiler-owned Type, Kind, and binder-kind work.
@@ -36,7 +40,6 @@ impl TypeWorkBudget {
         }
     }
 
-    #[cfg(test)]
     pub(crate) const fn with_limit(limit: usize) -> Self {
         Self { used: 0, limit }
     }
@@ -84,7 +87,7 @@ pub(crate) fn charge_type_cells(ty: &Type, budget: &mut TypeWorkBudget) -> Resul
                 work.push(Task::Visit(domain));
             }
             Type::Forall(parameters, body) => {
-                budget.charge(parameters.len())?;
+                charge_kinded_type_parameters(parameters, budget)?;
                 work.push(Task::Visit(body));
             }
             Type::Int
@@ -98,6 +101,17 @@ pub(crate) fn charge_type_cells(ty: &Type, budget: &mut TypeWorkBudget) -> Resul
     Ok(())
 }
 
+pub(crate) fn charge_kinded_type_parameters(
+    parameters: &[(TypeVariableId, Kind)],
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    budget.charge(parameters.len())?;
+    for (_, kind) in parameters {
+        charge_kind_nodes(kind, budget)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
     enum Task<'a> {
         Visit(&'a Type),
@@ -105,7 +119,7 @@ pub(crate) fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> 
         Tuple(usize),
         Application,
         Function,
-        Forall(Box<[TypeVariableId]>),
+        Forall(Box<[(TypeVariableId, Kind)]>),
     }
 
     charge_type_cells(ty, budget)?;
@@ -325,7 +339,7 @@ pub enum Type {
     /// One structural application of a type function to one type argument.
     Application(Box<Type>, Box<Type>),
     /// A rank-1 type scheme binding variables in its monotype body.
-    Forall(Box<[TypeVariableId]>, Box<Type>),
+    Forall(Box<[(TypeVariableId, Kind)]>, Box<Type>),
     /// A unary function from a domain to a codomain.
     Function(Box<Type>, Box<Type>),
 }
@@ -540,11 +554,11 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             Task::ApplicationSpine(_) => unreachable!("application spine tasks are closed"),
             Task::Visit(Type::Forall(parameters, body)) => {
                 formatter.write_str("forall ")?;
-                for (index, parameter) in parameters.iter().enumerate() {
+                for (index, (parameter, kind)) in parameters.iter().enumerate() {
                     if index > 0 {
                         formatter.write_str(", ")?;
                     }
-                    write!(formatter, "<type-variable:{}>", parameter.local())?;
+                    write!(formatter, "<type-variable:{}> : {kind}", parameter.local())?;
                 }
                 formatter.write_str(". ")?;
                 work.push(Task::Visit(body));
@@ -610,7 +624,7 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
                 pending.push(Task::Compare(left_function, right_function));
             }
             (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
-                if left_parameters == right_parameters =>
+                if same_kinded_type_parameters(left_parameters, right_parameters) =>
             {
                 pending.push(Task::Compare(left, right));
             }
@@ -630,7 +644,44 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
     true
 }
 
-#[cfg(test)]
+fn same_kinded_type_parameters(
+    left: &[(TypeVariableId, Kind)],
+    right: &[(TypeVariableId, Kind)],
+) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|((left_id, left_kind), (right_id, right_kind))| {
+                left_id == right_id && same_kind(left_kind, right_kind)
+            })
+}
+
+pub(crate) fn same_kinded_type_parameters_with_budget(
+    left: &[(TypeVariableId, Kind)],
+    right: &[(TypeVariableId, Kind)],
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    same_kinded_type_parameters_with_charge(left, right, |work| budget.charge(work))
+}
+
+pub(crate) fn same_kinded_type_parameters_with_charge(
+    left: &[(TypeVariableId, Kind)],
+    right: &[(TypeVariableId, Kind)],
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<bool, ()> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for ((left_id, left_kind), (right_id, right_kind)) in left.iter().zip(right) {
+        charge(1)?;
+        if left_id != right_id || !same_kind_with_charge(left_kind, right_kind, || charge(1))? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub(crate) fn same_type_with_budget(
     left: &Type,
     right: &Type,
@@ -669,8 +720,11 @@ pub(crate) fn same_type_with_budget(
             (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
                 if left_parameters.len() == right_parameters.len() =>
             {
-                budget.charge(left_parameters.len())?;
-                if left_parameters != right_parameters {
+                if !same_kinded_type_parameters_with_budget(
+                    left_parameters,
+                    right_parameters,
+                    budget,
+                )? {
                     return Ok(false);
                 }
                 pending.push(Task::Compare(left, right));
@@ -791,10 +845,21 @@ pub(crate) fn substitute_type_variables_with<E>(
             }
             ChargeTask::Visit(Type::Forall(parameters, body), substitute) => {
                 charge(1)?;
+                for (_, kind) in parameters {
+                    charge(1)?;
+                    let mut kinds = vec![kind];
+                    while let Some(kind) = kinds.pop() {
+                        charge(1)?;
+                        if let Kind::Arrow(domain, codomain) = kind {
+                            kinds.push(codomain);
+                            kinds.push(domain);
+                        }
+                    }
+                }
                 let substitute = substitute
                     && !parameters
                         .iter()
-                        .any(|parameter| replacements.contains_key(parameter));
+                        .any(|(parameter, _)| replacements.contains_key(parameter));
                 work.push(ChargeTask::Visit(body, substitute));
             }
             ChargeTask::Visit(
@@ -825,7 +890,7 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
-        FinishForall(Box<[TypeVariableId]>),
+        FinishForall(Box<[(TypeVariableId, Kind)]>),
     }
 
     let mut work = vec![Task::Visit(ty, true)];
@@ -860,7 +925,7 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
                 let substitute = substitute
                     && !parameters
                         .iter()
-                        .any(|parameter| replacements.contains_key(parameter));
+                        .any(|(parameter, _)| replacements.contains_key(parameter));
                 work.push(Task::Visit(body, substitute));
             }
             Task::Sequence(mut remaining, substitute) => {
@@ -961,11 +1026,18 @@ fn observe_kind_render_live_states(states: usize) {
 }
 
 pub(crate) fn charge_kind_nodes(kind: &Kind, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+    charge_kind_with_charge(kind, || budget.charge(1))
+}
+
+pub(crate) fn charge_kind_with_charge(
+    kind: &Kind,
+    mut charge: impl FnMut() -> Result<(), ()>,
+) -> Result<(), ()> {
     let mut work = vec![kind];
     while let Some(kind) = work.pop() {
         #[cfg(test)]
         KIND_NODE_CHARGE_VISITS.set(KIND_NODE_CHARGE_VISITS.get().saturating_add(1));
-        budget.charge(1)?;
+        charge()?;
         if let Kind::Arrow(domain, codomain) = kind {
             work.push(codomain);
             work.push(domain);
@@ -1749,12 +1821,17 @@ mod tests {
     }
 
     #[test]
-    fn charged_forall_equality_counts_binder_identities_exactly() {
+    fn charged_forall_equality_counts_binder_records_and_kinds_exactly() {
         const WIDTH: usize = 16;
-        const CELLS: usize = WIDTH + 2;
+        const CELLS: usize = 2 * WIDTH + 2;
         let ty = Type::Forall(
             (0..WIDTH)
-                .map(|index| TypeVariableId::new(u32::try_from(index).expect("identity fits")))
+                .map(|index| {
+                    (
+                        TypeVariableId::new(u32::try_from(index).expect("identity fits")),
+                        Kind::Type,
+                    )
+                })
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             Box::new(Type::Unit),
@@ -1764,6 +1841,47 @@ mod tests {
 
         assert_eq!(same_type_with_budget(&ty, &ty, &mut exact), Ok(true));
         assert_eq!(same_type_with_budget(&ty, &ty, &mut short), Err(()));
+    }
+
+    #[test]
+    fn kinded_forall_operations_charge_records_and_kind_nodes_exactly() {
+        // One Forall node + two binder records + one Type node + three Arrow
+        // kind nodes + one body node.
+        const CELLS: usize = 1 + 2 + 1 + 3 + 1;
+        let first = TypeVariableId::new(0);
+        let second = TypeVariableId::new(1);
+        let ty = Type::Forall(
+            vec![
+                (first, Kind::Type),
+                (
+                    second,
+                    Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                ),
+            ]
+            .into_boxed_slice(),
+            Box::new(Type::Variable(first)),
+        );
+
+        let mut clone_exact = TypeWorkBudget::with_limit(CELLS);
+        let cloned = clone_type_with_budget(&ty, &mut clone_exact)
+            .expect("the complete scheme budget should retain every pair");
+        assert_eq!(cloned, ty);
+        let mut clone_short = TypeWorkBudget::with_limit(CELLS - 1);
+        assert_eq!(clone_type_with_budget(&ty, &mut clone_short), Err(()));
+
+        let mut equality_exact = TypeWorkBudget::with_limit(CELLS);
+        assert_eq!(
+            same_type_with_budget(&ty, &ty, &mut equality_exact),
+            Ok(true)
+        );
+        let mut equality_short = TypeWorkBudget::with_limit(CELLS - 1);
+        assert_eq!(
+            same_type_with_budget(&ty, &ty, &mut equality_short),
+            Err(())
+        );
+
+        discard_type_iteratively(cloned);
+        discard_type_iteratively(ty);
     }
 
     #[test]

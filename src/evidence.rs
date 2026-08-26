@@ -15,8 +15,9 @@ use crate::{
     },
     source::Span,
     types::{
-        IterativeTypeOwner, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
-        clone_type_with_budget, discard_type_iteratively, substitute_type_variables_with,
+        IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
+        clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
+        same_kinded_type_parameters_with_charge, substitute_type_variables_with,
     },
 };
 
@@ -100,6 +101,7 @@ impl Drop for MethodEntry {
 struct InterfaceEntry {
     id: InterfaceId,
     parameter: TypeVariableId,
+    parameter_kind: Kind,
     methods: Box<[MethodEntry]>,
     method_ids: Box<[MethodId]>,
     span: Span,
@@ -197,6 +199,7 @@ impl Drop for PendingObligation {
 pub(crate) struct SelectionMethod<'a> {
     interface: InterfaceId,
     interface_parameter: TypeVariableId,
+    interface_parameter_kind: &'a Kind,
     value_type: &'a Type,
     declaration_span: Span,
 }
@@ -208,6 +211,10 @@ impl<'a> SelectionMethod<'a> {
 
     pub(crate) const fn interface_parameter(self) -> TypeVariableId {
         self.interface_parameter
+    }
+
+    pub(crate) const fn interface_parameter_kind(self) -> &'a Kind {
+        self.interface_parameter_kind
     }
 
     pub(crate) const fn value_type(self) -> &'a Type {
@@ -287,6 +294,11 @@ impl EvidenceSelector {
         {
             return Err(SelectionFailure::InvalidState);
         }
+        type_work
+            .charge(1)
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        let parameter_kind = clone_kind_with_budget(&fact.parameter.kind, type_work)
+            .map_err(|()| SelectionFailure::TypeResource)?;
         let mut methods = Vec::new();
         let mut method_ids = Vec::new();
         methods
@@ -336,6 +348,7 @@ impl EvidenceSelector {
         self.interfaces.push(InterfaceEntry {
             id: fact.id,
             parameter: fact.parameter.id,
+            parameter_kind,
             methods: methods.into_boxed_slice(),
             method_ids: method_ids.into_boxed_slice(),
             span: fact.span,
@@ -655,6 +668,7 @@ impl EvidenceSelector {
         Some(SelectionMethod {
             interface: interface.id,
             interface_parameter: interface.parameter,
+            interface_parameter_kind: &interface.parameter_kind,
             value_type: &method.value_type,
             declaration_span: method.span,
         })
@@ -1296,6 +1310,7 @@ impl EvidenceSelector {
         self.interfaces.push(InterfaceEntry {
             id,
             parameter,
+            parameter_kind: Kind::Type,
             methods: methods.into_boxed_slice(),
             method_ids,
             span,
@@ -1598,13 +1613,14 @@ fn same_type_with_constraint_budget(
                 pending.push((left_function, right_function));
             }
             (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right)) => {
-                if left_parameters.len() != right_parameters.len() {
+                if !same_kinded_type_parameters_with_charge(
+                    left_parameters,
+                    right_parameters,
+                    |work| constraint_work.charge(work),
+                )? {
                     return Ok(false);
                 }
-                constraint_work.charge(left_parameters.len().saturating_add(1))?;
-                if left_parameters != right_parameters {
-                    return Ok(false);
-                }
+                constraint_work.charge(1)?;
                 pending.try_reserve(1).map_err(|_| ())?;
                 pending.push((left, right));
             }
@@ -1635,8 +1651,8 @@ mod tests {
         interface::{EvidenceNode, EvidenceSlot, RequirementOwner},
         module::ModuleId,
         resolved::{
-            BinderId, CheckedImplementationFact, ImplementationAuthorization,
-            ImplementationRouteHop,
+            BinderId, CheckedImplementationFact, CheckedInterfaceFact, ImplementationAuthorization,
+            ImplementationRouteHop, ResolvedTypeVariable,
         },
         source::{ByteRange, Origin, SourceFile},
     };
@@ -1648,6 +1664,121 @@ mod tests {
         let requirement =
             RequirementId::new(RequirementOwner::Global(BinderId::resolved(module, 0)), 0);
         (interface, method, requirement)
+    }
+
+    fn interface_fact_with_kind(kind: Kind) -> CheckedInterfaceFact {
+        let file = SourceFile::new("selection-kind-fixture.ash", "Interface")
+            .expect("interface fixture source");
+        let span = file
+            .span(ByteRange::new(0, 9).expect("interface fixture range"))
+            .expect("interface fixture span");
+        let interface = InterfaceId::new(ModuleId::from(file.id()), 0);
+        CheckedInterfaceFact {
+            id: interface,
+            spelling: "Interface".to_owned(),
+            parameter: ResolvedTypeVariable {
+                id: TypeVariableId::resolved(ModuleId::from(file.id()), 0),
+                spelling: "F".to_owned(),
+                kind,
+                origin: Origin::Source(span),
+            },
+            methods: Box::new([]),
+            origin: Origin::Source(span),
+            span,
+        }
+    }
+
+    #[test]
+    fn interface_selector_retains_kinds_at_exact_atomic_boundaries() {
+        fn exercise(imported: bool) {
+            // One retained binder record plus the three nodes in Type -> Type.
+            const EXACT_WORK: usize = 4;
+            let kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+            let fact = interface_fact_with_kind(kind.clone());
+            let mut short_selector = EvidenceSelector::new();
+            let mut short_type = TypeWorkBudget::default();
+            short_type
+                .charge(crate::types::TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                .expect("test setup leaves one fewer retained unit");
+            let short = if imported {
+                short_selector.add_imported_interface_fact(
+                    &fact,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut short_type,
+                )
+            } else {
+                short_selector.add_interface_fact(
+                    &fact,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut short_type,
+                )
+            };
+            assert_eq!(short, Err(SelectionFailure::TypeResource));
+            assert!(short_selector.interfaces.is_empty());
+            assert!(short_selector.interface_indices.is_empty());
+            assert!(short_selector.method_indices.is_empty());
+
+            let mut exact_selector = EvidenceSelector::new();
+            let mut exact_type = TypeWorkBudget::default();
+            exact_type
+                .charge(crate::types::TYPE_WORK_LIMIT - EXACT_WORK)
+                .expect("test setup leaves the exact retained work");
+            let exact = if imported {
+                exact_selector.add_imported_interface_fact(
+                    &fact,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut exact_type,
+                )
+            } else {
+                exact_selector.add_interface_fact(
+                    &fact,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut exact_type,
+                )
+            };
+            assert_eq!(exact, Ok(()));
+            assert_eq!(exact_selector.interfaces[0].parameter_kind, kind);
+            assert_eq!(exact_type.charge(1), Err(()));
+        }
+
+        exercise(false);
+        exercise(true);
+    }
+
+    #[test]
+    fn imported_selector_kind_failure_is_stack_safe_and_atomic() {
+        const DEPTH: usize = 32_768;
+        const KIND_NODES: usize = 2 * DEPTH + 1;
+        const EXACT_WORK: usize = 1 + KIND_NODES;
+
+        std::thread::Builder::new()
+            .name("deep-selector-kind-retention".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut kind = Kind::Type;
+                for _ in 0..DEPTH {
+                    kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+                }
+                let fact = interface_fact_with_kind(kind);
+                let mut selector = EvidenceSelector::new();
+                let mut type_work = TypeWorkBudget::default();
+                type_work
+                    .charge(crate::types::TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+                    .expect("test setup leaves one fewer retained unit");
+                assert_eq!(
+                    selector.add_imported_interface_fact(
+                        &fact,
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut type_work,
+                    ),
+                    Err(SelectionFailure::TypeResource)
+                );
+                assert!(selector.interfaces.is_empty());
+                assert!(selector.interface_indices.is_empty());
+            })
+            .expect("deep selector thread")
+            .join()
+            .expect("deep selector retention and teardown stay iterative");
     }
 
     fn implementation(

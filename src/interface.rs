@@ -11,8 +11,9 @@ use crate::{
     resolved::BinderId,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        Kind, Type, TypeVariableId, TypeWorkBudget, clone_kinded_type_parameters_with_budget,
-        clone_type_with_budget, discard_type_iteratively, same_type,
+        Kind, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
+        clone_kinded_type_parameters_with_budget, clone_type_with_budget, discard_type_iteratively,
+        same_kinded_type_parameters_with_charge, same_type,
     },
 };
 
@@ -99,6 +100,9 @@ impl InterfaceConstraintBudget {
                 }
                 Type::Forall(parameters, body) => {
                     self.charge(parameters.len().saturating_add(1))?;
+                    for (_, kind) in parameters {
+                        charge_kind_with_charge(kind, || self.charge(1))?;
+                    }
                     pending.try_reserve(1).map_err(|_| ())?;
                     pending.push(Task::Type(body));
                 }
@@ -169,6 +173,9 @@ fn type_contains_any_variable(
             }
             Type::Forall(parameters, body) => {
                 budget.charge(parameters.len().saturating_add(1))?;
+                for (_, kind) in parameters {
+                    charge_kind_with_charge(kind, || budget.charge(1))?;
+                }
                 pending.try_reserve(1).map_err(|_| ())?;
                 pending.push(body);
             }
@@ -203,6 +210,9 @@ fn schedule_type_children<'a>(
         }
         Type::Forall(parameters, body) => {
             budget.charge(parameters.len().saturating_add(1))?;
+            for (_, kind) in parameters {
+                charge_kind_with_charge(kind, || budget.charge(1))?;
+            }
             pending.try_reserve(1).map_err(|_| ())?;
             pending.push(body);
         }
@@ -241,10 +251,15 @@ pub(crate) fn same_type_with_constraint_budget(
                 pending.push((left_argument, right_argument));
                 pending.push((left_function, right_function));
             }
-            (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
-                if left_parameters == right_parameters =>
-            {
-                budget.charge(left_parameters.len().saturating_add(1))?;
+            (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right)) => {
+                if !same_kinded_type_parameters_with_charge(
+                    left_parameters,
+                    right_parameters,
+                    |work| budget.charge(work),
+                )? {
+                    return Ok(false);
+                }
+                budget.charge(1)?;
                 pending.try_reserve(1).map_err(|_| ())?;
                 pending.push((left, right));
             }
@@ -1579,11 +1594,7 @@ impl ConstrainedScheme {
     pub(crate) fn from_rank1_type(scheme: Type) -> Self {
         match scheme {
             Type::Forall(type_parameters, value_type) => Self {
-                type_parameters: type_parameters
-                    .into_vec()
-                    .into_iter()
-                    .map(|parameter| (parameter, Kind::Type))
-                    .collect(),
+                type_parameters,
                 requirements: Box::new([]),
                 value_type: *value_type,
             },
@@ -1647,10 +1658,10 @@ mod tests {
     };
 
     #[test]
-    fn rank1_type_binders_default_to_kind_type() {
+    fn rank1_type_binders_retain_their_fixed_kind() {
         let parameter = TypeVariableId::resolved(ModuleId::new(5), 7);
         let scheme = ConstrainedScheme::from_rank1_type(Type::Forall(
-            Box::new([parameter]),
+            Box::new([(parameter, Kind::Type)]),
             Box::new(Type::Variable(parameter)),
         ));
 

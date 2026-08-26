@@ -900,6 +900,21 @@ fn generic_impl_constructor_result_zonks_before_core_alpha_renaming() {
 }
 
 #[test]
+fn module_check_method_occurrence_retains_the_interface_function_kind() {
+    check_valid(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "interface Construct<F : Type -> Type> {\n",
+        "construct : Int -> F<Int>\n",
+        "}\n\n",
+        "impl Construct<Option> {\n",
+        "construct value = Some(value)\n",
+        "}\n\n",
+        "main : Unit -> Option<Int>\n",
+        "main () = construct 42\n",
+    ));
+}
+
+#[test]
 fn generic_current_impl_does_not_freshly_instantiate_its_rigid_head() {
     let error = check_error(concat!(
         "type Option<A> =\nNone\n| Some(A)\n\n",
