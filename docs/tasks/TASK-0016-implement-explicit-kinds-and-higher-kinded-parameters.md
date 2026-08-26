@@ -11,10 +11,10 @@
 - CP-0009 is the accepted transition authority. The current specification owns
   implemented Ash until this product branch lands implementation, tests, and
   normative updates together.
-- This branch is stacked on explicit-import checkpoint `a1647ff`, which is not
-  integrated into `main@4f0541d`. It cannot integrate independently; the
-  predecessor must integrate first, or the stacked product branches must
-  integrate in predecessor order.
+- This branch starts from explicit-import checkpoint `a1647ff`, which is now
+  integrated as `main@a1647ff`. The predecessor-order restriction is therefore
+  satisfied; this branch remains separate and unmerged while the increment is
+  active.
 - The predecessor supplies explicit implementation selection and re-export,
   stable declaration and evidence identities, body-free summaries, linked
   authentication, independent Core validation, graph-wide resource budgets,
@@ -78,7 +78,8 @@ permanent language principle.
   evidence gate before CP-0009 was accepted.
 - The dedicated worktree starts from `a1647ff`; baseline build and full
   repository verification pass. CP-0009 is accepted, the task and execution
-  plan are authorized, and the branch remains stacked and unmerged.
+  plan are authorized, and the branch remains based on the integrated
+  predecessor and unmerged.
 - The execution plan orders the closed type-site inventory and resource
   formulas early so omissions fail during implementation rather than closure.
 - Task 2 retains contextual kind syntax and exact explicit binder lists across
@@ -93,6 +94,22 @@ permanent language principle.
   preservation, and contextual-name ambiguity were corrected. Focused tests,
   the full all-feature workspace suite, Clippy with warnings denied,
   formatting, all-target checking, and diff hygiene pass on the final change.
+- Task 3 replaces the saturated `AppliedNominal` representation with one unary
+  `Application` tree throughout production code. Resolution folds source
+  arguments left while preserving the predecessor's saturation and failure
+  boundary until Task 4. Type operations, paired application provenance, both
+  retained Core transforms, independent Core validation, and evaluator nominal
+  inspection use that tree. Core `TypeApplicationNode` remains the distinct
+  simultaneous n-ary outer-scheme instantiation operation.
+- Task 3 also closes the source-derived type-carrier and kind-site inventories.
+  The production-wide recursive-owner guard rejects raw destructive mutation;
+  exact resource and 32,768-level, 256 KiB-stack witnesses cover canonical
+  operations, retained payloads, replacements, and normal error exits. Two
+  independent reviews approve the final semantics and ownership boundary. The
+  focused suites, full all-target and all-feature workspace suite, Clippy with
+  warnings denied, formatting, all-target checking, test enumeration,
+  `cargo xtask verify`, Rust documentation, Markdown lint, and diff hygiene pass
+  on the final change.
 
 ## Verification
 
@@ -130,12 +147,36 @@ The canonical unary semantic application and the existing n-ary Core
 syntax; the latter simultaneously instantiates one complete outer rank-1
 scheme. Tests and validation must keep that distinction explicit.
 
+Canonical application also makes a retained result type deep enough that
+`Observation` needs iterative teardown. Implementing `Drop` prevents Rust
+callers from moving its public fields directly. CP-0009 now records the
+consuming `ObservationValue` and `ObservationParts` API that preserves captured
+evaluation heaps and transfers or dismantles result types without recursive
+drop. It also records that `TypeContext::insert` dismantles a displaced binding
+fact instead of returning a raw recursive type that callers can ignore, and
+that automatically dropped checked facts expose their structural types through
+borrowing accessors rather than mutable raw fields. Public carriers without
+automatic `Drop` remain caller-managed and use `discard_type_iteratively` when
+disposing a potentially deep extracted type.
+
 The type-bearing site map and additive resource formulas are implementation
 inputs, not retrospective documentation. The architecture guard and exact
 budget probes therefore precede summary and Core expansion.
 
 ## Deviations
 
-No deviation from CP-0009 is currently known. Any product evidence that exposes
-missing or incorrect semantics returns to proposal or design work instead of
-being decided in this task.
+Task 3 refines the predecessor Rust API so `Observation` can dismantle a
+canonical result type on drop without recursion or unsafe code. Borrowing moves
+to `value()` and `ty()`; direct field moves, overwrites, and by-value
+destructuring are replaced by borrowing and consuming accessors. CP-0009
+records this source-compatibility exception and its heap-owning return types.
+Checked requirements, constrained schemes, interface method facts, and
+implementation facts likewise expose their automatically dropped structural
+fields through borrowing accessors. `TypeContext::insert` now disposes
+a displaced binding fact iteratively and returns nothing; repository callers
+already ignored its previous raw `Option<Type>` result. Ash semantics, library
+and CLI rendering, and evaluator behavior do not change.
+
+No semantic deviation from CP-0009 is currently known. Any product evidence
+that exposes missing or incorrect semantics returns to proposal or design work
+instead of being decided in this task.

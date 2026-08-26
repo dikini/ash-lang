@@ -55,7 +55,7 @@ fn observe(entry: &Path, value: &str, ty: Type) {
 
     assert_eq!(observation.value_display(), value);
     assert_eq!(observation.type_display(), ty.to_string());
-    assert_eq!(observation.ty, ty);
+    assert_eq!(observation.ty(), &ty);
 }
 
 #[test]

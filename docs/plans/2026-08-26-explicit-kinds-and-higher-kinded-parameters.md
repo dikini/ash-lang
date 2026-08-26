@@ -63,9 +63,11 @@ a milestone tag.
 
 ### Step 1: Confirm transition authority
 
-Confirm CP-0009 is `accepted`, names `a1647ff` as its stacked semantic base,
-and requires predecessor-first integration. Confirm `main@4f0541d` and the
-current specification do not yet contain this transition.
+Confirm CP-0009 is `accepted`, names `a1647ff` as its semantic base,
+and records the predecessor integration state. At authorization,
+`main@4f0541d` did not contain the predecessor; `main` now equals the
+predecessor checkpoint `a1647ff`. Confirm the current specification does not
+yet contain the explicit-kinds transition.
 
 ### Step 2: Record the clean baseline
 
@@ -406,7 +408,10 @@ Implement the total `DELTA`/`OMEGA`/`XI` synthesis engine and the value-type and
 resolved declaration checking always supplies empty `OMEGA`; Task 6 connects
 the same engine to elaboration's transient registry. An omitted kind annotation
 on any explicit binder means `Type`; every binder introduced by an implicit
-global or implementation header is fixed at `Type`. No use infers an arrow kind.
+global or implementation header is fixed at `Type`. No use infers an arrow kind
+in this increment. This is a phase-dependent constraint that keeps explicit
+kinds independently implementable and testable, not a permanent language
+principle.
 
 Expose kind failures as a distinct typed pipeline case with structured
 expected/found kinds and causal spans. A successfully returned resolved module
@@ -1025,7 +1030,8 @@ Create `docs/design/lib-ash/kinds-evidence.md`. Record the final semantic
 boundary, complete type-bearing site map, production and maintenance sites,
 named positive/negative/tamper tests, exact resource formulas and measured
 results, 256 KiB outcomes, diagnostic and migration matrices, final test counts,
-review outcomes, stacked dependency, no-tag decision, and exclusions. Update
+review outcomes, integrated predecessor dependency, no-tag decision, and
+exclusions. Update
 the tool guide, DN-0025, design index, trajectory, and task progress without
 claiming the complete `lib-ash` milestone is closed.
 
@@ -1141,6 +1147,6 @@ git add -A docs
 git -c commit.gpgsign=false commit -m "docs: close explicit kinds increment"
 ```
 
-Leave branch `lib-ash-kinds` in its dedicated worktree, stacked on `a1647ff`,
-clean, untagged, unmerged into `main`, and ready only for predecessor-ordered
-integration.
+Leave branch `lib-ash-kinds` in its dedicated worktree, based on `a1647ff`,
+clean, untagged, and unmerged into `main`. The predecessor-order restriction is
+already satisfied because `main` contains `a1647ff`.

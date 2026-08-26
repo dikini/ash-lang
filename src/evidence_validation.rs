@@ -22,7 +22,7 @@ use crate::{
         ResolvedRegistry, ResolvedTermName,
     },
     source::{Origin, Span},
-    types::{NominalTypeId, Type, TypeVariableId, discard_type_iteratively},
+    types::{IterativeTypeOwner, Type, TypeVariableId, discard_type_iteratively},
 };
 
 /// Stable reason owned by pre-Core interface-evidence validation.
@@ -1233,11 +1233,13 @@ fn same_type_after_single_substitution(
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
-            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
-                if left_id == right_id && left.len() == right.len() =>
-            {
-                reserve_type_pairs(&mut pending, left.len(), budget, span)?;
-                pending.extend(left.iter().zip(right).rev());
+            (
+                Type::Application(left_function, left_argument),
+                Type::Application(right_function, right_argument),
+            ) => {
+                reserve_type_pairs(&mut pending, 2, budget, span)?;
+                pending.push((left_argument, right_argument));
+                pending.push((left_function, right_function));
             }
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
                 reserve_type_pairs(&mut pending, left.len(), budget, span)?;
@@ -1706,7 +1708,7 @@ fn validate_checked_selection_in_scope(
         budget,
         span,
     )?;
-    while let Some(goal) = pending.0.pop() {
+    while let Some(goal) = pending.pop() {
         validate_evidence_node(
             program,
             registry,
@@ -1905,7 +1907,7 @@ fn validate_evidence_node(
                 } else {
                     None
                 };
-                pending.0.push(PendingGoal::new(
+                pending.push(PendingGoal::new(
                     prerequisite,
                     requirement.interface,
                     argument,
@@ -2024,6 +2026,20 @@ impl Drop for PendingGoal {
 #[derive(Default)]
 struct PendingGoals(Vec<PendingGoal>);
 
+impl PendingGoals {
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn push(&mut self, goal: PendingGoal) {
+        self.0.push(goal);
+    }
+
+    fn pop(&mut self) -> Option<PendingGoal> {
+        self.0.pop()
+    }
+}
+
 fn reserve_pending_goals(
     pending: &mut PendingGoals,
     additional: usize,
@@ -2031,10 +2047,7 @@ fn reserve_pending_goals(
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
     charge(budget, additional, span)?;
-    pending
-        .0
-        .try_reserve(additional)
-        .map_err(|_| resource(span))
+    pending.try_reserve(additional).map_err(|_| resource(span))
 }
 
 fn implementation_head_matches(
@@ -2082,11 +2095,13 @@ fn implementation_head_matches(
         match (candidate, goal) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
-                if left_id == right_id && left.len() == right.len() =>
-            {
-                reserve_type_pairs(&mut pending, left.len(), budget, span)?;
-                pending.extend(left.iter().zip(right).rev());
+            (
+                Type::Application(left_function, left_argument),
+                Type::Application(right_function, right_argument),
+            ) => {
+                reserve_type_pairs(&mut pending, 2, budget, span)?;
+                pending.push((left_argument, right_argument));
+                pending.push((left_function, right_function));
             }
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
                 reserve_type_pairs(&mut pending, left.len(), budget, span)?;
@@ -2129,7 +2144,7 @@ fn validate_type(
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
     enum Task<'a> {
-        Visit(&'a Type),
+        Visit(&'a Type, usize),
         Sequence(std::slice::Iter<'a, Type>),
     }
 
@@ -2152,45 +2167,47 @@ fn validate_type(
     let mut pending = Vec::new();
     charge(budget, 1, span)?;
     pending.try_reserve(1).map_err(|_| resource(span))?;
-    pending.push(Task::Visit(root));
+    pending.push(Task::Visit(root, 0));
     while let Some(task) = pending.pop() {
         match task {
-            Task::Visit(ty) => {
+            Task::Visit(ty, applied_arguments) => {
                 charge(budget, 1, span)?;
                 match ty {
-                    Type::Int | Type::Bool | Type::Unit => {}
-                    Type::Nominal(id)
+                    Type::Int | Type::Bool | Type::Unit if applied_arguments == 0 => {}
+                    Type::Int | Type::Bool | Type::Unit => return Err(invalid_root(span)),
+                    Type::Nominal(id) => {
                         if registry
                             .nominal_parameters(*id)
-                            .is_some_and(<[_]>::is_empty) => {}
-                    Type::Nominal(_) | Type::Inference(_) | Type::Forall(_, _) => {
-                        return Err(invalid_root(span));
-                    }
-                    Type::Variable(variable) if unique.contains(variable) => {}
-                    Type::Variable(_) => return Err(invalid_root(span)),
-                    Type::AppliedNominal(id, arguments) => {
-                        if registry
-                            .nominal_parameters(*id)
-                            .is_none_or(|parameters| parameters.len() != arguments.len())
+                            .is_none_or(|parameters| parameters.len() != applied_arguments)
                         {
                             return Err(invalid_root(span));
                         }
-                        charge(budget, 1, span)?;
-                        pending.try_reserve(1).map_err(|_| resource(span))?;
-                        pending.push(Task::Sequence(arguments.iter()));
                     }
-                    Type::Tuple(elements) if elements.len() >= 2 => {
+                    Type::Inference(_) | Type::Forall(_, _) => {
+                        return Err(invalid_root(span));
+                    }
+                    Type::Variable(variable)
+                        if applied_arguments == 0 && unique.contains(variable) => {}
+                    Type::Variable(_) => return Err(invalid_root(span)),
+                    Type::Application(function, argument) => {
+                        charge(budget, 2, span)?;
+                        pending.try_reserve(2).map_err(|_| resource(span))?;
+                        pending.push(Task::Visit(argument, 0));
+                        pending.push(Task::Visit(function, applied_arguments.saturating_add(1)));
+                    }
+                    Type::Tuple(elements) if applied_arguments == 0 && elements.len() >= 2 => {
                         charge(budget, 1, span)?;
                         pending.try_reserve(1).map_err(|_| resource(span))?;
                         pending.push(Task::Sequence(elements.iter()));
                     }
                     Type::Tuple(_) => return Err(invalid_root(span)),
-                    Type::Function(domain, codomain) => {
+                    Type::Function(domain, codomain) if applied_arguments == 0 => {
                         charge(budget, 2, span)?;
                         pending.try_reserve(2).map_err(|_| resource(span))?;
-                        pending.push(Task::Visit(codomain));
-                        pending.push(Task::Visit(domain));
+                        pending.push(Task::Visit(codomain, 0));
+                        pending.push(Task::Visit(domain, 0));
                     }
+                    Type::Function(_, _) => return Err(invalid_root(span)),
                 }
             }
             Task::Sequence(mut remaining) => {
@@ -2198,7 +2215,7 @@ fn validate_type(
                     charge(budget, 2, span)?;
                     pending.try_reserve(2).map_err(|_| resource(span))?;
                     pending.push(Task::Sequence(remaining));
-                    pending.push(Task::Visit(next));
+                    pending.push(Task::Visit(next, 0));
                 }
             }
         }
@@ -2221,11 +2238,13 @@ fn same_type_charged(
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
-            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
-                if left_id == right_id && left.len() == right.len() =>
-            {
-                reserve_type_pairs(&mut pending, left.len(), budget, span)?;
-                pending.extend(left.iter().zip(right).rev());
+            (
+                Type::Application(left_function, left_argument),
+                Type::Application(right_function, right_argument),
+            ) => {
+                reserve_type_pairs(&mut pending, 2, budget, span)?;
+                pending.push((left_argument, right_argument));
+                pending.push((left_function, right_function));
             }
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
                 reserve_type_pairs(&mut pending, left.len(), budget, span)?;
@@ -2257,6 +2276,40 @@ fn reserve_type_pairs<'a>(
 
 struct TypeBuffer(Vec<Type>);
 
+impl TypeBuffer {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn push(&mut self, ty: Type) {
+        self.0.push(ty);
+    }
+
+    fn pop_owned(&mut self) -> Option<IterativeTypeOwner> {
+        self.0.pop().map(IterativeTypeOwner::new)
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
+    }
+
+    fn into_boxed_slice(mut self) -> Box<[Type]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+
+    fn into_one(mut self) -> Option<Type> {
+        (self.0.len() == 1).then(|| self.0.pop().expect("a singleton buffer has one type"))
+    }
+}
+
 impl Drop for TypeBuffer {
     fn drop(&mut self) {
         for ty in self.0.drain(..) {
@@ -2275,7 +2328,7 @@ fn substitute_evidence_type(
         Visit(&'a Type, bool),
         Sequence(std::slice::Iter<'a, Type>, bool),
         FinishTuple(usize),
-        FinishApplied(NominalTypeId, usize),
+        FinishApplication,
         FinishFunction,
     }
 
@@ -2283,7 +2336,7 @@ fn substitute_evidence_type(
     charge(budget, 1, span)?;
     work.try_reserve(1).map_err(|_| resource(span))?;
     work.push(Task::Visit(root, true));
-    let mut rebuilt = TypeBuffer(Vec::new());
+    let mut rebuilt = TypeBuffer::new();
     while let Some(task) = work.pop() {
         match task {
             Task::Visit(Type::Variable(variable), true) => {
@@ -2317,11 +2370,12 @@ fn substitute_evidence_type(
                 work.push(Task::FinishTuple(elements.len()));
                 work.push(Task::Sequence(elements.iter(), substitute));
             }
-            Task::Visit(Type::AppliedNominal(id, arguments), substitute) => {
-                charge(budget, 2, span)?;
-                work.try_reserve(2).map_err(|_| resource(span))?;
-                work.push(Task::FinishApplied(*id, arguments.len()));
-                work.push(Task::Sequence(arguments.iter(), substitute));
+            Task::Visit(Type::Application(function, argument), substitute) => {
+                charge(budget, 3, span)?;
+                work.try_reserve(3).map_err(|_| resource(span))?;
+                work.push(Task::FinishApplication);
+                work.push(Task::Visit(argument, substitute));
+                work.push(Task::Visit(function, substitute));
             }
             Task::Visit(Type::Function(domain, codomain), substitute) => {
                 charge(budget, 3, span)?;
@@ -2339,40 +2393,43 @@ fn substitute_evidence_type(
                 }
             }
             Task::FinishTuple(count) => {
-                if count > rebuilt.0.len() {
+                if count > rebuilt.len() {
                     return Err(invalid_root(span));
                 }
                 reserve_rebuilt_type(&mut rebuilt, budget, span)?;
-                let values = rebuilt.0.split_off(rebuilt.0.len() - count);
-                rebuilt.0.push(Type::Tuple(values.into_boxed_slice()));
+                let values = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::Tuple(values.into_boxed_slice()));
             }
-            Task::FinishApplied(id, count) => {
-                if count > rebuilt.0.len() {
+            Task::FinishApplication => {
+                if rebuilt.len() < 2 {
                     return Err(invalid_root(span));
                 }
                 reserve_rebuilt_type(&mut rebuilt, budget, span)?;
-                let values = rebuilt.0.split_off(rebuilt.0.len() - count);
-                rebuilt
-                    .0
-                    .push(Type::AppliedNominal(id, values.into_boxed_slice()));
+                let argument = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                let function = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                rebuilt.push(Type::Application(
+                    Box::new(function.into_inner()),
+                    Box::new(argument.into_inner()),
+                ));
             }
             Task::FinishFunction => {
-                if rebuilt.0.len() < 2 {
+                if rebuilt.len() < 2 {
                     return Err(invalid_root(span));
                 }
                 reserve_rebuilt_type(&mut rebuilt, budget, span)?;
-                let codomain = rebuilt.0.pop().ok_or_else(|| invalid_root(span))?;
-                let domain = rebuilt.0.pop().ok_or_else(|| invalid_root(span))?;
-                rebuilt
-                    .0
-                    .push(Type::Function(Box::new(domain), Box::new(codomain)));
+                let codomain = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                let domain = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                rebuilt.push(Type::Function(
+                    Box::new(domain.into_inner()),
+                    Box::new(codomain.into_inner()),
+                ));
             }
         }
     }
-    if rebuilt.0.len() != 1 {
+    if rebuilt.len() != 1 {
         return Err(invalid_root(span));
     }
-    Ok(rebuilt.0.pop().expect("one reconstructed evidence type"))
+    Ok(rebuilt.into_one().expect("one reconstructed evidence type"))
 }
 
 fn charge_and_push_type(
@@ -2382,8 +2439,8 @@ fn charge_and_push_type(
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
     charge(budget, 1, span)?;
-    rebuilt.0.try_reserve(1).map_err(|_| resource(span))?;
-    rebuilt.0.push(ty);
+    rebuilt.try_reserve(1).map_err(|_| resource(span))?;
+    rebuilt.push(ty);
     Ok(())
 }
 
@@ -2393,7 +2450,7 @@ fn reserve_rebuilt_type(
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
     charge(budget, 1, span)?;
-    rebuilt.0.try_reserve(1).map_err(|_| resource(span))
+    rebuilt.try_reserve(1).map_err(|_| resource(span))
 }
 
 fn implementation_is_available(
@@ -2611,7 +2668,7 @@ mod tests {
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{CheckedModule, ImplementationRoute, ImplementationRouteHop},
-        types::{InferenceVariableId, Type, TypeVariableId, TypeWorkBudget},
+        types::{InferenceVariableId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
     };
 
     static FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
@@ -3101,13 +3158,14 @@ mod tests {
         let program = generic_program();
         let group = &program.groups()[0];
         let generic = &group.implementation_facts()[1];
-        let Type::AppliedNominal(owner, _) = &generic.argument else {
-            panic!("the generic fixture head should be a nominal application");
-        };
+        let owner = generic
+            .argument
+            .outer_nominal()
+            .expect("the generic fixture head should be a nominal application");
         let selection = nested_generic_selection(
             &program,
             &Type::Bool,
-            Type::AppliedNominal(*owner, vec![Type::Int].into_boxed_slice()),
+            Type::apply_arguments(Type::Nominal(owner), [Type::Int]),
         );
         let registry =
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
@@ -3192,9 +3250,10 @@ mod tests {
         let left = &group.implementation_facts()[0];
         let right = &group.implementation_facts()[1];
         let generic = &group.implementation_facts()[2];
-        let Type::AppliedNominal(owner, _) = &generic.argument else {
-            panic!("the generic implementation should retain a nominal head");
-        };
+        let owner = generic
+            .argument
+            .outer_nominal()
+            .expect("the generic implementation should retain a nominal head");
         let parameter = generic.head_parameters[0].id;
         let registry =
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
@@ -3250,7 +3309,7 @@ mod tests {
                 .finish(
                     root,
                     generic.interface,
-                    Type::AppliedNominal(*owner, vec![Type::Int].into_boxed_slice()),
+                    Type::apply_arguments(Type::Nominal(owner), [Type::Int]),
                 )
                 .expect("the malformed prerequisite root should exist");
 
@@ -3612,17 +3671,15 @@ mod tests {
                 &mut InterfaceConstraintBudget::default(),
             )
             .expect("the enclosing implementation node should fit");
-        let Type::AppliedNominal(outer_nominal, _) = &outer.argument else {
-            panic!("the enclosing implementation should retain a nominal head");
-        };
+        let outer_nominal = outer
+            .argument
+            .outer_nominal()
+            .expect("the enclosing implementation should retain a nominal head");
         let nested = nested_builder
             .finish(
                 nested_root,
                 outer.interface,
-                Type::AppliedNominal(
-                    *outer_nominal,
-                    vec![requirement.argument.clone()].into_boxed_slice(),
-                ),
+                Type::apply_arguments(Type::Nominal(outer_nominal), [requirement.argument.clone()]),
             )
             .expect("the forged nested selection should remain structurally valid");
 
@@ -3735,8 +3792,8 @@ mod tests {
         );
         let exact = measured.used();
         assert_eq!(
-            exact, 6,
-            "owner lookup, requirement visit, and exact Wrap<A> identity are charged"
+            exact, 8,
+            "owner lookup, requirement visit, and both Wrap<A> application children are charged"
         );
 
         assert_eq!(
@@ -3838,7 +3895,7 @@ mod tests {
         .expect("exact current authentication should fit the default budget");
         let exact = measured.used();
         assert_eq!(
-            exact, 74,
+            exact, 87,
             "exact-current relationships and the mandated abstract prerequisite are charged"
         );
 
@@ -3926,9 +3983,10 @@ mod tests {
         let group = &program.groups()[0];
         let ground = &group.implementation_facts()[0];
         let generic = &group.implementation_facts()[1];
-        let Type::AppliedNominal(owner, _) = &generic.argument else {
-            panic!("the generic fixture should retain its nominal head");
-        };
+        let owner = generic
+            .argument
+            .outer_nominal()
+            .expect("the generic fixture should retain its nominal head");
         let methods = ground
             .methods
             .iter()
@@ -3936,8 +3994,8 @@ mod tests {
             .collect::<Vec<_>>();
         let malformed = [
             Type::Nominal(NominalTypeId::new(group.module(), 99)),
-            Type::Nominal(*owner),
-            Type::AppliedNominal(*owner, Box::new([])),
+            Type::Nominal(owner),
+            Type::apply_arguments(Type::Nominal(owner), [Type::Int, Type::Bool]),
         ];
         let registry =
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
@@ -5056,5 +5114,56 @@ mod tests {
             &mut InterfaceConstraintBudget::with_limit(exact + 1),
         )
         .expect("one unit above exact block work should fit");
+    }
+
+    #[test]
+    fn recursive_evidence_validation_buffers_do_not_bypass_the_owner_api() {
+        let source: String = include_str!("evidence_validation.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        for raw_field in [["pending", ".0"].concat(), ["rebuilt", ".0"].concat()] {
+            assert!(!source.contains(&raw_field));
+        }
+        for owner in ["PendingGoals", "TypeBuffer"] {
+            let broad_mutation = ["impl", "DerefMut", "for", owner].concat();
+            assert!(!source.contains(&broad_mutation));
+        }
+    }
+
+    #[test]
+    fn late_missing_substitution_discards_deep_rebuilt_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("late-evidence-substitution-failure".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = crate::source::SourceFile::new("evidence-buffer.ash", "x")
+                    .expect("the source fixture should fit");
+                let span = source
+                    .span(crate::source::ByteRange::new(0, 1).expect("ordered source range"))
+                    .expect("the span should belong to the fixture");
+                let mut deep = Type::Int;
+                for _ in 0..DEPTH {
+                    deep = Type::Application(Box::new(deep), Box::new(Type::Unit));
+                }
+                let root = crate::types::IterativeTypeOwner::new(Type::Tuple(
+                    vec![deep, Type::Variable(TypeVariableId::new(0))].into_boxed_slice(),
+                ));
+                assert_eq!(
+                    substitute_evidence_type(
+                        &root,
+                        &[],
+                        &mut InterfaceConstraintBudget::default(),
+                        span,
+                    )
+                    .expect_err("the final variable has no substitution"),
+                    invalid_root(span),
+                );
+            })
+            .expect("the small-stack evidence-validation thread should start")
+            .join()
+            .expect("late rebuilt-type teardown must stay iterative");
     }
 }

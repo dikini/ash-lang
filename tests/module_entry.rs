@@ -70,7 +70,7 @@ fn evaluates_entry_main_across_the_loaded_module_graph() {
     let observation = run(&entry).expect("the modular program should run");
 
     assert_eq!(observation.value_display(), "42");
-    assert_eq!(observation.ty, Type::Int);
+    assert_eq!(observation.ty(), &Type::Int);
     assert_eq!(observation.type_display(), "Int");
 }
 
@@ -82,7 +82,7 @@ fn accepts_a_private_main_declared_in_the_entry_module() {
     let observation = run(&entry).expect("entry main need not be public");
 
     assert_eq!(observation.value_display(), "true");
-    assert_eq!(observation.ty, Type::Bool);
+    assert_eq!(observation.ty(), &Type::Bool);
 }
 
 #[test]

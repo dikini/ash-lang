@@ -65,10 +65,13 @@ fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule
 }
 
 fn assert_option_of_parameter(ty: &Type, option: NominalTypeId, parameter: TypeVariableId) {
-    let Type::AppliedNominal(actual_option, arguments) = ty else {
+    let Type::Application(function, argument) = ty else {
         panic!("expected an applied Option type, found {ty:?}");
     };
-    let [Type::Variable(actual_parameter)] = arguments.as_ref() else {
+    let Type::Nominal(actual_option) = function.as_ref() else {
+        panic!("expected the Option nominal head");
+    };
+    let Type::Variable(actual_parameter) = argument.as_ref() else {
         panic!("expected Option to contain its implementation parameter once");
     };
 
@@ -135,7 +138,7 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         panic!("the generic implementation should bind one head parameter");
     };
     let parameter = head_parameter.id;
-    assert_option_of_parameter(&imported.argument, expected_option, parameter);
+    assert_option_of_parameter(imported.argument(), expected_option, parameter);
 
     let [prerequisite] = imported.prerequisites.as_ref() else {
         panic!("the implementation should retain one prerequisite");
@@ -146,7 +149,7 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     );
     assert_eq!(prerequisite.id.declaration(), 0);
     assert_eq!(prerequisite.interface, expected_interface);
-    assert_eq!(prerequisite.argument, Type::Variable(parameter));
+    assert_eq!(prerequisite.argument(), &Type::Variable(parameter));
 
     let [method] = imported.methods.as_ref() else {
         panic!("the implementation should retain one checked method scheme");
@@ -162,9 +165,9 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     };
     assert_eq!(method_requirement.id, prerequisite.id);
     assert_eq!(method_requirement.interface, prerequisite.interface);
-    assert_eq!(method_requirement.argument, Type::Variable(parameter));
+    assert_eq!(method_requirement.argument(), &Type::Variable(parameter));
 
-    let Type::Function(domain, codomain) = &method.scheme.value_type else {
+    let Type::Function(domain, codomain) = method.scheme.value_type() else {
         panic!("the retained implementation method should have a function type");
     };
     let Type::Tuple(elements) = domain.as_ref() else {

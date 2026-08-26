@@ -3,7 +3,7 @@
 use super::{NodeId, TypedBinder};
 use crate::{
     source::{Origin, discard_origin_iteratively},
-    types::{ConstructorId, Type, discard_type_iteratively},
+    types::{ConstructorId, Type, discard_type_iteratively, replace_type_iteratively},
 };
 
 /// A strict structural tuple construction.
@@ -81,7 +81,8 @@ impl CorePattern {
     {
         let mut work = vec![self];
         while let Some(pattern) = work.pop() {
-            pattern.ty = rewrite(&pattern.ty)?;
+            let rewritten = rewrite(&pattern.ty)?;
+            replace_type_iteratively(&mut pattern.ty, rewritten);
             match &mut pattern.kind {
                 CorePatternKind::Binder(binder) => binder.rewrite_type(rewrite)?,
                 CorePatternKind::Tuple(elements) => work.extend(elements.iter_mut()),
@@ -97,7 +98,12 @@ impl CorePattern {
         Ok(())
     }
 
-    pub(super) fn discard_iteratively(self) {
+    /// Consumes this unchecked pattern and dismantles all metadata without
+    /// following host-language recursion.
+    ///
+    /// Use this public disposal path for a potentially deep pattern that has
+    /// not been transferred into a Core builder.
+    pub fn discard_iteratively(self) {
         enum Task {
             Visit(CorePattern),
             Sequence(std::vec::IntoIter<CorePattern>),
@@ -224,9 +230,9 @@ pub enum CorePatternKind {
 /// One source-ordered structured-match arm.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoreMatchArm {
-    pattern: CorePattern,
+    pattern: Option<CorePattern>,
     body: NodeId,
-    origin: Origin,
+    origin: Option<Origin>,
 }
 
 impl CoreMatchArm {
@@ -234,16 +240,18 @@ impl CoreMatchArm {
     #[must_use]
     pub const fn new(pattern: CorePattern, body: NodeId, origin: Origin) -> Self {
         Self {
-            pattern,
+            pattern: Some(pattern),
             body,
-            origin,
+            origin: Some(origin),
         }
     }
 
     /// Returns the arm pattern.
     #[must_use]
     pub const fn pattern(&self) -> &CorePattern {
-        &self.pattern
+        self.pattern
+            .as_ref()
+            .expect("a live Core match arm retains its pattern")
     }
 
     /// Returns the selected body handle.
@@ -255,15 +263,42 @@ impl CoreMatchArm {
     /// Returns arm provenance.
     #[must_use]
     pub const fn origin(&self) -> &Origin {
-        &self.origin
+        self.origin
+            .as_ref()
+            .expect("a live Core match arm retains its origin")
     }
 
-    pub(super) fn into_parts(self) -> (CorePattern, NodeId, Origin) {
-        (self.pattern, self.body, self.origin)
+    pub(super) fn into_parts(mut self) -> (CorePattern, NodeId, Origin) {
+        (
+            self.pattern
+                .take()
+                .expect("a live Core match arm retains its pattern"),
+            self.body,
+            self.origin
+                .take()
+                .expect("a live Core match arm retains its origin"),
+        )
     }
 
     pub(super) fn pattern_mut(&mut self) -> &mut CorePattern {
-        &mut self.pattern
+        self.pattern
+            .as_mut()
+            .expect("a live Core match arm retains its pattern")
+    }
+
+    fn discard_contents(&mut self) {
+        if let Some(pattern) = self.pattern.take() {
+            pattern.discard_iteratively();
+        }
+        if let Some(origin) = self.origin.take() {
+            discard_origin_iteratively(origin);
+        }
+    }
+}
+
+impl Drop for CoreMatchArm {
+    fn drop(&mut self) {
+        self.discard_contents();
     }
 }
 

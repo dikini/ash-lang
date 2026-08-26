@@ -665,7 +665,9 @@ testable boundary. This is the leading direction.
 The design does not currently include:
 
 - module signatures;
-- source-level higher-rank values, kind inference, or kind polymorphism;
+- source-level higher-rank values or kind polymorphism; the prepared kinds
+  increment also excludes kind inference as a phase-dependent constraint, not
+  a permanent language principle;
 - fallback implementations or specialization;
 - implementation-head import patterns or individual implementation names;
 - parent-directory module traversal;

@@ -19,7 +19,7 @@ use crate::{
     resolve::{DependencyExports, ResolveError, ResolveReason, resolve_module_with_budget},
     resolved::ResolvedModuleProgram,
     source::{SourceError, SourceFile, SourceId, Span},
-    types::{Type, TypeWorkBudget},
+    types::{IterativeTypeOwner, Type, TypeWorkBudget},
 };
 
 /// Tool-facing inputs for one modular Ash execution.
@@ -98,17 +98,175 @@ impl Error for EntryFailure {}
 ///
 /// The observation retains the evaluation heap even when `value` is a closure
 /// whose captured environment contains structural locations.
+///
+/// The owned value and type are intentionally borrow-only. In particular, a
+/// caller cannot overwrite a deep structural type and trigger recursive drop:
+///
+/// ```compile_fail
+/// use ash::{driver::Observation, types::Type};
+///
+/// fn overwrite(observation: &mut Observation) {
+///     observation.ty = Type::Unit;
+/// }
+/// ```
 #[derive(Clone, Debug)]
 pub struct Observation {
-    /// The evaluated Ash value.
-    pub value: Value,
-    /// The structural type assigned to the program result.
-    pub ty: Type,
+    value: Value,
+    ty: Type,
     type_display: Option<String>,
     _heap: Arc<ObservedHeap>,
 }
 
+/// An evaluated value that retains the heap needed by captured locations.
+///
+/// A closure can capture structural values as evaluator heap locations. This
+/// owner keeps those locations valid after the containing [`Observation`] is
+/// consumed.
+#[derive(Clone, Debug)]
+pub struct ObservationValue {
+    value: Value,
+    _heap: Arc<ObservedHeap>,
+}
+
+impl ObservationValue {
+    /// Borrows the evaluated Ash value.
+    #[must_use]
+    pub const fn value(&self) -> &Value {
+        &self.value
+    }
+
+    /// Returns the structural rendering of the evaluated value.
+    #[must_use]
+    pub fn value_display(&self) -> String {
+        self.value.to_string()
+    }
+}
+
+impl AsRef<Value> for ObservationValue {
+    fn as_ref(&self) -> &Value {
+        self.value()
+    }
+}
+
+impl std::ops::Deref for ObservationValue {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        self.value()
+    }
+}
+
+impl fmt::Display for ObservationValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.value, formatter)
+    }
+}
+
+/// The heap-owning value and structural type consumed from an observation.
+///
+/// Dropping this owner dismantles an unconsumed structural type iteratively.
+#[derive(Debug)]
+pub struct ObservationParts {
+    value: Option<ObservationValue>,
+    ty: Option<Type>,
+    type_display: Option<String>,
+}
+
+impl ObservationParts {
+    /// Borrows the evaluated Ash value.
+    #[must_use]
+    pub fn value(&self) -> &Value {
+        self.observation_value().value()
+    }
+
+    /// Borrows the heap-owning evaluated value.
+    #[must_use]
+    pub fn observation_value(&self) -> &ObservationValue {
+        self.value
+            .as_ref()
+            .expect("observation parts retain their value until consumption")
+    }
+
+    /// Borrows the structural result type.
+    #[must_use]
+    pub fn ty(&self) -> &Type {
+        self.ty
+            .as_ref()
+            .expect("observation parts retain their type until consumption")
+    }
+
+    /// Returns the structural rendering of the evaluated value.
+    #[must_use]
+    pub fn value_display(&self) -> String {
+        self.observation_value().value_display()
+    }
+
+    /// Returns the source-facing rendering of the result type.
+    #[must_use]
+    pub fn type_display(&self) -> String {
+        self.type_display
+            .clone()
+            .unwrap_or_else(|| self.ty().to_string())
+    }
+
+    /// Returns the heap-owning value and dismantles the unreturned type.
+    #[must_use]
+    pub fn into_value(mut self) -> ObservationValue {
+        self.value
+            .take()
+            .expect("observation parts retain their value until consumption")
+    }
+
+    /// Returns the type and releases the unreturned value with its heap.
+    ///
+    /// Call [`crate::types::discard_type_iteratively`] when the returned type
+    /// may contain a deep structural spine.
+    #[must_use]
+    pub fn into_type(mut self) -> Type {
+        self.ty
+            .take()
+            .expect("observation parts retain their type until consumption")
+    }
+
+    /// Returns the heap-owning value and structural type together.
+    ///
+    /// Call [`crate::types::discard_type_iteratively`] when the returned type
+    /// may contain a deep structural spine.
+    #[must_use]
+    pub fn into_pair(mut self) -> (ObservationValue, Type) {
+        let value = self
+            .value
+            .take()
+            .expect("observation parts retain their value until consumption");
+        let ty = self
+            .ty
+            .take()
+            .expect("observation parts retain their type until consumption");
+        (value, ty)
+    }
+}
+
+impl Drop for ObservationParts {
+    fn drop(&mut self) {
+        if let Some(ty) = self.ty.take() {
+            crate::types::discard_type_iteratively(ty);
+        }
+    }
+}
+
 impl Observation {
+    /// Borrows the evaluated Ash value while retaining its observation heap.
+    #[must_use]
+    pub const fn value(&self) -> &Value {
+        &self.value
+    }
+
+    /// Borrows the structural type assigned to the program result.
+    #[must_use]
+    pub const fn ty(&self) -> &Type {
+        &self.ty
+    }
+
     /// Returns the structural rendering of the observed value.
     #[must_use]
     pub fn value_display(&self) -> String {
@@ -121,6 +279,50 @@ impl Observation {
         self.type_display
             .clone()
             .unwrap_or_else(|| self.ty.to_string())
+    }
+
+    /// Consumes the observation and returns its heap-owning evaluated value.
+    ///
+    /// The unreturned structural type is dismantled iteratively, including
+    /// canonical application spines at the compiler work bound. The returned
+    /// owner retains heap locations captured by closures.
+    #[must_use]
+    pub fn into_value(mut self) -> ObservationValue {
+        crate::types::discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
+        ObservationValue {
+            value: std::mem::replace(&mut self.value, Value::Unit),
+            _heap: Arc::clone(&self._heap),
+        }
+    }
+
+    /// Consumes the observation and returns its structural result type.
+    ///
+    /// Call [`crate::types::discard_type_iteratively`] when the returned type
+    /// may contain a deep structural spine.
+    #[must_use]
+    pub fn into_type(mut self) -> Type {
+        std::mem::replace(&mut self.ty, Type::Unit)
+    }
+
+    /// Consumes the observation into a heap-owning value-and-type owner.
+    ///
+    /// Dropping the returned owner dismantles its structural type iteratively.
+    #[must_use]
+    pub fn into_parts(mut self) -> ObservationParts {
+        ObservationParts {
+            value: Some(ObservationValue {
+                value: std::mem::replace(&mut self.value, Value::Unit),
+                _heap: Arc::clone(&self._heap),
+            }),
+            ty: Some(std::mem::replace(&mut self.ty, Type::Unit)),
+            type_display: self.type_display.take(),
+        }
+    }
+}
+
+impl Drop for Observation {
+    fn drop(&mut self) {
+        crate::types::discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
     }
 }
 
@@ -461,7 +663,7 @@ where
         | Type::Unit
         | Type::Tuple(_)
         | Type::Nominal(_)
-        | Type::AppliedNominal(_, _)
+        | Type::Application(_, _)
         | Type::Variable(_)
         | Type::Inference(_) => {
             return Err(entry_failure(EntryReason::MainDomain, main_span));
@@ -476,7 +678,7 @@ where
     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
-    let (ty, type_display, unchecked): (Type, String, UnvalidatedProgram) = {
+    let (ty, type_display, unchecked): (IterativeTypeOwner, String, UnvalidatedProgram) = {
         let validated_interfaces = interface_validator(linked, constraint_work)
             .map_err(PipelineFailure::EvidenceValidation)
             .map_err(FileFailure::Pipeline)?;
@@ -489,7 +691,7 @@ where
             .synthesize_module_program(&validated_interfaces)
             .map_err(PipelineFailure::Typing)
             .map_err(FileFailure::Pipeline)?;
-        let ty = typed.ty;
+        let ty = IterativeTypeOwner::new(typed.ty);
         let type_display = registry.display_type(&ty);
         let unchecked = elaborator
             .finish(typed.node)
@@ -509,7 +711,35 @@ where
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let validated = validator(unchecked, &sources, &module_sources)
+    finish_observation(
+        ty,
+        type_display,
+        unchecked,
+        &sources,
+        &module_sources,
+        validator,
+        evaluator,
+    )
+}
+
+fn finish_observation<V, E>(
+    ty: IterativeTypeOwner,
+    type_display: String,
+    unchecked: UnvalidatedProgram,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+    validator: V,
+    evaluator: E,
+) -> Result<Observation, FileFailure>
+where
+    V: FnOnce(
+        UnvalidatedProgram,
+        &[&SourceFile],
+        &[(ModuleId, SourceId)],
+    ) -> Result<ValidatedProgram, ValidationError>,
+    E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
+{
+    let validated = validator(unchecked, sources, module_sources)
         .map_err(PipelineFailure::Validation)
         .map_err(FileFailure::Pipeline)?;
     let evaluation = evaluator(&validated)
@@ -518,7 +748,7 @@ where
     let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
         value,
-        ty,
+        ty: ty.into_inner(),
         type_display: Some(type_display),
         _heap: heap,
     })
@@ -539,7 +769,11 @@ fn closed_entry_result(root: &Type) -> bool {
     while let Some(ty) = work.pop() {
         match ty {
             Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return false,
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => work.extend(elements),
+            Type::Tuple(elements) => work.extend(elements),
+            Type::Application(function, argument) => {
+                work.push(argument);
+                work.push(function);
+            }
             Type::Function(domain, codomain) => {
                 work.push(codomain);
                 work.push(domain);
@@ -573,7 +807,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::types::{InferenceVariableId, TypeVariableId};
+    use crate::{
+        source::{ByteRange, Origin},
+        types::{InferenceVariableId, NominalTypeId, TypeVariableId},
+    };
 
     static TEST_SOURCE_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -714,6 +951,89 @@ mod tests {
         };
         assert_eq!(error.reason(), crate::core::ValidationReason::Provenance);
         assert!(!evaluation_called.get());
+    }
+
+    fn deep_observation_type(depth: usize) -> Type {
+        let mut ty = Type::Nominal(NominalTypeId::new(ModuleId::new(0), 0));
+        for _ in 0..depth {
+            ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+        }
+        ty
+    }
+
+    fn unit_program(source: &SourceFile) -> UnvalidatedProgram {
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("fixture span"),
+        );
+        let mut builder = crate::core::CoreBuilder::new();
+        let root = builder
+            .unit(Type::Unit, origin)
+            .expect("the unit program should fit");
+        builder.finish(root).expect("the unit root is present")
+    }
+
+    #[test]
+    fn downstream_validation_failure_discards_deep_result_type_iteratively() {
+        std::thread::Builder::new()
+            .name("pipeline-validation-type-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_000;
+                let source = SourceFile::new("pipeline-validation.ash", "()")
+                    .expect("the fixture should fit");
+                let program = unit_program(&source);
+                let error = finish_observation(
+                    IterativeTypeOwner::new(deep_observation_type(DEPTH)),
+                    "Deep".into(),
+                    program,
+                    &[&source],
+                    &[],
+                    |unchecked, _, _| validate_modules(unchecked, &[], &[]),
+                    |_| panic!("evaluation must not run after validation failure"),
+                )
+                .expect_err("omitting the source rejects Core provenance");
+                assert!(matches!(
+                    error,
+                    FileFailure::Pipeline(PipelineFailure::Validation(_))
+                ));
+            })
+            .expect("small-stack pipeline thread should start")
+            .join()
+            .expect("validator failure must dismantle the result type iteratively");
+    }
+
+    #[test]
+    fn downstream_evaluator_failure_discards_deep_result_type_iteratively() {
+        std::thread::Builder::new()
+            .name("pipeline-evaluator-type-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_000;
+                let source = SourceFile::new("pipeline-evaluator.ash", "()")
+                    .expect("the fixture should fit");
+                let program = unit_program(&source);
+                let error = finish_observation(
+                    IterativeTypeOwner::new(deep_observation_type(DEPTH)),
+                    "Deep".into(),
+                    program,
+                    &[&source],
+                    &[],
+                    |unchecked, sources, _| crate::core::validate(unchecked, sources),
+                    |_| Err(RuntimeFailure::InvalidControlState),
+                )
+                .expect_err("the injected evaluator failure is preserved");
+                assert!(matches!(
+                    error,
+                    FileFailure::Pipeline(PipelineFailure::Runtime(
+                        RuntimeFailure::InvalidControlState
+                    ))
+                ));
+            })
+            .expect("small-stack pipeline thread should start")
+            .join()
+            .expect("evaluator failure must dismantle the result type iteratively");
     }
 
     #[test]
@@ -953,5 +1273,135 @@ mod tests {
 
         assert!(matches!(observation.value, Value::Function(_)));
         assert_eq!(observation._heap.cell_count(), 1);
+    }
+
+    #[test]
+    fn consumed_closure_observation_value_retains_its_captured_structural_heap() {
+        let source = TestSource::write(concat!(
+            "main : Unit -> Unit -> (Int, Int)\n",
+            "main () = {\n",
+            "let pair = (20, 22)\n",
+            "fn(ignored) {\n",
+            "pair\n",
+            "}\n",
+            "}\n",
+        ));
+
+        let consumed = run_path(source.configuration())
+            .expect("the closure should evaluate")
+            .into_value();
+
+        assert!(matches!(consumed.value(), Value::Function(_)));
+        assert_eq!(consumed.value_display(), "<function>");
+        assert_eq!(consumed._heap.cell_count(), 1);
+
+        let parts = run_path(source.configuration())
+            .expect("the closure should evaluate again")
+            .into_parts();
+        assert!(matches!(parts.value(), Value::Function(_)));
+        assert_eq!(parts.observation_value()._heap.cell_count(), 1);
+        let consumed = parts.into_value();
+        assert!(matches!(consumed.value(), Value::Function(_)));
+        assert_eq!(consumed._heap.cell_count(), 1);
+    }
+
+    #[test]
+    fn observation_discards_a_canonical_application_spine_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("observation-type-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut ty = Type::Nominal(NominalTypeId::new(ModuleId::new(0), 0));
+                for _ in 0..DEPTH {
+                    ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+                }
+                let observation = Observation {
+                    value: Value::Unit,
+                    ty,
+                    type_display: Some("Wide<Unit>".to_owned()),
+                    _heap: ObservedHeap::new(
+                        Arc::new(crate::resolved::ResolvedRegistry::default()),
+                        Vec::new(),
+                    ),
+                };
+                drop(observation);
+            })
+            .expect("the observation disposal thread should start")
+            .join()
+            .expect("Observation must dismantle its canonical type iteratively");
+    }
+
+    #[test]
+    fn observation_consuming_accessors_preserve_parts_and_discard_unconsumed_type() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("observation-consuming-accessors".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let heap = || {
+                    ObservedHeap::new(
+                        Arc::new(crate::resolved::ResolvedRegistry::default()),
+                        Vec::new(),
+                    )
+                };
+                let deep_type = || {
+                    let mut ty = Type::Nominal(NominalTypeId::new(ModuleId::new(0), 0));
+                    for _ in 0..DEPTH {
+                        ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+                    }
+                    ty
+                };
+
+                let value = Observation {
+                    value: Value::Boolean(true),
+                    ty: deep_type(),
+                    type_display: Some("Wide<Unit>".to_owned()),
+                    _heap: heap(),
+                }
+                .into_value();
+                assert!(matches!(value.value(), Value::Boolean(true)));
+
+                let value = Observation {
+                    value: Value::Boolean(true),
+                    ty: deep_type(),
+                    type_display: Some("Wide<Unit>".to_owned()),
+                    _heap: heap(),
+                }
+                .into_parts()
+                .into_value();
+                assert!(matches!(value.value(), Value::Boolean(true)));
+
+                let ty = Observation {
+                    value: Value::Unit,
+                    ty: Type::Int,
+                    type_display: Some("Int".to_owned()),
+                    _heap: heap(),
+                }
+                .into_type();
+                assert_eq!(ty, Type::Int);
+
+                let parts = Observation {
+                    value: Value::Boolean(false),
+                    ty: deep_type(),
+                    type_display: Some("Wide<Unit>".to_owned()),
+                    _heap: heap(),
+                }
+                .into_parts();
+                assert!(matches!(parts.value(), Value::Boolean(false)));
+                assert_eq!(parts.type_display(), "Wide<Unit>");
+                let (value, ty) = parts.into_pair();
+                assert!(matches!(value.value(), Value::Boolean(false)));
+                assert_eq!(
+                    ty.outer_nominal(),
+                    Some(NominalTypeId::new(ModuleId::new(0), 0))
+                );
+                crate::types::discard_type_iteratively(ty);
+            })
+            .expect("the consuming-accessor thread should start")
+            .join()
+            .expect("consuming accessors must preserve selected parts and dismantle safely");
     }
 }

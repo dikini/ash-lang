@@ -4,6 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
+    ops::Deref,
     sync::Arc,
 };
 
@@ -41,8 +42,9 @@ use crate::{
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
-        InferenceVariableId, Type, TypeVariableId, TypeWorkBudget, charge_type_cells,
-        discard_type_iteratively, same_type, substitute_type_variables_with,
+        InferenceVariableId, IterativeTypeOwner, Type, TypeVariableId, TypeWorkBudget,
+        charge_type_cells, discard_type_iteratively, replace_type_iteratively, same_type,
+        substitute_type_variables_with,
     },
 };
 
@@ -152,6 +154,13 @@ impl TypeMismatch {
     #[must_use]
     pub const fn found(&self) -> &Type {
         &self.found
+    }
+}
+
+impl Drop for TypeMismatch {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(self.expected.as_mut(), Type::Unit));
+        discard_type_iteratively(std::mem::replace(self.found.as_mut(), Type::Unit));
     }
 }
 
@@ -275,11 +284,23 @@ impl Clone for TypeContext {
     }
 }
 
+impl Drop for TypeContext {
+    fn drop(&mut self) {
+        for (_, mut fact) in self.binders.drain() {
+            discard_type_iteratively(std::mem::replace(&mut fact.ty, Type::Unit));
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TypeFact {
     ty: Type,
     provenance: TypeProvenance,
     quantified: Box<[TypeVariableId]>,
+}
+
+fn discard_type_fact(mut fact: TypeFact) {
+    discard_type_iteratively(std::mem::replace(&mut fact.ty, Type::Unit));
 }
 
 #[derive(Debug)]
@@ -290,10 +311,22 @@ struct LoweredInterfaceMethod {
     declaration_span: Span,
 }
 
+impl Drop for LoweredInterfaceMethod {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.value_type, Type::Unit));
+    }
+}
+
 #[derive(Debug)]
 struct LoweredRequirementMethod {
     method: MethodId,
     ty: Type,
+}
+
+impl Drop for LoweredRequirementMethod {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
+    }
 }
 
 #[derive(Debug)]
@@ -311,6 +344,13 @@ struct LoweredScheme {
     core_scheme: Type,
 }
 
+impl Drop for LoweredScheme {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.value_type, Type::Unit));
+        discard_type_iteratively(std::mem::replace(&mut self.core_scheme, Type::Unit));
+    }
+}
+
 #[derive(Debug)]
 struct LoweredImplementationMethod {
     binder: BinderId,
@@ -324,11 +364,23 @@ struct ActiveEvidenceBinder {
     ty: Type,
 }
 
+impl Drop for ActiveEvidenceBinder {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
+    }
+}
+
 #[derive(Clone, Debug)]
 struct LoweredEvidenceMethod {
     method: MethodId,
     node: NodeId,
     ty: Type,
+}
+
+impl Drop for LoweredEvidenceMethod {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
+    }
 }
 
 struct ScopedEvidenceBinder {
@@ -362,6 +414,11 @@ enum TypeProvenance {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TypeProvenanceNode {
     Fact(Option<Span>),
+    Application {
+        span: Option<Span>,
+        function: usize,
+        argument: usize,
+    },
     Function {
         span: Option<Span>,
         domain: usize,
@@ -412,6 +469,21 @@ impl TypeProvenance {
                     });
                     roots.push(nodes.len() - 1);
                 }
+                Type::Application(function, argument) if !visited => {
+                    tasks.push((current, true));
+                    tasks.push((argument, false));
+                    tasks.push((function, false));
+                }
+                Type::Application(_, _) => {
+                    let argument = roots.pop().unwrap_or(0);
+                    let function = roots.pop().unwrap_or(0);
+                    nodes.push(TypeProvenanceNode::Application {
+                        span,
+                        function,
+                        argument,
+                    });
+                    roots.push(nodes.len() - 1);
+                }
                 Type::Int
                 | Type::Bool
                 | Type::Unit
@@ -419,7 +491,6 @@ impl TypeProvenance {
                 | Type::Nominal(_)
                 | Type::Variable(_)
                 | Type::Inference(_)
-                | Type::AppliedNominal(_, _)
                 | Type::Forall(_, _) => {
                     nodes.push(TypeProvenanceNode::Fact(span));
                     roots.push(nodes.len() - 1);
@@ -437,7 +508,9 @@ impl TypeProvenance {
         match self {
             Self::Built { nodes, root } => match nodes.get(*root) {
                 Some(
-                    TypeProvenanceNode::Fact(span) | TypeProvenanceNode::Function { span, .. },
+                    TypeProvenanceNode::Fact(span)
+                    | TypeProvenanceNode::Application { span, .. }
+                    | TypeProvenanceNode::Function { span, .. },
                 ) => *span,
                 None => None,
             },
@@ -482,10 +555,20 @@ impl TypeProvenance {
                         | Type::Tuple(_)
                         | Type::Nominal(_)
                         | Type::Variable(_)
-                        | Type::Inference(_)
-                        | Type::AppliedNominal(_, _),
+                        | Type::Inference(_),
                         Some(TypeProvenanceNode::Fact(_)),
                     ) => {}
+                    (
+                        Type::Application(function, argument),
+                        Some(TypeProvenanceNode::Application {
+                            function: function_node,
+                            argument: argument_node,
+                            ..
+                        }),
+                    ) => {
+                        work.push((argument, Cursor::Built(nodes, *argument_node)));
+                        work.push((function, Cursor::Built(nodes, *function_node)));
+                    }
                     (
                         Type::Function(domain, codomain),
                         Some(TypeProvenanceNode::Function {
@@ -512,18 +595,27 @@ impl TypeProvenance {
                         work.push((domain, Cursor::Resolved(resolved, *domain_node)));
                     }
                     (
+                        Type::Application(function, argument),
+                        Some(ResolvedTypeProvenanceNode::Application {
+                            function: function_node,
+                            argument: argument_node,
+                            ..
+                        }),
+                    ) => {
+                        work.push((argument, Cursor::Resolved(resolved, *argument_node)));
+                        work.push((function, Cursor::Resolved(resolved, *function_node)));
+                    }
+                    (
                         Type::Int
                         | Type::Bool
                         | Type::Unit
                         | Type::Tuple(_)
                         | Type::Nominal(_)
                         | Type::Variable(_)
-                        | Type::Inference(_)
-                        | Type::AppliedNominal(_, _),
+                        | Type::Inference(_),
                         Some(
                             ResolvedTypeProvenanceNode::Fact(_)
-                            | ResolvedTypeProvenanceNode::Tuple { .. }
-                            | ResolvedTypeProvenanceNode::Application { .. },
+                            | ResolvedTypeProvenanceNode::Tuple { .. },
                         ),
                     ) => {}
                     _ => return false,
@@ -595,12 +687,16 @@ impl ProvenancedType {
         span: Option<Span>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, TypeError> {
+        let domain = ProvenancedTypeOwner::new(domain);
+        let codomain = ProvenancedTypeOwner::new(codomain);
         if !domain.provenance.aligns(&domain.ty) || !codomain.provenance.aligns(&codomain.ty) {
             return Err(invalid_state());
         }
         budget
             .charge(2)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let domain = domain.into_inner();
+        let codomain = codomain.into_inner();
         Ok(Self {
             ty: Type::Function(Box::new(domain.ty), Box::new(codomain.ty)),
             provenance: TypeProvenance::Function {
@@ -611,8 +707,12 @@ impl ProvenancedType {
     }
 
     fn into_function_parts(self) -> Result<(Self, Self), TypeError> {
-        let (domain_provenance, codomain_provenance) = self.provenance.function_parts(&self.ty)?;
-        let Type::Function(domain, codomain) = self.ty else {
+        let value = ProvenancedTypeOwner::new(self);
+        let (domain_provenance, codomain_provenance) =
+            value.provenance.function_parts(&value.ty)?;
+        let value = value.into_inner();
+        let Type::Function(domain, codomain) = value.ty else {
+            discard_type_iteratively(value.ty);
             return Err(invalid_state());
         };
         Ok((
@@ -639,18 +739,18 @@ impl TypeContext {
     ///
     /// This prepares caller-owned context metadata. Public elaboration entry
     /// points validate and charge the complete context before cloning it.
-    pub fn insert(&mut self, binder: BinderId, ty: Type) -> Option<Type> {
+    pub fn insert(&mut self, binder: BinderId, ty: Type) {
         let provenance = TypeProvenance::unknown(&ty);
-        self.binders
-            .insert(
-                binder,
-                TypeFact {
-                    ty,
-                    provenance,
-                    quantified: Box::new([]),
-                },
-            )
-            .map(|fact| fact.ty)
+        if let Some(displaced) = self.binders.insert(
+            binder,
+            TypeFact {
+                ty,
+                provenance,
+                quantified: Box::new([]),
+            },
+        ) {
+            discard_type_fact(displaced);
+        }
     }
 
     /// Returns the monotype assigned to a resolved binder.
@@ -664,18 +764,33 @@ impl TypeContext {
         binder: BinderId,
         ty: Type,
         provenance: TypeProvenance,
-    ) -> Result<Option<TypeFact>, TypeError> {
+    ) -> Result<bool, TypeError> {
+        let ty = IterativeTypeOwner::new(ty);
         if !provenance.aligns(&ty) {
             return Err(invalid_state());
         }
-        Ok(self.binders.insert(
+        let displaced = self.binders.insert(
             binder,
             TypeFact {
-                ty,
+                ty: ty.into_inner(),
                 provenance,
                 quantified: Box::new([]),
             },
-        ))
+        );
+        if let Some(displaced) = displaced {
+            discard_type_fact(displaced);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn remove_and_discard(&mut self, binder: BinderId) -> bool {
+        let Some(fact) = self.binders.remove(&binder) else {
+            return false;
+        };
+        discard_type_fact(fact);
+        true
     }
 
     fn fact(&self, binder: BinderId) -> Option<&TypeFact> {
@@ -701,6 +816,158 @@ pub struct TypedNode {
     /// Structural result type.
     pub ty: Type,
     provenance: TypeProvenance,
+}
+
+impl TypedNode {
+    /// Consumes a typed result and dismantles its structural type without
+    /// following the host call stack.
+    ///
+    /// Use this when a potentially deep result is not transferred into a Core
+    /// program or a [`crate::driver::Observation`].
+    pub fn discard_iteratively(self) {
+        discard_typed_node(self);
+    }
+}
+
+struct ProvenancedTypeOwner(Option<ProvenancedType>);
+
+impl ProvenancedTypeOwner {
+    fn new(value: ProvenancedType) -> Self {
+        Self(Some(value))
+    }
+
+    fn into_inner(mut self) -> ProvenancedType {
+        self.0.take().expect("provenanced type transfers once")
+    }
+
+    fn replace_type(&mut self, ty: Type) {
+        replace_type_iteratively(
+            &mut self.0.as_mut().expect("provenanced type remains live").ty,
+            ty,
+        );
+    }
+
+    fn set_provenance(&mut self, provenance: TypeProvenance) {
+        self.0
+            .as_mut()
+            .expect("provenanced type remains live")
+            .provenance = provenance;
+    }
+}
+
+impl Deref for ProvenancedTypeOwner {
+    type Target = ProvenancedType;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("provenanced type remains live")
+    }
+}
+
+impl Drop for ProvenancedTypeOwner {
+    fn drop(&mut self) {
+        if let Some(value) = self.0.take() {
+            discard_provenanced_type(value);
+        }
+    }
+}
+
+struct TypedNodeOwner(Option<TypedNode>);
+
+fn take_type_iteratively(ty: &mut Type) -> IterativeTypeOwner {
+    IterativeTypeOwner::new(std::mem::replace(ty, Type::Unit))
+}
+
+impl TypedNodeOwner {
+    fn new(value: TypedNode) -> Self {
+        Self(Some(value))
+    }
+
+    fn into_inner(mut self) -> TypedNode {
+        self.0.take().expect("typed node transfers once")
+    }
+
+    fn set_node(&mut self, node: NodeId) {
+        self.0.as_mut().expect("typed node remains live").node = node;
+    }
+
+    fn replace_type(&mut self, ty: Type) {
+        replace_type_iteratively(
+            &mut self.0.as_mut().expect("typed node remains live").ty,
+            ty,
+        );
+    }
+
+    fn take_type(&mut self) -> IterativeTypeOwner {
+        take_type_iteratively(&mut self.0.as_mut().expect("typed node remains live").ty)
+    }
+
+    fn set_provenance(&mut self, provenance: TypeProvenance) {
+        self.0.as_mut().expect("typed node remains live").provenance = provenance;
+    }
+}
+
+impl Deref for TypedNodeOwner {
+    type Target = TypedNode;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("typed node remains live")
+    }
+}
+
+impl Drop for TypedNodeOwner {
+    fn drop(&mut self) {
+        if let Some(value) = self.0.take() {
+            discard_typed_node(value);
+        }
+    }
+}
+
+struct TypeFactOwner(Option<TypeFact>);
+
+impl TypeFactOwner {
+    fn new(value: TypeFact) -> Self {
+        Self(Some(value))
+    }
+
+    fn into_inner(mut self) -> TypeFact {
+        self.0.take().expect("type fact transfers once")
+    }
+}
+
+impl Deref for TypeFactOwner {
+    type Target = TypeFact;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("type fact remains live")
+    }
+}
+
+impl Drop for TypeFactOwner {
+    fn drop(&mut self) {
+        if let Some(value) = self.0.take() {
+            discard_type_fact(value);
+        }
+    }
+}
+
+struct OriginOwner(Option<Origin>);
+
+impl OriginOwner {
+    fn new(origin: Origin) -> Self {
+        Self(Some(origin))
+    }
+
+    fn into_inner(mut self) -> Origin {
+        self.0.take().expect("origin transfers once")
+    }
+}
+
+impl Drop for OriginOwner {
+    fn drop(&mut self) {
+        if let Some(origin) = self.0.take() {
+            discard_origin_iteratively(origin);
+        }
+    }
 }
 
 struct CheckedSchemeBuffer(Vec<CheckedGlobalScheme>);
@@ -762,7 +1029,71 @@ fn reserve_checked_body_buffers(
 
 struct TypeReplacementBuffer(HashMap<TypeVariableId, Type>);
 
+impl TypeReplacementBuffer {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn as_map(&self) -> &HashMap<TypeVariableId, Type> {
+        &self.0
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn try_insert_unique(&mut self, parameter: TypeVariableId, ty: Type) -> Result<(), ()> {
+        if let Some(displaced) = self.0.insert(parameter, ty) {
+            discard_type_iteratively(displaced);
+            Err(())
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl Drop for TypeReplacementBuffer {
+    fn drop(&mut self) {
+        for (_, ty) in self.0.drain() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct InferenceSolutionMap(HashMap<InferenceVariableId, Type>);
+
+impl Deref for InferenceSolutionMap {
+    type Target = HashMap<InferenceVariableId, Type>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl InferenceSolutionMap {
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn insert(&mut self, variable: InferenceVariableId, ty: Type) {
+        if let Some(displaced) = self.0.insert(variable, ty) {
+            discard_type_iteratively(displaced);
+        }
+    }
+}
+
+impl PartialEq<HashMap<InferenceVariableId, Type>> for InferenceSolutionMap {
+    fn eq(&self, other: &HashMap<InferenceVariableId, Type>) -> bool {
+        self.0 == *other
+    }
+}
+
+impl Drop for InferenceSolutionMap {
     fn drop(&mut self) {
         for (_, ty) in self.0.drain() {
             discard_type_iteratively(ty);
@@ -807,7 +1138,7 @@ pub struct Elaborator {
     next_inference: u32,
     inference_origins: Vec<Span>,
     next_generated_type_variable: u32,
-    inference_solutions: HashMap<InferenceVariableId, Type>,
+    inference_solutions: InferenceSolutionMap,
     monomorphic_recursive: HashSet<BinderId>,
     method_binders: HashMap<MethodId, BinderId>,
     selection: Option<EvidenceSelector>,
@@ -844,7 +1175,7 @@ impl Elaborator {
             next_inference: 0,
             inference_origins: Vec::new(),
             next_generated_type_variable: u32::MAX,
-            inference_solutions: HashMap::new(),
+            inference_solutions: InferenceSolutionMap::default(),
             monomorphic_recursive: HashSet::new(),
             method_binders: HashMap::new(),
             selection: None,
@@ -893,13 +1224,21 @@ impl Elaborator {
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             quantified.extend_from_slice(&imported.scheme.type_parameters);
             let quantified = quantified.into_boxed_slice();
-            let body = clone_type_with_budget(&imported.scheme.value_type, &mut type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let provenance = TypeProvenance::at_span(&body, imported.origin.primary_span());
-            if base_context
-                .insert_with_provenance(imported.binder, body, provenance)?
-                .is_some()
-            {
+            let body = IterativeTypeOwner::new(
+                clone_type_with_budget(&imported.scheme.value_type, &mut type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            );
+            let provenance = at_span_provenance_with_budget(
+                &body,
+                imported.origin.primary_span(),
+                &mut type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            if base_context.insert_with_provenance(
+                imported.binder,
+                body.into_inner(),
+                provenance,
+            )? {
                 return Err(invalid_state());
             }
             base_context.set_quantified(imported.binder, quantified)?;
@@ -913,7 +1252,7 @@ impl Elaborator {
             next_inference: 0,
             inference_origins: Vec::new(),
             next_generated_type_variable: u32::MAX,
-            inference_solutions: HashMap::new(),
+            inference_solutions: InferenceSolutionMap::default(),
             monomorphic_recursive: HashSet::new(),
             method_binders: HashMap::new(),
             selection: None,
@@ -961,7 +1300,7 @@ impl Elaborator {
             next_inference: 0,
             inference_origins: Vec::new(),
             next_generated_type_variable: u32::MAX,
-            inference_solutions: HashMap::new(),
+            inference_solutions: InferenceSolutionMap::default(),
             monomorphic_recursive: HashSet::new(),
             method_binders: HashMap::new(),
             selection: None,
@@ -1116,11 +1455,10 @@ impl Elaborator {
             clone_type_variables_with_budget(&scheme.type_parameters, &mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
                 .into_boxed_slice();
-        let value_type = self.clone_type(&scheme.value_type)?;
-        let mut parameter_replacements = TypeReplacementBuffer(HashMap::new());
+        let value_type = IterativeTypeOwner::new(self.clone_type(&scheme.value_type)?);
+        let mut parameter_replacements = TypeReplacementBuffer::new();
         let (source_type_parameters, type_parameters) = if freshen_core_parameters {
             parameter_replacements
-                .0
                 .try_reserve(original_type_parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let mut type_parameters = Vec::new();
@@ -1131,8 +1469,8 @@ impl Elaborator {
                 let core = self.fresh_type_variable()?;
                 type_parameters.push(core);
                 parameter_replacements
-                    .0
-                    .insert(*source, Type::Variable(core));
+                    .try_insert_unique(*source, Type::Variable(core))
+                    .map_err(|()| invalid_state())?;
             }
             (
                 Some(original_type_parameters),
@@ -1162,23 +1500,22 @@ impl Elaborator {
                 if method_fact.interface != requirement.interface {
                     return Err(invalid_state());
                 }
-                let mut replacement = HashMap::new();
+                let mut replacement = TypeReplacementBuffer::new();
                 replacement
                     .try_reserve(1)
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                replacement.insert(
-                    method_fact.parameter,
-                    self.clone_type(&requirement.argument)?,
-                );
+                replacement
+                    .try_insert_unique(
+                        method_fact.parameter,
+                        self.clone_type(&requirement.argument)?,
+                    )
+                    .map_err(|()| invalid_state())?;
                 let ty = substitute_type_variables_with(
                     &method_fact.value_type,
-                    &replacement,
+                    replacement.as_map(),
                     |cells| self.type_work.charge(cells),
                 )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                for (_, replacement) in replacement {
-                    discard_type_iteratively(replacement);
-                }
                 methods.push(LoweredRequirementMethod {
                     method: *method,
                     ty,
@@ -1190,43 +1527,45 @@ impl Elaborator {
             });
         }
 
-        let mut core_body = self.clone_type(&value_type)?;
+        let mut core_body = IterativeTypeOwner::new(self.clone_type(&value_type)?);
         for requirement in requirements.iter().rev() {
             for method in requirement.methods.iter().rev() {
                 self.type_work
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                core_body =
-                    Type::Function(Box::new(self.clone_type(&method.ty)?), Box::new(core_body));
+                let domain = self.clone_type(&method.ty)?;
+                core_body = IterativeTypeOwner::new(Type::Function(
+                    Box::new(domain),
+                    Box::new(core_body.into_inner()),
+                ));
             }
         }
-        if !parameter_replacements.0.is_empty() {
-            let renamed =
-                substitute_type_variables_with(&core_body, &parameter_replacements.0, |cells| {
-                    self.type_work.charge(cells)
-                })
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            discard_type_iteratively(core_body);
-            core_body = renamed;
+        if !parameter_replacements.is_empty() {
+            let renamed = substitute_type_variables_with(
+                &core_body,
+                parameter_replacements.as_map(),
+                |cells| self.type_work.charge(cells),
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            core_body.replace(renamed);
         }
         let core_scheme = if type_parameters.is_empty() {
-            core_body
+            core_body.into_inner()
         } else {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            Type::Forall(
+            let parameters =
                 clone_type_variables_with_budget(&type_parameters, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-                    .into_boxed_slice(),
-                Box::new(core_body),
-            )
+                    .into_boxed_slice();
+            Type::Forall(parameters, Box::new(core_body.into_inner()))
         };
         Ok(LoweredScheme {
             source_type_parameters,
             type_parameters,
             requirements: requirements.into_boxed_slice(),
-            value_type,
+            value_type: value_type.into_inner(),
             core_scheme,
         })
     }
@@ -1253,7 +1592,7 @@ impl Elaborator {
             next_inference: 0,
             inference_origins: Vec::new(),
             next_generated_type_variable: u32::MAX,
-            inference_solutions: HashMap::new(),
+            inference_solutions: InferenceSolutionMap::default(),
             monomorphic_recursive: HashSet::new(),
             method_binders: HashMap::new(),
             selection: None,
@@ -1507,15 +1846,16 @@ impl Elaborator {
         self.type_work
             .charge(1)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut replacements = TypeReplacementBuffer(HashMap::new());
+        let mut replacements = TypeReplacementBuffer::new();
         replacements
-            .0
             .try_reserve(1)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        replacements.0.insert(
-            interface.parameter(),
-            self.clone_type(&implementation.argument.ty)?,
-        );
+        replacements
+            .try_insert_unique(
+                interface.parameter(),
+                self.clone_type(&implementation.argument.ty)?,
+            )
+            .map_err(|()| invalid_state())?;
 
         if checked.methods.len() != interface.method_count() {
             return Err(invalid_state());
@@ -1548,18 +1888,19 @@ impl Elaborator {
             {
                 return Err(invalid_state());
             }
-            let method_type =
-                substitute_type_variables_with(method.value_type(), &replacements.0, |cells| {
+            let method_type = IterativeTypeOwner::new(substitute_type_variables_with(
+                method.value_type(),
+                replacements.as_map(),
+                |cells| {
                     self.constraint_work
                         .charge(cells)
                         .map_err(|()| constraint_resource())?;
                     self.type_work.charge(cells).map_err(|()| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })
-                })?;
-            charge_type_provenance_nodes(&method_type, &mut self.type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let provenance = TypeProvenance::at_span(&method_type, method.annotation_span());
+                },
+            )?);
+            let provenance = self.at_span_provenance(&method_type, method.annotation_span())?;
             let presentation = implementation_method_origin(
                 implementation,
                 group,
@@ -1570,7 +1911,7 @@ impl Elaborator {
             let body_result = self.elaborate_equations(
                 &group.equations,
                 ProvenancedType {
-                    ty: method_type,
+                    ty: method_type.into_inner(),
                     provenance,
                 },
                 context,
@@ -1583,7 +1924,7 @@ impl Elaborator {
                 Ok(())
             };
             let leave_result = self.leave_evidence_scope();
-            let checked_body = body_result?;
+            let checked_body = TypedNodeOwner::new(body_result?);
             close_result?;
             leave_result?;
             let scheme =
@@ -1727,18 +2068,19 @@ impl Elaborator {
                     self.clone_type(&equational.interface.annotation.ty)?
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
-                    let domain = operational_domain(
+                    let domain = ProvenancedTypeOwner::new(operational_domain(
                         &operational.header.parameters,
                         operational.header.span,
                         &mut self.type_work,
-                    )?;
-                    let codomain = ProvenancedType::from_resolved_with_budget(
-                        &operational.header.result_type,
-                        &mut self.type_work,
-                    )?;
+                    )?);
+                    let codomain =
+                        ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
+                            &operational.header.result_type,
+                            &mut self.type_work,
+                        )?);
                     let function = ProvenancedType::function_with_budget(
-                        domain,
-                        codomain,
+                        domain.into_inner(),
+                        codomain.into_inner(),
                         Some(operational.header.span),
                         &mut self.type_work,
                     )?;
@@ -1967,7 +2309,7 @@ impl Elaborator {
         }
         let mut selector = self.selection.take().ok_or_else(invalid_state)?;
         let result = (|| {
-            let mut replacements = TypeReplacementBuffer(HashMap::new());
+            let mut replacements = TypeReplacementBuffer::new();
             let requirement_count = {
                 let Some(scheme) = selector.scheme(binder) else {
                     return if occurrence.evidence.is_empty() {
@@ -1985,14 +2327,12 @@ impl Elaborator {
                     .charge(scheme.type_parameters.len())
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 replacements
-                    .0
                     .try_reserve(scheme.type_parameters.len())
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 for (parameter, argument) in scheme.type_parameters.iter().zip(arguments) {
                     if replacements
-                        .0
-                        .insert(*parameter, self.clone_type(argument)?)
-                        .is_some()
+                        .try_insert_unique(*parameter, self.clone_type(argument)?)
+                        .is_err()
                     {
                         return Err(invalid_state());
                     }
@@ -2011,7 +2351,7 @@ impl Elaborator {
                     let requirement = scheme.requirements.get(index).ok_or_else(invalid_state)?;
                     let argument = substitute_type_variables_with(
                         &requirement.argument,
-                        &replacements.0,
+                        replacements.as_map(),
                         |cells| self.type_work.charge(cells),
                     )
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -2051,14 +2391,16 @@ impl Elaborator {
             let method_fact = selector.method(method).ok_or_else(invalid_state)?;
             let interface = method_fact.interface();
             let parameter = method_fact.interface_parameter();
-            let value_type = self.clone_type(method_fact.value_type())?;
+            let value_type = IterativeTypeOwner::new(self.clone_type(method_fact.value_type())?);
             let method_span = method_fact.declaration_span();
-            let fact = TypeFact {
-                provenance: TypeProvenance::at_span(&value_type, method_span),
-                ty: value_type,
+            let fact = TypeFactOwner::new(TypeFact {
+                provenance: self.at_span_provenance(&value_type, method_span)?,
+                ty: value_type.into_inner(),
                 quantified: vec![parameter].into_boxed_slice(),
-            };
+            });
             let (ty, arguments) = self.instantiate(&fact, false, span)?;
+            let ty = IterativeTypeOwner::new(ty);
+            let arguments = OwnedTypeBuffer(arguments);
             let [argument] = arguments.as_slice() else {
                 return Err(invalid_state());
             };
@@ -2080,10 +2422,10 @@ impl Elaborator {
             self.type_work
                 .charge(2)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let core_scheme = Type::Forall(
+            let core_scheme = IterativeTypeOwner::new(Type::Forall(
                 vec![parameter].into_boxed_slice(),
                 Box::new(self.clone_type(&fact.ty)?),
-            );
+            ));
             let binder = if let Some(binder) = self.method_binders.get(&method).copied() {
                 binder
             } else {
@@ -2107,20 +2449,28 @@ impl Elaborator {
                 }
                 binder
             };
-            let mut node = self
-                .builder
-                .variable(binder, core_scheme, occurrence.origin.clone())?;
+            let mut node = self.builder.variable(
+                binder,
+                core_scheme.into_inner(),
+                occurrence.origin.clone(),
+            )?;
             let core_ty = self.clone_type(&ty)?;
             node = self.builder.type_application(
                 node,
-                arguments,
+                arguments.into_vec(),
                 core_ty,
                 occurrence.origin.clone(),
             )?;
+            let TypeFact {
+                ty: fact_ty,
+                provenance,
+                quantified: _,
+            } = fact.into_inner();
+            discard_type_iteratively(fact_ty);
             Ok(TypedNode {
                 node,
-                ty,
-                provenance: fact.provenance,
+                ty: ty.into_inner(),
+                provenance,
             })
         })();
         self.selection = Some(selector);
@@ -2147,20 +2497,20 @@ impl Elaborator {
                 .ok_or_else(invalid_state)?;
             let parameter = method_fact.parameter;
             let declaration_span = method_fact.declaration_span;
-            let value_type = self.clone_type(&method_fact.value_type)?;
-            let mut replacement = TypeReplacementBuffer(HashMap::new());
+            let value_type = IterativeTypeOwner::new(self.clone_type(&method_fact.value_type)?);
+            let mut replacement = TypeReplacementBuffer::new();
             replacement
-                .0
                 .try_reserve(1)
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             replacement
-                .0
-                .insert(parameter, self.clone_type(selection.argument())?);
-            let expected = substitute_type_variables_with(&value_type, &replacement.0, |cells| {
-                self.type_work.charge(cells)
-            })
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            discard_type_iteratively(value_type);
+                .try_insert_unique(parameter, self.clone_type(selection.argument())?)
+                .map_err(|()| invalid_state())?;
+            let expected = IterativeTypeOwner::new(
+                substitute_type_variables_with(&value_type, replacement.as_map(), |cells| {
+                    self.type_work.charge(cells)
+                })
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            );
             let mut methods = self.lower_evidence_selection(
                 selection,
                 &mut lowering,
@@ -2170,19 +2520,19 @@ impl Elaborator {
             if methods.len() != 1 {
                 return Err(invalid_state());
             }
-            let selected = methods.pop().ok_or_else(invalid_state)?;
+            let mut selected = methods.pop().ok_or_else(invalid_state)?;
             if selected.method != method {
                 return Err(invalid_state());
             }
             if !same_type(&selected.ty, &expected) {
-                discard_type_iteratively(expected);
                 return Err(invalid_state());
             }
-            discard_type_iteratively(expected);
+            let ty = IterativeTypeOwner::new(std::mem::replace(&mut selected.ty, Type::Unit));
+            let provenance = self.at_span_provenance(&ty, declaration_span)?;
             Ok(TypedNode {
                 node: selected.node,
-                provenance: TypeProvenance::at_span(&selected.ty, declaration_span),
-                ty: selected.ty,
+                provenance,
+                ty: ty.into_inner(),
             })
         })();
         self.evidence_lowering = Some(lowering);
@@ -2199,7 +2549,7 @@ impl Elaborator {
             .global_schemes
             .get(&binder)
             .ok_or_else(invalid_state)?;
-        let mut specifications = Vec::new();
+        let mut specifications = EvidenceSpecificationBuffer(Vec::new());
         let method_count = scheme
             .requirements
             .iter()
@@ -2233,7 +2583,7 @@ impl Elaborator {
             .get(&method)
             .ok_or_else(invalid_state)?
             .scheme;
-        let mut specifications = Vec::new();
+        let mut specifications = EvidenceSpecificationBuffer(Vec::new());
         let method_count = scheme
             .requirements
             .iter()
@@ -2258,7 +2608,7 @@ impl Elaborator {
 
     fn enter_lowered_evidence_specifications(
         &mut self,
-        specifications: Vec<(RequirementId, MethodId, Type)>,
+        specifications: EvidenceSpecificationBuffer,
         cause: &Origin,
     ) -> Result<Vec<ScopedEvidenceBinder>, TypeError> {
         {
@@ -2275,7 +2625,8 @@ impl Elaborator {
         binders
             .try_reserve(specifications.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for (requirement, method, ty) in specifications {
+        for (requirement, method, ty) in specifications.into_sequence() {
+            let ty = IterativeTypeOwner::new(ty);
             let binder_ty = self.clone_type(&ty)?;
             let binder = self.builder.binder(
                 binder_ty,
@@ -2286,7 +2637,7 @@ impl Elaborator {
             )?;
             let active = ActiveEvidenceBinder {
                 binder: binder.id(),
-                ty,
+                ty: ty.into_inner(),
             };
             if self
                 .evidence_lowering
@@ -2309,10 +2660,11 @@ impl Elaborator {
 
     fn wrap_lowered_evidence_scope(
         &mut self,
-        mut function: TypedNode,
+        function: TypedNode,
         binders: Vec<ScopedEvidenceBinder>,
         cause: &Origin,
     ) -> Result<TypedNode, TypeError> {
+        let mut function = TypedNodeOwner::new(function);
         for scoped in binders.into_iter().rev() {
             let active = self
                 .evidence_lowering
@@ -2324,11 +2676,14 @@ impl Elaborator {
             if active.binder != scoped.binder.id() || !same_type(&active.ty, scoped.binder.ty()) {
                 return Err(invalid_state());
             }
-            let domain = self.clone_type(scoped.binder.ty())?;
+            let domain = IterativeTypeOwner::new(self.clone_type(scoped.binder.ty())?);
             let codomain = self.clone_type(&function.ty)?;
-            let ty = Type::Function(Box::new(domain), Box::new(codomain));
+            let ty = IterativeTypeOwner::new(Type::Function(
+                Box::new(domain.into_inner()),
+                Box::new(codomain),
+            ));
             let core_ty = self.clone_type(&ty)?;
-            function.node = self.builder.function(
+            let node = self.builder.function(
                 scoped.binder,
                 function.node,
                 core_ty,
@@ -2337,8 +2692,10 @@ impl Elaborator {
                     reason: GeneratedReason::TypeChecking,
                 },
             )?;
-            function.ty = ty;
-            function.provenance = TypeProvenance::at_span(&function.ty, cause.primary_span());
+            function.set_node(node);
+            function.replace_type(ty.into_inner());
+            let provenance = self.at_span_provenance(&function.ty, cause.primary_span())?;
+            function.set_provenance(provenance);
         }
         if !self
             .evidence_lowering
@@ -2349,7 +2706,7 @@ impl Elaborator {
         {
             return Err(invalid_state());
         }
-        Ok(function)
+        Ok(function.into_inner())
     }
 
     fn clear_lowered_evidence_scope(
@@ -2393,22 +2750,22 @@ impl Elaborator {
         self.type_work
             .charge(arguments.len())
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut replacements = TypeReplacementBuffer(HashMap::new());
+        let mut replacements = TypeReplacementBuffer::new();
         replacements
-            .0
             .try_reserve(arguments.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for (parameter, argument) in parameters.iter().zip(arguments) {
             if replacements
-                .0
-                .insert(*parameter, self.clone_type(argument)?)
-                .is_some()
+                .try_insert_unique(*parameter, self.clone_type(argument)?)
+                .is_err()
             {
                 return Err(invalid_state());
             }
         }
-        substitute_type_variables_with(body, &replacements.0, |cells| self.type_work.charge(cells))
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+        substitute_type_variables_with(body, replacements.as_map(), |cells| {
+            self.type_work.charge(cells)
+        })
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
     fn apply_lowered_argument(
@@ -2417,6 +2774,7 @@ impl Elaborator {
         argument: &LoweredEvidenceMethod,
         origin: &Origin,
     ) -> Result<TypedNode, TypeError> {
+        let function = TypedNodeOwner::new(function);
         let Type::Function(domain, codomain) = &function.ty else {
             return Err(invalid_state());
         };
@@ -2431,15 +2789,15 @@ impl Elaborator {
                 ));
             }
         }
-        let ty = self.clone_type(codomain)?;
+        let ty = IterativeTypeOwner::new(self.clone_type(codomain)?);
         let core_ty = self.clone_type(&ty)?;
         let node =
             self.builder
                 .application(function.node, argument.node, core_ty, origin.clone())?;
-        let provenance = TypeProvenance::at_span(&ty, origin.primary_span());
+        let provenance = self.at_span_provenance(&ty, origin.primary_span())?;
         Ok(TypedNode {
             node,
-            ty,
+            ty: ty.into_inner(),
             provenance,
         })
     }
@@ -2502,7 +2860,7 @@ impl Elaborator {
                                     .active_binders
                                     .get(&(requirement, *method))
                                     .ok_or_else(invalid_state)?;
-                                let ty = self.clone_type(&active.ty)?;
+                                let ty = IterativeTypeOwner::new(self.clone_type(&active.ty)?);
                                 let core_ty = self.clone_type(&ty)?;
                                 let node = self.builder.variable(
                                     active.binder,
@@ -2512,7 +2870,7 @@ impl Elaborator {
                                 results.push(LoweredEvidenceMethod {
                                     method: *method,
                                     node,
-                                    ty,
+                                    ty: ty.into_inner(),
                                 });
                             }
                             results
@@ -2553,22 +2911,24 @@ impl Elaborator {
                                 {
                                     return Err(invalid_state());
                                 }
-                                let core_scheme = self.clone_type(&lowered.scheme.core_scheme)?;
-                                let variable_ty = self.clone_type(&core_scheme)?;
-                                let mut current = TypedNode {
+                                let core_scheme = IterativeTypeOwner::new(
+                                    self.clone_type(&lowered.scheme.core_scheme)?,
+                                );
+                                let variable_ty =
+                                    IterativeTypeOwner::new(self.clone_type(&core_scheme)?);
+                                let provenance = self
+                                    .at_span_provenance(&lowered.scheme.value_type, lowered.span)?;
+                                let mut current = TypedNodeOwner::new(TypedNode {
                                     node: self.builder.variable(
                                         lowered.binder,
-                                        variable_ty,
+                                        variable_ty.into_inner(),
                                         origin.clone(),
                                     )?,
-                                    ty: core_scheme,
-                                    provenance: TypeProvenance::at_span(
-                                        &lowered.scheme.value_type,
-                                        lowered.span,
-                                    ),
-                                };
+                                    ty: core_scheme.into_inner(),
+                                    provenance,
+                                });
                                 if !substitution.is_empty() {
-                                    let mut arguments = Vec::new();
+                                    let mut arguments = OwnedTypeBuffer(Vec::new());
                                     arguments.try_reserve(substitution.len()).map_err(|_| {
                                         TypeError::Internal(
                                             ElaborationFailure::TypeResourceExhausted,
@@ -2577,27 +2937,35 @@ impl Elaborator {
                                     for substitution in substitution {
                                         arguments.push(self.clone_type(substitution.argument())?);
                                     }
-                                    let instantiated = self.instantiate_lowered_core_body(
-                                        &lowered.scheme,
-                                        &arguments,
-                                    )?;
+                                    let instantiated = IterativeTypeOwner::new(
+                                        self.instantiate_lowered_core_body(
+                                            &lowered.scheme,
+                                            &arguments,
+                                        )?,
+                                    );
                                     let core_ty = self.clone_type(&instantiated)?;
-                                    current.node = self.builder.type_application(
+                                    let node = self.builder.type_application(
                                         current.node,
-                                        arguments,
+                                        arguments.into_vec(),
                                         core_ty,
                                         origin.clone(),
                                     )?;
-                                    current.ty = instantiated;
+                                    current.set_node(node);
+                                    current.replace_type(instantiated.into_inner());
                                 }
                                 for prerequisite in prerequisites {
                                     let prerequisite_methods =
                                         values.get(prerequisite).ok_or_else(invalid_state)?;
                                     for argument in prerequisite_methods {
                                         current =
-                                            self.apply_lowered_argument(current, argument, origin)?;
+                                            TypedNodeOwner::new(self.apply_lowered_argument(
+                                                current.into_inner(),
+                                                argument,
+                                                origin,
+                                            )?);
                                     }
                                 }
+                                let current = current.into_inner();
                                 results.push(LoweredEvidenceMethod {
                                     method: method.method(),
                                     node: current.node,
@@ -2624,7 +2992,9 @@ impl Elaborator {
         if self.next_inference == 0 {
             Ok(ty)
         } else {
-            self.zonk(&ty)
+            let zonked = self.zonk(&ty);
+            discard_type_iteratively(ty);
+            zonked
         }
     }
 
@@ -2650,6 +3020,11 @@ impl Elaborator {
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
+    fn at_span_provenance(&mut self, ty: &Type, span: Span) -> Result<TypeProvenance, TypeError> {
+        at_span_provenance_with_budget(ty, span, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
     fn admit_public_context(&mut self, context: &TypeContext) -> Result<(), TypeError> {
         self.type_work
             .charge(context.binders.len())
@@ -2659,7 +3034,8 @@ impl Elaborator {
             if !fact.quantified.is_empty() {
                 invalid = true;
             }
-            match validate_and_charge_public_monotype(&fact.ty, &mut self.type_work) {
+            match validate_and_charge_public_monotype(&fact.ty, &self.registry, &mut self.type_work)
+            {
                 Ok(()) => {}
                 Err(PublicTypeAdmissionError::Invalid) => invalid = true,
                 Err(PublicTypeAdmissionError::Resource) => {
@@ -2677,12 +3053,14 @@ impl Elaborator {
     }
 
     fn admit_public_monotype(&mut self, ty: &Type) -> Result<(), TypeError> {
-        validate_and_charge_public_monotype(ty, &mut self.type_work).map_err(|error| match error {
-            PublicTypeAdmissionError::Invalid => invalid_state(),
-            PublicTypeAdmissionError::Resource => {
-                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-            }
-        })
+        validate_and_charge_public_monotype(ty, &self.registry, &mut self.type_work).map_err(
+            |error| match error {
+                PublicTypeAdmissionError::Invalid => invalid_state(),
+                PublicTypeAdmissionError::Resource => {
+                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                }
+            },
+        )
     }
 
     fn unify(&mut self, left: &Type, right: &Type) -> Result<(), UnificationFailure> {
@@ -2701,59 +3079,114 @@ impl Elaborator {
             Sequence(std::vec::IntoIter<Type>, std::vec::IntoIter<Type>),
         }
 
-        let left = clone_type_with_budget(left, &mut self.type_work)
-            .map_err(|()| UnificationFailure::Resource)?;
+        struct Work(Vec<Task>);
+
+        impl Drop for Work {
+            fn drop(&mut self) {
+                while let Some(task) = self.0.pop() {
+                    match task {
+                        Task::Pair(left, right) => {
+                            discard_type_iteratively(left);
+                            discard_type_iteratively(right);
+                        }
+                        Task::Sequence(left, right) => {
+                            for ty in left {
+                                discard_type_iteratively(ty);
+                            }
+                            for ty in right {
+                                discard_type_iteratively(ty);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let left = IterativeTypeOwner::new(
+            clone_type_with_budget(left, &mut self.type_work)
+                .map_err(|()| UnificationFailure::Resource)?,
+        );
         let right = clone_type_with_budget(right, &mut self.type_work)
             .map_err(|()| UnificationFailure::Resource)?;
-        let mut work = vec![Task::Pair(left, right)];
-        while let Some(task) = work.pop() {
+        let mut work = Work(vec![Task::Pair(left.into_inner(), right)]);
+        while let Some(task) = work.0.pop() {
             let (left, right) = match task {
                 Task::Pair(left, right) => (left, right),
                 Task::Sequence(mut left_types, mut right_types) => {
                     match (left_types.next(), right_types.next()) {
                         (Some(left), Some(right)) => {
-                            work.push(Task::Sequence(left_types, right_types));
-                            work.push(Task::Pair(left, right));
+                            work.0.push(Task::Sequence(left_types, right_types));
+                            work.0.push(Task::Pair(left, right));
                             continue;
                         }
                         (None, None) => continue,
-                        _ => return Err(UnificationFailure::Mismatch),
+                        (left, right) => {
+                            if let Some(left) = left {
+                                discard_type_iteratively(left);
+                            }
+                            if let Some(right) = right {
+                                discard_type_iteratively(right);
+                            }
+                            for ty in left_types {
+                                discard_type_iteratively(ty);
+                            }
+                            for ty in right_types {
+                                discard_type_iteratively(ty);
+                            }
+                            return Err(UnificationFailure::Mismatch);
+                        }
                     }
                 }
             };
-            let left = self.zonk(&left).map_err(|_| UnificationFailure::Resource)?;
-            let right = self
-                .zonk(&right)
-                .map_err(|_| UnificationFailure::Resource)?;
+            let zonked_left = self.zonk(&left);
+            discard_type_iteratively(left);
+            let left = match zonked_left {
+                Ok(left) => left,
+                Err(_) => {
+                    discard_type_iteratively(right);
+                    return Err(UnificationFailure::Resource);
+                }
+            };
+            let zonked_right = self.zonk(&right);
+            discard_type_iteratively(right);
+            let right = match zonked_right {
+                Ok(right) => right,
+                Err(_) => {
+                    discard_type_iteratively(left);
+                    return Err(UnificationFailure::Resource);
+                }
+            };
             match (left, right) {
                 (Type::Inference(left), Type::Inference(right)) if left == right => {}
                 (Type::Inference(variable), ty) | (ty, Type::Inference(variable)) => {
-                    self.charge_type(&ty)
-                        .map_err(|_| UnificationFailure::Resource)?;
+                    if self.charge_type(&ty).is_err() {
+                        discard_type_iteratively(ty);
+                        return Err(UnificationFailure::Resource);
+                    }
                     if type_contains_inference(&ty, variable, &self.inference_solutions) {
+                        discard_type_iteratively(ty);
                         return Err(UnificationFailure::Infinite);
                     }
-                    self.type_work
-                        .charge(1)
-                        .map_err(|()| UnificationFailure::Resource)?;
-                    self.inference_solutions
-                        .try_reserve(1)
-                        .map_err(|_| UnificationFailure::Resource)?;
+                    if self.type_work.charge(1).is_err()
+                        || self.inference_solutions.try_reserve(1).is_err()
+                    {
+                        discard_type_iteratively(ty);
+                        return Err(UnificationFailure::Resource);
+                    }
                     self.inference_solutions.insert(variable, ty);
                 }
                 (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
                 (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
                 (Type::Variable(left), Type::Variable(right)) if left == right => {}
-                (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
-                    if left_id == right_id && left.len() == right.len() =>
-                {
-                    work.push(Task::Sequence(
-                        left.into_vec().into_iter(),
-                        right.into_vec().into_iter(),
-                    ));
+                (
+                    Type::Application(left_function, left_argument),
+                    Type::Application(right_function, right_argument),
+                ) => {
+                    work.0.push(Task::Pair(*left_argument, *right_argument));
+                    work.0.push(Task::Pair(*left_function, *right_function));
                 }
                 (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
-                    work.push(Task::Sequence(
+                    work.0.push(Task::Sequence(
                         left.into_vec().into_iter(),
                         right.into_vec().into_iter(),
                     ));
@@ -2762,10 +3195,14 @@ impl Elaborator {
                     Type::Function(left_domain, left_codomain),
                     Type::Function(right_domain, right_codomain),
                 ) => {
-                    work.push(Task::Pair(*left_codomain, *right_codomain));
-                    work.push(Task::Pair(*left_domain, *right_domain));
+                    work.0.push(Task::Pair(*left_codomain, *right_codomain));
+                    work.0.push(Task::Pair(*left_domain, *right_domain));
                 }
-                _ => return Err(UnificationFailure::Mismatch),
+                (left, right) => {
+                    discard_type_iteratively(left);
+                    discard_type_iteratively(right);
+                    return Err(UnificationFailure::Mismatch);
+                }
             }
         }
         Ok(())
@@ -2773,25 +3210,25 @@ impl Elaborator {
 
     fn expose_expected_function(
         &mut self,
-        expected: ProvenancedType,
+        expected: ProvenancedTypeOwner,
         span: Span,
-    ) -> Result<ProvenancedType, TypeError> {
+    ) -> Result<ProvenancedTypeOwner, TypeError> {
         match &expected.ty {
             Type::Function(_, _) => Ok(expected),
             Type::Inference(_) => {
-                let expected_ty = self.zonk(&expected.ty)?;
-                if matches!(expected_ty, Type::Function(_, _)) {
+                let expected_ty = IterativeTypeOwner::new(self.zonk(&expected.ty)?);
+                if matches!(&*expected_ty, Type::Function(_, _)) {
                     let provenance = if expected.provenance.aligns(&expected_ty) {
-                        expected.provenance
+                        expected.provenance.clone()
                     } else {
                         self.unknown_provenance(&expected_ty)?
                     };
-                    return Ok(ProvenancedType {
-                        ty: expected_ty,
+                    return Ok(ProvenancedTypeOwner::new(ProvenancedType {
+                        ty: expected_ty.into_inner(),
                         provenance,
-                    });
+                    }));
                 }
-                if !matches!(expected_ty, Type::Inference(_)) {
+                if !matches!(&*expected_ty, Type::Inference(_)) {
                     return Err(function_needs_context(span, None));
                 }
                 self.type_work
@@ -2813,10 +3250,10 @@ impl Elaborator {
                         }
                     })?;
                 let provenance = self.unknown_provenance(&exposed)?;
-                Ok(ProvenancedType {
+                Ok(ProvenancedTypeOwner::new(ProvenancedType {
                     ty: exposed,
                     provenance,
-                })
+                }))
             }
             _ => Err(function_needs_context(span, None)),
         }
@@ -2831,7 +3268,7 @@ impl Elaborator {
         match self.unify(&operand.ty, &Type::Int) {
             Ok(()) => Ok(()),
             Err(UnificationFailure::Mismatch) => {
-                let found = self.zonk(&operand.ty)?;
+                let found = IterativeTypeOwner::new(self.zonk(&operand.ty)?);
                 let mut diagnostic = Diagnostic::new(
                     TypeReason::OperatorOperand,
                     SourceLabel::new(operand_span, "this operand is not an Int"),
@@ -2864,7 +3301,7 @@ impl Elaborator {
         match self.unify(expected, required) {
             Ok(()) => self.zonk(required),
             Err(UnificationFailure::Mismatch) => {
-                let expected = self.zonk(expected)?;
+                let expected = IterativeTypeOwner::new(self.zonk(expected)?);
                 Err(pattern_mismatch(span, &expected, &self.registry))
             }
             Err(UnificationFailure::Infinite) => Err(inference_failure(
@@ -2883,31 +3320,49 @@ impl Elaborator {
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
         let mut context = TypeContext::new();
-        let mut groups = Vec::with_capacity(program.groups().len());
+        let mut groups = ElaboratedGroupBuffer(Vec::new());
+        groups
+            .0
+            .try_reserve(program.groups().len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for group in program.groups() {
             let (members, next_context) = self.elaborate_checked_module_group(group, context)?;
             context = next_context;
-            groups.push((members, group.span()));
+            groups
+                .0
+                .push((ElaboratedBindingBuffer(members), group.span()));
         }
         let mut result = self.elaborate_result(program.result(), &mut context)?;
-        for (members, span) in groups.into_iter().rev() {
-            if members.is_empty() {
-                continue;
+        let assembly = (|| {
+            while let Some((mut members, span)) = groups.0.pop() {
+                if members.0.is_empty() {
+                    continue;
+                }
+                let mut core_members = CoreRecursiveMemberBuffer(Vec::new());
+                core_members
+                    .0
+                    .try_reserve(members.0.len())
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                members.0.reverse();
+                while let Some(member) = members.0.pop() {
+                    core_members.0.push((member.binder, member.initializer));
+                }
+                let result_type = self.clone_type(&result.ty)?;
+                result.node = self.builder.recursive_binding(
+                    std::mem::take(&mut core_members.0),
+                    result.node,
+                    result_type,
+                    Origin::Generated {
+                        cause: Box::new(Origin::Source(span)),
+                        reason: GeneratedReason::RecursiveBindingLowering,
+                    },
+                )?;
             }
-            let members = members
-                .into_iter()
-                .map(|member| (member.binder, member.initializer))
-                .collect();
-            let result_type = self.clone_type(&result.ty)?;
-            result.node = self.builder.recursive_binding(
-                members,
-                result.node,
-                result_type,
-                Origin::Generated {
-                    cause: Box::new(Origin::Source(span)),
-                    reason: GeneratedReason::RecursiveBindingLowering,
-                },
-            )?;
+            Ok(())
+        })();
+        if let Err(error) = assembly {
+            discard_typed_node(result);
+            return Err(error);
         }
         Ok(result)
     }
@@ -3007,17 +3462,22 @@ impl Elaborator {
                     binder_ty,
                     method.origin.clone(),
                 )?;
-                let source_ty =
+                let source_ty = IterativeTypeOwner::new(
                     clone_type_with_budget(&lowered.scheme.value_type, &mut self.type_work)
                         .map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?,
+                );
+                let provenance =
+                    at_span_provenance_with_budget(&source_ty, method.span, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?;
-                let provenance = TypeProvenance::at_span(&source_ty, method.span);
-                if prepared
-                    .context
-                    .insert_with_provenance(method.binder, source_ty, provenance)?
-                    .is_some()
-                    || prepared.binders.insert(method.binder, binder).is_some()
+                if prepared.context.insert_with_provenance(
+                    method.binder,
+                    source_ty.into_inner(),
+                    provenance,
+                )? || prepared.binders.insert(method.binder, binder).is_some()
                 {
                     return Err(invalid_state());
                 }
@@ -3097,7 +3557,7 @@ impl Elaborator {
             return Err(invalid_state());
         }
         let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
-        let mut core_type_replacements = TypeReplacementBuffer(HashMap::new());
+        let mut core_type_replacements = TypeReplacementBuffer::new();
         {
             let lowered = self
                 .evidence_lowering
@@ -3116,7 +3576,6 @@ impl Elaborator {
                 .charge(lowered.scheme.type_parameters.len())
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             core_type_replacements
-                .0
                 .try_reserve(lowered.scheme.type_parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             for (source, core) in source_type_parameters
@@ -3124,9 +3583,8 @@ impl Elaborator {
                 .zip(&lowered.scheme.type_parameters)
             {
                 if core_type_replacements
-                    .0
-                    .insert(*source, Type::Variable(*core))
-                    .is_some()
+                    .try_insert_unique(*source, Type::Variable(*core))
+                    .is_err()
                 {
                     return Err(invalid_state());
                 }
@@ -3139,28 +3597,35 @@ impl Elaborator {
             .and_then(|lowering| lowering.implementation_methods.get(&fact.id))
             .map(|method| &method.scheme.value_type)
             .ok_or_else(invalid_state)?;
-        let function_type = clone_type_with_budget(source_ty, &mut self.type_work)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let function_type = IterativeTypeOwner::new(
+            clone_type_with_budget(source_ty, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+        let function_provenance = self.at_span_provenance(&function_type, fact.span)?;
         let body_result = self.elaborate_equations(
             &source.equations,
             ProvenancedType {
-                provenance: TypeProvenance::at_span(&function_type, fact.span),
-                ty: function_type,
+                provenance: function_provenance,
+                ty: function_type.into_inner(),
             },
             &mut prepared.context,
             source.span,
             &fact.origin,
         );
-        let mut function = match body_result {
+        let mut function = TypedNodeOwner::new(match body_result {
             Ok(function) => function,
             Err(error) => {
                 self.clear_lowered_evidence_scope(evidence)?;
                 self.monomorphic_recursive.remove(&fact.binder);
                 return Err(error);
             }
-        };
-        function = self.wrap_lowered_evidence_scope(function, evidence, &fact.origin)?;
-        if !core_type_replacements.0.is_empty() {
+        });
+        function = TypedNodeOwner::new(self.wrap_lowered_evidence_scope(
+            function.into_inner(),
+            evidence,
+            &fact.origin,
+        )?);
+        if !core_type_replacements.is_empty() {
             let inference_solutions = &self.inference_solutions;
             let type_work = &mut self.type_work;
             self.builder.rewrite_types_since(rewrite_checkpoint, |ty| {
@@ -3169,25 +3634,28 @@ impl Elaborator {
                         .charge(cells)
                         .map_err(|()| BuildError::TypeWorkExceeded)
                 })?;
-                let renamed =
-                    substitute_type_variables_with(&zonked, &core_type_replacements.0, |cells| {
+                let renamed = substitute_type_variables_with(
+                    &zonked,
+                    core_type_replacements.as_map(),
+                    |cells| {
                         type_work
                             .charge(cells)
                             .map_err(|()| BuildError::TypeWorkExceeded)
-                    });
+                    },
+                );
                 discard_type_iteratively(zonked);
                 renamed
             })?;
-            let zonked_function_type = self.zonk(&function.ty)?;
-            let renamed_function_type = substitute_type_variables_with(
-                &zonked_function_type,
-                &core_type_replacements.0,
-                |cells| self.type_work.charge(cells),
-            )
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            discard_type_iteratively(zonked_function_type);
-            let source_function_type = std::mem::replace(&mut function.ty, renamed_function_type);
-            discard_type_iteratively(source_function_type);
+            let zonked_function_type = IterativeTypeOwner::new(self.zonk(&function.ty)?);
+            let renamed_function_type = IterativeTypeOwner::new(
+                substitute_type_variables_with(
+                    &zonked_function_type,
+                    core_type_replacements.as_map(),
+                    |cells| self.type_work.charge(cells),
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            );
+            function.replace_type(renamed_function_type.into_inner());
         }
         if !self.monomorphic_recursive.remove(&fact.binder) {
             return Err(invalid_state());
@@ -3216,14 +3684,17 @@ impl Elaborator {
             let core_scheme =
                 clone_type_with_budget(&lowered.scheme.core_scheme, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            function.node = self.builder.type_abstraction(
+            let node = self.builder.type_abstraction(
                 parameters,
                 function.node,
                 core_scheme,
                 fact.origin.clone(),
             )?;
-            function.ty = clone_type_with_budget(&lowered.scheme.core_scheme, &mut self.type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            function.set_node(node);
+            let rewritten =
+                clone_type_with_budget(&lowered.scheme.core_scheme, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            function.replace_type(rewritten);
         }
         let binder = prepared
             .binders
@@ -3282,10 +3753,11 @@ impl Elaborator {
         for definition in definitions.clone() {
             let (name, function_type, type_parameters, requirements) = match definition.kind() {
                 ResolvedDefinitionKind::Equational(equational) => {
-                    let function_type = ProvenancedType::from_resolved_with_budget(
-                        &equational.interface.annotation,
-                        &mut self.type_work,
-                    )?;
+                    let function_type =
+                        ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
+                            &equational.interface.annotation,
+                            &mut self.type_work,
+                        )?);
                     if !matches!(function_type.ty, Type::Function(_, _)) {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
@@ -3295,26 +3767,27 @@ impl Elaborator {
                     }
                     (
                         &equational.interface.name,
-                        function_type,
+                        function_type.into_inner(),
                         equational.interface.type_parameters.as_ref(),
                         equational.interface.requirements.as_ref(),
                     )
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
-                    let domain = operational_domain(
+                    let domain = ProvenancedTypeOwner::new(operational_domain(
                         &operational.header.parameters,
                         operational.header.span,
                         &mut self.type_work,
-                    )?;
-                    let codomain = ProvenancedType::from_resolved_with_budget(
-                        &operational.header.result_type,
-                        &mut self.type_work,
-                    )?;
+                    )?);
+                    let codomain =
+                        ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
+                            &operational.header.result_type,
+                            &mut self.type_work,
+                        )?);
                     (
                         &operational.header.name,
                         ProvenancedType::function_with_budget(
-                            domain,
-                            codomain,
+                            domain.into_inner(),
+                            codomain.into_inner(),
                             Some(operational.header.span),
                             &mut self.type_work,
                         )?,
@@ -3323,6 +3796,7 @@ impl Elaborator {
                     )
                 }
             };
+            let function_type = ProvenancedTypeOwner::new(function_type);
             self.type_work
                 .charge(type_parameters.len())
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -3332,7 +3806,7 @@ impl Elaborator {
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             quantified.extend(type_parameters.iter().map(|parameter| parameter.id));
             let quantified = quantified.into_boxed_slice();
-            let binder_body = self.clone_type(&function_type.ty)?;
+            let binder_body = IterativeTypeOwner::new(self.clone_type(&function_type.ty)?);
             let binder_type = if quantified.is_empty() {
                 binder_body
             } else {
@@ -3345,7 +3819,10 @@ impl Elaborator {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?
                         .into_boxed_slice();
-                Type::Forall(binder_parameters, Box::new(binder_body))
+                IterativeTypeOwner::new(Type::Forall(
+                    binder_parameters,
+                    Box::new(binder_body.into_inner()),
+                ))
             };
             let binder_type = if let Some(checked) = &checked_by_binder {
                 let checked = checked.get(&name.id).ok_or_else(invalid_state)?;
@@ -3362,7 +3839,6 @@ impl Elaborator {
                     || !same_type(&checked.scheme.value_type, &function_type.ty)
                     || !requirements_match
                 {
-                    discard_type_iteratively(binder_type);
                     return Err(invalid_state());
                 }
                 binder_type
@@ -3370,7 +3846,7 @@ impl Elaborator {
                 binder_type
             };
             let binder_type = if self.purpose == ElaborationPurpose::FinalSynthesis {
-                discard_type_iteratively(binder_type);
+                drop(binder_type);
                 let lowered = self
                     .evidence_lowering
                     .as_ref()
@@ -3381,22 +3857,24 @@ impl Elaborator {
                 {
                     return Err(invalid_state());
                 }
-                clone_type_with_budget(&lowered.core_scheme, &mut self.type_work)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                IterativeTypeOwner::new(
+                    clone_type_with_budget(&lowered.core_scheme, &mut self.type_work).map_err(
+                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                    )?,
+                )
             } else {
                 binder_type
             };
             let binder = self.builder.resolved_binder(
                 name.id,
-                binder_type,
+                binder_type.into_inner(),
                 Origin::Generated {
                     cause: Box::new(name.origin.clone()),
                     reason: GeneratedReason::BindingLowering,
                 },
             )?;
-            if context
-                .insert_with_provenance(name.id, function_type.ty, function_type.provenance)?
-                .is_some()
+            let ProvenancedType { ty, provenance } = function_type.into_inner();
+            if context.insert_with_provenance(name.id, ty, provenance)?
                 || global_binders.insert(name.id, binder).is_some()
             {
                 return Err(invalid_state());
@@ -3454,10 +3932,11 @@ impl Elaborator {
         let definition_result: Result<_, TypeError> = (|| {
             Ok(match definition.kind() {
                 ResolvedDefinitionKind::Equational(equational) => {
-                    let function_type = ProvenancedType::from_resolved_with_budget(
-                        &equational.interface.annotation,
-                        &mut self.type_work,
-                    )?;
+                    let function_type =
+                        ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
+                            &equational.interface.annotation,
+                            &mut self.type_work,
+                        )?);
                     if !matches!(function_type.ty, Type::Function(_, _)) {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
@@ -3469,25 +3948,26 @@ impl Elaborator {
                         &equational.interface.name,
                         self.elaborate_equation_group(
                             equational,
-                            function_type,
+                            function_type.into_inner(),
                             &mut prepared.context,
                             definition.span(),
                         )?,
                     )
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
-                    let domain = operational_domain(
+                    let domain = ProvenancedTypeOwner::new(operational_domain(
                         &operational.header.parameters,
                         operational.header.span,
                         &mut self.type_work,
-                    )?;
-                    let codomain = ProvenancedType::from_resolved_with_budget(
-                        &operational.header.result_type,
-                        &mut self.type_work,
-                    )?;
+                    )?);
+                    let codomain =
+                        ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
+                            &operational.header.result_type,
+                            &mut self.type_work,
+                        )?);
                     let function_type = ProvenancedType::function_with_budget(
-                        domain,
-                        codomain,
+                        domain.into_inner(),
+                        codomain.into_inner(),
                         Some(operational.header.span),
                         &mut self.type_work,
                     )?;
@@ -3502,7 +3982,8 @@ impl Elaborator {
                     )
                 }
             })
-        })();
+        })()
+        .map(|(name, function)| (name, TypedNodeOwner::new(function)));
         let close_result = if definition_result.is_ok() {
             evidence_marker
                 .map(|marker| self.close_evidence_obligations(marker))
@@ -3531,7 +4012,11 @@ impl Elaborator {
         leave_result?;
         lowered_clear_result?;
         if let Some(binders) = lowered_evidence {
-            function = self.wrap_lowered_evidence_scope(function, binders, &name.origin)?;
+            function = TypedNodeOwner::new(self.wrap_lowered_evidence_scope(
+                function.into_inner(),
+                binders,
+                &name.origin,
+            )?);
         }
         if !function.provenance.aligns(&function.ty) {
             return Err(invalid_state());
@@ -3553,19 +4038,21 @@ impl Elaborator {
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
                     .into_boxed_slice();
             let scheme_body = self.clone_type(&function.ty)?;
-            let scheme = Type::Forall(scheme_parameters, Box::new(scheme_body));
+            let scheme =
+                IterativeTypeOwner::new(Type::Forall(scheme_parameters, Box::new(scheme_body)));
             let abstraction_parameters =
                 clone_type_variables_with_budget(quantified, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            function.node = self.builder.type_abstraction(
+            let node = self.builder.type_abstraction(
                 abstraction_parameters,
                 function.node,
-                scheme,
+                scheme.into_inner(),
                 Origin::Generated {
                     cause: Box::new(name.origin.clone()),
                     reason: GeneratedReason::TypeChecking,
                 },
             )?;
+            function.set_node(node);
         }
         prepared.globals.push(ElaboratedBinding {
             binder,
@@ -3581,12 +4068,14 @@ impl Elaborator {
         if !prepared.binders.is_empty() || prepared.globals.len() != prepared.quantifiers.len() {
             return Err(invalid_state());
         }
-        for (binder, quantified) in prepared.quantifiers {
+        for (binder, quantified) in std::mem::take(&mut prepared.quantifiers) {
             prepared.context.set_quantified(binder, quantified)?;
         }
         self.monomorphic_recursive.clear();
 
-        Ok((prepared.globals, prepared.context))
+        let globals = std::mem::take(&mut prepared.globals);
+        let context = std::mem::take(&mut prepared.context);
+        Ok((globals, context))
     }
 
     fn elaborate_result(
@@ -3594,14 +4083,15 @@ impl Elaborator {
         result_expression: &ResolvedExpr,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        let mut result = self.elaborate_expression_with_context(
+        let mut result = TypedNodeOwner::new(self.elaborate_expression_with_context(
             ElaborationTask::Synthesize {
                 expression: result_expression,
                 cause: Some(SynthesisCause::ProgramResult(result_expression.span)),
             },
             context,
-        )?;
+        )?);
         let (zonked_result, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
+        let zonked_result = IterativeTypeOwner::new(zonked_result);
         if result_is_ambiguous {
             return Err(inference_failure(
                 TypeReason::AmbiguousType,
@@ -3609,9 +4099,10 @@ impl Elaborator {
                 "this result does not determine every inferred type",
             ));
         }
-        result.ty = zonked_result;
+        result.replace_type(zonked_result.into_inner());
         if !result.provenance.aligns(&result.ty) {
-            result.provenance = self.unknown_provenance(&result.ty)?;
+            let provenance = self.unknown_provenance(&result.ty)?;
+            result.set_provenance(provenance);
         }
         let ambiguous = (0..self.next_inference).find(|identity| {
             !self
@@ -3631,7 +4122,7 @@ impl Elaborator {
                 "this expression does not determine every inferred type",
             ));
         }
-        Ok(result)
+        Ok(result.into_inner())
     }
 
     fn elaborate_expression_with_context<'a>(
@@ -3639,9 +4130,16 @@ impl Elaborator {
         initial: ElaborationTask<'a>,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        let mut tasks = vec![initial];
-        let mut values = Vec::new();
-        let mut declarations = Vec::new();
+        let mut tasks = ElaborationTaskBuffer(vec![initial]);
+        let mut values = TypedNodeBuffer(Vec::new());
+        #[cfg(test)]
+        TEST_INITIAL_TYPED_NODES.with(|initial| {
+            let mut initial = initial.borrow_mut();
+            while let Some(node) = initial.pop() {
+                values.push(node);
+            }
+        });
+        let mut declarations = ElaboratedDeclarationBuffer(Vec::new());
         while let Some(task) = tasks.pop() {
             match task {
                 ElaborationTask::Synthesize {
@@ -3699,6 +4197,8 @@ impl Elaborator {
                             let fact = context.fact(binder).ok_or_else(invalid_state)?;
                             let rigid = self.monomorphic_recursive.contains(&binder);
                             let (ty, arguments) = self.instantiate(fact, rigid, current.span)?;
+                            let ty = IterativeTypeOwner::new(ty);
+                            let arguments = OwnedTypeBuffer(arguments);
                             let provenance = fact.provenance.clone();
                             let has_lowered_global_scheme =
                                 self.evidence_lowering.as_ref().is_some_and(|lowering| {
@@ -3714,28 +4214,32 @@ impl Elaborator {
                                         .global_schemes
                                         .get(&binder)
                                         .ok_or_else(invalid_state)?;
-                                    let core_scheme = self.clone_type(&scheme.core_scheme)?;
+                                    let core_scheme = IterativeTypeOwner::new(
+                                        self.clone_type(&scheme.core_scheme)?,
+                                    );
                                     let variable_ty = self.clone_type(&core_scheme)?;
-                                    let mut current = TypedNode {
+                                    let mut current = TypedNodeOwner::new(TypedNode {
                                         node: self.builder.variable(
                                             binder,
                                             variable_ty,
                                             occurrence.origin.clone(),
                                         )?,
-                                        ty: core_scheme,
+                                        ty: core_scheme.into_inner(),
                                         provenance: provenance.clone(),
-                                    };
+                                    });
                                     if !arguments.is_empty() {
-                                        let core_ty =
-                                            self.instantiate_lowered_core_body(scheme, &arguments)?;
+                                        let core_ty = IterativeTypeOwner::new(
+                                            self.instantiate_lowered_core_body(scheme, &arguments)?,
+                                        );
                                         let application_ty = self.clone_type(&core_ty)?;
-                                        current.node = self.builder.type_application(
+                                        let node = self.builder.type_application(
                                             current.node,
-                                            arguments,
+                                            arguments.into_vec(),
                                             application_ty,
                                             occurrence.origin.clone(),
                                         )?;
-                                        current.ty = core_ty;
+                                        current.set_node(node);
+                                        current.replace_type(core_ty.into_inner());
                                     }
                                     for slot in &occurrence.evidence {
                                         let selection =
@@ -3747,18 +4251,19 @@ impl Elaborator {
                                             None,
                                         )?;
                                         for method in &methods {
-                                            current = self.apply_lowered_argument(
-                                                current,
-                                                method,
-                                                &occurrence.origin,
-                                            )?;
+                                            current =
+                                                TypedNodeOwner::new(self.apply_lowered_argument(
+                                                    current.into_inner(),
+                                                    method,
+                                                    &occurrence.origin,
+                                                )?);
                                         }
                                     }
                                     if !same_type(&current.ty, &ty) {
                                         return Err(invalid_state());
                                     }
-                                    current.provenance = provenance;
-                                    Ok(current)
+                                    current.set_provenance(provenance);
+                                    Ok(current.into_inner())
                                 })();
                                 self.evidence_lowering = Some(lowering);
                                 values.push(result?);
@@ -3789,14 +4294,14 @@ impl Elaborator {
                                         })?;
                                     node = self.builder.type_application(
                                         node,
-                                        arguments,
+                                        arguments.into_vec(),
                                         core_ty,
                                         occurrence.origin.clone(),
                                     )?;
                                 }
                                 values.push(TypedNode {
                                     node,
-                                    ty,
+                                    ty: ty.into_inner(),
                                     provenance,
                                 });
                             }
@@ -3840,7 +4345,7 @@ impl Elaborator {
                             self.type_work.charge(1).map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?;
-                            Some(
+                            Some(IterativeTypeOwner::new(
                                 clone_type_with_budget(payload, &mut self.type_work).map_err(
                                     |()| {
                                         TypeError::Internal(
@@ -3848,7 +4353,7 @@ impl Elaborator {
                                         )
                                     },
                                 )?,
-                            )
+                            ))
                         } else {
                             None
                         };
@@ -3869,32 +4374,36 @@ impl Elaborator {
                                     .iter()
                                     .map(|parameter| Type::Variable(parameter.id)),
                             );
-                            Type::AppliedNominal(constructor.owner, arguments.into_boxed_slice())
+                            Type::apply_arguments(Type::Nominal(constructor.owner), arguments)
                         };
-                        let scheme = if let Some(payload) = payload {
-                            Type::Function(Box::new(payload), Box::new(result))
+                        let scheme = IterativeTypeOwner::new(if let Some(payload) = payload {
+                            Type::Function(Box::new(payload.into_inner()), Box::new(result))
                         } else {
                             result
-                        };
-                        let scheme_provenance = TypeProvenance::at_span(&scheme, declaration_span);
-                        let fact = TypeFact {
-                            ty: scheme,
+                        });
+                        let scheme_provenance =
+                            self.at_span_provenance(&scheme, declaration_span)?;
+                        let fact = TypeFactOwner::new(TypeFact {
+                            ty: scheme.into_inner(),
                             provenance: scheme_provenance,
                             quantified: quantified.into_boxed_slice(),
-                        };
+                        });
                         let (ty, arguments) = self.instantiate(&fact, false, current.span)?;
+                        let ty = IterativeTypeOwner::new(ty);
+                        let arguments = OwnedTypeBuffer(arguments);
                         let TypeFact {
                             ty: fact_ty,
                             provenance: _,
                             quantified,
-                        } = fact;
+                        } = fact.into_inner();
+                        let fact_ty = IterativeTypeOwner::new(fact_ty);
                         let core_scheme = if quantified.is_empty() {
-                            fact_ty
+                            fact_ty.into_inner()
                         } else {
                             self.type_work.charge(1).map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?;
-                            Type::Forall(quantified, Box::new(fact_ty))
+                            Type::Forall(quantified, Box::new(fact_ty.into_inner()))
                         };
                         let mut node = self.builder.constructor(
                             occurrence.constructor,
@@ -3908,16 +4417,16 @@ impl Elaborator {
                                 })?;
                             node = self.builder.type_application(
                                 node,
-                                arguments,
+                                arguments.into_vec(),
                                 core_ty,
                                 occurrence.origin.clone(),
                             )?;
                         }
-                        let provenance = TypeProvenance::at_span(&ty, declaration_span);
+                        let provenance = self.at_span_provenance(&ty, declaration_span)?;
                         values.push(TypedNode {
                             node,
                             provenance,
-                            ty,
+                            ty: ty.into_inner(),
                         });
                     }
                     ResolvedExprKind::Tuple(elements) => {
@@ -3990,20 +4499,23 @@ impl Elaborator {
                     kind,
                 } => match &expression.kind {
                     ResolvedExprKind::Function(function) => {
+                        let expected = ProvenancedTypeOwner::new(expected);
                         let expected = self.expose_expected_function(expected, expression.span)?;
                         let (domain_ty, codomain_ty) =
                             clone_function_parts_with_budget(&expected.ty, &mut self.type_work)
                                 .map_err(|()| {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                                 })?;
+                        let domain_ty = IterativeTypeOwner::new(domain_ty);
+                        let codomain_ty = IterativeTypeOwner::new(codomain_ty);
                         let (domain_provenance, codomain_provenance) =
                             expected.provenance.function_parts(&expected.ty)?;
                         let domain = ProvenancedType {
-                            ty: domain_ty,
+                            ty: domain_ty.into_inner(),
                             provenance: domain_provenance,
                         };
                         let codomain = ProvenancedType {
-                            ty: codomain_ty,
+                            ty: codomain_ty.into_inner(),
                             provenance: codomain_provenance,
                         };
                         tasks.push(ElaborationTask::CheckFunction {
@@ -4012,7 +4524,7 @@ impl Elaborator {
                             codomain,
                             body: FunctionBody::Block(&function.body),
                             presentation: anonymous_function_origin(expression.span, function),
-                            function_type: expected,
+                            function_type: expected.into_inner(),
                             body_check: kind,
                         });
                     }
@@ -4066,6 +4578,7 @@ impl Elaborator {
                     expected,
                     kind,
                 } => {
+                    let expected = ProvenancedTypeOwner::new(expected);
                     let synthesized = values.pop().ok_or_else(invalid_state)?;
                     if !expected.provenance.aligns(&expected.ty)
                         || !synthesized.provenance.aligns(&synthesized.ty)
@@ -4082,11 +4595,14 @@ impl Elaborator {
                             ));
                         }
                         Err(UnificationFailure::Mismatch) => {
+                            let expected_ty = IterativeTypeOwner::new(self.zonk(&expected.ty)?);
+                            let synthesized_ty =
+                                IterativeTypeOwner::new(self.zonk(&synthesized.ty)?);
                             return Err(check_mismatch(
                                 kind,
                                 span,
-                                self.zonk(&expected.ty)?,
-                                self.zonk(&synthesized.ty)?,
+                                expected_ty.into_inner(),
+                                synthesized_ty.into_inner(),
                                 expected.provenance.span(),
                                 &self.registry,
                             ));
@@ -4097,13 +4613,18 @@ impl Elaborator {
                             ));
                         }
                     }
-                    let ty = self.zonk_owned(synthesized.ty)?;
+                    let TypedNode {
+                        node,
+                        ty: synthesized_ty,
+                        provenance,
+                    } = synthesized.into_inner();
+                    let ty = IterativeTypeOwner::new(self.zonk_owned(synthesized_ty)?);
                     self.builder
-                        .record_type_check(synthesized.node, expected.provenance.span())?;
+                        .record_type_check(node, expected.provenance.span())?;
                     values.push(TypedNode {
-                        node: synthesized.node,
-                        ty,
-                        provenance: synthesized.provenance,
+                        node,
+                        ty: ty.into_inner(),
+                        provenance,
                     });
                 }
                 ElaborationTask::CheckFunction {
@@ -4140,17 +4661,23 @@ impl Elaborator {
                     origin,
                     provenance,
                 } => {
+                    let origin = OriginOwner::new(origin);
+                    let mut pattern = CorePatternOwner::new(pattern);
+                    let domain = domain.map(IterativeTypeOwner::new);
+                    let ty = IterativeTypeOwner::new(ty);
                     let mut body = values.pop().ok_or_else(invalid_state)?;
                     if let Some(binder) = direct_binder
-                        && context.binders.remove(&binder).is_none()
+                        && !context.remove_and_discard(binder)
                     {
                         return Err(invalid_state());
                     }
                     self.remove_pattern_binders(context, &pattern_binders)?;
-                    if let Some(pattern) = pattern {
+                    if pattern.0.is_some() {
                         let domain = domain.ok_or_else(invalid_state)?;
                         let pattern_span = pattern.origin.primary_span();
-                        let mut matrix = vec![vec![pattern]];
+                        let mut matrix = CorePatternMatrixBuffer(vec![vec![
+                            pattern.take().ok_or_else(invalid_state)?,
+                        ]]);
                         if let Some(witness) = missing_witness_for_types_with_budget(
                             &matrix,
                             std::slice::from_ref(&domain),
@@ -4165,30 +4692,38 @@ impl Elaborator {
                             ));
                         }
                         let mut row = matrix.pop().ok_or_else(invalid_state)?;
-                        let pattern = row.pop().ok_or_else(invalid_state)?;
+                        let mut pattern = row.pop().ok_or_else(invalid_state)?;
                         if !row.is_empty() {
                             return Err(invalid_state());
                         }
-                        let scrutinee_origin = pattern.origin.clone();
-                        let arm_origin = pattern.origin.clone();
-                        let match_origin = pattern.origin.clone();
-                        let scrutinee =
-                            self.builder
-                                .variable(binder.id(), domain, scrutinee_origin)?;
-                        let core_body_type = self.clone_type(&body.ty)?;
+                        let scrutinee_origin = OriginOwner::new(pattern.origin.clone());
+                        let arm_origin = OriginOwner::new(pattern.origin.clone());
+                        let match_origin = OriginOwner::new(pattern.origin.clone());
+                        let core_body_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+                        let scrutinee = self.builder.variable(
+                            binder.id(),
+                            domain.into_inner(),
+                            scrutinee_origin.into_inner(),
+                        )?;
                         let match_node = self.builder.match_expression(
                             scrutinee,
-                            vec![CoreMatchArm::new(pattern, body.node, arm_origin)],
-                            core_body_type,
-                            match_origin,
+                            vec![CoreMatchArm::new(
+                                pattern.take().ok_or_else(invalid_state)?,
+                                body.node,
+                                arm_origin.into_inner(),
+                            )],
+                            core_body_type.into_inner(),
+                            match_origin.into_inner(),
                         )?;
-                        body.node = match_node;
+                        body.set_node(match_node);
                     }
                     let core_ty = self.clone_type(&ty)?;
-                    let node = self.builder.function(binder, body.node, core_ty, origin)?;
+                    let node =
+                        self.builder
+                            .function(binder, body.node, core_ty, origin.into_inner())?;
                     values.push(TypedNode {
                         node,
-                        ty,
+                        ty: ty.into_inner(),
                         provenance,
                     });
                 }
@@ -4199,8 +4734,10 @@ impl Elaborator {
                     recursive_call,
                 } => {
                     let mut function = values.pop().ok_or_else(invalid_state)?;
-                    let mut function_ty = self.zonk_owned(function.ty)?;
-                    if matches!(function_ty, Type::Inference(_)) {
+                    let source_function_ty = function.take_type();
+                    let mut function_ty =
+                        IterativeTypeOwner::new(self.zonk_owned(source_function_ty.into_inner())?);
+                    if matches!(&*function_ty, Type::Inference(_)) {
                         self.type_work.charge(3).map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?;
@@ -4224,9 +4761,10 @@ impl Elaborator {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                                 }
                             })?;
-                        function_ty = self.zonk(&exposed)?;
+                        let zonked = self.zonk(&exposed)?;
+                        function_ty.replace(zonked);
                     }
-                    let Type::Function(_, _) = &function_ty else {
+                    let Type::Function(_, _) = &*function_ty else {
                         return Err(not_applicable(
                             function_span,
                             whole_span,
@@ -4246,25 +4784,25 @@ impl Elaborator {
                             .map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?;
-                    function.ty = function_ty;
-                    let domain = ProvenancedType {
+                    function.replace_type(function_ty.into_inner());
+                    let domain = ProvenancedTypeOwner::new(ProvenancedType {
                         ty: domain_ty,
                         provenance: domain_provenance,
-                    };
-                    let codomain = ProvenancedType {
+                    });
+                    let codomain = ProvenancedTypeOwner::new(ProvenancedType {
                         ty: codomain_ty,
                         provenance: codomain_provenance,
-                    };
+                    });
                     tasks.push(ElaborationTask::FinishApplication {
                         whole_span,
                         function_span,
                         argument_span: argument.span,
-                        function,
-                        codomain,
+                        function: function.into_inner(),
+                        codomain: codomain.into_inner(),
                     });
                     tasks.push(ElaborationTask::Check {
                         expression: argument,
-                        expected: domain,
+                        expected: domain.into_inner(),
                         kind: CheckKind::Argument {
                             function_span,
                             whole_span,
@@ -4279,11 +4817,17 @@ impl Elaborator {
                     function,
                     codomain,
                 } => {
+                    let function = TypedNodeOwner::new(function);
+                    let codomain = ProvenancedTypeOwner::new(codomain);
                     let argument = values.pop().ok_or_else(invalid_state)?;
-                    let core_codomain = self.clone_type(&codomain.ty)?;
-                    let ty = self.zonk_owned(codomain.ty)?;
-                    let provenance = if codomain.provenance.aligns(&ty) {
-                        codomain.provenance
+                    let core_codomain = IterativeTypeOwner::new(self.clone_type(&codomain.ty)?);
+                    let ProvenancedType {
+                        ty: codomain_ty,
+                        provenance: codomain_provenance,
+                    } = codomain.into_inner();
+                    let ty = IterativeTypeOwner::new(self.zonk_owned(codomain_ty)?);
+                    let provenance = if codomain_provenance.aligns(&ty) {
+                        codomain_provenance
                     } else {
                         self.unknown_provenance(&ty)?
                     };
@@ -4294,12 +4838,12 @@ impl Elaborator {
                     let node = self.builder.application(
                         function.node,
                         argument.node,
-                        core_codomain,
+                        core_codomain.into_inner(),
                         origin,
                     )?;
                     values.push(TypedNode {
                         node,
-                        ty,
+                        ty: ty.into_inner(),
                         provenance,
                     });
                 }
@@ -4316,7 +4860,7 @@ impl Elaborator {
                         primitive,
                         whole_span,
                         operator_span,
-                        left,
+                        left: left.into_inner(),
                         right_span: right.span,
                     });
                     tasks.push(ElaborationTask::Synthesize {
@@ -4331,6 +4875,7 @@ impl Elaborator {
                     left,
                     right_span,
                 } => {
+                    let left = TypedNodeOwner::new(left);
                     let right = values.pop().ok_or_else(invalid_state)?;
                     self.require_integer(&right, right_span, operator_span)?;
                     let ty = match primitive {
@@ -4359,6 +4904,8 @@ impl Elaborator {
                     expected,
                     finish_expected,
                 } => {
+                    let expected = expected.map(ProvenancedTypeOwner::new);
+                    let finish_expected = finish_expected.map(ProvenancedTypeOwner::new);
                     let evidence_marker = if self.purpose == ElaborationPurpose::ModuleCheck
                         && self.selection.is_some()
                         && finish_expected.is_none()
@@ -4371,14 +4918,14 @@ impl Elaborator {
                     };
                     tasks.push(ElaborationTask::FinishBinding {
                         binding,
-                        expected: finish_expected,
+                        expected: finish_expected.map(ProvenancedTypeOwner::into_inner),
                         evidence_marker,
                     });
                     match (expected, binding.annotation.as_ref()) {
                         (Some(expected), Some(annotation)) => {
                             tasks.push(ElaborationTask::Check {
                                 expression: &binding.initializer,
-                                expected,
+                                expected: expected.into_inner(),
                                 kind: CheckKind::BindingInitializer {
                                     initializer_span: binding.initializer.span,
                                     annotation_span: annotation.span,
@@ -4397,6 +4944,7 @@ impl Elaborator {
                     expected,
                     evidence_marker,
                 } => {
+                    let expected = expected.map(ProvenancedTypeOwner::new);
                     let mut initializer = values.pop().ok_or_else(invalid_state)?;
                     if let Some(marker) = evidence_marker {
                         self.close_evidence_obligations(marker)?;
@@ -4406,14 +4954,14 @@ impl Elaborator {
                         && matches!(binding.pattern.kind, ResolvedPatternKind::Binder(_))
                         && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
                     {
-                        let inferred = self.zonk(&initializer.ty)?;
+                        let inferred = IterativeTypeOwner::new(self.zonk(&initializer.ty)?);
                         let mut variables =
                             collect_unsolved_inference(&inferred, &mut self.type_work).map_err(
                                 |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
                             )?;
                         let mut environment_variables = HashSet::new();
                         for fact in context.binders.values() {
-                            let ty = self.zonk(&fact.ty)?;
+                            let ty = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
                             let variables = collect_unsolved_inference(&ty, &mut self.type_work)
                                 .map_err(|()| {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
@@ -4452,16 +5000,25 @@ impl Elaborator {
                                 .insert(variable, Type::Variable(binder));
                             generalized.push(binder);
                         }
-                        initializer.ty = self.zonk(&initializer.ty)?;
+                        let zonked = self.zonk(&initializer.ty)?;
+                        initializer.replace_type(zonked);
                     }
-                    let mut binding_type = if let Some(expected) = expected {
-                        expected
-                    } else {
-                        ProvenancedType {
-                            ty: initializer.ty,
-                            provenance: initializer.provenance,
-                        }
-                    };
+                    let mut binding_type =
+                        ProvenancedTypeOwner::new(if let Some(expected) = expected {
+                            expected.into_inner()
+                        } else {
+                            let TypedNode {
+                                node,
+                                ty,
+                                provenance,
+                            } = initializer.into_inner();
+                            initializer = TypedNodeOwner::new(TypedNode {
+                                node,
+                                ty: Type::Unit,
+                                provenance: TypeProvenance::atom(None),
+                            });
+                            ProvenancedType { ty, provenance }
+                        });
                     let mut binder_ids = Vec::new();
                     let checked = self.check_core_pattern(
                         &binding.pattern,
@@ -4470,17 +5027,21 @@ impl Elaborator {
                         &mut binder_ids,
                         GeneratedReason::BindingLowering,
                     )?;
-                    let pattern = checked.pattern;
+                    let mut pattern = CorePatternOwner::new(Some(checked.pattern));
                     if checked.inference_changed {
-                        binding_type.ty = clone_type_with_budget(&pattern.ty, &mut self.type_work)
+                        let rewritten = clone_type_with_budget(&pattern.ty, &mut self.type_work)
                             .map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?;
+                        binding_type.replace_type(rewritten);
                         if !binding_type.provenance.aligns(&binding_type.ty) {
-                            binding_type.provenance = self.unknown_provenance(&binding_type.ty)?;
+                            let provenance = self.unknown_provenance(&binding_type.ty)?;
+                            binding_type.set_provenance(provenance);
                         }
                     }
-                    let mut matrix = vec![vec![pattern]];
+                    let mut matrix = CorePatternMatrixBuffer(vec![vec![
+                        pattern.take().ok_or_else(invalid_state)?,
+                    ]]);
                     if let Some(witness) = missing_witness_for_types_with_budget(
                         &matrix,
                         std::slice::from_ref(&binding_type.ty),
@@ -4500,7 +5061,7 @@ impl Elaborator {
                     if !row.is_empty() {
                         return Err(invalid_state());
                     }
-                    match pattern {
+                    match pattern.into_inner() {
                         CorePattern {
                             ty,
                             origin: pattern_origin,
@@ -4524,9 +5085,13 @@ impl Elaborator {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                                 })?;
                                 let scheme_body = self.clone_type(&binding_type.ty)?;
-                                let scheme = Type::Forall(quantified, Box::new(scheme_body));
-                                let binder_scheme = self.clone_type(&scheme)?;
-                                let abstraction_parameters = match &scheme {
+                                let scheme = IterativeTypeOwner::new(Type::Forall(
+                                    quantified,
+                                    Box::new(scheme_body),
+                                ));
+                                let binder_scheme =
+                                    IterativeTypeOwner::new(self.clone_type(&scheme)?);
+                                let abstraction_parameters = match &*scheme {
                                     Type::Forall(parameters, _) => {
                                         clone_type_variables_with_budget(
                                             parameters,
@@ -4547,16 +5112,17 @@ impl Elaborator {
                             if let Some((scheme, binder_scheme, abstraction_parameters)) =
                                 abstraction
                             {
-                                binder.replace_type(binder_scheme);
-                                initializer.node = self.builder.type_abstraction(
+                                binder.replace_type(binder_scheme.into_inner());
+                                let node = self.builder.type_abstraction(
                                     abstraction_parameters,
                                     initializer.node,
-                                    scheme,
+                                    scheme.into_inner(),
                                     Origin::Generated {
                                         cause: Box::new(origin.clone()),
                                         reason: GeneratedReason::TypeChecking,
                                     },
                                 )?;
+                                initializer.set_node(node);
                             }
                             declarations.push(ElaboratedDeclaration::Binding {
                                 binder,
@@ -4600,14 +5166,11 @@ impl Elaborator {
                             &member.annotation,
                             &mut self.type_work,
                         )?;
-                        if context
-                            .insert_with_provenance(
-                                member.binder.id,
-                                expected.ty,
-                                expected.provenance,
-                            )?
-                            .is_some()
-                        {
+                        if context.insert_with_provenance(
+                            member.binder.id,
+                            expected.ty,
+                            expected.provenance,
+                        )? {
                             return Err(invalid_state());
                         }
                     }
@@ -4621,7 +5184,7 @@ impl Elaborator {
                         return Err(invalid_state());
                     }
                     let value_start = values.len() - group.members.len();
-                    let initializers = values.split_off(value_start);
+                    let mut initializers = values.split_off(value_start);
                     self.type_work.charge(group.members.len()).map_err(|()| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
@@ -4629,16 +5192,23 @@ impl Elaborator {
                     members.try_reserve(group.members.len()).map_err(|_| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
-                    for (member, initializer) in group.members.iter().zip(initializers) {
+                    initializers.reverse();
+                    for member in &group.members {
+                        let initializer = initializers.pop().ok_or_else(invalid_state)?;
+                        let TypedNode {
+                            node: initializer_node,
+                            ty: initializer_ty,
+                            provenance: _,
+                        } = initializer.into_inner();
                         let binder = self.builder.resolved_binder(
                             member.binder.id,
-                            initializer.ty,
+                            initializer_ty,
                             Origin::Generated {
                                 cause: Box::new(member.binder.origin.clone()),
                                 reason: GeneratedReason::BindingLowering,
                             },
                         )?;
-                        members.push((binder, initializer.node));
+                        members.push((binder, initializer_node));
                     }
                     declarations.push(ElaboratedDeclaration::Recursive {
                         members,
@@ -4650,6 +5220,8 @@ impl Elaborator {
                     span,
                     expected,
                 } => {
+                    let expected = expected
+                        .map(|(expected, kind)| (ProvenancedTypeOwner::new(expected), kind));
                     let scrutinee = values.pop().ok_or_else(invalid_state)?;
                     if expression.arms.is_empty() {
                         return Err(case_error(
@@ -4676,33 +5248,42 @@ impl Elaborator {
                     let progress = Box::new(MatchProgress {
                         expression,
                         span,
-                        scrutinee,
+                        scrutinee: scrutinee.into_inner(),
                         next_arm: 0,
                         matrix,
                         arm_bodies,
-                        result_type: expected
-                            .map(|(expected, kind)| (expected.ty, expected.provenance, kind)),
+                        result_type: expected.map(|(expected, kind)| {
+                            let ProvenancedType { ty, provenance } = expected.into_inner();
+                            (ty, provenance, kind)
+                        }),
                     });
                     self.schedule_match_arm(progress, context, &mut tasks)?;
                 }
                 ElaborationTask::FinishMatchArm {
-                    mut progress,
+                    progress,
                     binders,
                     row,
                     arm_span,
                 } => {
-                    let body_result = values.pop().ok_or_else(invalid_state);
+                    let mut progress = MatchProgressOwner::new(progress);
+                    let row = CorePatternBuffer(row);
+                    let body = values.pop().ok_or_else(invalid_state)?;
                     self.remove_pattern_binders(context, &binders)?;
-                    let body = body_result?;
+                    let body_node = body.node;
                     if progress.result_type.is_none() {
-                        progress.result_type = Some((body.ty, body.provenance, CheckKind::General));
+                        let TypedNode { ty, provenance, .. } = body.into_inner();
+                        progress.set_result_type(
+                            ProvenancedTypeOwner::new(ProvenancedType { ty, provenance }),
+                            CheckKind::General,
+                        )?;
                     }
-                    progress.matrix.push(row);
-                    progress.arm_bodies.push((body.node, arm_span));
-                    self.schedule_match_arm(progress, context, &mut tasks)?;
+                    progress.push_row(row.into_vec());
+                    progress.push_arm_body((body_node, arm_span));
+                    self.schedule_match_arm(progress.into_inner(), context, &mut tasks)?;
                 }
                 ElaborationTask::FinishMatch(progress) => {
-                    let Some((ty, provenance, _)) = progress.result_type else {
+                    let mut progress = MatchProgressOwner::new(progress);
+                    let Some((result_type, _)) = progress.take_result_type() else {
                         return Err(invalid_state());
                     };
                     if progress.matrix.len() != progress.arm_bodies.len() {
@@ -4717,22 +5298,28 @@ impl Elaborator {
                     arms.try_reserve(progress.arm_bodies.len()).map_err(|_| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
-                    for (mut row, (body, arm_span)) in
-                        progress.matrix.into_iter().zip(progress.arm_bodies)
-                    {
-                        let pattern = row.pop().ok_or_else(invalid_state)?;
+                    let matrix = progress.take_matrix();
+                    let arm_bodies = progress.take_arm_bodies();
+                    for (row, (body, arm_span)) in matrix.into_sequence().zip(arm_bodies) {
+                        let mut row = CorePatternBuffer(row);
+                        let mut pattern = row.pop().ok_or_else(invalid_state)?;
                         if !row.is_empty() {
                             return Err(invalid_state());
                         }
-                        arms.push(CoreMatchArm::new(pattern, body, Origin::Source(arm_span)));
+                        arms.push(CoreMatchArm::new(
+                            pattern.take().ok_or_else(invalid_state)?,
+                            body,
+                            Origin::Source(arm_span),
+                        ));
                     }
-                    let core_ty = self.clone_type(&ty)?;
+                    let core_ty = self.clone_type(&result_type.ty)?;
                     let node = self.builder.match_expression(
                         progress.scrutinee.node,
                         arms,
                         core_ty,
                         Origin::Source(progress.span),
                     )?;
+                    let ProvenancedType { ty, provenance } = result_type.into_inner();
                     values.push(TypedNode {
                         node,
                         ty,
@@ -4749,9 +5336,11 @@ impl Elaborator {
                     {
                         return Err(invalid_state());
                     }
-                    for declaration in declarations.drain(declaration_start..).rev() {
+                    let mut retained_declarations = declarations.split_off(declaration_start);
+                    while !retained_declarations.is_empty() {
                         let core_body_type = self.clone_type(&body.ty)?;
-                        let node = match declaration {
+                        let declaration = retained_declarations.pop().ok_or_else(invalid_state)?;
+                        let node = match declaration.into_inner() {
                             ElaboratedDeclaration::Binding {
                                 binder,
                                 initializer,
@@ -4778,11 +5367,7 @@ impl Elaborator {
                                 .builder
                                 .recursive_binding(members, body.node, core_body_type, origin)?,
                         };
-                        body = TypedNode {
-                            node,
-                            ty: body.ty,
-                            provenance: body.provenance,
-                        };
+                        body.set_node(node);
                     }
                     for declaration in source_declarations {
                         match declaration {
@@ -4790,27 +5375,27 @@ impl Elaborator {
                                 let mut ids = Vec::new();
                                 collect_pattern_binders(&binding.pattern, &mut ids);
                                 for id in ids {
-                                    if context.binders.remove(&id).is_none() {
+                                    if !context.remove_and_discard(id) {
                                         return Err(invalid_state());
                                     }
                                 }
                             }
                             ResolvedLocalDeclaration::Recursive(group) => {
                                 for member in &group.members {
-                                    if context.binders.remove(&member.binder.id).is_none() {
+                                    if !context.remove_and_discard(member.binder.id) {
                                         return Err(invalid_state());
                                     }
                                 }
                             }
                         }
                     }
-                    values.push(body);
+                    values.push(body.into_inner());
                 }
             }
         }
         let result = values.pop().ok_or_else(invalid_state)?;
         if values.is_empty() && result.provenance.aligns(&result.ty) {
-            Ok(result)
+            Ok(result.into_inner())
         } else {
             Err(invalid_state())
         }
@@ -4826,7 +5411,7 @@ impl Elaborator {
             return Err(invalid_state());
         }
         let mut nodes = Vec::with_capacity(elements.len());
-        let mut types = Vec::with_capacity(elements.len());
+        let mut types = OwnedTypeBuffer(Vec::with_capacity(elements.len()));
         for element in elements {
             let typed = self.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
@@ -4841,22 +5426,23 @@ impl Elaborator {
         self.type_work
             .charge(1)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let ty = Type::Tuple(types.into_boxed_slice());
+        let ty = IterativeTypeOwner::new(Type::Tuple(types.into_boxed_slice()));
         let core_ty = self.clone_type(&ty)?;
         let node = self.builder.tuple(nodes, core_ty, Origin::Source(span))?;
         Ok(TypedNode {
             node,
             provenance: TypeProvenance::atom(Some(span)),
-            ty,
+            ty: ty.into_inner(),
         })
     }
 
     fn schedule_match_arm<'a>(
         &mut self,
-        mut progress: Box<MatchProgress<'a>>,
+        progress: Box<MatchProgress<'a>>,
         context: &mut TypeContext,
-        tasks: &mut Vec<ElaborationTask<'a>>,
+        tasks: &mut ElaborationTaskBuffer<'a>,
     ) -> Result<(), TypeError> {
+        let mut progress = MatchProgressOwner::new(progress);
         let Some(arm) = progress.expression.arms.get(progress.next_arm) else {
             if let Some(witness) = missing_witness_for_types_with_budget(
                 &progress.matrix,
@@ -4871,14 +5457,14 @@ impl Elaborator {
                     Some(display_witness(&witness, &self.registry)),
                 ));
             }
-            tasks.push(ElaborationTask::FinishMatch(progress));
+            tasks.push(ElaborationTask::FinishMatch(progress.into_inner()));
             return Ok(());
         };
 
         self.type_work
             .charge(1)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut row = Vec::new();
+        let mut row = CorePatternBuffer(Vec::new());
         row.try_reserve(1)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut binders = Vec::new();
@@ -4889,15 +5475,17 @@ impl Elaborator {
             &mut binders,
             GeneratedReason::BindingLowering,
         )?;
-        let pattern = checked.pattern;
+        let mut pattern = CorePatternOwner::new(Some(checked.pattern));
         if checked.inference_changed {
-            progress.scrutinee.ty = clone_type_with_budget(&pattern.ty, &mut self.type_work)
+            let rewritten = clone_type_with_budget(&pattern.ty, &mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            progress.replace_scrutinee_type(rewritten);
             if !progress.scrutinee.provenance.aligns(&progress.scrutinee.ty) {
-                progress.scrutinee.provenance = self.unknown_provenance(&progress.scrutinee.ty)?;
+                let provenance = self.unknown_provenance(&progress.scrutinee.ty)?;
+                progress.set_scrutinee_provenance(provenance);
             }
         }
-        row.push(pattern);
+        row.push(pattern.take().ok_or_else(invalid_state)?);
         if usefulness_with_budget(
             &progress.matrix,
             &row,
@@ -4915,7 +5503,7 @@ impl Elaborator {
                 None,
             ));
         }
-        progress.next_arm += 1;
+        progress.advance_arm();
         let body_task = if let Some((ty, provenance, kind)) = &progress.result_type {
             let expected_ty = self.clone_type(ty)?;
             ElaborationTask::Check {
@@ -4933,9 +5521,9 @@ impl Elaborator {
             }
         };
         tasks.push(ElaborationTask::FinishMatchArm {
-            progress,
+            progress: progress.into_inner(),
             binders,
-            row,
+            row: row.into_vec(),
             arm_span: arm.span,
         });
         tasks.push(body_task);
@@ -4950,7 +5538,7 @@ impl Elaborator {
         binders: &mut Vec<BinderId>,
         binder_reason: GeneratedReason,
     ) -> Result<CheckedPattern, TypeError> {
-        let (mut expected, mut inference_changed) = if let Type::Inference(identity) = expected {
+        let (expected, mut inference_changed) = if let Type::Inference(identity) = expected {
             let zonked = self.zonk(expected)?;
             let changed = !matches!(&zonked, Type::Inference(zonked) if *zonked == *identity);
             (zonked, changed)
@@ -4958,6 +5546,7 @@ impl Elaborator {
             self.charge_type(expected)?;
             (expected.clone(), false)
         };
+        let mut expected = IterativeTypeOwner::new(expected);
         let mut rebuild_expected = false;
         let kind = match &pattern.kind {
             ResolvedPatternKind::Binder(binder) => {
@@ -4972,22 +5561,19 @@ impl Elaborator {
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let typed = self.builder.resolved_binder(
                     binder.id,
-                    expected.clone(),
+                    (*expected).clone(),
                     Origin::Generated {
                         cause: Box::new(binder.origin.clone()),
                         reason: binder_reason,
                     },
                 )?;
-                if context
-                    .insert_with_provenance(
-                        binder.id,
-                        expected.clone(),
-                        // `charge_pattern_binder_storage` reserves this tree
-                        // before the binder and context entries are retained.
-                        TypeProvenance::unknown(&expected),
-                    )?
-                    .is_some()
-                {
+                if context.insert_with_provenance(
+                    binder.id,
+                    (*expected).clone(),
+                    // `charge_pattern_binder_storage` reserves this tree
+                    // before the binder and context entries are retained.
+                    TypeProvenance::unknown(&expected),
+                )? {
                     return Err(invalid_state());
                 }
                 binders.push(binder.id);
@@ -4995,27 +5581,29 @@ impl Elaborator {
             }
             ResolvedPatternKind::Wildcard => CorePatternKind::Wildcard,
             ResolvedPatternKind::Boolean(value) => {
-                if matches!(expected, Type::Inference(_)) {
-                    expected =
+                if matches!(&*expected, Type::Inference(_)) {
+                    let refined =
                         self.refine_pattern_expected(&expected, &Type::Bool, pattern.span)?;
+                    expected.replace(refined);
                     inference_changed = true;
-                } else if !matches!(expected, Type::Bool) {
+                } else if !matches!(&*expected, Type::Bool) {
                     return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
                 }
                 CorePatternKind::Boolean(*value)
             }
             ResolvedPatternKind::Unit => {
-                if matches!(expected, Type::Inference(_)) {
-                    expected =
+                if matches!(&*expected, Type::Inference(_)) {
+                    let refined =
                         self.refine_pattern_expected(&expected, &Type::Unit, pattern.span)?;
+                    expected.replace(refined);
                     inference_changed = true;
-                } else if !matches!(expected, Type::Unit) {
+                } else if !matches!(&*expected, Type::Unit) {
                     return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
                 }
                 CorePatternKind::Unit
             }
             ResolvedPatternKind::Tuple(patterns) => {
-                if matches!(expected, Type::Inference(_)) {
+                if matches!(&*expected, Type::Inference(_)) {
                     self.type_work
                         .charge(patterns.len().saturating_add(1))
                         .map_err(|()| {
@@ -5029,16 +5617,18 @@ impl Elaborator {
                         types.push(self.fresh_inference(pattern.span)?);
                     }
                     let required = Type::Tuple(types.into_boxed_slice());
-                    expected = self.refine_pattern_expected(&expected, &required, pattern.span)?;
+                    let refined =
+                        self.refine_pattern_expected(&expected, &required, pattern.span)?;
+                    expected.replace(refined);
                     inference_changed = true;
                 }
-                let Type::Tuple(types) = &expected else {
+                let Type::Tuple(types) = &*expected else {
                     return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
                 };
                 if patterns.len() != types.len() {
                     return Err(pattern_mismatch(pattern.span, &expected, &self.registry));
                 }
-                let mut checked = Vec::new();
+                let mut checked = CorePatternBuffer(Vec::new());
                 checked
                     .try_reserve(patterns.len())
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -5048,6 +5638,11 @@ impl Elaborator {
                     rebuild_expected |= outcome.inference_changed;
                     inference_changed |= outcome.inference_changed;
                     checked.push(outcome.pattern);
+                }
+                if rebuild_expected {
+                    let zonked = self.zonk(&expected)?;
+                    expected.replace(zonked);
+                    rebuild_expected = false;
                 }
                 CorePatternKind::Tuple(checked.into_boxed_slice())
             }
@@ -5060,7 +5655,7 @@ impl Elaborator {
                     pattern,
                     *constructor,
                     payload.as_deref(),
-                    expected,
+                    expected.into_inner(),
                     context,
                     binders,
                     binder_reason,
@@ -5068,13 +5663,9 @@ impl Elaborator {
                 );
             }
         };
-        let expected = if rebuild_expected {
-            self.zonk(&expected)?
-        } else {
-            expected
-        };
+        debug_assert!(!rebuild_expected);
         Ok(CheckedPattern {
-            pattern: CorePattern::new(expected, Origin::Source(pattern.span), kind),
+            pattern: CorePattern::new(expected.into_inner(), Origin::Source(pattern.span), kind),
             inference_changed,
         })
     }
@@ -5085,12 +5676,13 @@ impl Elaborator {
         whole_pattern: &ResolvedPattern,
         constructor: crate::types::ConstructorId,
         payload: Option<&ResolvedPattern>,
-        mut expected: Type,
+        expected: Type,
         context: &mut TypeContext,
         binders: &mut Vec<BinderId>,
         binder_reason: GeneratedReason,
         mut inference_changed: bool,
     ) -> Result<CheckedPattern, TypeError> {
+        let mut expected = IterativeTypeOwner::new(expected);
         let Some(info) = self.registry.constructor(constructor) else {
             return Err(invalid_state());
         };
@@ -5099,8 +5691,8 @@ impl Elaborator {
             charge_type_cells(payload, &mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         }
-        let declared_payload = info.payload.clone();
-        if matches!(expected, Type::Inference(_)) {
+        let declared_payload = info.payload.clone().map(IterativeTypeOwner::new);
+        if matches!(&*expected, Type::Inference(_)) {
             let parameter_count = self
                 .registry
                 .nominal_parameters(info_owner)
@@ -5109,7 +5701,7 @@ impl Elaborator {
             self.type_work
                 .charge(parameter_count.saturating_add(1))
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let required = if parameter_count == 0 {
+            let required = IterativeTypeOwner::new(if parameter_count == 0 {
                 Type::Nominal(info_owner)
             } else {
                 let mut arguments = Vec::new();
@@ -5119,22 +5711,32 @@ impl Elaborator {
                 for _ in 0..parameter_count {
                     arguments.push(self.fresh_inference(whole_pattern.span)?);
                 }
-                Type::AppliedNominal(info_owner, arguments.into_boxed_slice())
-            };
-            expected = self.refine_pattern_expected(&expected, &required, whole_pattern.span)?;
+                Type::apply_arguments(Type::Nominal(info_owner), arguments)
+            });
+            let refined = self.refine_pattern_expected(&expected, &required, whole_pattern.span)?;
+            expected.replace(refined);
             inference_changed = true;
         }
-        let (owner, arguments): (_, &[Type]) = match &expected {
-            Type::Nominal(owner) => (*owner, &[]),
-            Type::AppliedNominal(owner, arguments) => (*owner, arguments),
-            _ => {
-                return Err(pattern_mismatch(
-                    whole_pattern.span,
-                    &expected,
-                    &self.registry,
-                ));
-            }
+        let Some(owner) = expected.outer_nominal() else {
+            return Err(pattern_mismatch(
+                whole_pattern.span,
+                &expected,
+                &self.registry,
+            ));
         };
+        let mut arguments = Vec::new();
+        let mut current: &Type = &expected;
+        while let Type::Application(function, argument) = current {
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            arguments
+                .try_reserve(1)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            arguments.push(argument.as_ref());
+            current = function;
+        }
+        arguments.reverse();
         let parameters = self
             .registry
             .nominal_parameters(owner)
@@ -5143,17 +5745,18 @@ impl Elaborator {
             return Err(invalid_state());
         }
         let replacements =
-            constructor_replacements_with_budget(parameters, arguments, &mut self.type_work)
+            constructor_replacements_with_budget(parameters, &arguments, &mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let payload_type = declared_payload
             .as_ref()
             .map(|payload| {
-                substitute_type_variables_with(payload, &replacements, |cells| {
+                substitute_type_variables_with(payload, replacements.as_map(), |cells| {
                     self.type_work.charge(cells)
                 })
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
             })
-            .transpose()?;
+            .transpose()?
+            .map(IterativeTypeOwner::new);
         if info_owner != owner {
             return Err(case_error(
                 TypeReason::ConstructorOwner,
@@ -5162,7 +5765,7 @@ impl Elaborator {
                 None,
             ));
         }
-        let checked_payload = match (payload, payload_type.as_ref()) {
+        let checked_payload = match (payload, payload_type.as_deref()) {
             (None, None) => None,
             (Some(pattern), Some(ty)) => {
                 let outcome = if let ResolvedPatternKind::Constructor {
@@ -5185,17 +5788,25 @@ impl Elaborator {
                 } else {
                     self.check_core_pattern(pattern, ty, context, binders, binder_reason)?
                 };
-                if outcome.inference_changed {
-                    expected = self.zonk(&expected)?;
+                let outcome_inference_changed = outcome.inference_changed;
+                let mut outcome_pattern = CorePatternBuffer(vec![outcome.pattern]);
+                if outcome_inference_changed {
+                    let zonked = self.zonk(&expected)?;
+                    expected.replace(zonked);
                     inference_changed = true;
                 }
-                Some(Box::new(outcome.pattern))
+                Some(Box::new(
+                    outcome_pattern
+                        .pop()
+                        .expect("one checked constructor payload pattern")
+                        .into_inner(),
+                ))
             }
             _ => return Err(constructor_mismatch(whole_pattern.span)),
         };
         Ok(CheckedPattern {
             pattern: CorePattern::new(
-                expected,
+                expected.into_inner(),
                 Origin::Source(whole_pattern.span),
                 CorePatternKind::Constructor {
                     constructor,
@@ -5212,7 +5823,7 @@ impl Elaborator {
         binders: &[BinderId],
     ) -> Result<(), TypeError> {
         for binder in binders {
-            if context.binders.remove(binder).is_none() {
+            if !context.remove_and_discard(*binder) {
                 return Err(invalid_state());
             }
         }
@@ -5222,23 +5833,27 @@ impl Elaborator {
     fn schedule_function_check<'a>(
         &mut self,
         context: &mut TypeContext,
-        tasks: &mut Vec<ElaborationTask<'a>>,
+        tasks: &mut ElaborationTaskBuffer<'a>,
         binding_start: usize,
         check: FunctionCheck<'a>,
     ) -> Result<(), TypeError> {
         let FunctionCheck {
             parameter,
-            mut domain,
-            mut codomain,
+            domain,
+            codomain,
             body,
             presentation,
-            mut function_type,
+            function_type,
             body_check,
         } = check;
+        let presentation = OriginOwner::new(presentation);
+        let mut domain = ProvenancedTypeOwner::new(domain);
+        let mut codomain = ProvenancedTypeOwner::new(codomain);
+        let mut function_type = ProvenancedTypeOwner::new(function_type);
         let mut pattern_binders = Vec::new();
-        let (checked_pattern, inference_changed) =
+        let (mut checked_pattern, inference_changed) =
             if matches!(&parameter.kind, ResolvedPatternKind::Binder(_)) {
-                (None, false)
+                (CorePatternOwner::new(None), false)
             } else {
                 let checked = self.check_core_pattern(
                     parameter,
@@ -5247,20 +5862,29 @@ impl Elaborator {
                     &mut pattern_binders,
                     GeneratedReason::FunctionLowering,
                 )?;
-                (Some(checked.pattern), checked.inference_changed)
+                (
+                    CorePatternOwner::new(Some(checked.pattern)),
+                    checked.inference_changed,
+                )
             };
         if inference_changed {
-            domain.ty = self.zonk(&domain.ty)?;
+            let zonked = self.zonk(&domain.ty)?;
+            domain.replace_type(zonked);
             if !domain.provenance.aligns(&domain.ty) {
-                domain.provenance = self.unknown_provenance(&domain.ty)?;
+                let provenance = self.unknown_provenance(&domain.ty)?;
+                domain.set_provenance(provenance);
             }
-            codomain.ty = self.zonk(&codomain.ty)?;
+            let zonked = self.zonk(&codomain.ty)?;
+            codomain.replace_type(zonked);
             if !codomain.provenance.aligns(&codomain.ty) {
-                codomain.provenance = self.unknown_provenance(&codomain.ty)?;
+                let provenance = self.unknown_provenance(&codomain.ty)?;
+                codomain.set_provenance(provenance);
             }
-            function_type.ty = self.zonk(&function_type.ty)?;
+            let zonked = self.zonk(&function_type.ty)?;
+            function_type.replace_type(zonked);
             if !function_type.provenance.aligns(&function_type.ty) {
-                function_type.provenance = self.unknown_provenance(&function_type.ty)?;
+                let provenance = self.unknown_provenance(&function_type.ty)?;
+                function_type.set_provenance(provenance);
             }
         }
         let function_parts_align = matches!(
@@ -5276,24 +5900,28 @@ impl Elaborator {
             if let ResolvedPatternKind::Binder(source_binder) = &parameter.kind {
                 reserve_context_entry(context, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let context_type = self.clone_type(&domain.ty)?;
+                let context_type = IterativeTypeOwner::new(self.clone_type(&domain.ty)?);
+                let ProvenancedType {
+                    ty: binder_type,
+                    provenance: domain_provenance,
+                } = domain.into_inner();
                 let binder = self.builder.resolved_binder(
                     source_binder.id,
-                    domain.ty,
+                    binder_type,
                     Origin::Generated {
                         cause: Box::new(source_binder.origin.clone()),
                         reason: GeneratedReason::FunctionLowering,
                     },
                 )?;
-                if context
-                    .insert_with_provenance(source_binder.id, context_type, domain.provenance)?
-                    .is_some()
-                {
+                if context.insert_with_provenance(
+                    source_binder.id,
+                    context_type.into_inner(),
+                    domain_provenance,
+                )? {
                     return Err(invalid_state());
                 }
                 (binder, None, None, Some(source_binder.id))
             } else {
-                let pattern = checked_pattern.ok_or_else(invalid_state)?;
                 let binder_type = self.clone_type(&domain.ty)?;
                 let binder = self.builder.binder(
                     binder_type,
@@ -5302,12 +5930,18 @@ impl Elaborator {
                         reason: GeneratedReason::FunctionLowering,
                     },
                 )?;
-                (binder, Some(pattern), Some(domain.ty), None)
+                let pattern = checked_pattern.take().ok_or_else(invalid_state)?;
+                let ProvenancedType {
+                    ty: domain_ty,
+                    provenance: _,
+                } = domain.into_inner();
+                (binder, Some(pattern), Some(domain_ty), None)
             };
         let origin = Origin::Generated {
-            cause: Box::new(presentation),
+            cause: Box::new(presentation.into_inner()),
             reason: GeneratedReason::FunctionLowering,
         };
+        let function_type = function_type.into_inner();
         tasks.push(ElaborationTask::FinishFunction {
             direct_binder,
             pattern_binders,
@@ -5321,7 +5955,7 @@ impl Elaborator {
         match body {
             FunctionBody::Block(block) => schedule_block(
                 block,
-                Some((codomain, body_check)),
+                Some((codomain.into_inner(), body_check)),
                 None,
                 tasks,
                 binding_start,
@@ -5356,6 +5990,7 @@ impl Elaborator {
         definition_span: Span,
         presentation: &Origin,
     ) -> Result<TypedNode, TypeError> {
+        let function_type = ProvenancedTypeOwner::new(function_type);
         let Some(first) = equations.first() else {
             return Err(invalid_state());
         };
@@ -5372,14 +6007,14 @@ impl Elaborator {
                 None,
             ));
         }
-        let mut remainder = ProvenancedType {
+        let mut remainder = ProvenancedTypeOwner::new(ProvenancedType {
             ty: self.clone_type(&function_type.ty)?,
             provenance: function_type.provenance.clone(),
-        };
+        });
         self.type_work
             .charge(arity.saturating_mul(2))
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut domains = Vec::new();
+        let mut domains = ProvenancedTypeBuffer(Vec::new());
         domains
             .try_reserve(arity)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -5392,16 +6027,16 @@ impl Elaborator {
                     None,
                 ));
             }
-            let (domain, codomain) = remainder.into_function_parts()?;
+            let (domain, codomain) = remainder.into_inner().into_function_parts()?;
             domains.push(domain);
-            remainder = codomain;
+            remainder = ProvenancedTypeOwner::new(codomain);
         }
 
         let mut parameters = Vec::new();
         parameters
             .try_reserve(arity)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for domain in &domains {
+        for domain in domains.iter() {
             let parameter_type = self.clone_type(&domain.ty)?;
             parameters.push(self.builder.binder(
                 parameter_type,
@@ -5415,18 +6050,18 @@ impl Elaborator {
         self.type_work
             .charge(arity)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut domain_types = Vec::new();
+        let mut domain_types = OwnedTypeBuffer(Vec::new());
         domain_types
             .try_reserve(arity)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for domain in &domains {
+        for domain in domains.iter() {
             domain_types.push(self.clone_type(&domain.ty)?);
         }
 
         self.type_work
             .charge(equations.len().saturating_mul(2))
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut coverage_matrix = Vec::new();
+        let mut coverage_matrix = CorePatternMatrixBuffer(Vec::new());
         coverage_matrix
             .try_reserve(equations.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -5439,11 +6074,11 @@ impl Elaborator {
             self.type_work
                 .charge(arity)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let mut patterns = Vec::new();
+            let mut patterns = CorePatternBuffer(Vec::new());
             patterns
                 .try_reserve(arity)
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for (pattern, domain) in clause.patterns.iter().zip(&domains) {
+            for (pattern, domain) in clause.patterns.iter().zip(domains.iter()) {
                 patterns.push(
                     self.check_core_pattern(
                         pattern,
@@ -5473,22 +6108,24 @@ impl Elaborator {
                 ));
             }
             let expected_type = self.clone_type(&remainder.ty)?;
-            let body_result = self.elaborate_expression_with_context(
-                ElaborationTask::Check {
-                    expression: &clause.body,
-                    expected: ProvenancedType {
-                        ty: expected_type,
-                        provenance: remainder.provenance.clone(),
+            let body_result = self
+                .elaborate_expression_with_context(
+                    ElaborationTask::Check {
+                        expression: &clause.body,
+                        expected: ProvenancedType {
+                            ty: expected_type,
+                            provenance: remainder.provenance.clone(),
+                        },
+                        kind: CheckKind::Definition {
+                            result_cause: remainder.provenance.span().unwrap_or(definition_span),
+                        },
                     },
-                    kind: CheckKind::Definition {
-                        result_cause: remainder.provenance.span().unwrap_or(definition_span),
-                    },
-                },
-                context,
-            );
+                    context,
+                )
+                .map(TypedNodeOwner::new);
             self.remove_pattern_binders(context, &binder_ids)?;
             let body = body_result?;
-            coverage_matrix.push(patterns);
+            coverage_matrix.push(patterns.into_vec());
             clause_bodies.push((body.node, clause.span));
         }
         if let Some(witness) = missing_witness_for_types_with_budget(
@@ -5514,13 +6151,16 @@ impl Elaborator {
             if !row.is_empty() {
                 return Err(invalid_state());
             }
-            let CorePattern {
-                ty,
-                origin,
-                kind: CorePatternKind::Binder(parameter),
-            } = pattern
-            else {
-                return Err(invalid_state());
+            let (ty, origin, parameter) = match pattern.into_inner() {
+                CorePattern {
+                    ty,
+                    origin,
+                    kind: CorePatternKind::Binder(parameter),
+                } => (ty, origin, parameter),
+                pattern => {
+                    pattern.discard_iteratively();
+                    return Err(invalid_state());
+                }
             };
             discard_type_iteratively(ty);
             discard_origin_iteratively(origin);
@@ -5536,18 +6176,21 @@ impl Elaborator {
             let mut arms = Vec::new();
             arms.try_reserve(clause_bodies.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for (patterns, (body, clause_span)) in coverage_matrix.into_iter().zip(clause_bodies) {
+            for (patterns, (body, clause_span)) in
+                coverage_matrix.into_sequence().zip(clause_bodies)
+            {
+                let mut patterns = CorePatternBuffer(patterns);
                 let arm_pattern = if patterns.len() == 1 {
-                    patterns.into_iter().next().ok_or_else(invalid_state)?
+                    patterns.pop().ok_or_else(invalid_state)?.into_inner()
                 } else {
                     self.type_work.charge(1).map_err(|()| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
-                    let mut tuple_domains = Vec::new();
+                    let mut tuple_domains = OwnedTypeBuffer(Vec::new());
                     tuple_domains.try_reserve(arity).map_err(|_| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
-                    for domain in &domains {
+                    for domain in domains.iter() {
                         tuple_domains.push(self.clone_type(&domain.ty)?);
                     }
                     CorePattern::new(
@@ -5569,7 +6212,7 @@ impl Elaborator {
             arguments
                 .try_reserve(parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for (parameter, domain) in parameters.iter().zip(&domains) {
+            for (parameter, domain) in parameters.iter().zip(domains.iter()) {
                 let variable_type = self.clone_type(&domain.ty)?;
                 arguments.push(self.builder.variable(
                     parameter.id(),
@@ -5583,11 +6226,11 @@ impl Elaborator {
                 self.type_work
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let mut tuple_domains = Vec::new();
+                let mut tuple_domains = OwnedTypeBuffer(Vec::new());
                 tuple_domains
                     .try_reserve(domain_types.len())
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                for domain in &domain_types {
+                for domain in domain_types.iter() {
                     tuple_domains.push(self.clone_type(domain)?);
                 }
                 let ty = Type::Tuple(tuple_domains.into_boxed_slice());
@@ -5602,13 +6245,16 @@ impl Elaborator {
                 Origin::Source(definition_span),
             )?
         };
-        let mut body_type = self.clone_type(&remainder.ty)?;
-        for (parameter, domain) in parameters.into_iter().zip(&domains).rev() {
-            let domain_type = self.clone_type(&domain.ty)?;
+        let mut body_type = IterativeTypeOwner::new(self.clone_type(&remainder.ty)?);
+        for (parameter, domain) in parameters.into_iter().zip(domains.iter()).rev() {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let ty = Type::Function(Box::new(domain_type), Box::new(body_type));
+            let domain_type = self.clone_type(&domain.ty)?;
+            let ty = IterativeTypeOwner::new(Type::Function(
+                Box::new(domain_type),
+                Box::new(body_type.into_inner()),
+            ));
             let core_ty = self.clone_type(&ty)?;
             body_node = self.builder.function(
                 parameter,
@@ -5624,10 +6270,15 @@ impl Elaborator {
         if !same_type(&body_type, &function_type.ty) {
             return Err(invalid_state());
         }
+        let ProvenancedType {
+            ty: original_function_type,
+            provenance,
+        } = function_type.into_inner();
+        discard_type_iteratively(original_function_type);
         Ok(TypedNode {
             node: body_node,
-            ty: body_type,
-            provenance: function_type.provenance,
+            ty: body_type.into_inner(),
+            provenance,
         })
     }
 
@@ -5638,19 +6289,22 @@ impl Elaborator {
         context: &mut TypeContext,
         definition_span: Span,
     ) -> Result<TypedNode, TypeError> {
+        let function_type = ProvenancedTypeOwner::new(function_type);
         let (domain_ty, codomain_ty) =
             clone_function_parts_with_budget(&function_type.ty, &mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let domain_ty = IterativeTypeOwner::new(domain_ty);
+        let codomain_ty = IterativeTypeOwner::new(codomain_ty);
         let (domain_provenance, codomain_provenance) =
             function_type.provenance.function_parts(&function_type.ty)?;
-        let domain = ProvenancedType {
-            ty: domain_ty,
+        let domain = ProvenancedTypeOwner::new(ProvenancedType {
+            ty: domain_ty.into_inner(),
             provenance: domain_provenance,
-        };
-        let codomain = ProvenancedType {
-            ty: codomain_ty,
+        });
+        let codomain = ProvenancedTypeOwner::new(ProvenancedType {
+            ty: codomain_ty.into_inner(),
             provenance: codomain_provenance,
-        };
+        });
         let mut binder_ids = Vec::new();
         let pattern = if operational.header.parameters.len() == 1 {
             self.check_core_pattern(
@@ -5671,7 +6325,7 @@ impl Elaborator {
             self.type_work
                 .charge(types.len())
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let mut elements = Vec::new();
+            let mut elements = CorePatternBuffer(Vec::new());
             elements
                 .try_reserve(types.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -5693,6 +6347,10 @@ impl Elaborator {
                 CorePatternKind::Tuple(elements.into_boxed_slice()),
             )
         };
+        let mut checked_pattern = CorePatternOwner::new(Some(pattern));
+        let pattern = checked_pattern
+            .take()
+            .expect("one checked operational pattern");
         let (parameter, retained_pattern) = match pattern {
             CorePattern {
                 ty,
@@ -5704,28 +6362,31 @@ impl Elaborator {
                 (binder, None)
             }
             pattern => {
+                let mut pattern = CorePatternOwner::new(Some(pattern));
                 let binder_type = self.clone_type(&domain.ty)?;
-                (
-                    self.builder
-                        .binder(binder_type, Origin::Source(operational.header.span))?,
-                    Some(pattern),
-                )
+                let binder = self
+                    .builder
+                    .binder(binder_type, Origin::Source(operational.header.span))?;
+                (binder, pattern.take())
             }
         };
-        let body_result = self.elaborate_expression_with_context(
-            ElaborationTask::CheckBlock {
-                block: &operational.body,
-                expected: codomain,
-                kind: CheckKind::Definition {
-                    result_cause: operational.header.result_type.span,
+        let mut retained_pattern = CorePatternOwner::new(retained_pattern);
+        let body_result = self
+            .elaborate_expression_with_context(
+                ElaborationTask::CheckBlock {
+                    block: &operational.body,
+                    expected: codomain.into_inner(),
+                    kind: CheckKind::Definition {
+                        result_cause: operational.header.result_type.span,
+                    },
                 },
-            },
-            context,
-        );
+                context,
+            )
+            .map(TypedNodeOwner::new);
         self.remove_pattern_binders(context, &binder_ids)?;
         let mut body = body_result?;
-        if let Some(pattern) = retained_pattern {
-            let mut matrix = vec![vec![pattern]];
+        if let Some(pattern) = retained_pattern.take() {
+            let mut matrix = CorePatternMatrixBuffer(vec![vec![pattern]]);
             if let Some(witness) = missing_witness_for_types_with_budget(
                 &matrix,
                 std::slice::from_ref(&domain.ty),
@@ -5740,7 +6401,7 @@ impl Elaborator {
                 ));
             }
             let mut row = matrix.pop().ok_or_else(invalid_state)?;
-            let pattern = row.pop().ok_or_else(invalid_state)?;
+            let mut pattern = row.pop().ok_or_else(invalid_state)?;
             if !row.is_empty() {
                 return Err(invalid_state());
             }
@@ -5750,17 +6411,18 @@ impl Elaborator {
                 scrutinee_type,
                 Origin::Source(operational.header.span),
             )?;
-            let core_body_type = self.clone_type(&body.ty)?;
-            body.node = self.builder.match_expression(
+            let core_body_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+            let node = self.builder.match_expression(
                 scrutinee,
                 vec![CoreMatchArm::new(
-                    pattern,
+                    pattern.take().ok_or_else(invalid_state)?,
                     body.node,
                     Origin::Source(operational.header.span),
                 )],
-                core_body_type,
+                core_body_type.into_inner(),
                 Origin::Source(operational.header.span),
             )?;
+            body.set_node(node);
         }
         let core_function_type = self.clone_type(&function_type.ty)?;
         let node = self.builder.function(
@@ -5772,6 +6434,7 @@ impl Elaborator {
                 reason: GeneratedReason::FunctionLowering,
             },
         )?;
+        let function_type = function_type.into_inner();
         Ok(TypedNode {
             node,
             ty: function_type.ty,
@@ -6275,16 +6938,9 @@ fn check_implementation_header(
     }
 
     let local_interface_owner = implementation.interface.id.module() == module.module();
-    let local_nominal_owner = match implementation.argument.ty {
-        Type::Nominal(id) | Type::AppliedNominal(id, _) => id.module() == module.module(),
-        Type::Int
-        | Type::Bool
-        | Type::Unit
-        | Type::Tuple(_)
-        | Type::Function(_, _)
-        | Type::Forall(_, _)
-        | Type::Variable(_)
-        | Type::Inference(_) => false,
+    let local_nominal_owner = match implementation.argument.ty.outer_nominal() {
+        Some(id) => id.module() == module.module(),
+        None => false,
     };
     if !local_interface_owner && !local_nominal_owner {
         let mut diagnostic = Diagnostic::new(
@@ -6680,10 +7336,16 @@ where
                     return Ok(true);
                 }
             }
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+            Type::Tuple(elements) => {
                 budget.charge(elements.len())?;
                 pending.try_reserve(elements.len()).map_err(|_| ())?;
                 pending.extend(elements.iter().rev());
+            }
+            Type::Application(function, argument) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push(argument);
+                pending.push(function);
             }
             Type::Function(domain, codomain) => {
                 budget.charge(2)?;
@@ -7228,6 +7890,126 @@ struct MatchProgress<'a> {
     result_type: Option<(Type, TypeProvenance, CheckKind)>,
 }
 
+struct MatchProgressOwner<'a>(Option<Box<MatchProgress<'a>>>);
+
+impl<'a> MatchProgressOwner<'a> {
+    fn new(progress: Box<MatchProgress<'a>>) -> Self {
+        Self(Some(progress))
+    }
+
+    fn into_inner(mut self) -> Box<MatchProgress<'a>> {
+        self.0.take().expect("match progress transfers once")
+    }
+
+    fn set_result_type(
+        &mut self,
+        result: ProvenancedTypeOwner,
+        kind: CheckKind,
+    ) -> Result<(), TypeError> {
+        let progress = self.0.as_deref_mut().expect("match progress remains live");
+        if progress.result_type.is_some() {
+            return Err(invalid_state());
+        }
+        let ProvenancedType { ty, provenance } = result.into_inner();
+        progress.result_type = Some((ty, provenance, kind));
+        Ok(())
+    }
+
+    fn take_result_type(&mut self) -> Option<(ProvenancedTypeOwner, CheckKind)> {
+        self.0
+            .as_deref_mut()
+            .expect("match progress remains live")
+            .result_type
+            .take()
+            .map(|(ty, provenance, kind)| {
+                (
+                    ProvenancedTypeOwner::new(ProvenancedType { ty, provenance }),
+                    kind,
+                )
+            })
+    }
+
+    fn push_row(&mut self, row: Vec<CorePattern>) {
+        self.0
+            .as_deref_mut()
+            .expect("match progress remains live")
+            .matrix
+            .push(row);
+    }
+
+    fn push_arm_body(&mut self, body: (NodeId, Span)) {
+        self.0
+            .as_deref_mut()
+            .expect("match progress remains live")
+            .arm_bodies
+            .push(body);
+    }
+
+    fn take_matrix(&mut self) -> CorePatternMatrixBuffer {
+        CorePatternMatrixBuffer(std::mem::take(
+            &mut self
+                .0
+                .as_deref_mut()
+                .expect("match progress remains live")
+                .matrix,
+        ))
+    }
+
+    fn take_arm_bodies(&mut self) -> Vec<(NodeId, Span)> {
+        std::mem::take(
+            &mut self
+                .0
+                .as_deref_mut()
+                .expect("match progress remains live")
+                .arm_bodies,
+        )
+    }
+
+    fn replace_scrutinee_type(&mut self, ty: Type) {
+        replace_type_iteratively(
+            &mut self
+                .0
+                .as_deref_mut()
+                .expect("match progress remains live")
+                .scrutinee
+                .ty,
+            ty,
+        );
+    }
+
+    fn set_scrutinee_provenance(&mut self, provenance: TypeProvenance) {
+        self.0
+            .as_deref_mut()
+            .expect("match progress remains live")
+            .scrutinee
+            .provenance = provenance;
+    }
+
+    fn advance_arm(&mut self) {
+        let progress = self.0.as_deref_mut().expect("match progress remains live");
+        progress.next_arm = progress
+            .next_arm
+            .checked_add(1)
+            .expect("match arm progress is bounded by the source arm vector");
+    }
+}
+
+impl<'a> Deref for MatchProgressOwner<'a> {
+    type Target = MatchProgress<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().expect("match progress remains live")
+    }
+}
+
+impl Drop for MatchProgressOwner<'_> {
+    fn drop(&mut self) {
+        if let Some(progress) = self.0.take() {
+            discard_match_progress(progress);
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum FunctionBody<'a> {
     Block(&'a ResolvedBlock),
@@ -7279,11 +8061,44 @@ struct ElaboratedBinding {
     initializer: NodeId,
 }
 
+struct ElaboratedBindingBuffer(Vec<ElaboratedBinding>);
+
+impl Drop for ElaboratedBindingBuffer {
+    fn drop(&mut self) {
+        for binding in self.0.drain(..) {
+            binding.binder.discard_metadata();
+        }
+    }
+}
+
+struct ElaboratedGroupBuffer(Vec<(ElaboratedBindingBuffer, Span)>);
+
+struct CoreRecursiveMemberBuffer(Vec<(TypedBinder, NodeId)>);
+
+impl Drop for CoreRecursiveMemberBuffer {
+    fn drop(&mut self) {
+        for (binder, _) in self.0.drain(..) {
+            binder.discard_metadata();
+        }
+    }
+}
+
 struct PreparedGlobals {
     context: TypeContext,
     globals: Vec<ElaboratedBinding>,
     binders: HashMap<BinderId, TypedBinder>,
     quantifiers: HashMap<BinderId, Box<[TypeVariableId]>>,
+}
+
+impl Drop for PreparedGlobals {
+    fn drop(&mut self) {
+        for binding in self.globals.drain(..) {
+            binding.binder.discard_metadata();
+        }
+        for (_, binder) in self.binders.drain() {
+            binder.discard_metadata();
+        }
+    }
 }
 
 enum ElaboratedDeclaration {
@@ -7301,6 +8116,503 @@ enum ElaboratedDeclaration {
         members: Vec<(TypedBinder, NodeId)>,
         origin: Origin,
     },
+}
+
+struct ElaborationTaskBuffer<'a>(Vec<ElaborationTask<'a>>);
+
+impl<'a> Deref for ElaborationTaskBuffer<'a> {
+    type Target = Vec<ElaborationTask<'a>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> ElaborationTaskBuffer<'a> {
+    fn push(&mut self, task: ElaborationTask<'a>) {
+        self.0.push(task);
+    }
+
+    fn pop(&mut self) -> Option<ElaborationTask<'a>> {
+        self.0.pop()
+    }
+}
+
+impl Drop for ElaborationTaskBuffer<'_> {
+    fn drop(&mut self) {
+        while let Some(task) = self.0.pop() {
+            discard_elaboration_task(task);
+        }
+    }
+}
+
+struct TypedNodeBuffer(Vec<TypedNode>);
+
+impl Deref for TypedNodeBuffer {
+    type Target = Vec<TypedNode>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TypedNodeBuffer {
+    fn push(&mut self, node: TypedNode) {
+        self.0.push(node);
+    }
+
+    fn pop(&mut self) -> Option<TypedNodeOwner> {
+        self.0.pop().map(TypedNodeOwner::new)
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
+    }
+
+    fn reverse(&mut self) {
+        self.0.reverse();
+    }
+}
+
+impl Drop for TypedNodeBuffer {
+    fn drop(&mut self) {
+        while let Some(node) = self.0.pop() {
+            discard_typed_node(node);
+        }
+    }
+}
+
+struct ElaboratedDeclarationBuffer(Vec<ElaboratedDeclaration>);
+
+struct ElaboratedDeclarationOwner(Option<ElaboratedDeclaration>);
+
+impl ElaboratedDeclarationOwner {
+    fn new(declaration: ElaboratedDeclaration) -> Self {
+        Self(Some(declaration))
+    }
+
+    fn into_inner(mut self) -> ElaboratedDeclaration {
+        self.0
+            .take()
+            .expect("an elaborated declaration transfers once")
+    }
+}
+
+impl Drop for ElaboratedDeclarationOwner {
+    fn drop(&mut self) {
+        if let Some(declaration) = self.0.take() {
+            discard_elaborated_declaration(declaration);
+        }
+    }
+}
+
+impl Deref for ElaboratedDeclarationBuffer {
+    type Target = Vec<ElaboratedDeclaration>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ElaboratedDeclarationBuffer {
+    fn push(&mut self, declaration: ElaboratedDeclaration) {
+        self.0.push(declaration);
+    }
+
+    fn pop(&mut self) -> Option<ElaboratedDeclarationOwner> {
+        self.0.pop().map(ElaboratedDeclarationOwner::new)
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
+    }
+}
+
+impl Drop for ElaboratedDeclarationBuffer {
+    fn drop(&mut self) {
+        while let Some(declaration) = self.0.pop() {
+            discard_elaborated_declaration(declaration);
+        }
+    }
+}
+
+struct OwnedTypeBuffer(Vec<Type>);
+
+impl Deref for OwnedTypeBuffer {
+    type Target = Vec<Type>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl OwnedTypeBuffer {
+    fn push(&mut self, ty: Type) {
+        self.0.push(ty);
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn into_vec(mut self) -> Vec<Type> {
+        std::mem::take(&mut self.0)
+    }
+
+    fn into_boxed_slice(mut self) -> Box<[Type]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for OwnedTypeBuffer {
+    fn drop(&mut self) {
+        while let Some(ty) = self.0.pop() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+struct CorePatternOwner(Option<CorePattern>);
+
+impl CorePatternOwner {
+    fn new(pattern: Option<CorePattern>) -> Self {
+        Self(pattern)
+    }
+
+    fn take(&mut self) -> Option<CorePattern> {
+        self.0.take()
+    }
+
+    fn into_inner(mut self) -> CorePattern {
+        self.0.take().expect("a core pattern transfers once")
+    }
+}
+
+impl Deref for CorePatternOwner {
+    type Target = CorePattern;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("core pattern remains live")
+    }
+}
+
+impl Drop for CorePatternOwner {
+    fn drop(&mut self) {
+        if let Some(pattern) = self.0.take() {
+            pattern.discard_iteratively();
+        }
+    }
+}
+
+struct CorePatternBuffer(Vec<CorePattern>);
+
+impl Deref for CorePatternBuffer {
+    type Target = Vec<CorePattern>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl CorePatternBuffer {
+    fn push(&mut self, pattern: CorePattern) {
+        self.0.push(pattern);
+    }
+
+    fn pop(&mut self) -> Option<CorePatternOwner> {
+        self.0
+            .pop()
+            .map(|pattern| CorePatternOwner::new(Some(pattern)))
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn into_vec(mut self) -> Vec<CorePattern> {
+        std::mem::take(&mut self.0)
+    }
+
+    fn into_boxed_slice(mut self) -> Box<[CorePattern]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+struct CorePatternMatrixBuffer(Vec<Vec<CorePattern>>);
+
+impl Deref for CorePatternMatrixBuffer {
+    type Target = Vec<Vec<CorePattern>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl CorePatternMatrixBuffer {
+    fn push(&mut self, row: Vec<CorePattern>) {
+        self.0.push(row);
+    }
+
+    fn pop(&mut self) -> Option<CorePatternBuffer> {
+        self.0.pop().map(CorePatternBuffer)
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn into_sequence(mut self) -> CorePatternRowSequence {
+        CorePatternRowSequence(std::mem::take(&mut self.0).into_iter())
+    }
+}
+
+impl Drop for CorePatternMatrixBuffer {
+    fn drop(&mut self) {
+        for row in self.0.drain(..) {
+            for pattern in row {
+                pattern.discard_iteratively();
+            }
+        }
+    }
+}
+
+struct CorePatternRowSequence(std::vec::IntoIter<Vec<CorePattern>>);
+
+impl Iterator for CorePatternRowSequence {
+    type Item = Vec<CorePattern>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
+impl Drop for CorePatternRowSequence {
+    fn drop(&mut self) {
+        for row in self.0.by_ref() {
+            for pattern in row {
+                pattern.discard_iteratively();
+            }
+        }
+    }
+}
+
+struct ProvenancedTypeBuffer(Vec<ProvenancedType>);
+
+impl Deref for ProvenancedTypeBuffer {
+    type Target = Vec<ProvenancedType>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ProvenancedTypeBuffer {
+    fn push(&mut self, value: ProvenancedType) {
+        self.0.push(value);
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+}
+
+impl Drop for ProvenancedTypeBuffer {
+    fn drop(&mut self) {
+        for value in self.0.drain(..) {
+            discard_provenanced_type(value);
+        }
+    }
+}
+
+struct EvidenceSpecificationBuffer(Vec<(RequirementId, MethodId, Type)>);
+
+impl Deref for EvidenceSpecificationBuffer {
+    type Target = Vec<(RequirementId, MethodId, Type)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl EvidenceSpecificationBuffer {
+    fn push(&mut self, specification: (RequirementId, MethodId, Type)) {
+        self.0.push(specification);
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn into_sequence(mut self) -> EvidenceSpecificationSequence {
+        EvidenceSpecificationSequence(std::mem::take(&mut self.0).into_iter())
+    }
+}
+
+impl Drop for EvidenceSpecificationBuffer {
+    fn drop(&mut self) {
+        for (_, _, ty) in self.0.drain(..) {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+struct EvidenceSpecificationSequence(std::vec::IntoIter<(RequirementId, MethodId, Type)>);
+
+impl Iterator for EvidenceSpecificationSequence {
+    type Item = (RequirementId, MethodId, Type);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
+impl Drop for EvidenceSpecificationSequence {
+    fn drop(&mut self) {
+        for (_, _, ty) in self.0.by_ref() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+impl Drop for CorePatternBuffer {
+    fn drop(&mut self) {
+        for pattern in self.0.drain(..) {
+            pattern.discard_iteratively();
+        }
+    }
+}
+
+fn discard_provenanced_type(provenanced: ProvenancedType) {
+    discard_type_iteratively(provenanced.ty);
+    drop(provenanced.provenance);
+}
+
+fn discard_typed_node(node: TypedNode) {
+    discard_type_iteratively(node.ty);
+    drop(node.provenance);
+}
+
+fn discard_match_progress(progress: Box<MatchProgress<'_>>) {
+    let MatchProgress {
+        scrutinee,
+        matrix,
+        result_type,
+        ..
+    } = *progress;
+    discard_typed_node(scrutinee);
+    for row in matrix {
+        for pattern in row {
+            pattern.discard_iteratively();
+        }
+    }
+    if let Some((ty, provenance, _)) = result_type {
+        discard_type_iteratively(ty);
+        drop(provenance);
+    }
+}
+
+fn discard_elaboration_task(task: ElaborationTask<'_>) {
+    match task {
+        ElaborationTask::Synthesize { .. }
+        | ElaborationTask::AfterApplicationFunction { .. }
+        | ElaborationTask::AfterLeft { .. }
+        | ElaborationTask::CheckRecursiveMember(_)
+        | ElaborationTask::BeginRecursiveGroup(_)
+        | ElaborationTask::FinishRecursiveGroup { .. }
+        | ElaborationTask::FinishBlock { .. } => {}
+        ElaborationTask::Check { expected, .. }
+        | ElaborationTask::CheckBlock { expected, .. }
+        | ElaborationTask::FinishCheck { expected, .. } => {
+            discard_provenanced_type(expected);
+        }
+        ElaborationTask::CheckFunction {
+            domain,
+            codomain,
+            function_type,
+            presentation,
+            ..
+        } => {
+            discard_provenanced_type(domain);
+            discard_provenanced_type(codomain);
+            discard_provenanced_type(function_type);
+            discard_origin_iteratively(presentation);
+        }
+        ElaborationTask::FinishFunction {
+            binder,
+            pattern,
+            domain,
+            ty,
+            origin,
+            ..
+        } => {
+            binder.discard_metadata();
+            if let Some(pattern) = pattern {
+                pattern.discard_iteratively();
+            }
+            if let Some(domain) = domain {
+                discard_type_iteratively(domain);
+            }
+            discard_type_iteratively(ty);
+            discard_origin_iteratively(origin);
+        }
+        ElaborationTask::FinishApplication {
+            function, codomain, ..
+        } => {
+            discard_typed_node(function);
+            discard_provenanced_type(codomain);
+        }
+        ElaborationTask::AfterMatchScrutinee { expected, .. } => {
+            if let Some((expected, _)) = expected {
+                discard_provenanced_type(expected);
+            }
+        }
+        ElaborationTask::FinishMatchArm { progress, row, .. } => {
+            discard_match_progress(progress);
+            for pattern in row {
+                pattern.discard_iteratively();
+            }
+        }
+        ElaborationTask::FinishMatch(progress) => discard_match_progress(progress),
+        ElaborationTask::AfterRight { left, .. } => discard_typed_node(left),
+        ElaborationTask::BeginBinding {
+            expected,
+            finish_expected,
+            ..
+        } => {
+            if let Some(expected) = expected {
+                discard_provenanced_type(expected);
+            }
+            if let Some(expected) = finish_expected {
+                discard_provenanced_type(expected);
+            }
+        }
+        ElaborationTask::FinishBinding { expected, .. } => {
+            if let Some(expected) = expected {
+                discard_provenanced_type(expected);
+            }
+        }
+    }
+}
+
+fn discard_elaborated_declaration(declaration: ElaboratedDeclaration) {
+    match declaration {
+        ElaboratedDeclaration::Binding { binder, origin, .. } => {
+            binder.discard_metadata();
+            discard_origin_iteratively(origin);
+        }
+        ElaboratedDeclaration::PatternBinding {
+            pattern, origin, ..
+        } => {
+            pattern.discard_iteratively();
+            discard_origin_iteratively(origin);
+        }
+        ElaboratedDeclaration::Recursive { members, origin } => {
+            for (binder, _) in members {
+                binder.discard_metadata();
+            }
+            discard_origin_iteratively(origin);
+        }
+    }
 }
 
 fn operational_domain(
@@ -7341,7 +8653,7 @@ fn schedule_block<'a>(
     block: &'a ResolvedBlock,
     expected: Option<(ProvenancedType, CheckKind)>,
     synthesis_cause: Option<SynthesisCause>,
-    tasks: &mut Vec<ElaborationTask<'a>>,
+    tasks: &mut ElaborationTaskBuffer<'a>,
     declaration_start: usize,
     type_work: &mut TypeWorkBudget,
 ) -> Result<(), TypeError> {
@@ -7374,7 +8686,8 @@ fn schedule_block<'a>(
                     .map(|annotation| {
                         ProvenancedType::from_resolved_with_budget(annotation, type_work)
                     })
-                    .transpose()?;
+                    .transpose()?
+                    .map(ProvenancedTypeOwner::new);
                 let finish_expected = expected
                     .as_ref()
                     .map(|expected| {
@@ -7387,7 +8700,7 @@ fn schedule_block<'a>(
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 tasks.push(ElaborationTask::BeginBinding {
                     binding,
-                    expected,
+                    expected: expected.map(ProvenancedTypeOwner::into_inner),
                     finish_expected,
                 });
             }
@@ -7407,13 +8720,15 @@ fn check_mismatch(
     expected_cause: Option<Span>,
     registry: &ResolvedRegistry,
 ) -> TypeError {
+    let expected = IterativeTypeOwner::new(expected);
+    let found = IterativeTypeOwner::new(found);
     match kind {
         CheckKind::General => TypeError::Mismatch(TypeMismatch {
             span,
             expected_display: registry.display_source_type(&expected),
             found_display: registry.display_source_type(&found),
-            expected: Box::new(expected),
-            found: Box::new(found),
+            expected: Box::new(expected.into_inner()),
+            found: Box::new(found.into_inner()),
         }),
         CheckKind::Argument {
             function_span,
@@ -7577,7 +8892,7 @@ fn schedule_left<'a>(
     primitive: Primitive,
     whole_span: Span,
     binary: &'a crate::resolved::ResolvedBinaryExpr,
-    tasks: &mut Vec<ElaborationTask<'a>>,
+    tasks: &mut ElaborationTaskBuffer<'a>,
 ) {
     tasks.push(ElaborationTask::AfterLeft {
         primitive,
@@ -7674,13 +8989,14 @@ fn validate_recursive_member(
             Ok(())
         }
         Type::Function(_, _) => Err(unsafe_recursive_initializer(group, member)),
-        Type::Nominal(owner) | Type::AppliedNominal(owner, _) => {
+        ty if ty.outer_nominal().is_some() => {
+            let owner = ty.outer_nominal().ok_or_else(invalid_state)?;
             let payload = match &member.initializer.kind {
                 ResolvedExprKind::Constructor(occurrence) => {
                     let Some(constructor) = registry.constructor(occurrence.constructor) else {
                         return Err(invalid_state());
                     };
-                    if constructor.owner != *owner || constructor.payload.is_some() {
+                    if constructor.owner != owner || constructor.payload.is_some() {
                         return Err(unsafe_recursive_root(group, member));
                     }
                     None
@@ -7693,7 +9009,7 @@ fn validate_recursive_member(
                     let Some(constructor) = registry.constructor(occurrence.constructor) else {
                         return Err(invalid_state());
                     };
-                    if constructor.owner != *owner || constructor.payload.is_none() {
+                    if constructor.owner != owner || constructor.payload.is_none() {
                         return Err(unsafe_recursive_root(group, member));
                     }
                     Some(application.argument.as_ref())
@@ -7714,6 +9030,8 @@ fn validate_recursive_member(
         | Type::Bool
         | Type::Unit
         | Type::Tuple(_)
+        | Type::Nominal(_)
+        | Type::Application(_, _)
         | Type::Variable(_)
         | Type::Inference(_)
         | Type::Forall(_, _) => Err(unsafe_recursive_root(group, member)),
@@ -7964,22 +9282,23 @@ enum PublicTypeAdmissionError {
 
 fn validate_and_charge_public_monotype(
     ty: &Type,
+    registry: &ResolvedRegistry,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), PublicTypeAdmissionError> {
     enum Task<'a> {
-        Visit(&'a Type, usize),
+        Visit(&'a Type, usize, usize),
         Sequence(std::slice::Iter<'a, Type>, usize),
     }
 
-    let mut work = vec![Task::Visit(ty, 0)];
+    let mut work = vec![Task::Visit(ty, 0, 0)];
     while let Some(task) = work.pop() {
-        let Task::Visit(ty, depth) = task else {
+        let Task::Visit(ty, depth, applied_arguments) = task else {
             let Task::Sequence(mut remaining, depth) = task else {
                 unreachable!("public type admission task is closed")
             };
             if let Some(next) = remaining.next() {
                 work.push(Task::Sequence(remaining, depth));
-                work.push(Task::Visit(next, depth));
+                work.push(Task::Visit(next, depth, 0));
             }
             continue;
         };
@@ -7987,25 +9306,51 @@ fn validate_and_charge_public_monotype(
             .charge(1)
             .map_err(|()| PublicTypeAdmissionError::Resource)?;
         match ty {
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+            Type::Tuple(elements) if applied_arguments == 0 => {
                 let child_depth = depth.saturating_add(1);
                 if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
                     return Err(PublicTypeAdmissionError::Invalid);
                 }
                 work.push(Task::Sequence(elements.iter(), child_depth));
             }
-            Type::Function(domain, codomain) => {
+            Type::Tuple(_) => return Err(PublicTypeAdmissionError::Invalid),
+            Type::Application(function, argument) => {
                 let child_depth = depth.saturating_add(1);
                 if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
                     return Err(PublicTypeAdmissionError::Invalid);
                 }
-                work.push(Task::Visit(codomain, child_depth));
-                work.push(Task::Visit(domain, child_depth));
+                work.push(Task::Visit(argument, child_depth, 0));
+                work.push(Task::Visit(
+                    function,
+                    depth,
+                    applied_arguments.saturating_add(1),
+                ));
             }
-            Type::Inference(_) | Type::Forall(_, _) => {
+            Type::Function(domain, codomain) if applied_arguments == 0 => {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return Err(PublicTypeAdmissionError::Invalid);
+                }
+                work.push(Task::Visit(codomain, child_depth, 0));
+                work.push(Task::Visit(domain, child_depth, 0));
+            }
+            Type::Function(_, _) | Type::Inference(_) | Type::Forall(_, _) => {
                 return Err(PublicTypeAdmissionError::Invalid);
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
+            Type::Int | Type::Bool | Type::Unit if applied_arguments != 0 => {
+                return Err(PublicTypeAdmissionError::Invalid);
+            }
+            Type::Nominal(id) => {
+                let Some(parameters) = registry.nominal_parameters(*id) else {
+                    return Err(PublicTypeAdmissionError::Invalid);
+                };
+                if parameters.len() != applied_arguments {
+                    return Err(PublicTypeAdmissionError::Invalid);
+                }
+            }
+            Type::Variable(_) if applied_arguments == 0 => {}
+            Type::Variable(_) => return Err(PublicTypeAdmissionError::Invalid),
+            Type::Int | Type::Bool | Type::Unit => {}
         }
     }
     Ok(())
@@ -8061,9 +9406,12 @@ fn charge_type_provenance_nodes(ty: &Type, budget: &mut TypeWorkBudget) -> Resul
     let mut work = vec![ty];
     while let Some(ty) = work.pop() {
         budget.charge(1)?;
-        if let Type::Function(domain, codomain) = ty {
-            work.push(codomain);
-            work.push(domain);
+        match ty {
+            Type::Function(domain, codomain) | Type::Application(domain, codomain) => {
+                work.push(codomain);
+                work.push(domain);
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -8077,11 +9425,20 @@ fn unknown_provenance_with_budget(
     Ok(TypeProvenance::unknown(ty))
 }
 
+fn at_span_provenance_with_budget(
+    ty: &Type,
+    span: Span,
+    budget: &mut TypeWorkBudget,
+) -> Result<TypeProvenance, ()> {
+    charge_type_provenance_nodes(ty, budget)?;
+    Ok(TypeProvenance::at_span(ty, span))
+}
+
 fn constructor_replacements_with_budget(
     parameters: &[crate::resolved::ResolvedTypeVariable],
-    arguments: &[Type],
+    arguments: &[&Type],
     budget: &mut TypeWorkBudget,
-) -> Result<HashMap<TypeVariableId, Type>, ()> {
+) -> Result<TypeReplacementBuffer, ()> {
     if parameters.len() != arguments.len() {
         return Err(());
     }
@@ -8089,10 +9446,10 @@ fn constructor_replacements_with_budget(
     for argument in arguments {
         charge_type_cells(argument, budget)?;
     }
-    let mut replacements = HashMap::new();
+    let mut replacements = TypeReplacementBuffer::new();
     replacements.try_reserve(arguments.len()).map_err(|_| ())?;
     for (parameter, argument) in parameters.iter().zip(arguments) {
-        replacements.insert(parameter.id, zonk_type(argument, &HashMap::new()));
+        replacements.try_insert_unique(parameter.id, zonk_type(argument, &HashMap::new()))?;
     }
     Ok(replacements)
 }
@@ -8133,10 +9490,12 @@ fn compare_concrete_types(
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
                 work.push(Task::Sequence(left.iter(), right.iter()));
             }
-            (Type::AppliedNominal(left_owner, left), Type::AppliedNominal(right_owner, right))
-                if left_owner == right_owner && left.len() == right.len() =>
-            {
-                work.push(Task::Sequence(left.iter(), right.iter()));
+            (
+                Type::Application(left_function, left_argument),
+                Type::Application(right_function, right_argument),
+            ) => {
+                work.push(Task::Pair(left_argument, right_argument));
+                work.push(Task::Pair(left_function, right_function));
             }
             (
                 Type::Function(left_domain, left_codomain),
@@ -8178,6 +9537,9 @@ enum UnificationFailure {
 std::thread_local! {
     static ZONK_REBUILD_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static OCCURS_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_INITIAL_TYPED_NODES: std::cell::RefCell<Vec<TypedNode>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
 }
 
 #[cfg(test)]
@@ -8207,9 +9569,14 @@ fn zonk_type_with_status<E>(
             ChargeTask::Visit(Type::Inference(identity)) if solutions.contains_key(identity) => {
                 work.push(ChargeTask::Visit(&solutions[identity]));
             }
-            ChargeTask::Visit(Type::Tuple(elements) | Type::AppliedNominal(_, elements)) => {
+            ChargeTask::Visit(Type::Tuple(elements)) => {
                 charge(1)?;
                 work.push(ChargeTask::Slice(elements.iter()));
+            }
+            ChargeTask::Visit(Type::Application(function, argument)) => {
+                charge(1)?;
+                work.push(ChargeTask::Visit(argument));
+                work.push(ChargeTask::Visit(function));
             }
             ChargeTask::Visit(Type::Function(domain, codomain)) => {
                 charge(1)?;
@@ -8245,7 +9612,7 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
         Visit(&'a Type),
         VisitSequence(std::slice::Iter<'a, Type>),
         FinishTuple(usize),
-        FinishApplied(crate::types::NominalTypeId, usize),
+        FinishApplication,
         FinishFunction,
         FinishForall(Box<[TypeVariableId]>),
     }
@@ -8269,9 +9636,10 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
                 work.push(Task::FinishTuple(elements.len()));
                 work.push(Task::VisitSequence(elements.iter()));
             }
-            Task::Visit(Type::AppliedNominal(owner, arguments)) => {
-                work.push(Task::FinishApplied(*owner, arguments.len()));
-                work.push(Task::VisitSequence(arguments.iter()));
+            Task::Visit(Type::Application(function, argument)) => {
+                work.push(Task::FinishApplication);
+                work.push(Task::Visit(argument));
+                work.push(Task::Visit(function));
             }
             Task::Visit(Type::Function(domain, codomain)) => {
                 work.push(Task::FinishFunction);
@@ -8292,9 +9660,10 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
                 let elements = rebuilt.split_off(rebuilt.len() - count);
                 rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
             }
-            Task::FinishApplied(owner, count) => {
-                let arguments = rebuilt.split_off(rebuilt.len() - count);
-                rebuilt.push(Type::AppliedNominal(owner, arguments.into_boxed_slice()));
+            Task::FinishApplication => {
+                let argument = rebuilt.pop().expect("zonked application argument");
+                let function = rebuilt.pop().expect("zonked application function");
+                rebuilt.push(Type::Application(Box::new(function), Box::new(argument)));
             }
             Task::FinishFunction => {
                 let codomain = rebuilt.pop().expect("zonked codomain");
@@ -8342,8 +9711,12 @@ fn type_contains_inference(
                     work.push(Task::Visit(solution));
                 }
             }
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+            Type::Tuple(elements) => {
                 work.push(Task::VisitSequence(elements.iter()));
+            }
+            Type::Application(function, argument) => {
+                work.push(Task::Visit(argument));
+                work.push(Task::Visit(function));
             }
             Type::Function(domain, codomain) => {
                 work.push(Task::Visit(codomain));
@@ -8393,8 +9766,12 @@ fn collect_unsolved_inference(
                 seen.insert(*identity);
                 found.push(*identity);
             }
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+            Type::Tuple(elements) => {
                 work.push(Task::Slice(elements.iter()));
+            }
+            Type::Application(function, argument) => {
+                work.push(Task::Visit(argument));
+                work.push(Task::Visit(function));
             }
             Type::Function(domain, codomain) => {
                 work.push(Task::Visit(codomain));
@@ -8577,11 +9954,13 @@ mod tests {
 
     use super::*;
     use crate::{
+        interface::EvidenceSelectionBuilder,
         module::{ModuleId, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{
             ImportedFacts, ResolvedExportCandidate, ResolvedInterfaceDeclaration,
-            ResolvedInterfaceMethod, ResolvedModuleParts, ResolvedTypeVariable,
+            ResolvedInterfaceMethod, ResolvedModuleParts, ResolvedNominalType,
+            ResolvedTypeVariable,
         },
         source::{ByteRange, SourceFile},
     };
@@ -8865,6 +10244,25 @@ mod tests {
             ty = Type::Function(Box::new(Type::Unit), Box::new(ty));
         }
         ty
+    }
+
+    fn deep_application_type(depth: usize) -> Type {
+        let mut ty = Type::Int;
+        for _ in 0..depth {
+            ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+        }
+        ty
+    }
+
+    fn deep_generated_origin(depth: usize, span: Span) -> Origin {
+        let mut origin = Origin::Source(span);
+        for _ in 0..depth {
+            origin = Origin::Generated {
+                cause: Box::new(origin),
+                reason: GeneratedReason::FunctionLowering,
+            };
+        }
+        origin
     }
 
     fn static_rule_outcome(
@@ -9385,8 +10783,10 @@ mod tests {
                 for _ in 0..10_000 {
                     head = Type::Function(Box::new(Type::Unit), Box::new(head));
                 }
-                let mut replacements = TypeReplacementBuffer(HashMap::new());
-                replacements.0.insert(TypeVariableId::generated(0), head);
+                let mut replacements = TypeReplacementBuffer::new();
+                replacements
+                    .try_insert_unique(TypeVariableId::generated(0), head)
+                    .expect("the fresh replacement key is unique");
                 drop(replacements);
             })
             .expect("the small-stack replacement drop thread should start")
@@ -9412,39 +10812,70 @@ mod tests {
     }
 
     #[test]
-    fn wide_zonk_rebuilds_keep_pending_fan_out_constant() {
+    fn wide_tuple_and_deep_application_zonk_use_their_exact_pending_shapes() {
         const WIDTH: usize = 4_096;
         let source =
             SourceFile::new("wide-zonk-pending.ash", "()").expect("the fixture should fit");
         let owner = crate::types::NominalTypeId::new(source.id(), 0);
-        for ty in [
-            Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice()),
-            Type::AppliedNominal(owner, vec![Type::Int; WIDTH].into_boxed_slice()),
-        ] {
-            ZONK_REBUILD_PENDING_PEAK.with(|peak| peak.set(0));
-            let rebuilt = zonk_type(&ty, &HashMap::new());
-            assert_eq!(rebuilt, ty);
-            let peak = ZONK_REBUILD_PENDING_PEAK.with(std::cell::Cell::get);
-            assert!(peak <= 3, "wide zonk retained {peak} pending tasks");
-        }
+        let tuple = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+        ZONK_REBUILD_PENDING_PEAK.with(|peak| peak.set(0));
+        assert_eq!(zonk_type(&tuple, &HashMap::new()), tuple);
+        assert!(ZONK_REBUILD_PENDING_PEAK.with(std::cell::Cell::get) <= 3);
+
+        let application = Type::apply_arguments(Type::Nominal(owner), vec![Type::Int; WIDTH]);
+        ZONK_REBUILD_PENDING_PEAK.with(|peak| peak.set(0));
+        assert_eq!(zonk_type(&application, &HashMap::new()), application);
+        assert_eq!(
+            ZONK_REBUILD_PENDING_PEAK.with(std::cell::Cell::get),
+            WIDTH * 2 + 1,
+            "each pending application retains one finish task and one argument visit",
+        );
     }
 
     #[test]
-    fn wide_occurs_checks_keep_pending_fan_out_constant() {
+    fn wide_tuple_and_deep_application_occurs_checks_use_exact_pending_shapes() {
         const WIDTH: usize = 4_096;
         let source =
             SourceFile::new("wide-occurs-pending.ash", "()").expect("the fixture should fit");
         let owner = crate::types::NominalTypeId::new(source.id(), 0);
         let needle = InferenceVariableId::new(0);
-        for ty in [
-            Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice()),
-            Type::AppliedNominal(owner, vec![Type::Int; WIDTH].into_boxed_slice()),
-        ] {
-            OCCURS_PENDING_PEAK.with(|peak| peak.set(0));
-            assert!(!type_contains_inference(&ty, needle, &HashMap::new()));
-            let peak = OCCURS_PENDING_PEAK.with(std::cell::Cell::get);
-            assert!(peak <= 2, "wide occurs check retained {peak} pending tasks");
-        }
+        let tuple = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+        OCCURS_PENDING_PEAK.with(|peak| peak.set(0));
+        assert!(!type_contains_inference(&tuple, needle, &HashMap::new()));
+        assert!(OCCURS_PENDING_PEAK.with(std::cell::Cell::get) <= 2);
+
+        let application = Type::apply_arguments(Type::Nominal(owner), vec![Type::Int; WIDTH]);
+        OCCURS_PENDING_PEAK.with(|peak| peak.set(0));
+        assert!(!type_contains_inference(
+            &application,
+            needle,
+            &HashMap::new(),
+        ));
+        assert_eq!(
+            OCCURS_PENDING_PEAK.with(std::cell::Cell::get),
+            WIDTH + 1,
+            "each left-spine step retains its argument until the function is visited",
+        );
+    }
+
+    #[test]
+    fn occurs_check_visits_both_application_children() {
+        let needle = InferenceVariableId::new(0);
+        let function_occurrence =
+            Type::Application(Box::new(Type::Inference(needle)), Box::new(Type::Unit));
+        let argument_occurrence =
+            Type::Application(Box::new(Type::Int), Box::new(Type::Inference(needle)));
+
+        assert!(type_contains_inference(
+            &function_occurrence,
+            needle,
+            &HashMap::new(),
+        ));
+        assert!(type_contains_inference(
+            &argument_occurrence,
+            needle,
+            &HashMap::new(),
+        ));
     }
 
     #[test]
@@ -9716,6 +11147,43 @@ mod tests {
     }
 
     #[test]
+    fn rebuilt_application_span_provenance_has_an_exact_stack_safe_node_budget() {
+        const DEPTH: usize = 32_768;
+        const PROVENANCE_NODES: usize = 2 * DEPTH + 1;
+
+        std::thread::Builder::new()
+            .name("application-provenance-budget".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("application-provenance.ash", "value")
+                    .expect("the provenance fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 5).expect("the range should be ordered"))
+                    .expect("the range should fit");
+                let ty = deep_application_type(DEPTH);
+
+                let mut short = TypeWorkBudget::with_limit(PROVENANCE_NODES - 1);
+                assert_eq!(
+                    at_span_provenance_with_budget(&ty, span, &mut short),
+                    Err(())
+                );
+                assert_eq!(short.charge(1), Err(()));
+
+                let mut exact = TypeWorkBudget::with_limit(PROVENANCE_NODES);
+                let provenance = at_span_provenance_with_budget(&ty, span, &mut exact)
+                    .expect("one provenance node per canonical application child should fit");
+                assert!(provenance.aligns(&ty));
+                assert_eq!(provenance.span(), Some(span));
+                assert_eq!(exact.charge(1), Err(()));
+
+                discard_type_iteratively(ty);
+            })
+            .expect("the provenance-budget thread should start")
+            .join()
+            .expect("provenance construction and type teardown must fit the small stack");
+    }
+
+    #[test]
     fn direct_function_binder_context_entries_require_one_reserved_unit() {
         let mut context = TypeContext::new();
         let mut short = TypeWorkBudget::default();
@@ -9933,6 +11401,60 @@ mod tests {
     }
 
     #[test]
+    fn deep_unification_second_copy_and_solution_have_exact_stack_safe_budgets() {
+        const DEPTH: usize = 32_768;
+        const CELLS: usize = 2 * DEPTH + 1;
+        const EXACT: usize = 3 * CELLS + 5;
+
+        std::thread::Builder::new()
+            .name("deep-unification-budget".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let inference = Type::Inference(InferenceVariableId::new(0));
+                let deep = deep_application_type(DEPTH);
+
+                let mut second_copy_short = Elaborator::new();
+                second_copy_short.type_work = TypeWorkBudget::with_limit(CELLS);
+                assert_eq!(
+                    second_copy_short.unify(&inference, &deep),
+                    Err(UnificationFailure::Resource)
+                );
+                assert!(second_copy_short.inference_solutions.is_empty());
+
+                let mut requested_prefix = Elaborator::new();
+                requested_prefix.type_work = TypeWorkBudget::with_limit(CELLS + 2);
+                assert_eq!(
+                    requested_prefix.unify(&inference, &deep),
+                    Err(UnificationFailure::Resource)
+                );
+                assert!(requested_prefix.inference_solutions.is_empty());
+
+                let mut one_short = Elaborator::new();
+                one_short.type_work = TypeWorkBudget::with_limit(EXACT - 1);
+                assert_eq!(
+                    one_short.unify(&inference, &deep),
+                    Err(UnificationFailure::Resource)
+                );
+                assert!(one_short.inference_solutions.is_empty());
+
+                let mut exact = Elaborator::new();
+                exact.type_work = TypeWorkBudget::with_limit(EXACT);
+                assert_eq!(exact.unify(&inference, &deep), Ok(()));
+                assert!(matches!(
+                    exact.inference_solutions.get(&InferenceVariableId::new(0)),
+                    Some(Type::Application(_, _))
+                ));
+                assert_eq!(exact.type_work.charge(1), Err(()));
+
+                discard_type_iteratively(deep);
+                drop(exact);
+            })
+            .expect("the deep-unification thread should start")
+            .join()
+            .expect("all deep unification paths must dismantle owned copies iteratively");
+    }
+
+    #[test]
     fn public_monotype_admission_enforces_the_exact_core_payload_depth() {
         let accepted = nested_function_type(CORE_PAYLOAD_DEPTH_LIMIT);
         let rejected = nested_function_type(CORE_PAYLOAD_DEPTH_LIMIT + 1);
@@ -9940,16 +11462,88 @@ mod tests {
         let mut rejected_budget = TypeWorkBudget::default();
 
         assert_eq!(
-            validate_and_charge_public_monotype(&accepted, &mut accepted_budget),
+            validate_and_charge_public_monotype(
+                &accepted,
+                &ResolvedRegistry::default(),
+                &mut accepted_budget,
+            ),
             Ok(())
         );
         assert_eq!(
-            validate_and_charge_public_monotype(&rejected, &mut rejected_budget),
+            validate_and_charge_public_monotype(
+                &rejected,
+                &ResolvedRegistry::default(),
+                &mut rejected_budget,
+            ),
             Err(PublicTypeAdmissionError::Invalid)
         );
 
         crate::types::discard_type_iteratively(accepted);
         crate::types::discard_type_iteratively(rejected);
+    }
+
+    #[test]
+    fn public_monotype_admission_preserves_predecessor_nominal_saturation() {
+        let source = SourceFile::new("public-saturation.ash", "Wide")
+            .expect("the saturation fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the range is ordered"))
+            .expect("the range belongs to the fixture");
+        let owner = crate::types::NominalTypeId::new(ModuleId::new(0), 0);
+        let parameters = [0, 1]
+            .into_iter()
+            .map(|local| ResolvedTypeVariable {
+                id: TypeVariableId::resolved(ModuleId::new(0), local),
+                spelling: format!("A{local}"),
+                origin: Origin::Source(span),
+            })
+            .collect::<Vec<_>>();
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: owner,
+                spelling: "Wide".to_owned(),
+                constructors: Box::new([]),
+                origin: Origin::Source(span),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(owner, parameters)]);
+        let bare = Type::Nominal(owner);
+        let partial = Type::Application(Box::new(Type::Nominal(owner)), Box::new(Type::Int));
+        let saturated = Type::Application(Box::new(partial.clone()), Box::new(Type::Bool));
+        let malformed_parameter_application = Type::Application(
+            Box::new(Type::Variable(TypeVariableId::new(99))),
+            Box::new(Type::Unit),
+        );
+
+        assert_eq!(
+            validate_and_charge_public_monotype(&bare, &registry, &mut TypeWorkBudget::default(),),
+            Err(PublicTypeAdmissionError::Invalid),
+        );
+        assert_eq!(
+            validate_and_charge_public_monotype(
+                &partial,
+                &registry,
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(PublicTypeAdmissionError::Invalid),
+        );
+        assert_eq!(
+            validate_and_charge_public_monotype(
+                &saturated,
+                &registry,
+                &mut TypeWorkBudget::default(),
+            ),
+            Ok(()),
+        );
+        assert_eq!(
+            validate_and_charge_public_monotype(
+                &malformed_parameter_application,
+                &registry,
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(PublicTypeAdmissionError::Invalid),
+        );
     }
 
     #[test]
@@ -10365,6 +11959,1397 @@ mod tests {
             .expect("the depth-boundary thread should start")
             .join()
             .expect("public type depth rejection must fit the small stack");
+    }
+
+    #[test]
+    fn mismatch_and_context_owners_discard_application_spines_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        let deep = || {
+            let mut ty = Type::Int;
+            for _ in 0..DEPTH {
+                ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+            }
+            ty
+        };
+        std::thread::Builder::new()
+            .name("elaboration-type-owner-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mismatch = TypeMismatch {
+                    span: resolved_module_fixture("mismatch-owner.ash", "", "Int", "42").span(),
+                    expected: Box::new(deep()),
+                    found: Box::new(Type::Unit),
+                    expected_display: "Wide<Unit>".to_owned(),
+                    found_display: "Unit".to_owned(),
+                };
+                drop(mismatch);
+
+                let mut context = TypeContext::new();
+                context.insert(BinderId::new(0), deep());
+                drop(context);
+            })
+            .expect("the elaboration owner disposal thread should start")
+            .join()
+            .expect("mismatch and context owners must dismantle types iteratively");
+    }
+
+    #[test]
+    fn public_context_replacement_discards_the_displaced_deep_fact_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("context-replacement-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut context = TypeContext::new();
+                context.insert(BinderId::new(0), deep_application_type(DEPTH));
+                context.insert(BinderId::new(0), Type::Unit);
+            })
+            .expect("the context-replacement thread should start")
+            .join()
+            .expect("public context replacement must dismantle the displaced fact iteratively");
+    }
+
+    #[test]
+    fn successful_pattern_check_transfers_a_deep_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("successful-deep-pattern-check".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-pattern-success.ash", "_")
+                    .expect("the fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the range should be ordered"))
+                    .expect("the range should fit");
+                let pattern = ResolvedPattern {
+                    kind: ResolvedPatternKind::Wildcard,
+                    span,
+                };
+                let expected = deep_application_type(DEPTH);
+                let mut elaborator = Elaborator::new();
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                let mut context = TypeContext::new();
+                let mut binders = Vec::new();
+
+                let checked = elaborator
+                    .check_core_pattern(
+                        &pattern,
+                        &expected,
+                        &mut context,
+                        &mut binders,
+                        GeneratedReason::BindingLowering,
+                    )
+                    .expect("the wildcard should retain the expected type");
+                checked.pattern.discard_iteratively();
+                discard_type_iteratively(expected);
+            })
+            .expect("the successful pattern thread should start")
+            .join()
+            .expect("a successful pattern check must transfer its deep type safely");
+    }
+
+    #[test]
+    fn pattern_mismatch_discards_its_deep_owned_expected_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("deep-pattern-mismatch".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-pattern-mismatch.ash", "true")
+                    .expect("the fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 4).expect("the range should be ordered"))
+                    .expect("the range should fit");
+                let pattern = ResolvedPattern {
+                    kind: ResolvedPatternKind::Boolean(true),
+                    span,
+                };
+                let expected = deep_application_type(DEPTH);
+                let mut elaborator = Elaborator::new();
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                let mut context = TypeContext::new();
+                let mut binders = Vec::new();
+
+                assert!(matches!(
+                    elaborator.check_core_pattern(
+                        &pattern,
+                        &expected,
+                        &mut context,
+                        &mut binders,
+                        GeneratedReason::BindingLowering,
+                    ),
+                    Err(TypeError::Source(diagnostic))
+                        if diagnostic.reason == TypeReason::PatternMismatch
+                ));
+                discard_type_iteratively(expected);
+            })
+            .expect("the mismatch thread should start")
+            .join()
+            .expect("a mismatch must dismantle its owned expected type iteratively");
+    }
+
+    #[test]
+    fn pattern_resource_failure_discards_its_deep_owned_expected_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+        const DEEP_CELLS: usize = DEPTH * 2 + 1;
+
+        std::thread::Builder::new()
+            .name("deep-pattern-resource".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-pattern-resource.ash", "value")
+                    .expect("the fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 5).expect("the range should be ordered"))
+                    .expect("the range should fit");
+                let pattern = ResolvedPattern {
+                    kind: ResolvedPatternKind::Binder(crate::resolved::Binder {
+                        id: BinderId::new(0),
+                        spelling: "value".to_owned(),
+                        origin: Origin::Source(span),
+                    }),
+                    span,
+                };
+                let expected = deep_application_type(DEPTH);
+                let mut elaborator = Elaborator::new();
+                elaborator.type_work = TypeWorkBudget::with_limit(DEEP_CELLS);
+                let mut context = TypeContext::new();
+                let mut binders = Vec::new();
+
+                assert!(matches!(
+                    elaborator.check_core_pattern(
+                        &pattern,
+                        &expected,
+                        &mut context,
+                        &mut binders,
+                        GeneratedReason::BindingLowering,
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+                discard_type_iteratively(expected);
+            })
+            .expect("the resource-failure thread should start")
+            .join()
+            .expect("a resource failure must dismantle its expected type iteratively");
+    }
+
+    #[test]
+    fn late_tuple_child_failure_discards_completed_deep_patterns_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("late-tuple-pattern-failure".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("late-tuple-pattern.ash", "(_, ())")
+                    .expect("the fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 7).expect("the range should be ordered"))
+                    .expect("the range should fit");
+                let pattern = ResolvedPattern {
+                    kind: ResolvedPatternKind::Tuple(vec![
+                        ResolvedPattern {
+                            kind: ResolvedPatternKind::Wildcard,
+                            span,
+                        },
+                        ResolvedPattern {
+                            kind: ResolvedPatternKind::Unit,
+                            span,
+                        },
+                    ]),
+                    span,
+                };
+                let expected =
+                    Type::Tuple(vec![deep_application_type(DEPTH), Type::Bool].into_boxed_slice());
+                let mut elaborator = Elaborator::new();
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                let mut context = TypeContext::new();
+                let mut binders = Vec::new();
+
+                assert!(matches!(
+                    elaborator.check_core_pattern(
+                        &pattern,
+                        &expected,
+                        &mut context,
+                        &mut binders,
+                        GeneratedReason::BindingLowering,
+                    ),
+                    Err(TypeError::Source(diagnostic))
+                        if diagnostic.reason == TypeReason::PatternMismatch
+                ));
+                discard_type_iteratively(expected);
+            })
+            .expect("the late-child thread should start")
+            .join()
+            .expect("completed tuple children must be dismantled iteratively after a later error");
+    }
+
+    #[test]
+    fn successful_polymorphic_inference_solution_owner_drops_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("successful-inference-solution-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let inference = Type::Inference(InferenceVariableId::new(0));
+                let deep = deep_application_type(DEPTH);
+                let mut elaborator = Elaborator::new();
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                assert_eq!(elaborator.unify(&inference, &deep), Ok(()));
+                assert!(
+                    elaborator
+                        .inference_solutions
+                        .contains_key(&InferenceVariableId::new(0))
+                );
+
+                discard_type_iteratively(deep);
+                drop(elaborator);
+            })
+            .expect("the inference-solution thread should start")
+            .join()
+            .expect("a successful deep inference solution must dismantle iteratively");
+    }
+
+    #[test]
+    fn successful_result_zonk_replaces_a_deep_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("successful-deep-result-zonk".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture("deep-zonk.ash", "", "Int", "42");
+                let span = fixture_result(&resolved).span;
+                let binder = BinderId::new(0);
+                let expression = ResolvedExpr {
+                    kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
+                        term: crate::resolved::ResolvedTermName::Global(binder),
+                        spelling: "deep".to_owned(),
+                        origin: Origin::Source(span),
+                        import_span: None,
+                        evidence: Box::new([]),
+                    }),
+                    span,
+                };
+                let mut context = TypeContext::new();
+                context.insert(binder, deep_application_type(DEPTH));
+                let mut elaborator = Elaborator::for_resolved_expression(&resolved, &expression)
+                    .expect("the standalone elaborator should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                let result = elaborator
+                    .elaborate_result(&expression, &mut context)
+                    .expect("the resolved occurrence should zonk successfully");
+                assert!(matches!(result.ty, Type::Application(_, _)));
+                result.discard_iteratively();
+            })
+            .expect("the result-zonk thread should start")
+            .join()
+            .expect("successful result zonking must dismantle the old type iteratively");
+    }
+
+    #[test]
+    fn late_expression_failure_drops_pending_and_completed_types_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("late-expression-work-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "late-expression-work.ash",
+                    "",
+                    "Int",
+                    "fn(function) {\nfn(value) {\nfunction((value, fn(argument) {\nargument\n}))\n}\n}",
+                );
+                let ResolvedExprKind::Function(outer) = &fixture_result(&resolved).kind else {
+                    panic!("the fixture should retain the outer function");
+                };
+                let ResolvedPatternKind::Binder(function) = &outer.pattern.kind else {
+                    panic!("the outer parameter should be a binder");
+                };
+                let ResolvedExprKind::Function(inner) = &outer.body.result.kind else {
+                    panic!("the fixture should retain the inner function");
+                };
+                let ResolvedPatternKind::Binder(value) = &inner.pattern.kind else {
+                    panic!("the inner parameter should be a binder");
+                };
+                let application = &inner.body.result;
+                assert!(matches!(application.kind, ResolvedExprKind::Apply(_)));
+
+                let function_type = Type::Function(
+                    Box::new(Type::Tuple(
+                        vec![deep_application_type(DEPTH), Type::Unit].into_boxed_slice(),
+                    )),
+                    Box::new(deep_application_type(DEPTH)),
+                );
+                let mut context = TypeContext::new();
+                context.insert(function.id, function_type);
+                context.insert(value.id, deep_application_type(DEPTH));
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                let failure = elaborator
+                    .elaborate_expression_with_context(
+                        ElaborationTask::Synthesize {
+                            expression: application,
+                            cause: None,
+                        },
+                        &mut context,
+                    )
+                    .expect_err("the unannotated tuple function must fail late");
+                assert!(matches!(
+                    failure,
+                    TypeError::Source(diagnostic)
+                        if diagnostic.reason == TypeReason::FunctionNeedsContext
+                ));
+            })
+            .expect("the late-failure thread should start")
+            .join()
+            .expect("pending and completed expression work must dismantle iteratively");
+    }
+
+    #[test]
+    fn popped_finish_payloads_are_owned_before_missing_value_errors() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("popped-finish-payload-ownership".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved =
+                    resolved_module_fixture("missing-finish-value.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let origin = Origin::Source(span);
+
+                let mut binder_builder = CoreBuilder::new();
+                let binder = binder_builder
+                    .binder(Type::Unit, origin.clone())
+                    .expect("the shallow binder should fit");
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                assert!(matches!(
+                    elaborator.elaborate_expression_with_context(
+                        ElaborationTask::FinishFunction {
+                            direct_binder: None,
+                            pattern_binders: Vec::new(),
+                            binder,
+                            pattern: None,
+                            domain: Some(deep_application_type(DEPTH)),
+                            ty: deep_application_type(DEPTH),
+                            origin: origin.clone(),
+                            provenance: TypeProvenance::atom(Some(span)),
+                        },
+                        &mut TypeContext::new(),
+                    ),
+                    Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+                ));
+
+                let expression = crate::resolved::ResolvedMatchExpr {
+                    scrutinee: Box::new(ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span,
+                    }),
+                    arms: Vec::new(),
+                };
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                assert!(matches!(
+                    elaborator.elaborate_expression_with_context(
+                        ElaborationTask::AfterMatchScrutinee {
+                            expression: &expression,
+                            span,
+                            expected: Some((
+                                ProvenancedType {
+                                    ty: deep_application_type(DEPTH),
+                                    provenance: TypeProvenance::atom(Some(span)),
+                                },
+                                CheckKind::General,
+                            )),
+                        },
+                        &mut TypeContext::new(),
+                    ),
+                    Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+                ));
+            })
+            .expect("the popped-payload thread should start")
+            .join()
+            .expect("popped task payloads must dismantle iteratively on missing-value errors");
+    }
+
+    #[test]
+    fn popped_check_function_clone_failure_discards_expected_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+        const ONE_DEEP_TYPE: usize = DEPTH * 2 + 1;
+
+        std::thread::Builder::new()
+            .name("popped-check-function-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "popped-check-function.ash",
+                    "",
+                    "Unit -> Unit",
+                    "fn(value) {\nvalue\n}",
+                );
+                let expression = fixture_result(&resolved);
+                assert!(matches!(expression.kind, ResolvedExprKind::Function(_)));
+                let expected_ty = Type::Function(
+                    Box::new(deep_application_type(DEPTH)),
+                    Box::new(deep_application_type(DEPTH)),
+                );
+                let expected = ProvenancedType {
+                    provenance: TypeProvenance::unknown(&expected_ty),
+                    ty: expected_ty,
+                };
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(ONE_DEEP_TYPE);
+
+                assert!(matches!(
+                    elaborator.elaborate_expression_with_context(
+                        ElaborationTask::Check {
+                            expression,
+                            expected,
+                            kind: CheckKind::General,
+                        },
+                        &mut TypeContext::new(),
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+            })
+            .expect("the popped Check(Function) thread should start")
+            .join()
+            .expect("a failed function-part clone must dismantle expected iteratively");
+    }
+
+    #[test]
+    fn popped_check_function_provenance_failure_discards_cloned_parts_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("popped-check-function-provenance-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "popped-check-function-provenance.ash",
+                    "",
+                    "Unit -> Unit",
+                    "fn(value) {\nvalue\n}",
+                );
+                let expression = fixture_result(&resolved);
+                assert!(matches!(expression.kind, ResolvedExprKind::Function(_)));
+                let expected_ty = Type::Function(
+                    Box::new(deep_application_type(DEPTH)),
+                    Box::new(deep_application_type(DEPTH)),
+                );
+                let expected = ProvenancedType {
+                    ty: expected_ty,
+                    provenance: TypeProvenance::atom(Some(expression.span)),
+                };
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                assert!(matches!(
+                    elaborator.elaborate_expression_with_context(
+                        ElaborationTask::Check {
+                            expression,
+                            expected,
+                            kind: CheckKind::General,
+                        },
+                        &mut TypeContext::new(),
+                    ),
+                    Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+                ));
+            })
+            .expect("the popped Check(Function) provenance thread should start")
+            .join()
+            .expect("malformed provenance must dismantle cloned function parts iteratively");
+    }
+
+    #[test]
+    fn schedule_function_failure_discards_presentation_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("schedule-function-presentation-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "schedule-function-presentation.ash",
+                    "",
+                    "Unit -> Unit",
+                    "fn(value) {\nvalue\n}",
+                );
+                let expression = fixture_result(&resolved);
+                let ResolvedExprKind::Function(function) = &expression.kind else {
+                    panic!("the fixture result should be a function");
+                };
+                let function_ty = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(0);
+                let mut tasks = ElaborationTaskBuffer(Vec::new());
+
+                assert!(matches!(
+                    elaborator.schedule_function_check(
+                        &mut TypeContext::new(),
+                        &mut tasks,
+                        0,
+                        FunctionCheck {
+                            parameter: &function.pattern,
+                            domain: ProvenancedType {
+                                ty: Type::Unit,
+                                provenance: TypeProvenance::atom(Some(expression.span)),
+                            },
+                            codomain: ProvenancedType {
+                                ty: Type::Unit,
+                                provenance: TypeProvenance::atom(Some(expression.span)),
+                            },
+                            body: FunctionBody::Block(&function.body),
+                            presentation: deep_generated_origin(DEPTH, expression.span),
+                            function_type: ProvenancedType {
+                                provenance: TypeProvenance::unknown(&function_ty),
+                                ty: function_ty,
+                            },
+                            body_check: CheckKind::General,
+                        },
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+            })
+            .expect("the schedule-function presentation thread should start")
+            .join()
+            .expect("a scheduling failure must dismantle presentation iteratively");
+    }
+
+    #[test]
+    fn popped_finish_function_failure_discards_origin_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("popped-finish-function-origin-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved =
+                    resolved_module_fixture("popped-finish-origin.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let mut binder_builder = CoreBuilder::new();
+                let binder = binder_builder
+                    .binder(Type::Unit, Origin::Source(span))
+                    .expect("the shallow binder should fit");
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+
+                assert!(matches!(
+                    elaborator.elaborate_expression_with_context(
+                        ElaborationTask::FinishFunction {
+                            direct_binder: None,
+                            pattern_binders: Vec::new(),
+                            binder,
+                            pattern: None,
+                            domain: None,
+                            ty: Type::Unit,
+                            origin: deep_generated_origin(DEPTH, span),
+                            provenance: TypeProvenance::atom(Some(span)),
+                        },
+                        &mut TypeContext::new(),
+                    ),
+                    Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+                ));
+            })
+            .expect("the popped FinishFunction origin thread should start")
+            .join()
+            .expect("a missing body must dismantle the function origin iteratively");
+    }
+
+    #[test]
+    fn popped_finish_function_clone_failure_discards_pattern_origins_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("popped-finish-function-pattern-origins".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved =
+                    resolved_module_fixture("popped-finish-pattern-origin.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                let body = elaborator
+                    .builder
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("the shallow body should fit");
+                let binder = elaborator
+                    .builder
+                    .binder(Type::Unit, Origin::Source(span))
+                    .expect("the shallow binder should fit");
+                TEST_INITIAL_TYPED_NODES.with(|initial| {
+                    initial.borrow_mut().push(TypedNode {
+                        node: body,
+                        ty: Type::Unit,
+                        provenance: TypeProvenance::atom(Some(span)),
+                    });
+                });
+                elaborator.type_work = TypeWorkBudget::with_limit(0);
+
+                assert!(matches!(
+                    elaborator.elaborate_expression_with_context(
+                        ElaborationTask::FinishFunction {
+                            direct_binder: None,
+                            pattern_binders: Vec::new(),
+                            binder,
+                            pattern: Some(CorePattern::new(
+                                Type::Unit,
+                                deep_generated_origin(DEPTH, span),
+                                CorePatternKind::Wildcard,
+                            )),
+                            domain: Some(Type::Unit),
+                            ty: Type::Unit,
+                            origin: Origin::Source(span),
+                            provenance: TypeProvenance::atom(Some(span)),
+                        },
+                        &mut TypeContext::new(),
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+            })
+            .expect("the popped FinishFunction pattern-origin thread should start")
+            .join()
+            .expect("a clone failure must dismantle cloned pattern origins iteratively");
+    }
+
+    #[test]
+    fn popped_finish_function_builder_failure_discards_cloned_body_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("popped-finish-function-cloned-body-type".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved =
+                    resolved_module_fixture("popped-finish-body-type.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                let body = elaborator
+                    .builder
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("the shallow body should fit");
+                let binder = elaborator
+                    .builder
+                    .binder(Type::Unit, Origin::Source(span))
+                    .expect("the shallow binder should fit");
+                TEST_INITIAL_TYPED_NODES.with(|initial| {
+                    initial.borrow_mut().push(TypedNode {
+                        node: body,
+                        ty: deep_application_type(DEPTH),
+                        provenance: TypeProvenance::atom(Some(span)),
+                    });
+                });
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                let rejected_domain = nested_function_type(CORE_PAYLOAD_DEPTH_LIMIT + 1);
+
+                assert!(matches!(
+                    elaborator.elaborate_expression_with_context(
+                        ElaborationTask::FinishFunction {
+                            direct_binder: None,
+                            pattern_binders: Vec::new(),
+                            binder,
+                            pattern: Some(CorePattern::new(
+                                rejected_domain.clone(),
+                                Origin::Source(span),
+                                CorePatternKind::Wildcard,
+                            )),
+                            domain: Some(rejected_domain),
+                            ty: Type::Unit,
+                            origin: Origin::Source(span),
+                            provenance: TypeProvenance::atom(Some(span)),
+                        },
+                        &mut TypeContext::new(),
+                    ),
+                    Err(TypeError::Internal(ElaborationFailure::Core(
+                        BuildError::TypeDepthExceeded
+                    ))),
+                ));
+            })
+            .expect("the popped FinishFunction cloned-body thread should start")
+            .join()
+            .expect("a builder failure must dismantle the cloned body type iteratively");
+    }
+
+    #[test]
+    fn popped_finish_application_zonk_failure_discards_core_codomain_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+        const ONE_DEEP_TYPE: usize = DEPTH * 2 + 1;
+
+        std::thread::Builder::new()
+            .name("popped-finish-application-core-codomain".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved =
+                    resolved_module_fixture("popped-finish-application.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                let function_node = elaborator
+                    .builder
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("the shallow function stand-in should fit");
+                let argument_node = elaborator
+                    .builder
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("the shallow argument should fit");
+                TEST_INITIAL_TYPED_NODES.with(|initial| {
+                    initial.borrow_mut().push(TypedNode {
+                        node: argument_node,
+                        ty: Type::Unit,
+                        provenance: TypeProvenance::atom(Some(span)),
+                    });
+                });
+                let codomain_ty = deep_application_type(DEPTH);
+                let codomain = ProvenancedType {
+                    provenance: TypeProvenance::unknown(&codomain_ty),
+                    ty: codomain_ty,
+                };
+                elaborator.next_inference = 1;
+                elaborator.type_work = TypeWorkBudget::with_limit(ONE_DEEP_TYPE);
+
+                assert!(matches!(
+                    elaborator.elaborate_expression_with_context(
+                        ElaborationTask::FinishApplication {
+                            whole_span: span,
+                            function_span: span,
+                            argument_span: span,
+                            function: TypedNode {
+                                node: function_node,
+                                ty: Type::Unit,
+                                provenance: TypeProvenance::atom(Some(span)),
+                            },
+                            codomain,
+                        },
+                        &mut TypeContext::new(),
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+            })
+            .expect("the popped FinishApplication thread should start")
+            .join()
+            .expect("a zonk failure must dismantle the cloned Core codomain iteratively");
+    }
+
+    #[test]
+    fn lowered_evidence_provenance_failure_discards_variable_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+        const ONE_DEEP_TYPE: usize = DEPTH * 2 + 1;
+
+        std::thread::Builder::new()
+            .name("lowered-evidence-variable-type-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved =
+                    resolved_module_fixture("lowered-evidence-owner.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let module = ModuleId::new(901);
+                let interface = InterfaceId::new(module, 0);
+                let method = MethodId::new(interface, 0);
+                let implementation = ImplId::new(module, 0);
+                let implementation_method = ImplMethodId::new(implementation, method);
+                let mut selection_builder = EvidenceSelectionBuilder::new();
+                let root = selection_builder
+                    .push_implementation(
+                        implementation,
+                        Box::new([]),
+                        &[],
+                        &[implementation_method],
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the one-node evidence plan should fit");
+                let selection = selection_builder
+                    .finish(root, interface, Type::Unit)
+                    .expect("the evidence root should exist");
+                let mut lowering = EvidenceLowering {
+                    interfaces: HashMap::new(),
+                    interface_methods: HashMap::new(),
+                    global_schemes: HashMap::new(),
+                    implementation_methods: HashMap::from([(
+                        implementation_method,
+                        LoweredImplementationMethod {
+                            binder: BinderId::resolved(module, 0),
+                            scheme: LoweredScheme {
+                                source_type_parameters: Some(Box::new([])),
+                                type_parameters: Box::new([]),
+                                requirements: Box::new([]),
+                                value_type: Type::Unit,
+                                core_scheme: deep_application_type(DEPTH),
+                            },
+                            span,
+                        },
+                    )]),
+                    active_binders: HashMap::new(),
+                };
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(ONE_DEEP_TYPE * 2);
+
+                assert!(matches!(
+                    elaborator.lower_evidence_selection(
+                        &selection,
+                        &mut lowering,
+                        &Origin::Source(span),
+                        None,
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+            })
+            .expect("the lowered-evidence thread should start")
+            .join()
+            .expect("a provenance failure must dismantle the variable type iteratively");
+    }
+
+    #[test]
+    fn definition_view_lookup_failure_discards_function_and_binder_types_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("definition-view-type-owners".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "definition-view-owner.ash",
+                    "value : Unit -> Unit\nvalue argument = argument\n",
+                    "Unit",
+                    "()",
+                );
+                let mut definitions = resolved.definitions()[..1].to_vec();
+                let ResolvedDefinitionKind::Equational(global) = &mut definitions[0].kind else {
+                    panic!("the fixture definition should be equational");
+                };
+                global.interface.annotation.ty =
+                    Type::Function(Box::new(deep_application_type(DEPTH)), Box::new(Type::Unit));
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                assert!(matches!(
+                    elaborator.prepare_definition_views(
+                        definitions.iter(),
+                        Some(&[]),
+                        TypeContext::new(),
+                    ),
+                    Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+                ));
+
+                let ResolvedDefinitionKind::Equational(global) = &mut definitions[0].kind else {
+                    unreachable!()
+                };
+                let deep = std::mem::replace(&mut global.interface.annotation.ty, Type::Unit);
+                discard_type_iteratively(deep);
+            })
+            .expect("the definition-view thread should start")
+            .join()
+            .expect("a checked-view lookup failure must dismantle cloned types iteratively");
+    }
+
+    #[test]
+    fn operational_provenance_failure_discards_cloned_function_parts_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("operational-function-part-owners".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "operational-function-part-owner.ash",
+                    "fn value(argument : Unit) -> Unit {\nargument\n}\n",
+                    "Unit",
+                    "()",
+                );
+                let ResolvedDefinitionKind::InlineOperational(operational) =
+                    &resolved.definitions()[0].kind
+                else {
+                    panic!("the fixture definition should be operational");
+                };
+                let function_ty = Type::Function(
+                    Box::new(deep_application_type(DEPTH)),
+                    Box::new(deep_application_type(DEPTH)),
+                );
+                let function_type = ProvenancedType {
+                    ty: function_ty,
+                    provenance: TypeProvenance::atom(Some(operational.header.span)),
+                };
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                assert!(matches!(
+                    elaborator.elaborate_operational_function(
+                        operational,
+                        function_type,
+                        &mut TypeContext::new(),
+                        operational.header.span,
+                    ),
+                    Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+                ));
+            })
+            .expect("the operational function-part thread should start")
+            .join()
+            .expect("malformed provenance must dismantle operational function parts iteratively");
+    }
+
+    #[test]
+    fn operational_variable_admission_failure_discards_retained_pattern_on_a_small_stack() {
+        const DEPTH: usize = 100_000;
+
+        std::thread::Builder::new()
+            .name("operational-retained-pattern-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "operational-retained-pattern-owner.ash",
+                    "fn value(_ : Unit) -> Unit {\n()\n}\n",
+                    "Unit",
+                    "()",
+                );
+                let ResolvedDefinitionKind::InlineOperational(operational) =
+                    &resolved.definitions()[0].kind
+                else {
+                    panic!("the fixture definition should be operational");
+                };
+                let function_ty =
+                    Type::Function(Box::new(deep_application_type(DEPTH)), Box::new(Type::Unit));
+                let function_type = ProvenancedType {
+                    provenance: TypeProvenance::unknown(&function_ty),
+                    ty: function_ty,
+                };
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                assert!(matches!(
+                    elaborator.elaborate_operational_function(
+                        operational,
+                        function_type,
+                        &mut TypeContext::new(),
+                        operational.header.span,
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+            })
+            .expect("the operational retained-pattern thread should start")
+            .join()
+            .expect("a variable admission failure must dismantle the pattern iteratively");
+    }
+
+    #[test]
+    fn operational_codomain_failure_discards_completed_domain_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+        const ONE_DEEP_TYPE: usize = DEPTH * 2 + 1;
+
+        std::thread::Builder::new()
+            .name("operational-domain-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "operational-domain-owner.ash",
+                    "fn value(argument : Unit) -> Unit {\nargument\n}\n",
+                    "Unit",
+                    "()",
+                );
+                let mut definitions = resolved.definitions()[..1].to_vec();
+                let ResolvedDefinitionKind::InlineOperational(operational) =
+                    &mut definitions[0].kind
+                else {
+                    panic!("the fixture definition should be operational");
+                };
+                operational.header.parameters[0].annotation.ty = deep_application_type(DEPTH);
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(ONE_DEEP_TYPE + 1);
+
+                assert!(matches!(
+                    elaborator.checked_module_schemes(&definitions),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+
+                let ResolvedDefinitionKind::InlineOperational(operational) =
+                    &mut definitions[0].kind
+                else {
+                    unreachable!()
+                };
+                let deep = std::mem::replace(
+                    &mut operational.header.parameters[0].annotation.ty,
+                    Type::Unit,
+                );
+                discard_type_iteratively(deep);
+            })
+            .expect("the operational-domain thread should start")
+            .join()
+            .expect("a codomain failure must dismantle the completed domain iteratively");
+    }
+
+    #[test]
+    fn nonfunction_definition_rejection_discards_the_resolved_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("nonfunction-definition-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "nonfunction-definition-owner.ash",
+                    "value : Unit -> Unit\nvalue argument = argument\n",
+                    "Unit",
+                    "()",
+                );
+                let mut definitions = resolved.definitions()[..1].to_vec();
+                let ResolvedDefinitionKind::Equational(global) = &mut definitions[0].kind else {
+                    panic!("the fixture definition should be equational");
+                };
+                global.interface.annotation.ty = deep_application_type(DEPTH);
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                assert!(matches!(
+                    elaborator.prepare_definition_views(
+                        definitions.iter(),
+                        None,
+                        TypeContext::new(),
+                    ),
+                    Err(TypeError::Source(diagnostic))
+                        if diagnostic.reason == TypeReason::EquationInterfaceNotFunction
+                ));
+
+                let ResolvedDefinitionKind::Equational(global) = &mut definitions[0].kind else {
+                    unreachable!()
+                };
+                let deep = std::mem::replace(&mut global.interface.annotation.ty, Type::Unit);
+                discard_type_iteratively(deep);
+            })
+            .expect("the nonfunction-definition thread should start")
+            .join()
+            .expect("a nonfunction rejection must dismantle the resolved type iteratively");
+    }
+
+    #[test]
+    fn ambiguous_result_discards_the_zonked_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("ambiguous-result-zonk-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved =
+                    resolved_module_fixture("ambiguous-result-owner.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let binder = BinderId::new(0);
+                let expression = ResolvedExpr {
+                    kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
+                        term: crate::resolved::ResolvedTermName::Global(binder),
+                        spelling: "ambiguous".to_owned(),
+                        origin: Origin::Source(span),
+                        import_span: None,
+                        evidence: Box::new([]),
+                    }),
+                    span,
+                };
+                let mut ambiguous = deep_application_type(DEPTH);
+                let Type::Application(_, argument) = &mut ambiguous else {
+                    unreachable!()
+                };
+                discard_type_iteratively(std::mem::replace(
+                    argument.as_mut(),
+                    Type::Inference(InferenceVariableId::new(0)),
+                ));
+                let provenance = TypeProvenance::unknown(&ambiguous);
+                let mut context = TypeContext::new();
+                context.binders.insert(
+                    binder,
+                    TypeFact {
+                        ty: ambiguous,
+                        provenance,
+                        quantified: Box::new([]),
+                    },
+                );
+                let mut elaborator = Elaborator::for_resolved_expression(&resolved, &expression)
+                    .expect("the standalone binder reservation should fit");
+                elaborator.next_inference = 1;
+                elaborator.inference_origins.push(span);
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                assert!(matches!(
+                    elaborator.elaborate_result(&expression, &mut context),
+                    Err(TypeError::Source(diagnostic))
+                        if diagnostic.reason == TypeReason::AmbiguousType
+                ));
+            })
+            .expect("the ambiguous-result thread should start")
+            .join()
+            .expect("an ambiguous result must dismantle the zonked type iteratively");
+    }
+
+    #[test]
+    fn schedule_function_zonk_failure_discards_the_checked_pattern_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("schedule-function-checked-pattern-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "schedule-function-checked-pattern.ash",
+                    "",
+                    "Unit -> Unit",
+                    "fn(value) {\nvalue\n}",
+                );
+                let expression = fixture_result(&resolved);
+                let ResolvedExprKind::Function(function) = &expression.kind else {
+                    panic!("the fixture result should be a function");
+                };
+                let parameter = ResolvedPattern {
+                    kind: ResolvedPatternKind::Tuple(vec![
+                        ResolvedPattern {
+                            kind: ResolvedPatternKind::Wildcard,
+                            span: expression.span,
+                        },
+                        ResolvedPattern {
+                            kind: ResolvedPatternKind::Boolean(true),
+                            span: expression.span,
+                        },
+                    ]),
+                    span: expression.span,
+                };
+                let make_domain = || {
+                    Type::Tuple(
+                        vec![
+                            deep_application_type(DEPTH),
+                            Type::Inference(InferenceVariableId::new(0)),
+                        ]
+                        .into_boxed_slice(),
+                    )
+                };
+
+                let calibration_domain = make_domain();
+                let mut calibration =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                calibration.next_inference = 1;
+                calibration.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                let mut calibration_binders = Vec::new();
+                let checked = calibration
+                    .check_core_pattern(
+                        &parameter,
+                        &calibration_domain,
+                        &mut TypeContext::new(),
+                        &mut calibration_binders,
+                        GeneratedReason::FunctionLowering,
+                    )
+                    .expect("the tuple pattern should refine its Boolean component");
+                assert!(checked.inference_changed);
+                checked.pattern.discard_iteratively();
+                let exact_check_work = calibration.type_work.used();
+                discard_type_iteratively(calibration_domain);
+
+                let domain_ty = make_domain();
+                let domain = ProvenancedType {
+                    provenance: TypeProvenance::unknown(&domain_ty),
+                    ty: domain_ty,
+                };
+                let function_ty = Type::Function(Box::new(make_domain()), Box::new(Type::Unit));
+                let mut elaborator =
+                    Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+                elaborator.next_inference = 1;
+                elaborator.type_work = TypeWorkBudget::with_limit(exact_check_work);
+
+                assert!(matches!(
+                    elaborator.schedule_function_check(
+                        &mut TypeContext::new(),
+                        &mut ElaborationTaskBuffer(Vec::new()),
+                        0,
+                        FunctionCheck {
+                            parameter: &parameter,
+                            domain,
+                            codomain: ProvenancedType {
+                                ty: Type::Unit,
+                                provenance: TypeProvenance::atom(Some(expression.span)),
+                            },
+                            body: FunctionBody::Block(&function.body),
+                            presentation: Origin::Source(expression.span),
+                            function_type: ProvenancedType {
+                                provenance: TypeProvenance::unknown(&function_ty),
+                                ty: function_ty,
+                            },
+                            body_check: CheckKind::General,
+                        },
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+            })
+            .expect("the schedule-function checked-pattern thread should start")
+            .join()
+            .expect("a zonk failure must dismantle the checked pattern iteratively");
+    }
+
+    #[test]
+    fn central_finish_check_success_returns_a_public_deep_typed_node_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("central-finish-check-success".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved =
+                    resolved_module_fixture("central-finish-check.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let binder = BinderId::new(0);
+                let nominal = crate::types::NominalTypeId::new(resolved.module(), 0);
+                let expression = ResolvedExpr {
+                    kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
+                        term: crate::resolved::ResolvedTermName::Global(binder),
+                        spelling: "deep".to_owned(),
+                        origin: Origin::Source(span),
+                        import_span: None,
+                        evidence: Box::new([]),
+                    }),
+                    span,
+                };
+                let parameters = (0..DEPTH)
+                    .map(|index| crate::resolved::ResolvedTypeVariable {
+                        id: TypeVariableId::new(
+                            u32::try_from(index).expect("the parameter identity should fit"),
+                        ),
+                        spelling: format!("T{index}"),
+                        origin: Origin::Source(span),
+                    })
+                    .collect::<Vec<_>>();
+                let registry = Arc::new(
+                    ResolvedRegistry::new(
+                        vec![crate::resolved::ResolvedNominalType {
+                            id: nominal,
+                            spelling: "Deep".to_owned(),
+                            constructors: Box::new([]),
+                            origin: Origin::Source(span),
+                        }],
+                        Vec::new(),
+                    )
+                    .with_type_parameters(vec![(nominal, parameters)]),
+                );
+                let deep = || {
+                    Type::apply_arguments(
+                        Type::Nominal(nominal),
+                        std::iter::repeat_with(|| Type::Unit).take(DEPTH),
+                    )
+                };
+                let expected_ty = deep();
+                let mut context = TypeContext::new();
+                context.insert(binder, deep());
+                let mut elaborator = Elaborator::for_resolved_expression(&resolved, &expression)
+                    .expect("the standalone binder reservation should fit");
+                let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+                builder
+                    .reserve_resolved_binders([binder])
+                    .expect("the standalone binder identity should reserve once");
+                elaborator.builder = builder;
+                elaborator.registry = registry;
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                let result = elaborator
+                    .check(&expression, &expected_ty, &context)
+                    .expect("the central FinishCheck path should retain the deep result");
+                assert!(matches!(result.ty, Type::Application(_, _)));
+                result.discard_iteratively();
+                discard_type_iteratively(expected_ty);
+            })
+            .expect("the central FinishCheck thread should start")
+            .join()
+            .expect("a public deep TypedNode must be safely disposable on the small stack");
+    }
+
+    #[test]
+    fn late_redundant_match_arm_discards_popped_progress_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("central-late-match-failure".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture("central-late-match.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let binder = BinderId::new(0);
+                let occurrence = || ResolvedExpr {
+                    kind: ResolvedExprKind::Occurrence(crate::resolved::ResolvedOccurrence {
+                        term: crate::resolved::ResolvedTermName::Global(binder),
+                        spelling: "deep".to_owned(),
+                        origin: Origin::Source(span),
+                        import_span: None,
+                        evidence: Box::new([]),
+                    }),
+                    span,
+                };
+                let arm = || crate::resolved::ResolvedMatchArm {
+                    pattern: ResolvedPattern {
+                        kind: ResolvedPatternKind::Wildcard,
+                        span,
+                    },
+                    body: occurrence(),
+                    span,
+                };
+                let expression = ResolvedExpr {
+                    kind: ResolvedExprKind::Match(crate::resolved::ResolvedMatchExpr {
+                        scrutinee: Box::new(occurrence()),
+                        arms: vec![arm(), arm()],
+                    }),
+                    span,
+                };
+                let mut context = TypeContext::new();
+                context.insert(binder, deep_application_type(DEPTH));
+                let mut elaborator = Elaborator::for_resolved_expression(&resolved, &expression)
+                    .expect("the standalone binder reservation should fit");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+
+                assert!(matches!(
+                    elaborator.elaborate_expression_with_context(
+                        ElaborationTask::Synthesize {
+                            expression: &expression,
+                            cause: None,
+                        },
+                        &mut context,
+                    ),
+                    Err(TypeError::Source(diagnostic))
+                        if diagnostic.reason == TypeReason::RedundantCase
+                ));
+            })
+            .expect("the central late-match thread should start")
+            .join()
+            .expect("popped match progress must dismantle completed deep owners iteratively");
     }
 
     #[test]

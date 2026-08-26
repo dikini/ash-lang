@@ -24,7 +24,7 @@ use crate::{
     integer::Integer,
     resolved::{BinderId, ResolvedRegistry},
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
-    types::{Type, TypeWorkBudget, discard_type_iteratively},
+    types::{Type, TypeWorkBudget, discard_type_iteratively, replace_type_iteratively},
 };
 
 /// Names the closed pure Core dialect selected by Ash.
@@ -130,6 +130,17 @@ pub struct TypedExpr {
     pub origin: Origin,
     /// The selected pure feature payload.
     pub kind: PureExprKind,
+}
+
+impl TypedExpr {
+    /// Consumes a standalone expression and dismantles its structural type
+    /// without following the host call stack.
+    pub fn discard_iteratively(self) {
+        let Self { ty, origin, kind } = self;
+        discard_type_iteratively(ty);
+        discard_origin_iteratively(origin);
+        discard_pure_expr_kind_metadata(kind);
+    }
 }
 
 /// The closed expression families in the pure Ash dialect.
@@ -276,8 +287,20 @@ pub struct UnvalidatedProgram {
 }
 
 impl UnvalidatedProgram {
-    pub(super) fn discard_iteratively(self) {
-        for stored in self.nodes {
+    pub(super) fn discard_iteratively(mut self) {
+        self.discard_contents();
+    }
+
+    pub(super) fn into_parts(
+        mut self,
+    ) -> (Arc<ResolvedRegistry>, ArenaId, Vec<StoredNode>, NodeId) {
+        let registry = std::mem::take(&mut self.registry);
+        let nodes = std::mem::take(&mut self.nodes);
+        (registry, self.arena, nodes, self.root)
+    }
+
+    fn discard_contents(&mut self) {
+        for stored in std::mem::take(&mut self.nodes) {
             discard_type_iteratively(stored.ty);
             if let Some(origin) = stored.origin {
                 discard_origin_iteratively(origin);
@@ -313,9 +336,15 @@ impl UnvalidatedProgram {
                 ) => {}
             }
         }
-        if let Ok(registry) = Arc::try_unwrap(self.registry) {
+        if let Ok(registry) = Arc::try_unwrap(std::mem::take(&mut self.registry)) {
             registry.discard_iteratively();
         }
+    }
+}
+
+impl Drop for UnvalidatedProgram {
+    fn drop(&mut self) {
+        self.discard_contents();
     }
 }
 
@@ -370,6 +399,50 @@ impl PureProgram {
     #[must_use]
     pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
         &self.registry
+    }
+}
+
+impl Drop for PureProgram {
+    fn drop(&mut self) {
+        let nodes = std::mem::take(&mut self.nodes);
+        for typed in nodes {
+            discard_type_iteratively(typed.ty);
+            discard_origin_iteratively(typed.origin);
+            match typed.kind {
+                PureExprKind::Value(PureValue::Function(function)) => {
+                    function.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                    binding.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                    group.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                    match_node.discard_metadata();
+                }
+                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                    operation.discard_metadata();
+                }
+                PureExprKind::Value(
+                    PureValue::Integer(_)
+                    | PureValue::Boolean(_)
+                    | PureValue::Unit(_)
+                    | PureValue::Constructor(_),
+                )
+                | PureExprKind::Variable(_)
+                | PureExprKind::Computation(
+                    PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_)
+                    | PureComputation::TypeAbstraction(_),
+                ) => {}
+            }
+        }
+        let registry = std::mem::replace(&mut self.registry, Arc::new(ResolvedRegistry::default()));
+        if let Ok(registry) = Arc::try_unwrap(registry) {
+            registry.discard_iteratively();
+        }
     }
 }
 
@@ -564,9 +637,22 @@ impl CoreBuilder {
     /// identity when no arena identity remains.
     pub fn binder(&mut self, ty: Type, origin: Origin) -> Result<TypedBinder, BuildError> {
         let (ty, origin, requires_type_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
-        let (id, next) = self.next_binder_candidate()?;
-        let arena = self.ensure_arena()?;
+        let (id, next) = match self.next_binder_candidate() {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                discard_admitted_payload(ty, origin);
+                return Err(error);
+            }
+        };
+        let arena = match self.ensure_arena() {
+            Ok(arena) => arena,
+            Err(error) => {
+                discard_admitted_payload(ty, origin);
+                return Err(error);
+            }
+        };
         if !self.generated_binders.insert(id) {
+            discard_admitted_payload(ty, origin);
             return Err(BuildError::InvalidPayload);
         }
         self.next_binder = next;
@@ -596,12 +682,20 @@ impl CoreBuilder {
     ) -> Result<TypedBinder, BuildError> {
         let (ty, origin, requires_type_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
         if !self.reserved_resolved.contains(&id) {
+            discard_admitted_payload(ty, origin);
             return Err(BuildError::UnreservedResolvedBinder);
         }
         if self.materialized_resolved.contains(&id) {
+            discard_admitted_payload(ty, origin);
             return Err(BuildError::DuplicateResolvedBinder);
         }
-        let arena = self.ensure_arena()?;
+        let arena = match self.ensure_arena() {
+            Ok(arena) => arena,
+            Err(error) => {
+                discard_admitted_payload(ty, origin);
+                return Err(error);
+            }
+        };
         self.materialized_resolved.insert(id);
         self.binder_phase_started = true;
         if requires_type_rewrite {
@@ -730,8 +824,16 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin, result_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, result_rewrite) = match admit_payloads(ty, origin, &mut self.type_work) {
+            Ok(payloads) => payloads,
+            Err(error) => {
+                parameter.discard_metadata();
+                return Err(error);
+            }
+        };
         if self.arena != Some(parameter.arena()) {
+            parameter.discard_metadata();
+            discard_admitted_payload(ty, origin);
             return Err(BuildError::ForeignBinder);
         }
         let binder_rewrite = self.inference_binders.contains(&parameter.id());
@@ -760,8 +862,16 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin, result_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, result_rewrite) = match admit_payloads(ty, origin, &mut self.type_work) {
+            Ok(payloads) => payloads,
+            Err(error) => {
+                binder.discard_metadata();
+                return Err(error);
+            }
+        };
         if self.arena != Some(binder.arena()) {
+            binder.discard_metadata();
+            discard_admitted_payload(ty, origin);
             return Err(BuildError::ForeignBinder);
         }
         let binder_rewrite = self.inference_binders.contains(&binder.id());
@@ -795,11 +905,19 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin, result_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, result_rewrite) = match admit_payloads(ty, origin, &mut self.type_work) {
+            Ok(payloads) => payloads,
+            Err(error) => {
+                discard_recursive_binding_inputs(members);
+                return Err(error);
+            }
+        };
         if members
             .iter()
             .any(|(binder, _)| self.arena != Some(binder.arena()))
         {
+            discard_recursive_binding_inputs(members);
+            discard_admitted_payload(ty, origin);
             return Err(BuildError::ForeignBinder);
         }
         let binder_rewrite = members
@@ -850,7 +968,11 @@ impl CoreBuilder {
             .map_err(|()| BuildError::TypeWorkExceeded);
         let payloads = admit_payloads(ty, origin, &mut self.type_work);
         let (ty, origin, requires_type_rewrite) = match (parameter_admission, payloads) {
-            (Err(error), _) | (Ok(()), Err(error)) => return Err(error),
+            (Err(error), Ok((ty, origin, _))) => {
+                discard_admitted_payload(ty, origin);
+                return Err(error);
+            }
+            (Err(error), Err(_)) | (Ok(()), Err(error)) => return Err(error),
             (Ok(()), Ok(payloads)) => payloads,
         };
         self.push_admitted_tracking(
@@ -880,7 +1002,7 @@ impl CoreBuilder {
                     argument_rewrite |= contains_inference;
                     admitted_arguments.push(argument);
                 }
-                Ok(_) => {}
+                Ok((argument, _)) => discard_type_iteratively(argument),
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
@@ -888,7 +1010,19 @@ impl CoreBuilder {
         }
         let payloads = admit_payloads(ty, origin, &mut self.type_work);
         let (ty, origin, result_rewrite) = match (first_error, payloads) {
-            (Some(error), _) | (None, Err(error)) => return Err(error),
+            (Some(error), Ok((ty, origin, _))) => {
+                discard_type_vector_iteratively(&mut admitted_arguments);
+                discard_admitted_payload(ty, origin);
+                return Err(error);
+            }
+            (Some(error), Err(_)) => {
+                discard_type_vector_iteratively(&mut admitted_arguments);
+                return Err(error);
+            }
+            (None, Err(error)) => {
+                discard_type_vector_iteratively(&mut admitted_arguments);
+                return Err(error);
+            }
             (None, Ok(payloads)) => payloads,
         };
         self.push_admitted_tracking(
@@ -954,7 +1088,7 @@ impl CoreBuilder {
             cause: Box::new(cause),
             reason: GeneratedReason::TypeChecking,
         })?;
-        self.nodes[index].origin = Some(origin);
+        replace_origin_iteratively(&mut self.nodes[index].origin, origin);
         Ok(())
     }
 
@@ -1014,7 +1148,8 @@ impl CoreBuilder {
             Ok(rewritten)
         };
         for node in nodes {
-            node.ty = rewrite_admitted(&node.ty)?;
+            let rewritten = rewrite_admitted(&node.ty)?;
+            replace_type_iteratively(&mut node.ty, rewritten);
             match &mut node.kind {
                 PureExprKind::Value(PureValue::Function(function)) => {
                     function
@@ -1107,8 +1242,20 @@ impl CoreBuilder {
         origin: Origin,
         kind: PureExprKind,
     ) -> Result<NodeId, BuildError> {
-        let index = u32::try_from(self.nodes.len()).map_err(|_| BuildError::NodeIdExhausted)?;
-        let arena = self.ensure_arena()?;
+        let index = match u32::try_from(self.nodes.len()) {
+            Ok(index) => index,
+            Err(_) => {
+                discard_pending_node_payload(ty, origin, kind);
+                return Err(BuildError::NodeIdExhausted);
+            }
+        };
+        let arena = match self.ensure_arena() {
+            Ok(arena) => arena,
+            Err(error) => {
+                discard_pending_node_payload(ty, origin, kind);
+                return Err(error);
+            }
+        };
         self.nodes.push(StoredNode {
             dialect: DialectId::PURE,
             ty,
@@ -1149,37 +1296,65 @@ impl Drop for CoreBuilder {
             if let Some(origin) = stored.origin {
                 discard_origin_iteratively(origin);
             }
-            match stored.kind {
-                PureExprKind::Value(PureValue::Function(function)) => {
-                    function.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::Bind(binding)) => {
-                    binding.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
-                    group.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::Match(match_node)) => {
-                    match_node.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
-                    operation.discard_metadata();
-                }
-                PureExprKind::Value(
-                    PureValue::Integer(_)
-                    | PureValue::Boolean(_)
-                    | PureValue::Unit(_)
-                    | PureValue::Constructor(_),
-                )
-                | PureExprKind::Variable(_)
-                | PureExprKind::Computation(
-                    PureComputation::Apply(_)
-                    | PureComputation::Primitive(_)
-                    | PureComputation::Tuple(_)
-                    | PureComputation::TypeAbstraction(_),
-                ) => {}
-            }
+            discard_pure_expr_kind_metadata(stored.kind);
         }
+    }
+}
+
+fn replace_origin_iteratively(slot: &mut Option<Origin>, replacement: Origin) {
+    if let Some(displaced) = slot.replace(replacement) {
+        discard_origin_iteratively(displaced);
+    }
+}
+
+fn discard_admitted_payload(ty: Type, origin: Origin) {
+    discard_type_iteratively(ty);
+    discard_origin_iteratively(origin);
+}
+
+fn discard_type_vector_iteratively(types: &mut Vec<Type>) {
+    for ty in types.drain(..) {
+        discard_type_iteratively(ty);
+    }
+}
+
+fn discard_recursive_binding_inputs(members: Vec<(TypedBinder, NodeId)>) {
+    for (binder, _) in members {
+        binder.discard_metadata();
+    }
+}
+
+fn discard_pending_node_payload(ty: Type, origin: Origin, kind: PureExprKind) {
+    discard_admitted_payload(ty, origin);
+    discard_pure_expr_kind_metadata(kind);
+}
+
+fn discard_pure_expr_kind_metadata(kind: PureExprKind) {
+    match kind {
+        PureExprKind::Value(PureValue::Function(function)) => function.discard_metadata(),
+        PureExprKind::Computation(PureComputation::Bind(binding)) => binding.discard_metadata(),
+        PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+            group.discard_metadata();
+        }
+        PureExprKind::Computation(PureComputation::Match(match_node)) => {
+            match_node.discard_metadata();
+        }
+        PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+            operation.discard_metadata();
+        }
+        PureExprKind::Value(
+            PureValue::Integer(_)
+            | PureValue::Boolean(_)
+            | PureValue::Unit(_)
+            | PureValue::Constructor(_),
+        )
+        | PureExprKind::Variable(_)
+        | PureExprKind::Computation(
+            PureComputation::Apply(_)
+            | PureComputation::Primitive(_)
+            | PureComputation::Tuple(_)
+            | PureComputation::TypeAbstraction(_),
+        ) => {}
     }
 }
 
@@ -1510,8 +1685,15 @@ fn admit_payloads(
     let admitted_origin = admit_origin(origin);
     match (admitted_type, admitted_origin) {
         (Ok((ty, contains_inference)), Ok(origin)) => Ok((ty, origin, contains_inference)),
-        (Err(error), Ok(_)) | (Err(error), Err(_)) => Err(error),
-        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Ok(origin)) => {
+            discard_origin_iteratively(origin);
+            Err(error)
+        }
+        (Err(error), Err(_)) => Err(error),
+        (Ok((ty, _)), Err(error)) => {
+            discard_type_iteratively(ty);
+            Err(error)
+        }
     }
 }
 
@@ -1520,7 +1702,7 @@ enum TypeAdmissionTask {
     VisitSequence(std::vec::IntoIter<Type>, usize),
     FinishFunction,
     FinishTuple(usize),
-    FinishAppliedNominal(crate::types::NominalTypeId, usize),
+    FinishApplication,
     FinishForall(Box<[crate::types::TypeVariableId]>),
 }
 
@@ -1531,7 +1713,7 @@ enum TypeToken {
     Nominal(crate::types::NominalTypeId),
     Variable(crate::types::TypeVariableId),
     Inference(crate::types::InferenceVariableId),
-    AppliedNominal(crate::types::NominalTypeId, usize),
+    Application,
     Tuple(usize),
     Function,
     Forall(Box<[crate::types::TypeVariableId]>),
@@ -1593,15 +1775,15 @@ fn admit_type_with_status(
                 contains_inference = true;
                 tokens.push(TypeToken::Inference(identity));
             }
-            TypeAdmissionTask::Visit(Type::AppliedNominal(identity, arguments), depth) => {
+            TypeAdmissionTask::Visit(Type::Application(function, argument), depth) => {
                 let child_depth = depth.saturating_add(1);
                 exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
-                let count = arguments.len();
-                work.push(TypeAdmissionTask::FinishAppliedNominal(identity, count));
-                work.push(TypeAdmissionTask::VisitSequence(
-                    arguments.into_vec().into_iter(),
-                    child_depth,
-                ));
+                work.push(TypeAdmissionTask::FinishApplication);
+                work.push(TypeAdmissionTask::Visit(*argument, child_depth));
+                // A source-level simultaneous nominal application is encoded as
+                // a unary left spine. Its function links are representation
+                // width, not additional source structural depth.
+                work.push(TypeAdmissionTask::Visit(*function, depth));
             }
             TypeAdmissionTask::Visit(Type::Forall(parameters, body), depth) => {
                 let child_depth = depth.saturating_add(1);
@@ -1639,9 +1821,7 @@ fn admit_type_with_status(
             }
             TypeAdmissionTask::FinishFunction => tokens.push(TypeToken::Function),
             TypeAdmissionTask::FinishTuple(count) => tokens.push(TypeToken::Tuple(count)),
-            TypeAdmissionTask::FinishAppliedNominal(identity, count) => {
-                tokens.push(TypeToken::AppliedNominal(identity, count));
-            }
+            TypeAdmissionTask::FinishApplication => tokens.push(TypeToken::Application),
             TypeAdmissionTask::FinishForall(parameters) => {
                 tokens.push(TypeToken::Forall(parameters));
             }
@@ -1662,12 +1842,10 @@ fn admit_type_with_status(
             TypeToken::Nominal(identity) => rebuilt.push(Type::Nominal(identity)),
             TypeToken::Variable(identity) => rebuilt.push(Type::Variable(identity)),
             TypeToken::Inference(identity) => rebuilt.push(Type::Inference(identity)),
-            TypeToken::AppliedNominal(identity, count) => {
-                if rebuilt.len() < count {
-                    return Err(BuildError::InvalidPayload);
-                }
-                let arguments = rebuilt.split_off(rebuilt.len() - count);
-                rebuilt.push(Type::AppliedNominal(identity, arguments.into_boxed_slice()));
+            TypeToken::Application => {
+                let argument = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
+                let function = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
+                rebuilt.push(Type::Application(Box::new(function), Box::new(argument)));
             }
             TypeToken::Tuple(count) => {
                 if rebuilt.len() < count {
@@ -1704,11 +1882,15 @@ fn discard_type_admission_work(mut work: Vec<TypeAdmissionTask>) {
     while let Some(task) = work.pop() {
         match task {
             TypeAdmissionTask::Visit(ty, depth) => match ty {
-                Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                Type::Tuple(elements) => {
                     work.push(TypeAdmissionTask::VisitSequence(
                         elements.into_vec().into_iter(),
                         depth,
                     ));
+                }
+                Type::Application(function, argument) => {
+                    work.push(TypeAdmissionTask::Visit(*argument, depth));
+                    work.push(TypeAdmissionTask::Visit(*function, depth));
                 }
                 Type::Function(domain, codomain) => {
                     work.push(TypeAdmissionTask::Visit(*codomain, depth));
@@ -1732,7 +1914,7 @@ fn discard_type_admission_work(mut work: Vec<TypeAdmissionTask>) {
             }
             TypeAdmissionTask::FinishFunction
             | TypeAdmissionTask::FinishTuple(_)
-            | TypeAdmissionTask::FinishAppliedNominal(_, _)
+            | TypeAdmissionTask::FinishApplication
             | TypeAdmissionTask::FinishForall(_) => {}
         }
     }
@@ -1821,7 +2003,9 @@ mod tests {
     use super::*;
     use crate::{
         module::ModuleId,
+        resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable},
         source::{ByteRange, GeneratedReason, SourceFile},
+        types::{ConstructorId, NominalTypeId, TypeVariableId},
     };
 
     fn resolved_id(local: u32) -> BinderId {
@@ -1840,6 +2024,14 @@ mod tests {
         let mut ty = Type::Unit;
         for _ in 0..depth {
             ty = Type::Function(Box::new(Type::Unit), Box::new(ty));
+        }
+        ty
+    }
+
+    fn application_type(depth: usize) -> Type {
+        let mut ty = Type::Unit;
+        for _ in 0..depth {
+            ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
         }
         ty
     }
@@ -1878,6 +2070,352 @@ mod tests {
                 })
                 .expect("small-stack builder-drop thread should complete");
         });
+    }
+
+    #[test]
+    fn replacing_an_origin_discards_the_displaced_deep_origin_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("replace-deep-core-origin".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("replace-origin.ash", "()")
+                    .expect("the replacement fixture should fit");
+                let mut slot = Some(generated_origin(&source, DEPTH));
+
+                replace_origin_iteratively(&mut slot, generated_origin(&source, 0));
+
+                assert_eq!(
+                    slot.as_ref().map(Origin::primary_span).map(Span::source),
+                    Some(source.id())
+                );
+            })
+            .expect("the origin-replacement thread should start")
+            .join()
+            .expect("the displaced origin must be dismantled iteratively");
+    }
+
+    #[test]
+    fn successful_core_metadata_rewrite_replaces_deep_types_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("successful-deep-core-rewrite".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("rewrite-core.ash", "()")
+                    .expect("the rewrite fixture should fit");
+                let origin = generated_origin(&source, 0);
+
+                let mut node_builder = CoreBuilder::new();
+                node_builder
+                    .unit(application_type(DEPTH), origin.clone())
+                    .expect("the deep node annotation should be admitted");
+                node_builder
+                    .rewrite_types(|_| Ok(Type::Unit))
+                    .expect("the deep node annotation should rewrite");
+
+                let mut binder_builder = CoreBuilder::new();
+                let body = binder_builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the function body should fit");
+                let parameter = binder_builder
+                    .binder(application_type(DEPTH), origin.clone())
+                    .expect("the deep binder annotation should be admitted");
+                binder_builder
+                    .function(parameter, body, Type::Unit, origin.clone())
+                    .expect("the unchecked function should fit");
+                binder_builder
+                    .rewrite_types(|_| Ok(Type::Unit))
+                    .expect("the deep binder annotation should rewrite");
+
+                let mut pattern_builder = CoreBuilder::new();
+                let value = pattern_builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the scrutinee should fit");
+                pattern_builder
+                    .match_expression(
+                        value,
+                        vec![CoreMatchArm::new(
+                            CorePattern::new(
+                                application_type(DEPTH),
+                                origin.clone(),
+                                CorePatternKind::Wildcard,
+                            ),
+                            value,
+                            origin.clone(),
+                        )],
+                        Type::Unit,
+                        origin.clone(),
+                    )
+                    .expect("the deep pattern annotation should be admitted");
+                pattern_builder
+                    .rewrite_types(|_| Ok(Type::Unit))
+                    .expect("the deep pattern annotation should rewrite");
+
+                let mut operation_builder = CoreBuilder::new();
+                let function = operation_builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the type-operation function should fit");
+                operation_builder
+                    .type_application(function, vec![application_type(DEPTH)], Type::Unit, origin)
+                    .expect("the deep type argument should be admitted");
+                operation_builder
+                    .rewrite_types(|_| Ok(Type::Unit))
+                    .expect("the deep type argument should rewrite");
+            })
+            .expect("the rewrite thread should start")
+            .join()
+            .expect("successful Core rewrites must dismantle old types iteratively");
+    }
+
+    #[test]
+    fn unvalidated_program_discards_deep_payloads_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("unvalidated-deep-type-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("raw-core.ash", "()").expect("the raw Core fixture should fit");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let root = builder
+                    .unit(application_type(DEPTH), origin)
+                    .expect("the deep raw annotation should be admitted");
+                let unvalidated = builder.finish(root).expect("the raw Core root should fit");
+                drop(unvalidated);
+            })
+            .expect("the raw Core thread should start")
+            .join()
+            .expect("raw Core teardown must dismantle stored types iteratively");
+    }
+
+    #[test]
+    fn successful_public_binder_owners_drop_deep_types_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("successful-binder-owner-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("binder-owner.ash", "()").expect("the fixture should fit");
+                let origin = generated_origin(&source, 0);
+
+                let mut generated_builder = CoreBuilder::new();
+                let generated = generated_builder
+                    .binder(application_type(DEPTH), origin.clone())
+                    .expect("the generated binder should be admitted");
+                drop(generated);
+
+                let resolved_id = resolved_id(0);
+                let mut resolved_builder = CoreBuilder::new();
+                resolved_builder
+                    .reserve_resolved_binders([resolved_id])
+                    .expect("the resolved binder should be reserved");
+                let resolved = resolved_builder
+                    .resolved_binder(resolved_id, application_type(DEPTH), origin)
+                    .expect("the resolved binder should be admitted");
+                drop(resolved);
+            })
+            .expect("the binder-owner thread should start")
+            .join()
+            .expect("successful public binder owners must dismantle their types iteratively");
+    }
+
+    #[test]
+    fn public_match_arm_owner_drops_a_deep_pattern_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("public-match-arm-owner-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("match-arm-owner.ash", "()").expect("the fixture should fit");
+                let origin = generated_origin(&source, 0);
+                let arm = CoreMatchArm::new(
+                    CorePattern::new(
+                        application_type(DEPTH),
+                        origin.clone(),
+                        CorePatternKind::Wildcard,
+                    ),
+                    NodeId::new(ArenaId::new(0), 0),
+                    origin,
+                );
+                drop(arm);
+            })
+            .expect("the match-arm owner thread should start")
+            .join()
+            .expect("a public match arm must dismantle its pattern iteratively");
+    }
+
+    #[test]
+    fn public_core_pattern_has_an_iterative_consuming_disposal_path() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("public-pattern-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("pattern-owner.ash", "()").expect("the fixture should fit");
+                CorePattern::new(
+                    application_type(DEPTH),
+                    generated_origin(&source, 0),
+                    CorePatternKind::Wildcard,
+                )
+                .discard_iteratively();
+            })
+            .expect("the pattern-owner thread should start")
+            .join()
+            .expect("the documented Core pattern disposal path must fit a small stack");
+    }
+
+    #[test]
+    fn public_typed_expression_disposes_type_application_arguments_iteratively() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("public-typed-expression-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("typed-expression-owner.ash", "()")
+                    .expect("the fixture should fit");
+                TypedExpr {
+                    ty: Type::Unit,
+                    origin: generated_origin(&source, 0),
+                    kind: PureExprKind::Computation(PureComputation::TypeApplication(
+                        TypeApplicationNode::new(
+                            NodeId::new(ArenaId::new(0), 0),
+                            vec![application_type(DEPTH)],
+                        ),
+                    )),
+                }
+                .discard_iteratively();
+            })
+            .expect("the typed-expression thread should start")
+            .join()
+            .expect("the public disposal path must dismantle Core type arguments iteratively");
+    }
+
+    #[test]
+    fn canonical_application_core_admission_has_an_exact_cell_boundary() {
+        let owner = NominalTypeId::new(ModuleId::new(0), 0);
+        let application = || {
+            Type::Application(
+                Box::new(Type::Application(
+                    Box::new(Type::Nominal(owner)),
+                    Box::new(Type::Int),
+                )),
+                Box::new(Type::Bool),
+            )
+        };
+        let mut exact = TypeWorkBudget::with_limit(5);
+        let mut short = TypeWorkBudget::with_limit(4);
+
+        let (admitted, exceeded) = admit_type_with_status(application(), &mut exact, true)
+            .expect("the five canonical cells should fit exactly");
+        assert!(!exceeded);
+        assert_eq!(exact.used(), 5);
+        discard_type_iteratively(admitted);
+        assert_eq!(
+            admit_type_with_status(application(), &mut short, true),
+            Err(BuildError::TypeWorkExceeded),
+        );
+        assert_eq!(short.used(), 4);
+    }
+
+    #[test]
+    fn validated_program_discards_a_wide_application_on_a_small_stack() {
+        const WIDTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("validated-wide-type-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("wide-core.ash", "x".repeat(WIDTH + 2))
+                    .expect("the Core fixture should fit");
+                let span = source
+                    .span(
+                        ByteRange::new(
+                            0,
+                            u32::try_from(WIDTH + 2).expect("the fixture length should fit"),
+                        )
+                        .expect("the range is ordered"),
+                    )
+                    .expect("the range belongs to the fixture");
+                let origin = Origin::Source(span);
+                let module = ModuleId::new(0);
+                let owner = NominalTypeId::new(module, 0);
+                let constructor = ConstructorId::new(owner, 0);
+                let parameters = (0..WIDTH)
+                    .map(|index| {
+                        let start = u32::try_from(index + 1).expect("the fixture index should fit");
+                        ResolvedTypeVariable {
+                            id: TypeVariableId::resolved(
+                                module,
+                                u32::try_from(index).expect("the fixture index should fit"),
+                            ),
+                            spelling: format!("A{index}"),
+                            origin: Origin::Source(
+                                source
+                                    .span(
+                                        ByteRange::new(start, start + 1)
+                                            .expect("the range is ordered"),
+                                    )
+                                    .expect("the range belongs to the fixture"),
+                            ),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let parameter_ids = parameters
+                    .iter()
+                    .map(|parameter| parameter.id)
+                    .collect::<Vec<_>>();
+                let registry = ResolvedRegistry::new(
+                    vec![ResolvedNominalType {
+                        id: owner,
+                        spelling: "Wide".to_owned(),
+                        constructors: vec![constructor].into_boxed_slice(),
+                        origin: origin.clone(),
+                    }],
+                    vec![ResolvedConstructor {
+                        id: constructor,
+                        owner,
+                        spelling: "Wide".to_owned(),
+                        payload: None,
+                        origin: Origin::Source(
+                            source
+                                .span(ByteRange::new(0, 1).expect("the range is ordered"))
+                                .expect("the range belongs to the fixture"),
+                        ),
+                    }],
+                )
+                .with_type_parameters(vec![(owner, parameters)]);
+                let mut result = Type::Nominal(owner);
+                for parameter in &parameter_ids {
+                    result =
+                        Type::Application(Box::new(result), Box::new(Type::Variable(*parameter)));
+                }
+                let annotation = Type::Forall(parameter_ids.into_boxed_slice(), Box::new(result));
+                let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+                let root = builder
+                    .constructor(constructor, annotation, origin)
+                    .expect("application-spine width must not become Core structural depth");
+                let program = builder
+                    .finish(root)
+                    .expect("the Core fixture should finish");
+                let validated = super::super::validate::validate(program, &[&source])
+                    .expect("the saturated wide constructor scheme should validate");
+                drop(validated);
+            })
+            .expect("the Core disposal thread should start")
+            .join()
+            .expect("validated Core should dispose canonical application spines iteratively");
     }
 
     fn related_origin(source: &SourceFile, depth: usize) -> Origin {
@@ -2143,6 +2681,153 @@ mod tests {
             .expect("type-application result admission thread should start")
             .join()
             .expect("rejected type-application result must fit the small stack");
+    }
+
+    #[test]
+    fn type_application_discards_an_admitted_deep_argument_before_a_later_rejection() {
+        const DEPTH: usize = 32_768;
+        const DEEP_CELLS: usize = DEPTH * 2 + 1;
+
+        std::thread::Builder::new()
+            .name("admitted-argument-before-rejection".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("argument-before-error.ash", "()")
+                    .expect("the fixture should fit");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let function = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the function placeholder should fit");
+                builder
+                    .type_work
+                    .charge(
+                        crate::types::TYPE_WORK_LIMIT
+                            .saturating_sub(builder.type_work.used())
+                            .saturating_sub(DEEP_CELLS),
+                    )
+                    .expect("the setup should leave exactly one deep argument");
+
+                assert_eq!(
+                    builder.type_application(
+                        function,
+                        vec![application_type(DEPTH), Type::Unit],
+                        Type::Unit,
+                        origin,
+                    ),
+                    Err(BuildError::TypeWorkExceeded)
+                );
+            })
+            .expect("the admitted-argument thread should start")
+            .join()
+            .expect("an admitted argument must be dismantled iteratively after a later error");
+    }
+
+    #[test]
+    fn type_application_discards_a_deep_argument_admitted_after_an_earlier_rejection() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("rejection-before-admitted-argument".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("error-before-argument.ash", "()")
+                    .expect("the fixture should fit");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let function = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the function placeholder should fit");
+
+                assert_eq!(
+                    builder.type_application(
+                        function,
+                        vec![
+                            function_type(CORE_PAYLOAD_DEPTH_LIMIT + 1),
+                            application_type(DEPTH),
+                        ],
+                        Type::Unit,
+                        origin,
+                    ),
+                    Err(BuildError::TypeDepthExceeded)
+                );
+            })
+            .expect("the rejected-then-admitted thread should start")
+            .join()
+            .expect("a later admitted argument must be dismantled iteratively");
+    }
+
+    #[test]
+    fn type_application_discards_an_admitted_deep_result_after_argument_failure() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("argument-error-with-admitted-result".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("argument-error-result.ash", "()")
+                    .expect("the fixture should fit");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let function = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the function placeholder should fit");
+
+                assert_eq!(
+                    builder.type_application(
+                        function,
+                        vec![function_type(CORE_PAYLOAD_DEPTH_LIMIT + 1)],
+                        application_type(DEPTH),
+                        origin,
+                    ),
+                    Err(BuildError::TypeDepthExceeded)
+                );
+            })
+            .expect("the admitted-result thread should start")
+            .join()
+            .expect("an admitted result must be dismantled iteratively after argument failure");
+    }
+
+    #[test]
+    fn type_abstraction_discards_an_admitted_deep_result_after_parameter_failure() {
+        const DEPTH: usize = 32_768;
+        const DEEP_CELLS: usize = DEPTH * 2 + 1;
+
+        std::thread::Builder::new()
+            .name("parameter-error-with-admitted-result".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("parameter-error-result.ash", "()")
+                    .expect("the fixture should fit");
+                let origin = generated_origin(&source, 0);
+                let mut builder = CoreBuilder::new();
+                let body = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the abstraction body should fit");
+                builder
+                    .type_work
+                    .charge(
+                        crate::types::TYPE_WORK_LIMIT
+                            .saturating_sub(builder.type_work.used())
+                            .saturating_sub(DEEP_CELLS),
+                    )
+                    .expect("the setup should leave exactly one deep result");
+                let parameters = (0..=DEEP_CELLS)
+                    .map(|index| {
+                        crate::types::TypeVariableId::new(
+                            u32::try_from(index).expect("the parameter identity should fit"),
+                        )
+                    })
+                    .collect();
+
+                assert_eq!(
+                    builder.type_abstraction(parameters, body, application_type(DEPTH), origin,),
+                    Err(BuildError::TypeWorkExceeded)
+                );
+            })
+            .expect("the parameter-failure thread should start")
+            .join()
+            .expect("an admitted abstraction result must be dismantled iteratively");
     }
 
     #[test]

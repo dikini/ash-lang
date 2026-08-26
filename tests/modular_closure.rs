@@ -293,8 +293,8 @@ fn integer_equality_paths_complete_the_pipeline_with_one_observation() {
 
     // Assert.
     assert_eq!(
-        observation.ty,
-        Type::Tuple(vec![Type::Bool, Type::Bool, Type::Bool].into_boxed_slice())
+        observation.ty(),
+        &Type::Tuple(vec![Type::Bool, Type::Bool, Type::Bool].into_boxed_slice())
     );
     assert_eq!(observation.value_display(), "(true, true, true)");
     assert_eq!(observation.type_display(), "(Bool, Bool, Bool)");

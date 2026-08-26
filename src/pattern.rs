@@ -8,7 +8,7 @@ use std::{
 use crate::{
     core::{CorePattern, CorePatternKind},
     resolved::ResolvedRegistry,
-    types::{ConstructorId, Type, substitute_type_variables_with},
+    types::{ConstructorId, Type, discard_type_iteratively, substitute_type_variables_with},
 };
 
 /// A binder-free pattern shape used for coverage witnesses.
@@ -40,7 +40,77 @@ enum Head {
     Constructor(ConstructorId),
 }
 
-type State = (Vec<Vec<WitnessPattern>>, Vec<WitnessPattern>, Vec<Type>);
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct State(Vec<Vec<WitnessPattern>>, Vec<WitnessPattern>, Vec<Type>);
+
+impl Drop for State {
+    fn drop(&mut self) {
+        for ty in self.2.drain(..) {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+struct TypeReplacementMap(HashMap<crate::types::TypeVariableId, Type>);
+
+impl TypeReplacementMap {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn insert_replacing(&mut self, parameter: crate::types::TypeVariableId, ty: Type) {
+        if let Some(displaced) = self.0.insert(parameter, ty) {
+            discard_type_iteratively(displaced);
+        }
+    }
+
+    fn as_map(&self) -> &HashMap<crate::types::TypeVariableId, Type> {
+        &self.0
+    }
+}
+
+impl Drop for TypeReplacementMap {
+    fn drop(&mut self) {
+        for (_, ty) in self.0.drain() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+struct OwnedTypeBuffer(Vec<Type>);
+
+impl OwnedTypeBuffer {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn append_cloned(
+        &mut self,
+        types: &[Type],
+        budget: &mut UsefulnessBudget,
+    ) -> Result<(), UsefulnessError> {
+        charge_types(types, budget)?;
+        self.0.reserve(types.len());
+        self.0.extend_from_slice(types);
+        Ok(())
+    }
+
+    fn into_vec(mut self) -> Vec<Type> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for OwnedTypeBuffer {
+    fn drop(&mut self) {
+        for ty in self.0.drain(..) {
+            discard_type_iteratively(ty);
+        }
+    }
+}
 
 /// Maximum number of distinct usefulness states explored by one query.
 pub const USEFULNESS_STATE_LIMIT: usize = 100_000;
@@ -243,7 +313,7 @@ fn usefulness_shapes(
     budget: &mut UsefulnessBudget,
 ) -> Result<Option<Vec<WitnessPattern>>, UsefulnessError> {
     charge_state_materialization(matrix, candidate, types, budget)?;
-    let root = Rc::new((matrix.to_vec(), candidate.to_vec(), types.to_vec()));
+    let root = Rc::new(State(matrix.to_vec(), candidate.to_vec(), types.to_vec()));
     let mut memo = HashMap::<Rc<State>, Option<Vec<WitnessPattern>>>::new();
     let mut active = HashSet::new();
     let mut frames = vec![Frame::Call(root)];
@@ -330,7 +400,7 @@ fn immediate_result(
     state: &State,
     budget: &mut UsefulnessBudget,
 ) -> Result<Option<Option<Vec<WitnessPattern>>>, UsefulnessError> {
-    let (matrix, candidate, types) = state;
+    let State(matrix, candidate, types) = state;
     if candidate.is_empty() {
         return Ok(Some(matrix.is_empty().then(Vec::new)));
     }
@@ -353,7 +423,7 @@ fn choices(
     state_limit: usize,
     budget: &mut UsefulnessBudget,
 ) -> Result<Vec<Choice>, UsefulnessError> {
-    let (matrix, candidate, types) = state;
+    let State(matrix, candidate, types) = state;
     let first_type = &types[0];
     if candidate[0].is_wildcard() {
         if let Some(heads) = heads_for_type(first_type, registry) {
@@ -377,7 +447,7 @@ fn choices(
         let specialized_candidate = clone_witnesses(&candidate[1..], budget)?;
         let specialized_types = clone_types(&types[1..], budget)?;
         return Ok(vec![Choice {
-            child: Rc::new((default, specialized_candidate, specialized_types)),
+            child: Rc::new(State(default, specialized_candidate, specialized_types)),
             rebuild: Rebuild::Wildcard,
         }]);
     }
@@ -398,8 +468,8 @@ fn specialized_choice(
     registry: &ResolvedRegistry,
     budget: &mut UsefulnessBudget,
 ) -> Result<Choice, UsefulnessError> {
-    let (matrix, candidate, types) = state;
-    let argument_types = head_types(head, &types[0], registry, budget)?;
+    let State(matrix, candidate, types) = state;
+    let argument_types = OwnedTypeBuffer(head_types(head, &types[0], registry, budget)?);
     let argument_count = argument_types.len();
     let specialized_matrix = specialize_matrix(matrix, head, argument_count, budget)?;
     let mut specialized_candidate = if wildcard_candidate {
@@ -410,9 +480,13 @@ fn specialized_choice(
     };
     append_witnesses(&mut specialized_candidate, &candidate[1..], budget)?;
     let mut specialized_types = argument_types;
-    append_types(&mut specialized_types, &types[1..], budget)?;
+    specialized_types.append_cloned(&types[1..], budget)?;
     Ok(Choice {
-        child: Rc::new((specialized_matrix, specialized_candidate, specialized_types)),
+        child: Rc::new(State(
+            specialized_matrix,
+            specialized_candidate,
+            specialized_types.into_vec(),
+        )),
         rebuild: Rebuild::Head {
             head,
             argument_count,
@@ -519,17 +593,6 @@ fn clone_types(
     Ok(types.to_vec())
 }
 
-fn append_types(
-    target: &mut Vec<Type>,
-    types: &[Type],
-    budget: &mut UsefulnessBudget,
-) -> Result<(), UsefulnessError> {
-    charge_types(types, budget)?;
-    target.reserve(types.len());
-    target.extend_from_slice(types);
-    Ok(())
-}
-
 fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), UsefulnessError> {
     enum Task<'a> {
         Type(&'a Type),
@@ -553,8 +616,9 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
                         work.push(Task::Type(codomain));
                         work.push(Task::Type(domain));
                     }
-                    Type::AppliedNominal(_, arguments) => {
-                        work.push(Task::Slice(arguments.iter()));
+                    Type::Application(function, argument) => {
+                        work.push(Task::Type(argument));
+                        work.push(Task::Type(function));
                     }
                     Type::Int
                     | Type::Bool
@@ -626,9 +690,9 @@ fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads
         Type::Unit => Some(Heads::Unit),
         Type::Tuple(elements) => Some(Heads::Tuple(elements.len())),
         Type::Nominal(id) => Some(Heads::Constructors(&registry.nominal(*id)?.constructors)),
-        Type::AppliedNominal(id, _) => {
-            Some(Heads::Constructors(&registry.nominal(*id)?.constructors))
-        }
+        Type::Application(_, _) => Some(Heads::Constructors(
+            &registry.nominal(ty.outer_nominal()?)?.constructors,
+        )),
         Type::Int
         | Type::Function(_, _)
         | Type::Variable(_)
@@ -657,26 +721,38 @@ fn head_types(
                 return Ok(Vec::new());
             };
             let instantiated = match ty {
-                Type::AppliedNominal(owner, arguments) if *owner == constructor.owner => {
-                    let Some(parameters) = registry.nominal_parameters(*owner) else {
+                Type::Application(_, _) if ty.outer_nominal() == Some(constructor.owner) => {
+                    let Some(parameters) = registry.nominal_parameters(constructor.owner) else {
                         return Ok(Vec::new());
                     };
-                    if parameters.len() != arguments.len() {
+                    let mut current = ty;
+                    let mut argument_count = 0usize;
+                    while let Type::Application(function, argument) = current {
+                        budget.charge(1)?;
+                        let _ = argument;
+                        argument_count = argument_count
+                            .checked_add(1)
+                            .ok_or(UsefulnessError::WorkLimit)?;
+                        current = function;
+                    }
+                    if parameters.len() != argument_count {
                         return Ok(Vec::new());
                     }
                     budget.charge(parameters.len())?;
-                    charge_types(arguments, budget)?;
-                    let mut replacements = HashMap::new();
+                    let mut replacements = TypeReplacementMap::new();
                     replacements
                         .try_reserve(parameters.len())
                         .map_err(|_| UsefulnessError::WorkLimit)?;
-                    replacements.extend(
-                        parameters
-                            .iter()
-                            .zip(arguments)
-                            .map(|(parameter, argument)| (parameter.id, argument.clone())),
-                    );
-                    substitute_type_variables_with(payload, &replacements, |cells| {
+                    current = ty;
+                    for parameter in parameters.iter().rev() {
+                        let Type::Application(function, argument) = current else {
+                            return Ok(Vec::new());
+                        };
+                        charge_types(std::slice::from_ref(argument), budget)?;
+                        replacements.insert_replacing(parameter.id, argument.as_ref().clone());
+                        current = function;
+                    }
+                    substitute_type_variables_with(payload, replacements.as_map(), |cells| {
                         budget.charge(cells)
                     })?
                 }
@@ -920,8 +996,10 @@ mod tests {
         const WIDTH: usize = 4_096;
 
         let (registry, constructor, owner) = constructor_registry(WIDTH, Type::Int);
-        let applied = Type::AppliedNominal(owner, vec![Type::Bool; WIDTH].into_boxed_slice());
-        let required = WIDTH * 2 + 1;
+        let applied = Type::apply_arguments(Type::Nominal(owner), vec![Type::Bool; WIDTH]);
+        // W application-spine visits + W replacement records + W retained
+        // argument leaves + one substituted payload cell.
+        let required = WIDTH * 3 + 1;
         let mut exact = UsefulnessBudget {
             remaining: required,
         };
@@ -985,5 +1063,90 @@ mod tests {
             ),
             Err(UsefulnessError::WorkLimit)
         );
+    }
+
+    #[test]
+    fn late_specialization_failure_discards_deep_constructor_argument_types_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+        const DEEP_CELLS: usize = DEPTH * 2 + 1;
+
+        std::thread::Builder::new()
+            .name("late-specialization-type-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut payload = Type::Unit;
+                for _ in 0..DEPTH {
+                    payload = Type::Application(Box::new(payload), Box::new(Type::Unit));
+                }
+                let (registry, constructor, owner) = constructor_registry(0, payload);
+                let state = State(
+                    Vec::new(),
+                    vec![WitnessPattern::Wildcard, WitnessPattern::Wildcard],
+                    vec![Type::Nominal(owner), Type::Int],
+                );
+                let mut one_short = UsefulnessBudget {
+                    remaining: DEEP_CELLS + 2,
+                };
+
+                assert!(matches!(
+                    specialized_choice(
+                        &state,
+                        Head::Constructor(constructor),
+                        true,
+                        &registry,
+                        &mut one_short,
+                    ),
+                    Err(UsefulnessError::WorkLimit)
+                ));
+            })
+            .expect("the late-specialization thread should start")
+            .join()
+            .expect("late specialization failure must dismantle argument types iteratively");
+    }
+}
+#[cfg(test)]
+mod replacement_owner_api_tests {
+    use super::*;
+
+    fn deep_type(depth: usize) -> Type {
+        let mut ty = Type::Int;
+        for _ in 0..depth {
+            ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+        }
+        ty
+    }
+
+    #[test]
+    fn recursive_type_replacements_do_not_bypass_the_owner_api() {
+        let source: String = include_str!("pattern.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let raw_field = ["replacements", ".0"].concat();
+        assert!(!source.contains(&raw_field));
+        let raw_insert = [".0", ".insert("].concat();
+        let raw_reserve = [".0", ".try_reserve("].concat();
+        assert_eq!(source.matches(&raw_insert).count(), 1);
+        assert_eq!(source.matches(&raw_reserve).count(), 1);
+        let broad_mutation = ["impl", "DerefMut", "for", "TypeReplacementMap"].concat();
+        assert!(!source.contains(&broad_mutation));
+    }
+
+    #[test]
+    fn duplicate_deep_replacement_is_dismantled_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("duplicate-pattern-replacement".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let parameter = crate::types::TypeVariableId::new(0);
+                let mut replacements = TypeReplacementMap::new();
+                replacements.insert_replacing(parameter, deep_type(DEPTH));
+                replacements.insert_replacing(parameter, deep_type(DEPTH));
+            })
+            .expect("the duplicate-replacement thread should start")
+            .join()
+            .expect("duplicate replacement teardown must stay iterative");
     }
 }

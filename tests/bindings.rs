@@ -131,11 +131,11 @@ fn v003_resolves_shadowing_to_distinct_binders_and_runs_to_two() {
 
     let observation =
         run_module("v003-local-shadowing.ash", V003).expect("V-003 should run end to end");
-    let Value::Integer(value) = observation.value else {
+    let Value::Integer(value) = observation.value() else {
         panic!("expected an integer value");
     };
-    assert_eq!(value, Integer::parse_decimal("2").expect("valid integer"));
-    assert_eq!(observation.ty, Type::Int);
+    assert_eq!(*value, Integer::parse_decimal("2").expect("valid integer"));
+    assert_eq!(observation.ty(), &Type::Int);
 }
 
 #[test]
@@ -148,11 +148,11 @@ fn annotated_primitive_binding_checks_then_enters_the_remainder_scope() {
 
     let observation =
         run_module("annotated.ash", source.text()).expect("annotated binding should run");
-    let Value::Integer(value) = observation.value else {
+    let Value::Integer(value) = observation.value() else {
         panic!("expected an integer value");
     };
-    assert_eq!(value, Integer::parse_decimal("42").expect("valid integer"));
-    assert_eq!(observation.ty, Type::Int);
+    assert_eq!(*value, Integer::parse_decimal("42").expect("valid integer"));
+    assert_eq!(observation.ty(), &Type::Int);
 }
 
 #[test]

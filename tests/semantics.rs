@@ -479,8 +479,8 @@ fn arbitrary_precision_observations_and_traces_exceed_unsigned_machine_width() {
     ] {
         let fixture = ModuleFixture::load(&text);
         let observation = fixture.run();
-        assert_eq!(observation.value.to_string(), expected_value, "{name}");
-        assert_eq!(observation.ty.to_string(), expected_type, "{name}");
+        assert_eq!(observation.value().to_string(), expected_value, "{name}");
+        assert_eq!(observation.ty().to_string(), expected_type, "{name}");
         assert_eq!(
             render::observation(&observation),
             format!("{expected_value} : {expected_type}\n"),

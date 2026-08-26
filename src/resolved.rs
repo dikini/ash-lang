@@ -860,6 +860,9 @@ impl CheckedModule {
 
 impl Drop for CheckedModule {
     fn drop(&mut self) {
+        for interface in std::mem::take(&mut self.interfaces).into_vec() {
+            discard_resolved_interface_iteratively(interface);
+        }
         for checked in self.schemes.drain(..) {
             drop(checked.scheme);
             discard_origin_iteratively(checked.origin);
@@ -976,6 +979,9 @@ impl ResolvedModuleGroup {
 
 impl Drop for ResolvedModuleGroup {
     fn drop(&mut self) {
+        for interface in std::mem::take(&mut self.interfaces).into_vec() {
+            discard_resolved_interface_iteratively(interface);
+        }
         for checked in std::mem::take(&mut self.schemes).into_vec() {
             drop(checked.scheme);
             discard_origin_iteratively(checked.origin);
@@ -1495,7 +1501,9 @@ impl ImportedFacts {
     }
 
     pub(crate) fn insert_global(&mut self, fact: ImportedGlobalScheme) {
-        self.globals.insert(fact.binder, fact);
+        if let Some(displaced) = self.globals.insert(fact.binder, fact) {
+            discard_imported_global(displaced);
+        }
     }
 
     pub(crate) fn merge_nominal(
@@ -1503,7 +1511,9 @@ impl ImportedFacts {
         mut fact: ImportedNominalFact,
     ) -> Result<(), ImportedNominalConflict> {
         let Some(existing) = self.nominals.get_mut(&fact.id) else {
-            self.nominals.insert(fact.id, fact);
+            if let Some(displaced) = self.nominals.insert(fact.id, fact) {
+                discard_imported_nominal(displaced);
+            }
             return Ok(());
         };
         let constructor_conflict = !existing.constructors.is_empty()
@@ -1543,7 +1553,9 @@ impl ImportedFacts {
     }
 
     pub(crate) fn insert_constructor(&mut self, fact: ImportedConstructorFact) {
-        self.constructors.insert(fact.id, fact);
+        if let Some(displaced) = self.constructors.insert(fact.id, fact) {
+            displaced.discard_iteratively();
+        }
     }
 
     pub(crate) fn insert_interface(
@@ -1659,6 +1671,19 @@ impl Drop for ImportedFacts {
     }
 }
 
+fn discard_imported_global(fact: ImportedGlobalScheme) {
+    let ImportedGlobalScheme { scheme, origin, .. } = fact;
+    drop(scheme);
+    discard_origin_iteratively(origin);
+}
+
+fn discard_imported_nominal(fact: ImportedNominalFact) {
+    for parameter in fact.parameters.into_vec() {
+        discard_origin_iteratively(parameter.origin);
+    }
+    discard_origin_iteratively(fact.origin);
+}
+
 /// One body-free checked interface fact keyed by stable semantic identity.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckedInterfaceFact {
@@ -1716,7 +1741,7 @@ pub struct CheckedInterfaceMethodFact {
     /// Exact defining source spelling.
     pub spelling: String,
     /// Checked source value type before evidence lowering.
-    pub value_type: Type,
+    pub(crate) value_type: Type,
     /// Causal method provenance.
     pub origin: Origin,
     /// Complete method-signature span.
@@ -1733,6 +1758,14 @@ impl Drop for CheckedInterfaceMethodFact {
     }
 }
 
+impl CheckedInterfaceMethodFact {
+    /// Borrows the checked source value type before evidence lowering.
+    #[must_use]
+    pub const fn value_type(&self) -> &Type {
+        &self.value_type
+    }
+}
+
 /// One body-free checked implementation fact available for selection and overlap checks.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckedImplementationFact {
@@ -1743,7 +1776,7 @@ pub struct CheckedImplementationFact {
     /// Ordered rigid head parameters with defining identities.
     pub head_parameters: Box<[ResolvedTypeVariable]>,
     /// Checked implementation head argument.
-    pub argument: Type,
+    pub(crate) argument: Type,
     /// Ordered checked prerequisites.
     pub prerequisites: Box<[CheckedRequirement]>,
     /// Method mappings in interface declaration order.
@@ -1761,6 +1794,14 @@ pub struct ImportedImplementationFact {
     pub fact: CheckedImplementationFact,
     pub(crate) authorization: ImplementationAuthorization,
     pub(crate) public_authorization: Option<ImplementationAuthorization>,
+}
+
+impl CheckedImplementationFact {
+    /// Borrows the checked implementation head argument.
+    #[must_use]
+    pub const fn argument(&self) -> &Type {
+        &self.argument
+    }
 }
 
 impl ImportedImplementationFact {
@@ -2051,6 +2092,17 @@ pub struct ImportedConstructorFact {
     pub origin: Origin,
 }
 
+impl ImportedConstructorFact {
+    /// Consumes a standalone imported constructor fact and dismantles its
+    /// optional payload without recursive type drop.
+    pub fn discard_iteratively(self) {
+        if let Some(payload) = self.payload {
+            discard_type_iteratively(payload);
+        }
+        discard_origin_iteratively(self.origin);
+    }
+}
+
 /// Public local declarations and checked imported names staged by resolution.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResolvedExportCandidate {
@@ -2137,6 +2189,7 @@ impl ResolvedExportCandidate {
             spelling,
             candidate,
             budget,
+            |candidate: CandidateGlobal| discard_origin_iteratively(candidate.origin),
         )
     }
 
@@ -2152,6 +2205,7 @@ impl ResolvedExportCandidate {
             spelling,
             candidate,
             budget,
+            |candidate: CandidateNominal| discard_origin_iteratively(candidate.origin),
         )
     }
 
@@ -2167,6 +2221,7 @@ impl ResolvedExportCandidate {
             spelling,
             candidate,
             budget,
+            |candidate: CandidateConstructor| discard_origin_iteratively(candidate.origin),
         )
     }
 
@@ -2182,6 +2237,7 @@ impl ResolvedExportCandidate {
             spelling,
             candidate,
             budget,
+            |_candidate: CandidateInterface| {},
         )
     }
 
@@ -2197,6 +2253,7 @@ impl ResolvedExportCandidate {
             spelling,
             candidate,
             budget,
+            |_candidate: CandidateMethod| {},
         )
     }
 
@@ -2206,12 +2263,15 @@ impl ResolvedExportCandidate {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ()> {
         if let Some(existing) = self.hidden_nominals.get_mut(&candidate.id) {
-            *existing = candidate;
+            let displaced = std::mem::replace(existing, candidate);
+            discard_origin_iteratively(displaced.origin);
             return Ok(());
         }
         budget.charge(1)?;
         self.hidden_nominals.try_reserve(1).map_err(|_| ())?;
-        self.hidden_nominals.insert(candidate.id, candidate);
+        if let Some(displaced) = self.hidden_nominals.insert(candidate.id, candidate) {
+            discard_origin_iteratively(displaced.origin);
+        }
         Ok(())
     }
 
@@ -2226,7 +2286,8 @@ impl ResolvedExportCandidate {
         if let Some(existing) = self.withheld.get_mut(&spelling)
             && let Some(existing) = existing.get_exact_mut(namespace, owner)
         {
-            *existing = withheld;
+            let displaced = std::mem::replace(existing, withheld);
+            discard_withheld_export(displaced);
             return Ok(());
         }
         let retained_work = if namespace == WithheldNamespace::Constructor {
@@ -2248,7 +2309,9 @@ impl ResolvedExportCandidate {
         } else {
             let mut entries = WithheldExports::default();
             entries.try_reserve(namespace, 1)?;
-            self.withheld.insert(spelling.clone(), entries);
+            if let Some(displaced) = self.withheld.insert(spelling.clone(), entries) {
+                discard_withheld_exports(displaced);
+            }
         }
         let constructor_index = self
             .withheld
@@ -2271,20 +2334,35 @@ fn try_insert_ordered<K, V>(
     key: K,
     value: V,
     budget: &mut TypeWorkBudget,
+    mut discard: impl FnMut(V),
 ) -> Result<(), ()>
 where
     K: Clone + Eq + Hash,
 {
     if let Some(existing) = entries.get_mut(&key) {
-        *existing = value;
+        discard(std::mem::replace(existing, value));
         return Ok(());
     }
     budget.charge(2)?;
     entries.try_reserve(1).map_err(|_| ())?;
     order.try_reserve(1).map_err(|_| ())?;
     order.push(key.clone());
-    entries.insert(key, value);
+    if let Some(displaced) = entries.insert(key, value) {
+        discard(displaced);
+    }
     Ok(())
+}
+
+fn discard_withheld_export(withheld: WithheldExport) {
+    if let Some(origin) = withheld.origin {
+        discard_origin_iteratively(origin);
+    }
+}
+
+fn discard_withheld_exports(withheld: WithheldExports) {
+    for withheld in withheld.into_values() {
+        discard_withheld_export(withheld);
+    }
 }
 
 impl Drop for ResolvedExportCandidate {
@@ -2309,11 +2387,7 @@ impl Drop for ResolvedExportCandidate {
             discard_origin_iteratively(candidate.origin);
         }
         for (_, withheld) in self.withheld.drain() {
-            for withheld in withheld.into_values() {
-                if let Some(origin) = withheld.origin {
-                    discard_origin_iteratively(origin);
-                }
-            }
+            discard_withheld_exports(withheld);
         }
         self.withheld_order.clear();
     }
@@ -2629,6 +2703,17 @@ pub struct ExportedConstructor {
     pub payload: Option<Type>,
     /// Causal declaration provenance.
     pub origin: Origin,
+}
+
+impl ExportedConstructor {
+    /// Consumes a standalone exported constructor and dismantles its optional
+    /// payload without recursive type drop.
+    pub fn discard_iteratively(self) {
+        if let Some(payload) = self.payload {
+            discard_type_iteratively(payload);
+        }
+        discard_origin_iteratively(self.origin);
+    }
 }
 
 /// Checked, body-free exports from one dependency module.
@@ -4023,9 +4108,9 @@ fn collect_nominal_identities(
             Type::Nominal(id) => {
                 output.insert(*id);
             }
-            Type::AppliedNominal(id, arguments) => {
-                output.insert(*id);
-                work.extend(arguments);
+            Type::Application(function, argument) => {
+                work.push(argument);
+                work.push(function);
             }
             Type::Tuple(elements) => work.extend(elements),
             Type::Function(domain, codomain) => {
@@ -4348,9 +4433,7 @@ impl ResolvedRegistry {
                 .nominal_parameters
                 .insert(owner, parameters.into_boxed_slice())
             {
-                for parameter in replaced.into_vec() {
-                    discard_origin_iteratively(parameter.origin);
-                }
+                discard_resolved_type_variables(replaced);
             }
         }
         self
@@ -4375,7 +4458,7 @@ impl ResolvedRegistry {
 
     fn insert_type_variable(&mut self, parameter: ResolvedTypeVariable) {
         if let Some(replaced) = self.type_variables.insert(parameter.id, parameter) {
-            discard_origin_iteratively(replaced.origin);
+            discard_resolved_type_variable(replaced);
         }
     }
 
@@ -4453,6 +4536,7 @@ impl ResolvedRegistry {
     fn display_type_with_inference(&self, ty: &Type, anonymous_inference: bool) -> String {
         enum Task<'a> {
             Type(&'a Type),
+            ApplicationSpine(&'a Type),
             Text(&'static str),
         }
 
@@ -4487,23 +4571,27 @@ impl ResolvedRegistry {
                         output.push_str(&Type::Inference(*id).to_string());
                     }
                 }
-                Task::Type(Type::AppliedNominal(id, arguments)) => {
-                    if let Some(nominal) = self.nominal(*id) {
-                        output.push_str(&nominal.spelling);
-                    } else if let Some(spelling) = self.abstract_nominal_names.get(id) {
-                        output.push_str(spelling);
-                    } else {
-                        output.push_str(&Type::Nominal(*id).to_string());
-                    }
-                    output.push('<');
+                Task::Type(application @ Type::Application(_, _)) => {
                     work.push(Task::Text(">"));
-                    for (index, argument) in arguments.iter().enumerate().rev() {
-                        work.push(Task::Type(argument));
-                        if index > 0 {
-                            work.push(Task::Text(", "));
+                    work.push(Task::ApplicationSpine(application));
+                }
+                Task::ApplicationSpine(Type::Application(function, argument)) => {
+                    work.push(Task::Type(argument));
+                    if matches!(function.as_ref(), Type::Application(_, _)) {
+                        work.push(Task::Text(", "));
+                        work.push(Task::ApplicationSpine(function));
+                    } else {
+                        work.push(Task::Text("<"));
+                        if matches!(function.as_ref(), Type::Function(_, _) | Type::Forall(_, _)) {
+                            work.push(Task::Text(")"));
+                            work.push(Task::Type(function));
+                            work.push(Task::Text("("));
+                        } else {
+                            work.push(Task::Type(function));
                         }
                     }
                 }
+                Task::ApplicationSpine(_) => unreachable!("application spine tasks are closed"),
                 Task::Type(Type::Forall(parameters, body)) => {
                     output.push_str("forall ");
                     for (index, parameter) in parameters.iter().enumerate() {
@@ -4567,13 +4655,21 @@ impl ResolvedRegistry {
             discard_origin_iteratively(constructor.origin);
         }
         for parameters in nominal_parameters.into_values() {
-            for parameter in parameters.into_vec() {
-                discard_origin_iteratively(parameter.origin);
-            }
+            discard_resolved_type_variables(parameters);
         }
         for parameter in type_variables.into_values() {
-            discard_origin_iteratively(parameter.origin);
+            discard_resolved_type_variable(parameter);
         }
+    }
+}
+
+fn discard_resolved_type_variable(parameter: ResolvedTypeVariable) {
+    discard_origin_iteratively(parameter.origin);
+}
+
+fn discard_resolved_type_variables(parameters: Box<[ResolvedTypeVariable]>) {
+    for parameter in parameters.into_vec() {
+        discard_resolved_type_variable(parameter);
     }
 }
 
@@ -4622,6 +4718,17 @@ pub struct ResolvedConstructor {
     pub origin: Origin,
 }
 
+impl ResolvedConstructor {
+    /// Consumes standalone constructor metadata and dismantles its optional
+    /// payload without recursive type drop.
+    pub fn discard_iteratively(self) {
+        if let Some(payload) = self.payload {
+            discard_type_iteratively(payload);
+        }
+        discard_origin_iteratively(self.origin);
+    }
+}
+
 /// One fully resolved type occurrence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedType {
@@ -4633,6 +4740,14 @@ pub struct ResolvedType {
     pub origin: Origin,
     /// Complete source occurrence span.
     pub span: Span,
+}
+
+impl ResolvedType {
+    /// Consumes a standalone resolved type and dismantles its structural tree
+    /// without following the host call stack.
+    pub fn discard_iteratively(self) {
+        discard_resolved_type(self);
+    }
 }
 
 /// Shareable arena-shaped provenance for one resolved type occurrence.
@@ -4655,8 +4770,13 @@ pub enum ResolvedTypeProvenanceNode {
         domain: usize,
         codomain: usize,
     },
-    /// A saturated nominal type application and its argument roots.
-    Application { span: Span, arguments: Box<[usize]> },
+    /// One canonical unary type application and its causal source argument.
+    Application {
+        span: Span,
+        function: usize,
+        argument: usize,
+        argument_span: Span,
+    },
 }
 
 impl ResolvedTypeProvenance {
@@ -5098,7 +5218,7 @@ pub struct ResolvedFunctionExpr {
     pub body: ResolvedBlock,
 }
 
-fn discard_resolved_definition_iteratively(definition: ResolvedDefinition) {
+pub(crate) fn discard_resolved_definition_iteratively(definition: ResolvedDefinition) {
     let mut expressions = Vec::new();
     let mut patterns = Vec::new();
     match definition.kind {
@@ -5127,7 +5247,7 @@ fn discard_resolved_definition_iteratively(definition: ResolvedDefinition) {
     discard_resolved_body_work(expressions, patterns);
 }
 
-fn discard_resolved_implementation_iteratively(implementation: ResolvedImplementation) {
+pub(crate) fn discard_resolved_implementation_iteratively(implementation: ResolvedImplementation) {
     discard_origin_iteratively(implementation.interface.origin);
     discard_resolved_type(implementation.argument);
     for parameter in implementation.head_parameters {
@@ -5150,7 +5270,7 @@ fn discard_resolved_implementation_iteratively(implementation: ResolvedImplement
     discard_resolved_body_work(expressions, patterns);
 }
 
-fn discard_resolved_interface_iteratively(interface: ResolvedInterfaceDeclaration) {
+pub(crate) fn discard_resolved_interface_iteratively(interface: ResolvedInterfaceDeclaration) {
     discard_origin_iteratively(interface.parameter.origin);
     for method in interface.methods.into_vec() {
         discard_resolved_type(method.annotation);
@@ -5173,9 +5293,14 @@ fn discard_external_interface(interface: ResolvedExternalInterface) {
     }
 }
 
-fn discard_resolved_requirement(requirement: ResolvedRequirement) {
+pub(crate) fn discard_resolved_requirement(requirement: ResolvedRequirement) {
     discard_origin_iteratively(requirement.interface.origin);
     discard_resolved_type(requirement.argument);
+}
+
+pub(crate) fn discard_resolved_equation_iteratively(equation: ResolvedEquation) {
+    discard_resolved_body_work(vec![equation.body], equation.patterns);
+    discard_origin_iteratively(equation.name.origin);
 }
 
 fn discard_resolved_type(resolved: ResolvedType) {
@@ -5287,12 +5412,424 @@ fn discard_resolved_body_work(
     }
 }
 
+pub(crate) fn discard_resolved_expression_iteratively(expression: ResolvedExpr) {
+    discard_resolved_body_work(vec![expression], Vec::new());
+}
+
+pub(crate) fn discard_resolved_pattern_iteratively(pattern: ResolvedPattern) {
+    discard_resolved_body_work(Vec::new(), vec![pattern]);
+}
+
+pub(crate) fn discard_resolved_local_declaration_iteratively(
+    declaration: ResolvedLocalDeclaration,
+) {
+    let span = match &declaration {
+        ResolvedLocalDeclaration::Binding(binding) => binding.span,
+        ResolvedLocalDeclaration::Recursive(group) => group.span,
+    };
+    discard_resolved_body_work(
+        vec![ResolvedExpr {
+            kind: ResolvedExprKind::Block(ResolvedBlock {
+                declarations: vec![declaration],
+                result: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span,
+                }),
+                span,
+            }),
+            span,
+        }],
+        Vec::new(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::interface::RequirementOwner;
     use crate::module::ModuleId;
     use crate::source::{ByteRange, GeneratedReason, SourceFile};
+
+    fn application_type(depth: usize) -> Type {
+        let mut ty = Type::Unit;
+        for _ in 0..depth {
+            ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+        }
+        ty
+    }
+
+    fn generated_origin(source: &SourceFile, depth: usize) -> Origin {
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the origin range should be ordered"))
+            .expect("the origin range should belong to the fixture");
+        let mut origin = Origin::Source(span);
+        for _ in 0..depth {
+            origin = Origin::Generated {
+                cause: Box::new(origin),
+                reason: GeneratedReason::TypeChecking,
+            };
+        }
+        origin
+    }
+
+    #[test]
+    fn duplicate_imported_global_is_dismantled_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("duplicate-imported-global".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("duplicate-global.ash", "x")
+                    .expect("the imported-global fixture should fit");
+                let binder = BinderId::resolved(ModuleId::new(90), 0);
+                let mut imported = ImportedFacts::default();
+                imported.insert_global(ImportedGlobalScheme {
+                    binder,
+                    scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
+                    origin: generated_origin(&source, DEPTH),
+                });
+                imported.insert_global(ImportedGlobalScheme {
+                    binder,
+                    scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
+                    origin: generated_origin(&source, 0),
+                });
+                assert_eq!(
+                    imported
+                        .global(binder)
+                        .expect("the replacement global should remain")
+                        .scheme
+                        .value_type(),
+                    &Type::Unit,
+                );
+            })
+            .expect("the duplicate-global thread should start")
+            .join()
+            .expect("the displaced imported global must be dismantled iteratively");
+    }
+
+    #[test]
+    fn duplicate_imported_constructor_is_dismantled_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("duplicate-imported-constructor".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("duplicate-constructor.ash", "x")
+                    .expect("the imported-constructor fixture should fit");
+                let constructor = ConstructorId::new(NominalTypeId::new(ModuleId::new(91), 0), 0);
+                let mut imported = ImportedFacts::default();
+                imported.insert_constructor(ImportedConstructorFact {
+                    id: constructor,
+                    spelling: "Deep".to_owned(),
+                    payload: Some(application_type(DEPTH)),
+                    origin: generated_origin(&source, DEPTH),
+                });
+                imported.insert_constructor(ImportedConstructorFact {
+                    id: constructor,
+                    spelling: "Shallow".to_owned(),
+                    payload: None,
+                    origin: generated_origin(&source, 0),
+                });
+                let retained = imported
+                    .constructors
+                    .get(&constructor)
+                    .expect("the replacement constructor should remain");
+                assert_eq!(retained.spelling, "Shallow");
+                assert!(retained.payload.is_none());
+            })
+            .expect("the duplicate-constructor thread should start")
+            .join()
+            .expect("the displaced imported constructor must be dismantled iteratively");
+    }
+
+    #[test]
+    fn replaced_ordered_export_candidate_is_dismantled_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("replace-ordered-export".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("replace-ordered.ash", "x")
+                    .expect("the ordered-export fixture should fit");
+                let mut exports = ResolvedExportCandidate::default();
+                let mut budget = TypeWorkBudget::default();
+                exports
+                    .try_insert_term(
+                        "value".to_owned(),
+                        CandidateGlobal {
+                            binder: BinderId::resolved(ModuleId::new(92), 0),
+                            source: CandidateFactSource::Imported,
+                            origin: generated_origin(&source, DEPTH),
+                        },
+                        &mut budget,
+                    )
+                    .expect("the first export should fit");
+                exports
+                    .try_insert_term(
+                        "value".to_owned(),
+                        CandidateGlobal {
+                            binder: BinderId::resolved(ModuleId::new(92), 1),
+                            source: CandidateFactSource::Local,
+                            origin: generated_origin(&source, 0),
+                        },
+                        &mut budget,
+                    )
+                    .expect("replacement should retain the existing order slot");
+                assert_eq!(
+                    exports.term("value").map(|candidate| candidate.binder),
+                    Some(BinderId::resolved(ModuleId::new(92), 1)),
+                );
+            })
+            .expect("the ordered-export replacement thread should start")
+            .join()
+            .expect("the displaced ordered export must be dismantled iteratively");
+    }
+
+    #[test]
+    fn replaced_hidden_nominal_is_dismantled_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("replace-hidden-nominal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("replace-hidden.ash", "x")
+                    .expect("the hidden-nominal fixture should fit");
+                let id = NominalTypeId::new(ModuleId::new(93), 0);
+                let mut exports = ResolvedExportCandidate::default();
+                let mut budget = TypeWorkBudget::default();
+                exports
+                    .try_insert_hidden_nominal(
+                        CandidateHiddenNominal {
+                            id,
+                            parameter_count: 0,
+                            spelling: "Deep".to_owned(),
+                            origin: generated_origin(&source, DEPTH),
+                        },
+                        &mut budget,
+                    )
+                    .expect("the first hidden nominal should fit");
+                exports
+                    .try_insert_hidden_nominal(
+                        CandidateHiddenNominal {
+                            id,
+                            parameter_count: 1,
+                            spelling: "Shallow".to_owned(),
+                            origin: generated_origin(&source, 0),
+                        },
+                        &mut budget,
+                    )
+                    .expect("the hidden nominal should replace in place");
+                assert_eq!(
+                    exports
+                        .hidden_nominal(id)
+                        .map(|candidate| candidate.spelling.as_str()),
+                    Some("Shallow"),
+                );
+            })
+            .expect("the hidden-nominal replacement thread should start")
+            .join()
+            .expect("the displaced hidden nominal must be dismantled iteratively");
+    }
+
+    #[test]
+    fn replaced_withheld_export_is_dismantled_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("replace-withheld-export".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("replace-withheld.ash", "x")
+                    .expect("the withheld-export fixture should fit");
+                let mut exports = ResolvedExportCandidate::default();
+                let mut budget = TypeWorkBudget::default();
+                exports
+                    .try_insert_withheld(
+                        WithheldNamespace::Term,
+                        "hidden".to_owned(),
+                        WithheldExport {
+                            kind: WithheldExportKind::Private,
+                            owner: None,
+                            origin: Some(generated_origin(&source, DEPTH)),
+                        },
+                        &mut budget,
+                    )
+                    .expect("the first withheld export should fit");
+                exports
+                    .try_insert_withheld(
+                        WithheldNamespace::Term,
+                        "hidden".to_owned(),
+                        WithheldExport {
+                            kind: WithheldExportKind::Private,
+                            owner: None,
+                            origin: Some(generated_origin(&source, 0)),
+                        },
+                        &mut budget,
+                    )
+                    .expect("the withheld export should replace in place");
+                assert!(exports.is_private("hidden"));
+            })
+            .expect("the withheld-export replacement thread should start")
+            .join()
+            .expect("the displaced withheld export must be dismantled iteratively");
+    }
+
+    #[test]
+    fn resolved_application_rendering_parenthesizes_non_atomic_heads() {
+        let source = SourceFile::new("resolved-application-display.ash", "A")
+            .expect("the display fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the display range should be ordered"))
+            .expect("the display range should belong to the fixture");
+        let parameter = TypeVariableId::new(0);
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables([ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                origin: Origin::Source(span),
+            }]);
+
+        let function_head = Type::Application(
+            Box::new(Type::Function(Box::new(Type::Int), Box::new(Type::Bool))),
+            Box::new(Type::Unit),
+        );
+        assert_eq!(registry.display_type(&function_head), "(Int -> Bool)<Unit>");
+
+        let quantified_head = Type::Application(
+            Box::new(Type::Forall(
+                vec![parameter].into_boxed_slice(),
+                Box::new(Type::Variable(parameter)),
+            )),
+            Box::new(Type::Unit),
+        );
+        assert_eq!(
+            registry.display_type(&quantified_head),
+            "(forall A. A)<Unit>"
+        );
+    }
+
+    fn resolved_interface_with_annotation(
+        module: ModuleId,
+        span: Span,
+        annotation: Type,
+    ) -> ResolvedInterfaceDeclaration {
+        let interface = InterfaceId::new(module, 0);
+        ResolvedInterfaceDeclaration {
+            id: interface,
+            public: false,
+            spelling: "Deep".into(),
+            parameter: ResolvedTypeVariable {
+                id: TypeVariableId::new(0),
+                spelling: "A".into(),
+                origin: Origin::Source(span),
+            },
+            methods: vec![ResolvedInterfaceMethod {
+                id: MethodId::new(interface, 0),
+                spelling: "method".into(),
+                annotation: ResolvedType {
+                    ty: annotation,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                type_parameters: Box::new([]),
+                origin: Origin::Source(span),
+                span,
+            }]
+            .into_boxed_slice(),
+            origin: Origin::Source(span),
+            span,
+        }
+    }
+
+    fn checked_module_with_interface(
+        module: ModuleId,
+        span: Span,
+        interface: ResolvedInterfaceDeclaration,
+        exports: ExportSummary,
+    ) -> CheckedModule {
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module,
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported: ImportedFacts::default(),
+            direct_dependencies: Vec::new(),
+            declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
+            interfaces: vec![interface],
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate: ResolvedExportCandidate::default(),
+            span,
+        });
+        CheckedModule::new(
+            resolved,
+            CheckedModuleParts {
+                definitions: Box::new([]),
+                implementations: Box::new([]),
+                available_implementations: Box::new([]),
+                schemes: Vec::new(),
+                checked_interfaces: Box::new([]),
+                checked_implementations: Box::new([]),
+                interface_facts: Box::new([]),
+                implementation_facts: Box::new([]),
+                exports,
+            },
+        )
+    }
+
+    #[test]
+    fn checked_and_group_interface_annotations_drop_iteratively_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("checked-module-interface-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-interface.ash", "method")
+                    .expect("the interface fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 6).expect("the range should be ordered"))
+                    .expect("the range should belong to the fixture");
+                let module = ModuleId::new(82);
+
+                let (exports, _) =
+                    freeze_public_implementation_summary_with_limit(true, usize::MAX);
+                let checked = checked_module_with_interface(
+                    module,
+                    span,
+                    resolved_interface_with_annotation(module, span, application_type(DEPTH)),
+                    exports.expect("the public summary fixture should freeze"),
+                );
+                assert!(
+                    checked
+                        .into_group(&mut crate::interface::InterfaceConstraintBudget::with_limit(0))
+                        .is_err(),
+                    "the deliberately short transition must drop its checked module",
+                );
+
+                let (exports, _) =
+                    freeze_public_implementation_summary_with_limit(true, usize::MAX);
+                let checked = checked_module_with_interface(
+                    module,
+                    span,
+                    resolved_interface_with_annotation(module, span, application_type(DEPTH)),
+                    exports.expect("the public summary fixture should freeze"),
+                );
+                let group = checked
+                    .into_group(&mut crate::interface::InterfaceConstraintBudget::default())
+                    .expect("the unbounded transition should retain the interface");
+                drop(group);
+            })
+            .expect("the checked-module thread should start")
+            .join()
+            .expect("checked and grouped interfaces must dismantle types iteratively");
+    }
 
     #[test]
     fn checked_module_moves_opaque_bodies_and_ordered_availability_into_group() {
@@ -6747,7 +7284,7 @@ mod tests {
                         .span(ByteRange::new(0, 1).expect("ordered parameter range"))
                         .expect("parameter range should belong to source");
                     let mut origin = Origin::Source(span);
-                    for index in 0..5_000 {
+                    for index in 0..32_768 {
                         origin = if index % 2 == 0 {
                             Origin::Generated {
                                 cause: Box::new(origin),
@@ -6786,5 +7323,53 @@ mod tests {
                 .join()
                 .expect("replaced additional parameter teardown must fit the small stack");
         });
+    }
+
+    #[test]
+    fn destroys_replaced_nominal_type_variables_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("replace-nominal-parameters".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let file = SourceFile::new("nominal parameter", "parameter")
+                    .expect("the nominal-parameter source should fit");
+                let span = file
+                    .span(ByteRange::new(0, 1).expect("the parameter range should be ordered"))
+                    .expect("the parameter range should belong to the source");
+                let owner = NominalTypeId::new(ModuleId::new(94), 0);
+                let parameter = TypeVariableId::resolved(ModuleId::new(94), 0);
+                let registry =
+                    ResolvedRegistry::new(Vec::new(), Vec::new()).with_type_parameters(vec![
+                        (
+                            owner,
+                            vec![ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "Deep".to_owned(),
+                                origin: generated_origin(&file, DEPTH),
+                            }],
+                        ),
+                        (
+                            owner,
+                            vec![ResolvedTypeVariable {
+                                id: parameter,
+                                spelling: "Shallow".to_owned(),
+                                origin: Origin::Source(span),
+                            }],
+                        ),
+                    ]);
+                assert_eq!(
+                    registry
+                        .nominal_parameter_entries()
+                        .find(|(candidate, _)| *candidate == owner)
+                        .and_then(|(_, parameters)| parameters.first())
+                        .map(|parameter| parameter.spelling.as_str()),
+                    Some("Shallow"),
+                );
+            })
+            .expect("the nominal-parameter replacement thread should start")
+            .join()
+            .expect("replaced nominal parameters must be dismantled iteratively");
     }
 }

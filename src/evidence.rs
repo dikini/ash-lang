@@ -15,8 +15,8 @@ use crate::{
     },
     source::Span,
     types::{
-        NominalTypeId, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
-        discard_type_iteratively, substitute_type_variables_with,
+        IterativeTypeOwner, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
+        clone_type_with_budget, discard_type_iteratively, substitute_type_variables_with,
     },
 };
 
@@ -753,6 +753,7 @@ impl EvidenceSelector {
         argument: Type,
         constraint_work: &mut InterfaceConstraintBudget,
     ) -> Result<(), SelectionFailure> {
+        let argument = IterativeTypeOwner::new(argument);
         constraint_work
             .charge(1)
             .and_then(|()| constraint_work.charge_type(&argument))
@@ -763,7 +764,7 @@ impl EvidenceSelector {
         self.abstracts.push(RequirementEntry {
             id,
             interface,
-            argument,
+            argument: argument.into_inner(),
         });
         Ok(())
     }
@@ -796,6 +797,7 @@ impl EvidenceSelector {
         site: SelectionSite,
         constraint_work: &mut InterfaceConstraintBudget,
     ) -> Result<(), SelectionFailure> {
+        let argument = IterativeTypeOwner::new(argument);
         constraint_work
             .charge(1)
             .and_then(|()| constraint_work.charge_type(&argument))
@@ -805,7 +807,7 @@ impl EvidenceSelector {
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         self.pending.push(PendingObligation {
             interface,
-            argument,
+            argument: argument.into_inner(),
             slot: site.slot,
             span: site.span,
             declaration_span: site.declaration_span,
@@ -826,14 +828,16 @@ impl EvidenceSelector {
             .charge(1)
             .and_then(|()| constraint_work.charge_type(argument))
             .map_err(|()| SelectionFailure::ConstraintResource)?;
-        let argument = clone_type_with_budget(argument, type_work)
-            .map_err(|()| SelectionFailure::TypeResource)?;
+        let argument = IterativeTypeOwner::new(
+            clone_type_with_budget(argument, type_work)
+                .map_err(|()| SelectionFailure::TypeResource)?,
+        );
         self.pending
             .try_reserve(1)
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         self.pending.push(PendingObligation {
             interface,
-            argument,
+            argument: argument.into_inner(),
             slot: site.slot,
             span: site.span,
             declaration_span: site.declaration_span,
@@ -951,7 +955,8 @@ impl EvidenceSelector {
         type_work: &mut TypeWorkBudget,
     ) -> Result<(Type, EvidenceSelection), SelectionFailure> {
         causes.clear();
-        if matches!(&argument, Type::Inference(_)) {
+        let argument = IterativeTypeOwner::new(argument);
+        if matches!(&*argument, Type::Inference(_)) {
             let interface_entry = self.interface_entry(interface)?;
             retain_selection_cause(
                 causes,
@@ -959,17 +964,15 @@ impl EvidenceSelector {
                 interface_entry.span,
                 constraint_work,
             )?;
-            discard_type_iteratively(argument);
             return Err(SelectionFailure::Reason(InterfaceReason::Ambiguous));
         }
-        if matches!(&argument, Type::Forall(_, _)) {
-            discard_type_iteratively(argument);
+        if matches!(&*argument, Type::Forall(_, _)) {
             return Err(SelectionFailure::InvalidState);
         }
         let mut builder = EvidenceSelectionBuilder::new();
         let mut checked_goal = Goal {
             interface,
-            argument,
+            argument: argument.into_inner(),
         };
         let work_argument = clone_type_with_budget(&checked_goal.argument, type_work)
             .map_err(|()| SelectionFailure::TypeResource)?;
@@ -1177,16 +1180,17 @@ impl EvidenceSelector {
                     for prerequisite in implementation.prerequisites.iter().rev() {
                         let argument = substitute_type_variables_with(
                             &prerequisite.argument,
-                            &replacements.values,
+                            replacements.as_map(),
                             |cells| type_work.charge(cells),
                         )
                         .map_err(|()| SelectionFailure::TypeResource)?;
-                        charge_prerequisite_goal(&argument, constraint_work)?;
+                        let goal = Goal {
+                            interface: prerequisite.interface,
+                            argument,
+                        };
+                        charge_prerequisite_goal(&goal.argument, constraint_work)?;
                         work.push(SelectionTask::Select {
-                            goal: Goal {
-                                interface: prerequisite.interface,
-                                argument,
-                            },
+                            goal,
                             cause_marker: prerequisite_cause_marker,
                         })?;
                     }
@@ -1227,30 +1231,24 @@ impl EvidenceSelector {
         if !active.is_empty() || results.len() != 1 {
             return Err(SelectionFailure::InvalidState);
         }
-        let checked_argument = std::mem::replace(&mut checked_goal.argument, Type::Unit);
+        let checked_argument =
+            IterativeTypeOwner::new(std::mem::replace(&mut checked_goal.argument, Type::Unit));
         if constraint_work
             .charge(1)
             .and_then(|()| constraint_work.charge_type(&checked_argument))
             .is_err()
         {
-            discard_type_iteratively(checked_argument);
             return Err(SelectionFailure::ConstraintResource);
         }
         let selection_argument = match clone_type_with_budget(&checked_argument, type_work) {
             Ok(argument) => argument,
-            Err(()) => {
-                discard_type_iteratively(checked_argument);
-                return Err(SelectionFailure::TypeResource);
-            }
+            Err(()) => return Err(SelectionFailure::TypeResource),
         };
         let selection = match builder.finish(results[0], interface, selection_argument) {
             Ok(selection) => selection,
-            Err(()) => {
-                discard_type_iteratively(checked_argument);
-                return Err(SelectionFailure::InvalidState);
-            }
+            Err(()) => return Err(SelectionFailure::InvalidState),
         };
-        Ok((checked_argument, selection))
+        Ok((checked_argument.into_inner(), selection))
     }
 
     fn interface_entry(&self, interface: InterfaceId) -> Result<&InterfaceEntry, SelectionFailure> {
@@ -1341,22 +1339,50 @@ impl Drop for ReplacementMap {
     }
 }
 
+impl ReplacementMap {
+    fn new() -> Self {
+        Self {
+            values: HashMap::new(),
+        }
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.values.try_reserve(additional)
+    }
+
+    fn try_insert_unique(
+        &mut self,
+        parameter: TypeVariableId,
+        argument: IterativeTypeOwner,
+    ) -> Result<(), SelectionFailure> {
+        if let Some(displaced) = self.values.insert(parameter, argument.into_inner()) {
+            discard_type_iteratively(displaced);
+            return Err(SelectionFailure::InvalidState);
+        }
+        Ok(())
+    }
+
+    fn as_map(&self) -> &HashMap<TypeVariableId, Type> {
+        &self.values
+    }
+}
+
 fn replacement_map(
     substitution: &[EvidenceSubstitution],
     type_work: &mut TypeWorkBudget,
 ) -> Result<ReplacementMap, SelectionFailure> {
-    let mut values = HashMap::new();
-    values
+    let mut replacements = ReplacementMap::new();
+    replacements
         .try_reserve(substitution.len())
         .map_err(|_| SelectionFailure::TypeResource)?;
     for binding in substitution {
-        let argument = clone_type_with_budget(binding.argument(), type_work)
-            .map_err(|()| SelectionFailure::TypeResource)?;
-        if values.insert(binding.parameter(), argument).is_some() {
-            return Err(SelectionFailure::InvalidState);
-        }
+        let argument = IterativeTypeOwner::new(
+            clone_type_with_budget(binding.argument(), type_work)
+                .map_err(|()| SelectionFailure::TypeResource)?,
+        );
+        replacements.try_insert_unique(binding.parameter(), argument)?;
     }
-    Ok(ReplacementMap { values })
+    Ok(replacements)
 }
 
 #[derive(Debug)]
@@ -1423,7 +1449,7 @@ enum GoalCell {
     Bool,
     Unit,
     Nominal(NominalTypeId),
-    AppliedNominal(NominalTypeId, usize),
+    Application,
     Tuple(usize),
     Function,
     Variable(TypeVariableId),
@@ -1458,15 +1484,16 @@ fn goal_key(
             Type::Bool => cells.push(GoalCell::Bool),
             Type::Unit => cells.push(GoalCell::Unit),
             Type::Nominal(id) => cells.push(GoalCell::Nominal(*id)),
-            Type::AppliedNominal(id, arguments) => {
-                cells.push(GoalCell::AppliedNominal(*id, arguments.len()));
+            Type::Application(function, argument) => {
+                cells.push(GoalCell::Application);
                 constraint_work
-                    .charge(arguments.len())
+                    .charge(2)
                     .map_err(|()| SelectionFailure::ConstraintResource)?;
                 pending
-                    .try_reserve(arguments.len())
+                    .try_reserve(2)
                     .map_err(|_| SelectionFailure::ConstraintResource)?;
-                pending.extend(arguments.iter().rev());
+                pending.push(argument);
+                pending.push(function);
             }
             Type::Tuple(elements) => {
                 cells.push(GoalCell::Tuple(elements.len()));
@@ -1561,12 +1588,14 @@ fn same_type_with_constraint_budget(
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (Type::Inference(left), Type::Inference(right)) if left == right => {}
-            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
-                if left_id == right_id && left.len() == right.len() =>
-            {
-                constraint_work.charge(left.len())?;
-                pending.try_reserve(left.len()).map_err(|_| ())?;
-                pending.extend(left.iter().zip(right).rev());
+            (
+                Type::Application(left_function, left_argument),
+                Type::Application(right_function, right_argument),
+            ) => {
+                constraint_work.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push((left_argument, right_argument));
+                pending.push((left_function, right_function));
             }
             (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right)) => {
                 if left_parameters.len() != right_parameters.len() {
@@ -1740,12 +1769,12 @@ mod tests {
             generic,
             interface,
             vec![parameter],
-            Type::AppliedNominal(option, vec![Type::Variable(parameter)].into_boxed_slice()),
+            Type::apply_arguments(Type::Nominal(option), [Type::Variable(parameter)]),
             vec![(prerequisite, interface, Type::Variable(parameter))],
             vec![ImplMethodId::new(generic, method)],
         ));
 
-        let goal = Type::AppliedNominal(option, vec![Type::Int].into_boxed_slice());
+        let goal = Type::apply_arguments(Type::Nominal(option), [Type::Int]);
         let mut measured_constraints = InterfaceConstraintBudget::default();
         let mut measured_types = TypeWorkBudget::default();
         let selection = selector
@@ -1830,7 +1859,7 @@ mod tests {
             current,
             interface,
             vec![parameter],
-            Type::AppliedNominal(option, vec![Type::Variable(parameter)].into_boxed_slice()),
+            Type::apply_arguments(Type::Nominal(option), [Type::Variable(parameter)]),
             vec![(prerequisite, interface, Type::Variable(parameter))],
             vec![ImplMethodId::new(current, method)],
         ));
@@ -1859,7 +1888,7 @@ mod tests {
         );
 
         let current_argument =
-            Type::AppliedNominal(option, vec![Type::Variable(parameter)].into_boxed_slice());
+            Type::apply_arguments(Type::Nominal(option), [Type::Variable(parameter)]);
         let mut measured_constraints = InterfaceConstraintBudget::default();
         let mut measured_types = TypeWorkBudget::default();
         let selection = selector
@@ -2728,5 +2757,150 @@ mod tests {
             .expect("small-stack selection thread")
             .join()
             .expect("selection and drop stay iterative");
+    }
+
+    fn application_type(depth: usize) -> Type {
+        let mut ty = Type::Unit;
+        for _ in 0..depth {
+            ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+        }
+        ty
+    }
+
+    #[test]
+    fn owned_evidence_inputs_fail_without_recursive_drop_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("owned-evidence-input-failure".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let (interface, _, requirement) = ids();
+                let source = SourceFile::new("owned-evidence.ash", "x")
+                    .expect("the evidence fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the range should be ordered"))
+                    .expect("the range should belong to the fixture");
+                let mut selector = EvidenceSelector::new();
+                assert_eq!(
+                    selector.push_abstract(
+                        requirement,
+                        interface,
+                        application_type(DEPTH),
+                        &mut InterfaceConstraintBudget::with_limit(0),
+                    ),
+                    Err(SelectionFailure::ConstraintResource),
+                );
+                let slot = EvidenceSlot::empty();
+                assert_eq!(
+                    selector.push_owned_obligation(
+                        interface,
+                        application_type(DEPTH),
+                        SelectionSite::plain(slot.handle(), span),
+                        &mut InterfaceConstraintBudget::with_limit(0),
+                    ),
+                    Err(SelectionFailure::ConstraintResource),
+                );
+            })
+            .expect("the small-stack evidence thread should start")
+            .join()
+            .expect("owned evidence inputs must be dismantled iteratively on failure");
+    }
+
+    #[test]
+    fn checked_argument_late_constraint_failure_drops_deep_type_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("checked-argument-late-failure".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(12);
+                let interface = InterfaceId::new(module, 0);
+                let method = MethodId::new(interface, 0);
+                let parameter = TypeVariableId::resolved(module, 0);
+                let implementation_id = ImplId::new(module, 0);
+                let mut selector = EvidenceSelector::new();
+                selector.add_interface_raw(interface, parameter, vec![(method, Type::Unit)]);
+                selector.add_implementation_raw(implementation(
+                    implementation_id,
+                    interface,
+                    vec![parameter],
+                    Type::Variable(parameter),
+                    Vec::new(),
+                    vec![ImplMethodId::new(implementation_id, method)],
+                ));
+
+                let mut measured_constraints = InterfaceConstraintBudget::with_limit(usize::MAX);
+                let mut measured_types = TypeWorkBudget::with_limit(usize::MAX);
+                let (checked_argument, selection) = selector
+                    .select_owned(
+                        interface,
+                        application_type(DEPTH),
+                        &mut Vec::new(),
+                        &mut measured_constraints,
+                        &mut measured_types,
+                    )
+                    .expect("the measured deep selection should succeed");
+                discard_type_iteratively(checked_argument);
+                drop(selection);
+
+                assert_eq!(
+                    selector.select_owned(
+                        interface,
+                        application_type(DEPTH),
+                        &mut Vec::new(),
+                        &mut InterfaceConstraintBudget::with_limit(
+                            measured_constraints.used() - 1,
+                        ),
+                        &mut TypeWorkBudget::with_limit(measured_types.used()),
+                    ),
+                    Err(SelectionFailure::ConstraintResource),
+                );
+            })
+            .expect("the checked-argument failure thread should start")
+            .join()
+            .expect("late checked-argument failure must stay iterative");
+    }
+
+    #[test]
+    fn duplicate_deep_replacement_is_dismantled_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("duplicate-evidence-replacement".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let parameter = TypeVariableId::new(0);
+                let substitutions = [
+                    EvidenceSubstitution::new(parameter, application_type(DEPTH)),
+                    EvidenceSubstitution::new(parameter, application_type(DEPTH)),
+                ];
+                assert!(matches!(
+                    replacement_map(&substitutions, &mut TypeWorkBudget::default()),
+                    Err(SelectionFailure::InvalidState),
+                ));
+            })
+            .expect("the duplicate-replacement thread should start")
+            .join()
+            .expect("duplicate replacement teardown must stay iterative");
+    }
+}
+#[cfg(test)]
+mod replacement_owner_api_tests {
+    #[test]
+    fn recursive_type_replacements_do_not_bypass_the_owner_api() {
+        let source: String = include_str!("evidence.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let raw_field = ["replacements", ".values"].concat();
+        assert!(!source.contains(&raw_field));
+        let raw_insert = [".values", ".insert("].concat();
+        let raw_reserve = [".values", ".try_reserve("].concat();
+        assert_eq!(source.matches(&raw_insert).count(), 1);
+        assert_eq!(source.matches(&raw_reserve).count(), 1);
+        let broad_mutation = ["impl", "DerefMut", "for", "ReplacementMap"].concat();
+        assert!(!source.contains(&broad_mutation));
     }
 }

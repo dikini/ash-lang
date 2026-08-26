@@ -6,20 +6,19 @@
 
 > This proposal is not current Ash.
 
-## Stacked semantic base
+## Semantic base
 
-This proposal is stacked on commit `a1647ff`, the completed explicit-import
+This proposal is based on commit `a1647ff`, the completed explicit-import
 increment retained by the
 [explicit-import evidence report](../design/lib-ash/imports-evidence.md). That
-checkpoint is not yet integrated into `main@4f0541d`. CP-0009 cannot integrate
-independently: the predecessor must integrate first, or the stacked product
-branches must integrate in predecessor order. “Current behavior” below means
-the authorized predecessor base for this transition, not an assertion that
-`main` already contains that base.
+checkpoint is now integrated as `main@a1647ff`. “Current behavior” below means
+the current specification and implementation at that predecessor checkpoint;
+the explicit-kinds transition remains an authorized implementation target, not
+current Ash.
 
 ## Current behavior
 
-On the stacked semantic base, Ash keeps kinds internal. Every source type
+On the semantic base, Ash keeps kinds internal. Every source type
 parameter and inference variable has kind `Type`. A nominal declaration with
 `n` parameters has an internal `n`-argument constructor kind, but resolution
 requires every source nominal application to be saturated. A parameter cannot
@@ -551,8 +550,41 @@ Migration must also inventory deliberate stage and reason changes. In
 particular, predecessor failures for an unsaturated nominal and `A<Int>` move
 from resolution to their exact kind-checking reasons. `Type` remains usable as
 a nominal spelling outside a kind annotation. The complete predecessor corpus,
-specification examples, library API, CLI, Core-validation, and evaluator
-observations remain otherwise unchanged.
+specification examples, CLI, Core-validation, and evaluator observations remain
+otherwise unchanged.
+
+Safe teardown of canonical application spines requires deliberate Rust API
+refinements. `Observation` dismantles its result type iteratively when dropped.
+Rust therefore no longer exposes its owned `value` or `ty` fields for direct
+move, overwrite, or by-value destructuring. `Observation::value` and
+`Observation::ty` provide borrowing access. `Observation::into_value`,
+`Observation::into_type`, and `Observation::into_parts` provide consuming
+access. A consumed value remains paired with the evaluation heap through
+`ObservationValue`, and `ObservationParts` dismantles an unconsumed type
+iteratively. A caller that
+takes ownership of a type can use `discard_type_iteratively` for the same
+stack-safe disposal.
+
+`TypeContext::insert` also dismantles a displaced binding fact iteratively and
+no longer returns its raw result type. All product callers already ignore that
+return. Returning the recursive type would let an otherwise safe ignored value
+use Rust's recursive drop path. These refinements change Rust source
+compatibility, not Ash semantics, rendered observations, or evaluator behavior,
+and their teardown uses no unsafe code.
+
+The same overwrite boundary applies to public checked owners whose automatic
+drop dismantles structural types iteratively. `CheckedRequirement::argument`,
+`ConstrainedScheme::value_type`, `CheckedInterfaceMethodFact::value_type`, and
+`CheckedImplementationFact::argument` replace mutable raw fields with borrowing
+accessors. Construction and mutation remain compiler-owned. This is the same
+Rust source-compatibility refinement and does not change the represented Ash
+facts.
+
+Public carriers without automatic `Drop` retain caller-managed type ownership.
+Code that extracts a potentially deep type from one of those carriers must use
+`discard_type_iteratively`; this increment does not convert every recursive
+type carrier into an automatic-drop API. The distinction is an ownership and
+source-compatibility boundary, not an Ash semantic distinction.
 
 An exhaustive retained site map must list every source, surface, resolved,
 checked, summary, evidence, registry, Core-binder, Core-pattern, and Core-node
@@ -596,4 +628,4 @@ reviews must have no unresolved correctness issue. Only then may the branch
 retain the evidence report and normative updates and remove CP-0009, TASK-0016,
 its execution plan, and this temporary design record. This increment does not
 create a `lib-ash` tag; the complete milestone remains open. The branch remains
-stacked and unmerged until its predecessor can integrate first.
+based on the integrated predecessor and unmerged until this increment closes.

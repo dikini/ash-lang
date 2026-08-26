@@ -1,7 +1,7 @@
 //! Explicit rank-1 type abstraction and application Core payloads.
 
 use super::NodeId;
-use crate::types::{Type, TypeVariableId, discard_type_iteratively};
+use crate::types::{Type, TypeVariableId, discard_type_iteratively, replace_type_iteratively};
 
 /// A type-erased abstraction over one or more rank-1 type parameters.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,7 +63,8 @@ impl TypeApplicationNode {
         F: FnMut(&Type) -> Result<Type, super::BuildError>,
     {
         for argument in &mut self.arguments {
-            *argument = rewrite(argument)?;
+            let rewritten = rewrite(argument)?;
+            replace_type_iteratively(argument, rewritten);
         }
         Ok(())
     }

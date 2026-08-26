@@ -5,8 +5,10 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
-    sync::Arc,
 };
+
+#[cfg(test)]
+use std::sync::Arc;
 
 use super::{
     dialect::{
@@ -22,8 +24,85 @@ use crate::{
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::{BinderId, ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable},
     source::{Origin, SourceFile, SourceId, Span},
-    types::{ConstructorId, TYPE_WORK_LIMIT, Type, same_type, substitute_type_variables_with},
+    types::{
+        ConstructorId, IterativeTypeOwner, TYPE_WORK_LIMIT, Type, discard_type_iteratively,
+        same_type, substitute_type_variables_with,
+    },
 };
+
+struct TypeReplacementMap(HashMap<crate::types::TypeVariableId, Type>);
+
+impl TypeReplacementMap {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn insert_replacing(&mut self, parameter: crate::types::TypeVariableId, ty: Type) {
+        if let Some(displaced) = self.0.insert(parameter, ty) {
+            discard_type_iteratively(displaced);
+        }
+    }
+
+    fn as_map(&self) -> &HashMap<crate::types::TypeVariableId, Type> {
+        &self.0
+    }
+}
+
+impl Drop for TypeReplacementMap {
+    fn drop(&mut self) {
+        for (_, ty) in self.0.drain() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+struct CorePatternMatrix(Vec<Vec<CorePattern>>);
+
+impl Drop for CorePatternMatrix {
+    fn drop(&mut self) {
+        for row in self.0.drain(..) {
+            for pattern in row {
+                pattern.discard_iteratively();
+            }
+        }
+    }
+}
+
+struct CorePatternRow(Vec<CorePattern>);
+
+impl CorePatternRow {
+    fn into_inner(mut self) -> Vec<CorePattern> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for CorePatternRow {
+    fn drop(&mut self) {
+        for pattern in self.0.drain(..) {
+            pattern.discard_iteratively();
+        }
+    }
+}
+
+struct OwnedTypeSequence(std::vec::IntoIter<Type>);
+
+impl OwnedTypeSequence {
+    fn next(&mut self) -> Option<Type> {
+        self.0.next()
+    }
+}
+
+impl Drop for OwnedTypeSequence {
+    fn drop(&mut self) {
+        for ty in self.0.by_ref() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
 
 /// The independently checked invariant that malformed Core violated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,6 +224,20 @@ fn function_value_type_matches(annotation: &Type, domain: &Type, codomain: &Type
     same_type(actual_domain, domain) && same_type(actual_codomain, codomain)
 }
 
+fn nominal_application_head_and_arity(ty: &Type) -> Option<(crate::types::NominalTypeId, usize)> {
+    let mut arity = 0usize;
+    let mut function = ty;
+    while let Type::Application(next, argument) = function {
+        let _ = argument;
+        arity = arity.checked_add(1)?;
+        function = next;
+    }
+    let Type::Nominal(owner) = function else {
+        return None;
+    };
+    Some((*owner, arity))
+}
+
 fn constructor_value_type_matches(
     annotation: &Type,
     constructor: &ResolvedConstructor,
@@ -177,28 +270,17 @@ fn constructor_value_type_matches(
     } else {
         monotype
     };
-    match result {
-        Type::Nominal(owner) => parameters.is_empty() && *owner == constructor.owner,
-        Type::AppliedNominal(owner, arguments) => {
-            !parameters.is_empty()
-                && *owner == constructor.owner
-                && arguments.len() == parameters.len()
-                && arguments
-                    .iter()
-                    .zip(parameters)
-                    .all(|(argument, parameter)| {
-                        matches!(argument, Type::Variable(identity) if *identity == parameter.id)
-                    })
+    let mut current = result;
+    for parameter in parameters.iter().rev() {
+        let Type::Application(function, argument) = current else {
+            return false;
+        };
+        if !matches!(argument.as_ref(), Type::Variable(identity) if *identity == parameter.id) {
+            return false;
         }
-        Type::Int
-        | Type::Bool
-        | Type::Unit
-        | Type::Tuple(_)
-        | Type::Variable(_)
-        | Type::Inference(_)
-        | Type::Forall(_, _)
-        | Type::Function(_, _) => false,
+        current = function;
     }
+    matches!(current, Type::Nominal(owner) if *owner == constructor.owner)
 }
 
 /// Consumes unchecked Core and returns the capability required by consumers.
@@ -219,9 +301,10 @@ pub fn validate(
         return Err(error);
     }
 
-    let mut nodes = Vec::with_capacity(program.nodes.len());
-    for (index, stored) in program.nodes.into_iter().enumerate() {
-        let node = node_id(program.arena, index)?;
+    let (registry, arena, stored_nodes, root) = program.into_parts();
+    let mut nodes = Vec::with_capacity(stored_nodes.len());
+    for (index, stored) in stored_nodes.into_iter().enumerate() {
+        let node = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
             return Err(ValidationError::new(
                 ValidationReason::Provenance,
@@ -236,10 +319,7 @@ pub fn validate(
     }
 
     Ok(ValidatedProgram::new(PureProgram::new(
-        Arc::clone(&program.registry),
-        program.arena,
-        nodes,
-        program.root,
+        registry, arena, nodes, root,
     )))
 }
 
@@ -271,9 +351,10 @@ pub fn validate_modules(
         return Err(error);
     }
 
-    let mut nodes = Vec::with_capacity(program.nodes.len());
-    for (index, stored) in program.nodes.into_iter().enumerate() {
-        let node = node_id(program.arena, index)?;
+    let (registry, arena, stored_nodes, root) = program.into_parts();
+    let mut nodes = Vec::with_capacity(stored_nodes.len());
+    for (index, stored) in stored_nodes.into_iter().enumerate() {
+        let node = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
             return Err(ValidationError::new(
                 ValidationReason::Provenance,
@@ -288,10 +369,7 @@ pub fn validate_modules(
     }
 
     Ok(ValidatedProgram::new(PureProgram::new(
-        Arc::clone(&program.registry),
-        program.arena,
-        nodes,
-        program.root,
+        registry, arena, nodes, root,
     )))
 }
 
@@ -793,46 +871,48 @@ impl<'program, 'source> Validator<'program, 'source> {
             return Ok(true);
         };
         enum Task<'a> {
-            Visit(&'a Type, bool, usize),
+            Visit(&'a Type, bool, usize, usize),
             Sequence(std::slice::Iter<'a, Type>, usize),
         }
-        let mut work = vec![Task::Visit(root, allow_scheme, 0)];
+        let mut work = vec![Task::Visit(root, allow_scheme, 0, 0)];
         while let Some(task) = work.pop() {
             #[cfg(test)]
             self.type_validation_pending_peak
                 .set(self.type_validation_pending_peak.get().max(work.len() + 1));
             match task {
-                Task::Visit(ty, allow_scheme, depth) => {
+                Task::Visit(ty, allow_scheme, depth, applied_arguments) => {
                     if depth > super::dialect::CORE_PAYLOAD_DEPTH_LIMIT {
                         return Ok(false);
                     }
                     self.charge_type_work(1)?;
                     match ty {
-                        Type::Int | Type::Bool | Type::Unit => {}
-                        Type::Nominal(id)
-                            if self
-                                .program
-                                .registry
-                                .nominal_parameters(*id)
-                                .is_some_and(<[_]>::is_empty) => {}
-                        Type::Nominal(_) => return Ok(false),
-                        Type::Variable(_) => {}
-                        Type::Inference(_) => return Ok(false),
-                        Type::AppliedNominal(id, arguments) => {
-                            let Some(nominal) = self.program.registry.nominal(*id) else {
+                        Type::Int | Type::Bool | Type::Unit if applied_arguments == 0 => {}
+                        Type::Int | Type::Bool | Type::Unit => return Ok(false),
+                        Type::Nominal(id) => {
+                            let Some(parameters) = self.program.registry.nominal_parameters(*id)
+                            else {
                                 return Ok(false);
                             };
-                            if self
-                                .program
-                                .registry
-                                .nominal_parameters(nominal.id)
-                                .is_none_or(|parameters| parameters.len() != arguments.len())
-                            {
+                            if parameters.len() != applied_arguments {
                                 return Ok(false);
                             }
-                            work.push(Task::Sequence(arguments.iter(), depth.saturating_add(1)));
                         }
-                        Type::Forall(parameters, body) if allow_scheme => {
+                        Type::Variable(_) if applied_arguments == 0 => {}
+                        Type::Variable(_) => return Ok(false),
+                        Type::Inference(_) => return Ok(false),
+                        Type::Application(function, argument) => {
+                            let child_depth = depth.saturating_add(1);
+                            work.push(Task::Visit(argument, false, child_depth, 0));
+                            work.push(Task::Visit(
+                                function,
+                                false,
+                                depth,
+                                applied_arguments.saturating_add(1),
+                            ));
+                        }
+                        Type::Forall(parameters, body)
+                            if allow_scheme && applied_arguments == 0 =>
+                        {
                             self.charge_type_work(parameters.len())?;
                             let mut unique = HashSet::new();
                             unique.try_reserve(parameters.len()).map_err(|_| {
@@ -846,24 +926,25 @@ impl<'program, 'source> Validator<'program, 'source> {
                             {
                                 return Ok(false);
                             }
-                            work.push(Task::Visit(body, false, depth.saturating_add(1)));
+                            work.push(Task::Visit(body, false, depth.saturating_add(1), 0));
                         }
                         Type::Forall(_, _) => return Ok(false),
-                        Type::Tuple(elements) if elements.len() >= 2 => {
+                        Type::Tuple(elements) if applied_arguments == 0 && elements.len() >= 2 => {
                             work.push(Task::Sequence(elements.iter(), depth.saturating_add(1)));
                         }
                         Type::Tuple(_) => return Ok(false),
-                        Type::Function(domain, codomain) => {
+                        Type::Function(domain, codomain) if applied_arguments == 0 => {
                             let child_depth = depth.saturating_add(1);
-                            work.push(Task::Visit(codomain, false, child_depth));
-                            work.push(Task::Visit(domain, false, child_depth));
+                            work.push(Task::Visit(codomain, false, child_depth, 0));
+                            work.push(Task::Visit(domain, false, child_depth, 0));
                         }
+                        Type::Function(_, _) => return Ok(false),
                     }
                 }
                 Task::Sequence(mut remaining, depth) => {
                     if let Some(ty) = remaining.next() {
                         work.push(Task::Sequence(remaining, depth));
-                        work.push(Task::Visit(ty, false, depth));
+                        work.push(Task::Visit(ty, false, depth, 0));
                     }
                 }
             }
@@ -881,18 +962,18 @@ impl<'program, 'source> Validator<'program, 'source> {
             return Ok(true);
         };
         enum Task<'a> {
-            Visit(&'a Type, usize),
+            Visit(&'a Type, usize, usize),
             Sequence(std::slice::Iter<'a, Type>, usize),
         }
-        let mut work = vec![Task::Visit(root, 0)];
+        let mut work = vec![Task::Visit(root, 0, 0)];
         while let Some(task) = work.pop() {
-            let Task::Visit(ty, depth) = task else {
+            let Task::Visit(ty, depth, applied_arguments) = task else {
                 let Task::Sequence(mut remaining, depth) = task else {
                     unreachable!()
                 };
                 if let Some(ty) = remaining.next() {
                     work.push(Task::Sequence(remaining, depth));
-                    work.push(Task::Visit(ty, depth));
+                    work.push(Task::Visit(ty, depth, 0));
                 }
                 continue;
             };
@@ -901,36 +982,39 @@ impl<'program, 'source> Validator<'program, 'source> {
             }
             self.charge_type_work(1)?;
             match ty {
-                Type::Int | Type::Bool | Type::Unit => {}
-                Type::Nominal(id)
-                    if self
-                        .program
-                        .registry
-                        .nominal_parameters(*id)
-                        .is_some_and(<[_]>::is_empty) => {}
-                Type::Nominal(_) => return Ok(false),
-                Type::Variable(variable) if parameter_owners.get(variable) == Some(&owner) => {}
-                Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return Ok(false),
-                Type::AppliedNominal(id, arguments) => {
-                    if self
-                        .program
-                        .registry
-                        .nominal_parameters(*id)
-                        .is_none_or(|parameters| parameters.len() != arguments.len())
-                    {
+                Type::Int | Type::Bool | Type::Unit if applied_arguments == 0 => {}
+                Type::Int | Type::Bool | Type::Unit => return Ok(false),
+                Type::Nominal(id) => {
+                    let Some(parameters) = self.program.registry.nominal_parameters(*id) else {
+                        return Ok(false);
+                    };
+                    if parameters.len() != applied_arguments {
                         return Ok(false);
                     }
-                    work.push(Task::Sequence(arguments.iter(), depth.saturating_add(1)));
                 }
-                Type::Tuple(elements) if elements.len() >= 2 => {
+                Type::Variable(variable)
+                    if applied_arguments == 0 && parameter_owners.get(variable) == Some(&owner) => {
+                }
+                Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return Ok(false),
+                Type::Application(function, argument) => {
+                    let child_depth = depth.saturating_add(1);
+                    work.push(Task::Visit(argument, child_depth, 0));
+                    work.push(Task::Visit(
+                        function,
+                        depth,
+                        applied_arguments.saturating_add(1),
+                    ));
+                }
+                Type::Tuple(elements) if applied_arguments == 0 && elements.len() >= 2 => {
                     work.push(Task::Sequence(elements.iter(), depth.saturating_add(1)));
                 }
                 Type::Tuple(_) => return Ok(false),
-                Type::Function(domain, codomain) => {
+                Type::Function(domain, codomain) if applied_arguments == 0 => {
                     let child_depth = depth.saturating_add(1);
-                    work.push(Task::Visit(codomain, child_depth));
-                    work.push(Task::Visit(domain, child_depth));
+                    work.push(Task::Visit(codomain, child_depth, 0));
+                    work.push(Task::Visit(domain, child_depth, 0));
                 }
+                Type::Function(_, _) => return Ok(false),
             }
         }
         Ok(true)
@@ -966,8 +1050,12 @@ impl<'program, 'source> Validator<'program, 'source> {
             };
             self.charge_type_work(1)?;
             match ty {
-                Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                Type::Tuple(elements) => {
                     work.push(Task::Sequence(elements.iter()));
+                }
+                Type::Application(function, argument) => {
+                    work.push(Task::Visit(argument));
+                    work.push(Task::Visit(function));
                 }
                 Type::Function(domain, codomain) => {
                     work.push(Task::Visit(codomain));
@@ -1332,12 +1420,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                             initializer.kind,
                             PureExprKind::Value(PureValue::Function(_))
                         ),
-                        Type::Nominal(owner) => {
-                            self.guarded_data_root(member.initializer(), *owner, &recursive)?
-                        }
-                        Type::AppliedNominal(owner, _) => {
-                            self.guarded_data_root(member.initializer(), *owner, &recursive)?
-                        }
+                        ty if ty.outer_nominal().is_some() => match ty.outer_nominal() {
+                            Some(owner) => {
+                                self.guarded_data_root(member.initializer(), owner, &recursive)?
+                            }
+                            None => false,
+                        },
                         Type::Forall(parameters, body)
                             if matches!(body.as_ref(), Type::Function(_, _)) =>
                         {
@@ -1360,6 +1448,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                         | Type::Bool
                         | Type::Unit
                         | Type::Tuple(_)
+                        | Type::Nominal(_)
+                        | Type::Application(_, _)
                         | Type::Variable(_)
                         | Type::Inference(_)
                         | Type::Forall(_, _) => false,
@@ -1427,7 +1517,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 if match_node.arms().is_empty() {
                     return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
                 }
-                let mut matrix = Vec::new();
+                let mut matrix = CorePatternMatrix(Vec::new());
                 let mut coverage_budget = UsefulnessBudget::default();
                 for arm in match_node.arms() {
                     self.validate_origin(arm.origin(), id)?;
@@ -1435,10 +1525,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                     if !same_type(&self.node(arm.body())?.ty, &node.ty) {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
-                    let row = vec![arm.pattern().clone()];
+                    let row = CorePatternRow(vec![arm.pattern().clone()]);
                     if usefulness_with_budget(
-                        &matrix,
-                        &row,
+                        &matrix.0,
+                        &row.0,
                         std::slice::from_ref(&scrutinee.ty),
                         &self.program.registry,
                         &mut coverage_budget,
@@ -1448,10 +1538,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                     {
                         return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
                     }
-                    matrix.push(row);
+                    matrix.0.push(row.into_inner());
                 }
                 if missing_witness_for_types_with_budget(
-                    &matrix,
+                    &matrix.0,
                     std::slice::from_ref(&scrutinee.ty),
                     &self.program.registry,
                     &mut coverage_budget,
@@ -1530,19 +1620,18 @@ impl<'program, 'source> Validator<'program, 'source> {
                     self.charge_type_structure(argument)?;
                 }
                 self.charge_type_work(parameters.len())?;
-                let mut replacements = HashMap::new();
+                let mut replacements = TypeReplacementMap::new();
                 replacements
                     .try_reserve(parameters.len())
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
-                replacements.extend(
-                    parameters
-                        .iter()
-                        .zip(application.arguments())
-                        .map(|(parameter, argument)| (*parameter, argument.clone())),
-                );
-                let instantiated = substitute_type_variables_with(body, &replacements, |cells| {
-                    self.charge_type_work(cells)
-                })?;
+                for (parameter, argument) in parameters.iter().zip(application.arguments()) {
+                    replacements.insert_replacing(*parameter, argument.clone());
+                }
+                let instantiated = IterativeTypeOwner::new(substitute_type_variables_with(
+                    body,
+                    replacements.as_map(),
+                    |cells| self.charge_type_work(cells),
+                )?);
                 if !same_type(&node.ty, &instantiated) {
                     return Err(ValidationError::new(
                         ValidationReason::TypeOperation,
@@ -1696,7 +1785,7 @@ impl<'program, 'source> Validator<'program, 'source> {
     ) -> Result<(), ValidationError> {
         enum Expected<'a> {
             Borrowed(&'a Type),
-            Owned(Type),
+            Owned(IterativeTypeOwner),
         }
         impl Expected<'_> {
             fn as_type(&self) -> &Type {
@@ -1715,7 +1804,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             },
             OwnedTupleSequence {
                 patterns: std::slice::Iter<'a, CorePattern>,
-                types: std::vec::IntoIter<Type>,
+                types: OwnedTypeSequence,
                 depth: usize,
             },
         }
@@ -1750,7 +1839,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                             types,
                             depth,
                         });
-                        work.push(Task::Visit(pattern, Expected::Owned(ty), depth));
+                        work.push(Task::Visit(
+                            pattern,
+                            Expected::Owned(IterativeTypeOwner::new(ty)),
+                            depth,
+                        ));
                     }
                     continue;
                 }
@@ -1785,10 +1878,27 @@ impl<'program, 'source> Validator<'program, 'source> {
                             depth: depth.saturating_add(1),
                         });
                     }
-                    Expected::Owned(Type::Tuple(types)) if patterns.len() == types.len() => {
+                    Expected::Owned(expected) => {
+                        let expected = expected.into_inner();
+                        let Type::Tuple(types) = expected else {
+                            discard_type_iteratively(expected);
+                            return Err(ValidationError::new(
+                                ValidationReason::Pattern,
+                                Some(node),
+                            ));
+                        };
+                        if patterns.len() != types.len() {
+                            for ty in types {
+                                discard_type_iteratively(ty);
+                            }
+                            return Err(ValidationError::new(
+                                ValidationReason::Pattern,
+                                Some(node),
+                            ));
+                        }
                         work.push(Task::OwnedTupleSequence {
                             patterns: patterns.iter(),
-                            types: types.into_vec().into_iter(),
+                            types: OwnedTypeSequence(types.into_vec().into_iter()),
                             depth: depth.saturating_add(1),
                         });
                     }
@@ -1800,15 +1910,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                     constructor,
                     payload,
                 } => {
-                    let (owner, arguments): (_, &[Type]) = match expected.as_type() {
-                        Type::Nominal(owner) => (*owner, &[]),
-                        Type::AppliedNominal(owner, arguments) => (*owner, arguments),
-                        _ => {
-                            return Err(ValidationError::new(
-                                ValidationReason::Pattern,
-                                Some(node),
-                            ));
-                        }
+                    let Some((owner, arity)) =
+                        nominal_application_head_and_arity(expected.as_type())
+                    else {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     };
                     let Some(info) = self.program.registry.constructor(*constructor) else {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
@@ -1819,29 +1924,32 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let Some(parameters) = self.program.registry.nominal_parameters(owner) else {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     };
-                    if parameters.len() != arguments.len() {
+                    if parameters.len() != arity {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     }
                     let payload_type = if let Some(payload) = info.payload.as_ref() {
                         self.charge_type_work(parameters.len())?;
-                        for argument in arguments {
-                            self.charge_type_structure(argument)?;
-                        }
-                        let mut replacements = HashMap::new();
+                        let mut replacements = TypeReplacementMap::new();
                         replacements.try_reserve(parameters.len()).map_err(|_| {
                             ValidationError::new(ValidationReason::Resource, Some(node))
                         })?;
-                        replacements.extend(
-                            parameters
-                                .iter()
-                                .zip(arguments)
-                                .map(|(parameter, argument)| (parameter.id, argument.clone())),
-                        );
-                        Some(substitute_type_variables_with(
+                        let mut current = expected.as_type();
+                        for parameter in parameters.iter().rev() {
+                            let Type::Application(function, argument) = current else {
+                                return Err(ValidationError::new(
+                                    ValidationReason::Pattern,
+                                    Some(node),
+                                ));
+                            };
+                            self.charge_type_structure(argument)?;
+                            replacements.insert_replacing(parameter.id, argument.as_ref().clone());
+                            current = function;
+                        }
+                        Some(IterativeTypeOwner::new(substitute_type_variables_with(
                             payload,
-                            &replacements,
+                            replacements.as_map(),
                             |cells| self.charge_type_work(cells),
-                        )?)
+                        )?))
                     } else {
                         None
                     };
@@ -2087,8 +2195,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                 Task::Visit(Type::Variable(variable)) => {
                     self.retain_type_scope_requirement(&mut discovered, *variable)?;
                 }
-                Task::Visit(Type::Tuple(elements) | Type::AppliedNominal(_, elements)) => {
+                Task::Visit(Type::Tuple(elements)) => {
                     work.push(Task::Sequence(elements.iter()));
+                }
+                Task::Visit(Type::Application(function, argument)) => {
+                    work.push(Task::Visit(argument));
+                    work.push(Task::Visit(function));
                 }
                 Task::Visit(Type::Function(domain, codomain)) => {
                     work.push(Task::Visit(codomain));
@@ -2564,6 +2676,42 @@ mod tests {
             result = Type::Function(Box::new(Type::Unit), Box::new(result));
         }
         result
+    }
+
+    fn nominal_application_type(owner: crate::types::NominalTypeId, depth: usize) -> Type {
+        let mut result = Type::Nominal(owner);
+        for _ in 0..depth {
+            result = Type::Application(Box::new(result), Box::new(Type::Unit));
+        }
+        result
+    }
+
+    fn wide_nominal(
+        owner: crate::types::NominalTypeId,
+        spelling: &str,
+        depth: usize,
+        node_origin: &Origin,
+    ) -> (
+        crate::resolved::ResolvedNominalType,
+        Vec<crate::resolved::ResolvedTypeVariable>,
+    ) {
+        (
+            crate::resolved::ResolvedNominalType {
+                id: owner,
+                spelling: spelling.into(),
+                constructors: Box::new([]),
+                origin: node_origin.clone(),
+            },
+            (0..depth)
+                .map(|index| crate::resolved::ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::new(
+                        u32::try_from(index).expect("wide type parameter identity"),
+                    ),
+                    spelling: format!("T{index}"),
+                    origin: node_origin.clone(),
+                })
+                .collect(),
+        )
     }
 
     fn unchecked_identity_program(source: &SourceFile, result_depth: usize) -> UnvalidatedProgram {
@@ -3304,7 +3452,8 @@ mod tests {
     #[test]
     fn constructor_pattern_substitutions_precharge_phantom_argument_clones() {
         const WIDTH: usize = 64;
-        const ROOT_TYPE_CELLS: usize = WIDTH + 1;
+        // W application nodes + W argument leaves + one nominal head.
+        const ROOT_TYPE_CELLS: usize = WIDTH * 2 + 1;
         const REPLACEMENT_STORAGE: usize = WIDTH * 2;
         const PAYLOAD_WORK: usize = 2;
         const EXACT_WORK: usize = ROOT_TYPE_CELLS + REPLACEMENT_STORAGE + PAYLOAD_WORK;
@@ -3339,7 +3488,7 @@ mod tests {
             }],
         )
         .with_type_parameters(vec![(owner, parameters)]);
-        let expected = Type::AppliedNominal(owner, vec![Type::Bool; WIDTH].into_boxed_slice());
+        let expected = Type::apply_arguments(Type::Nominal(owner), vec![Type::Bool; WIDTH]);
         let pattern = CorePattern::new(
             expected.clone(),
             node_origin.clone(),
@@ -3702,9 +3851,9 @@ mod tests {
             vec![parameter].into_boxed_slice(),
             Box::new(Type::Function(
                 Box::new(payload.clone()),
-                Box::new(Type::AppliedNominal(
-                    nominal,
-                    vec![Type::Variable(parameter)].into_boxed_slice(),
+                Box::new(Type::apply_arguments(
+                    Type::Nominal(nominal),
+                    [Type::Variable(parameter)],
                 )),
             )),
         );
@@ -3722,10 +3871,7 @@ mod tests {
             vec![parameter].into_boxed_slice(),
             Box::new(Type::Function(
                 Box::new(payload.clone()),
-                Box::new(Type::AppliedNominal(
-                    nominal,
-                    vec![Type::Int].into_boxed_slice(),
-                )),
+                Box::new(Type::apply_arguments(Type::Nominal(nominal), [Type::Int])),
             )),
         );
         let binder = TypedBinder::new(
@@ -3841,12 +3987,8 @@ mod tests {
         let poly_nullary = ConstructorId::new(parameterized, 0);
         let poly_payload = ConstructorId::new(parameterized, 1);
         let parameter = crate::types::TypeVariableId::new(0);
-        let parameterized_result = || {
-            Type::AppliedNominal(
-                parameterized,
-                vec![Type::Variable(parameter)].into_boxed_slice(),
-            )
-        };
+        let parameterized_result =
+            || Type::apply_arguments(Type::Nominal(parameterized), [Type::Variable(parameter)]);
         let parameterized_scheme =
             |body| Type::Forall(vec![parameter].into_boxed_slice(), Box::new(body));
         let constructors = [
@@ -3930,9 +4072,9 @@ mod tests {
                 poly_payload,
                 parameterized_scheme(Type::Function(
                     Box::new(Type::Int),
-                    Box::new(Type::AppliedNominal(
-                        parameterized,
-                        vec![Type::Int].into_boxed_slice(),
+                    Box::new(Type::apply_arguments(
+                        Type::Nominal(parameterized),
+                        [Type::Int],
                     )),
                 )),
             ),
@@ -4075,6 +4217,419 @@ mod tests {
             .expect("small-stack validation thread should start")
             .join()
             .expect("borrowed value matching must fit the small stack");
+    }
+
+    #[test]
+    fn successful_type_application_validation_discards_instantiation_work_iteratively() {
+        std::thread::Builder::new()
+            .name("type-application-validation-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_000;
+                let file = source();
+                let node_origin = origin(&file);
+                let arena = super::super::dialect::ArenaId::new(191);
+                let owner = crate::types::NominalTypeId::new(file.id(), 0);
+                let parameter = crate::types::TypeVariableId::new(
+                    u32::try_from(DEPTH).expect("scheme parameter identity"),
+                );
+                let function = NodeId::new(arena, 0);
+                let application = NodeId::new(arena, 1);
+                let argument = nominal_application_type(owner, DEPTH);
+                let (nominal, parameters) = wide_nominal(owner, "Wide", DEPTH, &node_origin);
+                let program = UnvalidatedProgram {
+                    registry: Arc::new(
+                        crate::resolved::ResolvedRegistry::new(vec![nominal], vec![])
+                            .with_type_parameters(vec![(owner, parameters)]),
+                    ),
+                    arena,
+                    nodes: vec![
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: Type::Forall(
+                                vec![parameter].into_boxed_slice(),
+                                Box::new(Type::Variable(parameter)),
+                            ),
+                            origin: Some(node_origin.clone()),
+                            kind: PureExprKind::Value(PureValue::Unit(
+                                super::super::literal::UnitNode,
+                            )),
+                        },
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: argument.clone(),
+                            origin: Some(node_origin),
+                            kind: PureExprKind::Computation(PureComputation::TypeApplication(
+                                super::super::type_ops::TypeApplicationNode::new(
+                                    function,
+                                    vec![argument],
+                                ),
+                            )),
+                        },
+                    ],
+                    root: application,
+                };
+                let validator = Validator::new(&program, &[&file]);
+                let PureExprKind::Computation(computation) = &program.nodes[1].kind else {
+                    unreachable!("test application computation")
+                };
+                validator
+                    .validate_computation(
+                        application,
+                        &program.nodes[1],
+                        computation,
+                        &mut HashMap::new(),
+                        &HashMap::new(),
+                    )
+                    .expect("the deep type application is valid");
+                drop(validator);
+                program.discard_iteratively();
+            })
+            .expect("small-stack validation thread should start")
+            .join()
+            .expect("successful instantiation teardown must fit the small stack");
+    }
+
+    #[test]
+    fn successful_match_validation_discards_coverage_matrix_iteratively() {
+        std::thread::Builder::new()
+            .name("match-validation-matrix-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_000;
+                let file = source();
+                let node_origin = origin(&file);
+                let arena = super::super::dialect::ArenaId::new(192);
+                let owner = crate::types::NominalTypeId::new(file.id(), 0);
+                let scrutinee = NodeId::new(arena, 0);
+                let body = NodeId::new(arena, 1);
+                let match_id = NodeId::new(arena, 2);
+                let deep = nominal_application_type(owner, DEPTH);
+                let (nominal, parameters) = wide_nominal(owner, "Wide", DEPTH, &node_origin);
+                let pattern =
+                    CorePattern::new(deep.clone(), node_origin.clone(), CorePatternKind::Wildcard);
+                let program = UnvalidatedProgram {
+                    registry: Arc::new(
+                        crate::resolved::ResolvedRegistry::new(vec![nominal], vec![])
+                            .with_type_parameters(vec![(owner, parameters)]),
+                    ),
+                    arena,
+                    nodes: vec![
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: deep,
+                            origin: Some(node_origin.clone()),
+                            kind: PureExprKind::Value(PureValue::Unit(
+                                super::super::literal::UnitNode,
+                            )),
+                        },
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: Type::Unit,
+                            origin: Some(node_origin.clone()),
+                            kind: PureExprKind::Value(PureValue::Unit(
+                                super::super::literal::UnitNode,
+                            )),
+                        },
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: Type::Unit,
+                            origin: Some(node_origin.clone()),
+                            kind: PureExprKind::Computation(PureComputation::Match(
+                                super::super::MatchNode::new(
+                                    scrutinee,
+                                    vec![super::super::CoreMatchArm::new(
+                                        pattern,
+                                        body,
+                                        node_origin,
+                                    )],
+                                ),
+                            )),
+                        },
+                    ],
+                    root: match_id,
+                };
+                let validator = Validator::new(&program, &[&file]);
+                let PureExprKind::Computation(computation) = &program.nodes[2].kind else {
+                    unreachable!("test match computation")
+                };
+                validator
+                    .validate_computation(
+                        match_id,
+                        &program.nodes[2],
+                        computation,
+                        &mut HashMap::new(),
+                        &HashMap::new(),
+                    )
+                    .expect("the exhaustive deep match is valid");
+                drop(validator);
+                program.discard_iteratively();
+            })
+            .expect("small-stack validation thread should start")
+            .join()
+            .expect("successful coverage-matrix teardown must fit the small stack");
+    }
+
+    #[test]
+    fn redundant_match_validation_discards_pending_pattern_row_iteratively() {
+        std::thread::Builder::new()
+            .name("match-validation-row-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_000;
+                let file = source();
+                let node_origin = origin(&file);
+                let arena = super::super::dialect::ArenaId::new(194);
+                let owner = crate::types::NominalTypeId::new(file.id(), 0);
+                let scrutinee = NodeId::new(arena, 0);
+                let body = NodeId::new(arena, 1);
+                let match_id = NodeId::new(arena, 2);
+                let deep = nominal_application_type(owner, DEPTH);
+                let (nominal, parameters) = wide_nominal(owner, "Wide", DEPTH, &node_origin);
+                let arms = vec![
+                    super::super::CoreMatchArm::new(
+                        CorePattern::new(
+                            deep.clone(),
+                            node_origin.clone(),
+                            CorePatternKind::Wildcard,
+                        ),
+                        body,
+                        node_origin.clone(),
+                    ),
+                    super::super::CoreMatchArm::new(
+                        CorePattern::new(
+                            deep.clone(),
+                            node_origin.clone(),
+                            CorePatternKind::Wildcard,
+                        ),
+                        body,
+                        node_origin.clone(),
+                    ),
+                ];
+                let program = UnvalidatedProgram {
+                    registry: Arc::new(
+                        crate::resolved::ResolvedRegistry::new(vec![nominal], vec![])
+                            .with_type_parameters(vec![(owner, parameters)]),
+                    ),
+                    arena,
+                    nodes: vec![
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: deep,
+                            origin: Some(node_origin.clone()),
+                            kind: PureExprKind::Value(PureValue::Unit(
+                                super::super::literal::UnitNode,
+                            )),
+                        },
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: Type::Unit,
+                            origin: Some(node_origin.clone()),
+                            kind: PureExprKind::Value(PureValue::Unit(
+                                super::super::literal::UnitNode,
+                            )),
+                        },
+                        StoredNode {
+                            dialect: DialectId::PURE,
+                            ty: Type::Unit,
+                            origin: Some(node_origin.clone()),
+                            kind: PureExprKind::Computation(PureComputation::Match(
+                                super::super::MatchNode::new(scrutinee, arms),
+                            )),
+                        },
+                    ],
+                    root: match_id,
+                };
+                let validator = Validator::new(&program, &[&file]);
+                let PureExprKind::Computation(computation) = &program.nodes[2].kind else {
+                    unreachable!("test match computation")
+                };
+                let error = validator
+                    .validate_computation(
+                        match_id,
+                        &program.nodes[2],
+                        computation,
+                        &mut HashMap::new(),
+                        &HashMap::new(),
+                    )
+                    .expect_err("the second wildcard is redundant");
+                assert_eq!(error.reason(), ValidationReason::Coverage);
+                drop(validator);
+                program.discard_iteratively();
+            })
+            .expect("small-stack validation thread should start")
+            .join()
+            .expect("redundant pattern-row teardown must fit the small stack");
+    }
+
+    #[test]
+    fn late_pattern_validation_error_discards_owned_payload_type_iteratively() {
+        std::thread::Builder::new()
+            .name("pattern-validation-owned-payload".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_000;
+                let file = source();
+                let node_origin = origin(&file);
+                let arena = super::super::dialect::ArenaId::new(193);
+                let owner = crate::types::NominalTypeId::new(file.id(), 0);
+                let deep_owner = crate::types::NominalTypeId::new(file.id(), 1);
+                let constructor = ConstructorId::new(owner, 0);
+                let parameter = crate::types::TypeVariableId::new(0);
+                let (deep_nominal, deep_parameters) =
+                    wide_nominal(deep_owner, "Wide", DEPTH, &node_origin);
+                let registry = crate::resolved::ResolvedRegistry::new(
+                    vec![
+                        crate::resolved::ResolvedNominalType {
+                            id: owner,
+                            spelling: "Deep".into(),
+                            constructors: vec![constructor].into_boxed_slice(),
+                            origin: node_origin.clone(),
+                        },
+                        deep_nominal,
+                    ],
+                    vec![crate::resolved::ResolvedConstructor {
+                        id: constructor,
+                        owner,
+                        spelling: "Make".into(),
+                        payload: Some(Type::Variable(parameter)),
+                        origin: node_origin.clone(),
+                    }],
+                )
+                .with_type_parameters(vec![
+                    (
+                        owner,
+                        vec![crate::resolved::ResolvedTypeVariable {
+                            id: parameter,
+                            spelling: "T".into(),
+                            origin: node_origin.clone(),
+                        }],
+                    ),
+                    (deep_owner, deep_parameters),
+                ]);
+                let expected = Type::Application(
+                    Box::new(Type::Nominal(owner)),
+                    Box::new(nominal_application_type(deep_owner, DEPTH)),
+                );
+                let pattern = CorePattern::new(
+                    expected.clone(),
+                    node_origin.clone(),
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload: Some(Box::new(CorePattern::new(
+                            Type::Bool,
+                            node_origin.clone(),
+                            CorePatternKind::Wildcard,
+                        ))),
+                    },
+                );
+                let program = UnvalidatedProgram {
+                    registry: Arc::new(registry),
+                    arena,
+                    nodes: vec![StoredNode {
+                        dialect: DialectId::PURE,
+                        ty: Type::Unit,
+                        origin: Some(node_origin),
+                        kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                    }],
+                    root: NodeId::new(arena, 0),
+                };
+                let validator = Validator::new(&program, &[&file]);
+                let error = validator
+                    .validate_pattern(&pattern, &expected, program.root)
+                    .expect_err("the payload pattern has the wrong type");
+                assert_eq!(error.reason(), ValidationReason::Pattern);
+                drop(validator);
+                pattern.discard_iteratively();
+                discard_type_iteratively(expected);
+                program.discard_iteratively();
+            })
+            .expect("small-stack validation thread should start")
+            .join()
+            .expect("late owned-pattern teardown must fit the small stack");
+    }
+
+    #[test]
+    fn payload_shape_error_discards_substituted_type_iteratively() {
+        std::thread::Builder::new()
+            .name("pattern-validation-payload-shape-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_000;
+                let file = source();
+                let node_origin = origin(&file);
+                let arena = super::super::dialect::ArenaId::new(195);
+                let owner = crate::types::NominalTypeId::new(file.id(), 0);
+                let deep_owner = crate::types::NominalTypeId::new(file.id(), 1);
+                let constructor = ConstructorId::new(owner, 0);
+                let parameter = crate::types::TypeVariableId::new(0);
+                let (deep_nominal, deep_parameters) =
+                    wide_nominal(deep_owner, "Wide", DEPTH, &node_origin);
+                let registry = crate::resolved::ResolvedRegistry::new(
+                    vec![
+                        crate::resolved::ResolvedNominalType {
+                            id: owner,
+                            spelling: "Deep".into(),
+                            constructors: vec![constructor].into_boxed_slice(),
+                            origin: node_origin.clone(),
+                        },
+                        deep_nominal,
+                    ],
+                    vec![crate::resolved::ResolvedConstructor {
+                        id: constructor,
+                        owner,
+                        spelling: "Make".into(),
+                        payload: Some(Type::Variable(parameter)),
+                        origin: node_origin.clone(),
+                    }],
+                )
+                .with_type_parameters(vec![
+                    (
+                        owner,
+                        vec![crate::resolved::ResolvedTypeVariable {
+                            id: parameter,
+                            spelling: "T".into(),
+                            origin: node_origin.clone(),
+                        }],
+                    ),
+                    (deep_owner, deep_parameters),
+                ]);
+                let expected = Type::Application(
+                    Box::new(Type::Nominal(owner)),
+                    Box::new(nominal_application_type(deep_owner, DEPTH)),
+                );
+                let pattern = CorePattern::new(
+                    expected.clone(),
+                    node_origin.clone(),
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload: None,
+                    },
+                );
+                let program = UnvalidatedProgram {
+                    registry: Arc::new(registry),
+                    arena,
+                    nodes: vec![StoredNode {
+                        dialect: DialectId::PURE,
+                        ty: Type::Unit,
+                        origin: Some(node_origin),
+                        kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                    }],
+                    root: NodeId::new(arena, 0),
+                };
+                let validator = Validator::new(&program, &[&file]);
+                let error = validator
+                    .validate_pattern(&pattern, &expected, program.root)
+                    .expect_err("the required payload pattern is missing");
+                assert_eq!(error.reason(), ValidationReason::Pattern);
+                drop(validator);
+                pattern.discard_iteratively();
+                discard_type_iteratively(expected);
+                program.discard_iteratively();
+            })
+            .expect("small-stack validation thread should start")
+            .join()
+            .expect("payload-shape teardown must fit the small stack");
     }
 
     #[test]
@@ -4309,5 +4864,51 @@ mod tests {
         let analysis = validator.analyze_free_binders().expect("valid shared DAG");
         assert!(analysis.root_requirements.is_empty());
         assert_eq!(analysis.analyzed_nodes, program.nodes.len());
+    }
+}
+#[cfg(test)]
+mod replacement_owner_api_tests {
+    use super::*;
+
+    fn deep_type(depth: usize) -> Type {
+        let mut ty = Type::Int;
+        for _ in 0..depth {
+            ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+        }
+        ty
+    }
+
+    #[test]
+    fn recursive_type_replacements_do_not_bypass_the_owner_api() {
+        let source: String = include_str!("validate.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let raw_field = ["replacements", ".0"].concat();
+        assert!(!source.contains(&raw_field));
+        let raw_insert = [".0", ".insert("].concat();
+        let raw_reserve = [".0", ".try_reserve("].concat();
+        assert_eq!(source.matches(&raw_insert).count(), 1);
+        assert_eq!(source.matches(&raw_reserve).count(), 1);
+        let broad_mutation = ["impl", "DerefMut", "for", "TypeReplacementMap"].concat();
+        assert!(!source.contains(&broad_mutation));
+    }
+
+    #[test]
+    fn duplicate_deep_replacement_is_dismantled_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("duplicate-core-validation-replacement".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let parameter = crate::types::TypeVariableId::new(0);
+                let mut replacements = TypeReplacementMap::new();
+                replacements.insert_replacing(parameter, deep_type(DEPTH));
+                replacements.insert_replacing(parameter, deep_type(DEPTH));
+            })
+            .expect("the duplicate-replacement thread should start")
+            .join()
+            .expect("duplicate replacement teardown must stay iterative");
     }
 }

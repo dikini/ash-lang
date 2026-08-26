@@ -33,9 +33,13 @@ use crate::{
         ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry,
         ResolvedRequirement, ResolvedTermName, ResolvedType, ResolvedTypeProvenance,
         ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern, WithheldExport,
-        WithheldExportKind, WithheldNamespace,
+        WithheldExportKind, WithheldNamespace, discard_resolved_definition_iteratively,
+        discard_resolved_equation_iteratively, discard_resolved_expression_iteratively,
+        discard_resolved_implementation_iteratively, discard_resolved_interface_iteratively,
+        discard_resolved_local_declaration_iteratively, discard_resolved_pattern_iteratively,
+        discard_resolved_requirement,
     },
-    source::Origin,
+    source::{Origin, discard_origin_iteratively},
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDeclarationIndex, SurfaceDefinition,
         SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceImplementation,
@@ -45,10 +49,405 @@ use crate::{
         SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeVisibility,
     },
     types::{
-        ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, charge_type_cells,
-        clone_type_with_budget,
+        ConstructorId, IterativeTypeOwner, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
+        charge_type_cells, clone_type_with_budget, discard_type_iteratively,
     },
 };
+
+struct ResolvedTypeBuffer(Vec<(Type, usize)>);
+
+impl Deref for ResolvedTypeBuffer {
+    type Target = Vec<(Type, usize)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ResolvedTypeBuffer {
+    fn push(&mut self, value: (Type, usize)) {
+        self.0.push(value);
+    }
+
+    fn pop_owned(&mut self) -> Option<(IterativeTypeOwner, usize)> {
+        self.0
+            .pop()
+            .map(|(ty, root)| (IterativeTypeOwner::new(ty), root))
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
+    }
+
+    fn into_vec(mut self) -> Vec<(Type, usize)> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedTypeBuffer {
+    fn drop(&mut self) {
+        while let Some((ty, _)) = self.0.pop() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+struct ResolvedExpressionOwner(Option<ResolvedExpr>);
+
+impl ResolvedExpressionOwner {
+    fn new(expression: ResolvedExpr) -> Self {
+        Self(Some(expression))
+    }
+
+    fn into_inner(mut self) -> ResolvedExpr {
+        self.0.take().expect("a resolved expression transfers once")
+    }
+}
+
+impl Deref for ResolvedExpressionOwner {
+    type Target = ResolvedExpr;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+            .as_ref()
+            .expect("a resolved expression remains owned")
+    }
+}
+
+impl Drop for ResolvedExpressionOwner {
+    fn drop(&mut self) {
+        if let Some(expression) = self.0.take() {
+            discard_resolved_expression_iteratively(expression);
+        }
+    }
+}
+
+struct ResolvedExpressionBuffer(Vec<ResolvedExpr>);
+
+impl Deref for ResolvedExpressionBuffer {
+    type Target = Vec<ResolvedExpr>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ResolvedExpressionBuffer {
+    fn push(&mut self, expression: ResolvedExpr) {
+        self.0.push(expression);
+    }
+
+    fn pop_owned(&mut self) -> Option<ResolvedExpressionOwner> {
+        self.0.pop().map(ResolvedExpressionOwner::new)
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
+    }
+
+    fn into_vec(mut self) -> Vec<ResolvedExpr> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedExpressionBuffer {
+    fn drop(&mut self) {
+        for expression in self.0.drain(..) {
+            discard_resolved_expression_iteratively(expression);
+        }
+    }
+}
+
+struct ResolvedPatternOwner(Option<ResolvedPattern>);
+
+impl ResolvedPatternOwner {
+    fn new(pattern: ResolvedPattern) -> Self {
+        Self(Some(pattern))
+    }
+
+    fn into_inner(mut self) -> ResolvedPattern {
+        self.0.take().expect("a resolved pattern transfers once")
+    }
+}
+
+impl Drop for ResolvedPatternOwner {
+    fn drop(&mut self) {
+        if let Some(pattern) = self.0.take() {
+            discard_resolved_pattern_iteratively(pattern);
+        }
+    }
+}
+
+struct ResolvedPatternBuffer(Vec<ResolvedPattern>);
+
+impl ResolvedPatternBuffer {
+    fn pop(&mut self) -> Option<ResolvedPattern> {
+        self.0.pop()
+    }
+
+    fn into_vec(mut self) -> Vec<ResolvedPattern> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedPatternBuffer {
+    fn drop(&mut self) {
+        for pattern in self.0.drain(..) {
+            discard_resolved_pattern_iteratively(pattern);
+        }
+    }
+}
+
+struct ResolvedDeclarationBuffer(Vec<ResolvedLocalDeclaration>);
+
+impl Deref for ResolvedDeclarationBuffer {
+    type Target = Vec<ResolvedLocalDeclaration>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ResolvedDeclarationBuffer {
+    fn push(&mut self, declaration: ResolvedLocalDeclaration) {
+        self.0.push(declaration);
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
+    }
+
+    fn into_vec(mut self) -> Vec<ResolvedLocalDeclaration> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedDeclarationBuffer {
+    fn drop(&mut self) {
+        for declaration in self.0.drain(..) {
+            discard_resolved_local_declaration_iteratively(declaration);
+        }
+    }
+}
+
+struct ResolvedTypeOccurrenceBuffer(Vec<ResolvedType>);
+
+impl ResolvedTypeOccurrenceBuffer {
+    fn into_vec(mut self) -> Vec<ResolvedType> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedTypeOccurrenceBuffer {
+    fn drop(&mut self) {
+        for resolved in self.0.drain(..) {
+            resolved.discard_iteratively();
+        }
+    }
+}
+
+struct ResolvedTypeOccurrenceOwner(Option<ResolvedType>);
+
+impl ResolvedTypeOccurrenceOwner {
+    fn new(resolved: ResolvedType) -> Self {
+        Self(Some(resolved))
+    }
+
+    fn into_inner(mut self) -> ResolvedType {
+        self.0
+            .take()
+            .expect("a resolved type occurrence transfers once")
+    }
+}
+
+impl Drop for ResolvedTypeOccurrenceOwner {
+    fn drop(&mut self) {
+        if let Some(resolved) = self.0.take() {
+            resolved.discard_iteratively();
+        }
+    }
+}
+
+struct ResolvedMatchArmBuffer(Vec<ResolvedMatchArm>);
+
+impl ResolvedMatchArmBuffer {
+    fn into_vec(mut self) -> Vec<ResolvedMatchArm> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+struct ResolvedInterfaceMethodBuffer(Vec<ResolvedInterfaceMethod>);
+
+impl ResolvedInterfaceMethodBuffer {
+    fn into_vec(mut self) -> Vec<ResolvedInterfaceMethod> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedInterfaceMethodBuffer {
+    fn drop(&mut self) {
+        for method in self.0.drain(..) {
+            method.annotation.discard_iteratively();
+            for parameter in method.type_parameters.into_vec() {
+                discard_origin_iteratively(parameter.origin);
+            }
+            discard_origin_iteratively(method.origin);
+        }
+    }
+}
+
+struct ResolvedInterfaceBuffer(Vec<ResolvedInterfaceDeclaration>);
+
+impl ResolvedInterfaceBuffer {
+    fn into_vec(mut self) -> Vec<ResolvedInterfaceDeclaration> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedInterfaceBuffer {
+    fn drop(&mut self) {
+        for interface in self.0.drain(..) {
+            discard_resolved_interface_iteratively(interface);
+        }
+    }
+}
+
+struct ResolvedRequirementBuffer(Vec<ResolvedRequirement>);
+
+impl ResolvedRequirementBuffer {
+    fn into_boxed_slice(mut self) -> Box<[ResolvedRequirement]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for ResolvedRequirementBuffer {
+    fn drop(&mut self) {
+        for requirement in self.0.drain(..) {
+            discard_resolved_requirement(requirement);
+        }
+    }
+}
+
+struct ResolvedEquationBuffer(Vec<ResolvedEquation>);
+
+impl ResolvedEquationBuffer {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn into_vec(mut self) -> Vec<ResolvedEquation> {
+        std::mem::take(&mut self.0)
+    }
+
+    fn into_boxed_slice(mut self) -> Box<[ResolvedEquation]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for ResolvedEquationBuffer {
+    fn drop(&mut self) {
+        for equation in self.0.drain(..) {
+            discard_resolved_equation_iteratively(equation);
+        }
+    }
+}
+
+struct ResolvedTypedPatternBuffer(Vec<ResolvedTypedPattern>);
+
+impl ResolvedTypedPatternBuffer {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn into_vec(mut self) -> Vec<ResolvedTypedPattern> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedTypedPatternBuffer {
+    fn drop(&mut self) {
+        for pattern in self.0.drain(..) {
+            discard_resolved_pattern_iteratively(pattern.pattern);
+            pattern.annotation.discard_iteratively();
+        }
+    }
+}
+
+struct ResolvedDefinitionBuffer(Vec<ResolvedDefinition>);
+
+impl ResolvedDefinitionBuffer {
+    fn into_vec(mut self) -> Vec<ResolvedDefinition> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedDefinitionBuffer {
+    fn drop(&mut self) {
+        for definition in self.0.drain(..) {
+            discard_resolved_definition_iteratively(definition);
+        }
+    }
+}
+
+struct ResolvedImplementationMethodGroupBuffer(Vec<ResolvedImplementationMethodGroup>);
+
+impl ResolvedImplementationMethodGroupBuffer {
+    fn into_boxed_slice(mut self) -> Box<[ResolvedImplementationMethodGroup]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for ResolvedImplementationMethodGroupBuffer {
+    fn drop(&mut self) {
+        for group in self.0.drain(..) {
+            discard_origin_iteratively(group.binder.origin);
+            for equation in group.equations.into_vec() {
+                discard_resolved_equation_iteratively(equation);
+            }
+        }
+    }
+}
+
+struct ResolvedImplementationBuffer(Vec<ResolvedImplementation>);
+
+impl ResolvedImplementationBuffer {
+    fn into_vec(mut self) -> Vec<ResolvedImplementation> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedImplementationBuffer {
+    fn drop(&mut self) {
+        for implementation in self.0.drain(..) {
+            discard_resolved_implementation_iteratively(implementation);
+        }
+    }
+}
+
+struct ResolvedConstructorOwnerBuffer(Vec<ResolvedConstructor>);
+
+impl ResolvedConstructorOwnerBuffer {
+    fn into_vec(mut self) -> Vec<ResolvedConstructor> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedConstructorOwnerBuffer {
+    fn drop(&mut self) {
+        for constructor in self.0.drain(..) {
+            constructor.discard_iteratively();
+        }
+    }
+}
+
+impl Drop for ResolvedMatchArmBuffer {
+    fn drop(&mut self) {
+        for arm in self.0.drain(..) {
+            discard_resolved_pattern_iteratively(arm.pattern);
+            discard_resolved_expression_iteratively(arm.body);
+        }
+    }
+}
 
 /// The semantic reason that prevented name resolution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -280,21 +679,17 @@ pub(crate) fn resolve_module_with_budget(
         }));
         resolver.install_imports(surface, dependencies)?;
         resolver.validate_local_namespaces(surface)?;
-        let ResolvedDeclarations {
-            registry,
-            interfaces,
-            implementations,
-            definitions,
-        } = resolver.resolve_declarations(surface)?;
+        let declarations = resolver.resolve_declarations(surface)?;
         let imported = std::mem::take(&mut resolver.imported);
         let export_candidate = build_export_candidate(
             surface,
-            &registry,
-            &interfaces,
-            &definitions,
+            &declarations.registry,
+            &declarations.interfaces,
+            &declarations.definitions,
             std::mem::take(&mut resolver.public_import_candidate),
             &mut resolver.type_work,
         )?;
+        let (registry, interfaces, implementations, definitions) = declarations.into_parts();
         let declaration_order = surface
             .declaration_order
             .iter()
@@ -714,6 +1109,38 @@ struct ResolvedDeclarations {
     definitions: Vec<ResolvedDefinition>,
 }
 
+impl ResolvedDeclarations {
+    fn into_parts(
+        mut self,
+    ) -> (
+        Arc<ResolvedRegistry>,
+        Vec<ResolvedInterfaceDeclaration>,
+        Vec<ResolvedImplementation>,
+        Vec<ResolvedDefinition>,
+    ) {
+        (
+            std::mem::take(&mut self.registry),
+            std::mem::take(&mut self.interfaces),
+            std::mem::take(&mut self.implementations),
+            std::mem::take(&mut self.definitions),
+        )
+    }
+}
+
+impl Drop for ResolvedDeclarations {
+    fn drop(&mut self) {
+        for interface in self.interfaces.drain(..) {
+            discard_resolved_interface_iteratively(interface);
+        }
+        for implementation in self.implementations.drain(..) {
+            discard_resolved_implementation_iteratively(implementation);
+        }
+        for definition in self.definitions.drain(..) {
+            discard_resolved_definition_iteratively(definition);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum LocalTypeDeclarationKind {
     Nominal,
@@ -1029,7 +1456,7 @@ impl Resolver {
             identities.push((id, methods));
         }
 
-        let mut resolved = Vec::with_capacity(declarations.len());
+        let mut resolved = ResolvedInterfaceBuffer(Vec::with_capacity(declarations.len()));
         let mut retained_type_variables = Vec::new();
         for (declaration, (id, method_ids)) in declarations.iter().zip(identities) {
             let parameter = self.allocate_type_variable(
@@ -1037,7 +1464,8 @@ impl Resolver {
                 declaration.parameter.name.span,
             )?;
             retained_type_variables.push(parameter.clone());
-            let mut methods = Vec::with_capacity(declaration.methods.len());
+            let mut methods =
+                ResolvedInterfaceMethodBuffer(Vec::with_capacity(declaration.methods.len()));
             for (method, method_id) in declaration.methods.iter().zip(method_ids) {
                 let mut names = Vec::new();
                 let mut seen = HashSet::from([declaration.parameter.name.text.as_str()]);
@@ -1065,7 +1493,7 @@ impl Resolver {
                 );
                 let annotation = self.resolve_type(&method.annotation);
                 let _ = self.type_scopes.pop();
-                methods.push(ResolvedInterfaceMethod {
+                methods.0.push(ResolvedInterfaceMethod {
                     id: method_id,
                     spelling: method.name.text.clone(),
                     annotation: annotation?,
@@ -1074,17 +1502,17 @@ impl Resolver {
                     span: method.span,
                 });
             }
-            resolved.push(ResolvedInterfaceDeclaration {
+            resolved.0.push(ResolvedInterfaceDeclaration {
                 id,
                 public: declaration.public,
                 spelling: declaration.name.text.clone(),
                 parameter,
-                methods: methods.into_boxed_slice(),
+                methods: methods.into_vec().into_boxed_slice(),
                 origin: Origin::Source(declaration.span),
                 span: declaration.span,
             });
         }
-        Ok((resolved, retained_type_variables))
+        Ok((resolved.into_vec(), retained_type_variables))
     }
 
     fn prepare_implementations(
@@ -2460,9 +2888,9 @@ impl Resolver {
                 Type::Nominal(id) => {
                     seen.insert(*id);
                 }
-                Type::AppliedNominal(id, arguments) => {
-                    seen.insert(*id);
-                    pending.push(Task::Sequence(arguments.iter()));
+                Type::Application(function, argument) => {
+                    pending.push(Task::Type(argument));
+                    pending.push(Task::Type(function));
                 }
                 Type::Tuple(elements) => pending.push(Task::Sequence(elements.iter())),
                 Type::Function(domain, codomain) => {
@@ -2824,26 +3252,36 @@ impl Resolver {
         owner: RequirementOwner,
         requirements: &[SurfaceRequirement],
     ) -> Result<Box<[ResolvedRequirement]>, ResolveError> {
-        requirements
-            .iter()
-            .enumerate()
-            .map(|(index, requirement)| {
-                let index = u32::try_from(index).map_err(|_| {
-                    error(
-                        ResolveReason::InternalState,
-                        requirement.span,
-                        "the declaration contains too many interface requirements",
-                    )
-                })?;
-                Ok(ResolvedRequirement {
-                    id: RequirementId::new(owner, index),
-                    interface: self.interface_reference(&requirement.interface)?,
-                    argument: self.resolve_type(&requirement.argument)?,
-                    span: requirement.span,
-                })
-            })
-            .collect::<Result<Vec<_>, ResolveError>>()
-            .map(Vec::into_boxed_slice)
+        let Some(first) = requirements.first() else {
+            return Ok(Box::new([]));
+        };
+        let mut resolved = ResolvedRequirementBuffer(Vec::new());
+        resolved.0.try_reserve(requirements.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                first.span,
+                "requirement storage exceeded its work budget",
+            )
+        })?;
+        for (index, requirement) in requirements.iter().enumerate() {
+            let index = u32::try_from(index).map_err(|_| {
+                error(
+                    ResolveReason::InternalState,
+                    requirement.span,
+                    "the declaration contains too many interface requirements",
+                )
+            })?;
+            let interface = self.interface_reference(&requirement.interface)?;
+            let argument =
+                ResolvedTypeOccurrenceOwner::new(self.resolve_type(&requirement.argument)?);
+            resolved.0.push(ResolvedRequirement {
+                id: RequirementId::new(owner, index),
+                interface,
+                argument: argument.into_inner(),
+                span: requirement.span,
+            });
+        }
+        Ok(resolved.into_boxed_slice())
     }
 
     fn constructor_reference(
@@ -2996,6 +3434,7 @@ impl Resolver {
         let registry = self.resolve_registry(&surface.type_declarations)?;
         let (interfaces, interface_type_parameters) =
             self.resolve_interface_declarations(&surface.interfaces)?;
+        let interfaces = ResolvedInterfaceBuffer(interfaces);
         let surface_definitions = &surface.definitions;
         let mut global_type_parameters = Vec::with_capacity(surface_definitions.len());
         for definition in surface_definitions {
@@ -3080,7 +3519,8 @@ impl Resolver {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut definitions = Vec::with_capacity(surface_definitions.len());
+        let mut definitions =
+            ResolvedDefinitionBuffer(Vec::with_capacity(surface_definitions.len()));
         for ((definition, global), type_parameters) in surface_definitions
             .iter()
             .zip(global_binders)
@@ -3093,116 +3533,175 @@ impl Resolver {
                     .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
                     .collect(),
             );
-            let kind = match &definition.kind {
-                SurfaceDefinitionKind::Equational(equational) => {
-                    let annotation = self.resolve_type(&equational.interface.annotation)?;
-                    let requirements = self.resolve_requirements(
-                        RequirementOwner::Global(global.id),
-                        &equational.interface.requirements,
-                    )?;
-                    let mut equations = Vec::with_capacity(equational.equations.len());
-                    for equation in &equational.equations {
-                        let scope_checkpoint = self.scopes.len();
-                        let (patterns, binders) =
-                            self.resolve_pattern_vector(&equation.patterns)?;
-                        self.push_binder_scope_many(&binders);
-                        let resolved_body = self.resolve_expr(&equation.body);
-                        self.scopes.truncate(scope_checkpoint);
-                        equations.push(ResolvedEquation {
-                            name: crate::resolved::ResolvedEquationHead {
-                                binder: global.id,
-                                spelling: equation.name.text.clone(),
-                                origin: Origin::Source(equation.name.span),
+            let kind = (|| -> Result<ResolvedDefinitionKind, ResolveError> {
+                let kind = match &definition.kind {
+                    SurfaceDefinitionKind::Equational(equational) => {
+                        let annotation = ResolvedTypeOccurrenceOwner::new(
+                            self.resolve_type(&equational.interface.annotation)?,
+                        );
+                        let requirements = ResolvedRequirementBuffer(
+                            self.resolve_requirements(
+                                RequirementOwner::Global(global.id),
+                                &equational.interface.requirements,
+                            )?
+                            .into_vec(),
+                        );
+                        let mut equations =
+                            ResolvedEquationBuffer(Vec::with_capacity(equational.equations.len()));
+                        for equation in &equational.equations {
+                            let scope_checkpoint = self.scopes.len();
+                            let (patterns, binders) =
+                                self.resolve_pattern_vector(&equation.patterns)?;
+                            let patterns = ResolvedPatternBuffer(patterns);
+                            self.push_binder_scope_many(&binders);
+                            let resolved_body = self
+                                .resolve_expr(&equation.body)
+                                .map(ResolvedExpressionOwner::new);
+                            self.scopes.truncate(scope_checkpoint);
+                            let resolved_body = resolved_body?;
+                            equations.0.push(ResolvedEquation {
+                                name: crate::resolved::ResolvedEquationHead {
+                                    binder: global.id,
+                                    spelling: equation.name.text.clone(),
+                                    origin: Origin::Source(equation.name.span),
+                                },
+                                patterns: patterns.into_vec(),
+                                body: resolved_body.into_inner(),
+                                span: equation.span,
+                            });
+                        }
+                        if equations.is_empty() {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                definition.span,
+                                "the resolver produced no equation",
+                            ));
+                        }
+                        ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
+                            interface: ResolvedExternalInterface {
+                                name: global.clone(),
+                                annotation: annotation.into_inner(),
+                                requirements: requirements.into_boxed_slice(),
+                                type_parameters: type_parameters.clone().into_boxed_slice(),
+                                span: equational.interface.span,
                             },
-                            patterns,
-                            body: resolved_body?,
-                            span: equation.span,
-                        });
-                    }
-                    if equations.is_empty() {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            definition.span,
-                            "the resolver produced no equation",
-                        ));
-                    }
-                    ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
-                        interface: ResolvedExternalInterface {
-                            name: global.clone(),
-                            annotation,
-                            requirements,
-                            type_parameters: type_parameters.clone().into_boxed_slice(),
-                            span: equational.interface.span,
-                        },
-                        equations,
-                    })
-                }
-                SurfaceDefinitionKind::InlineOperational(operational) => {
-                    let requirements = self.resolve_requirements(
-                        RequirementOwner::Global(global.id),
-                        &operational.header.requirements,
-                    )?;
-                    let surface_patterns = operational
-                        .header
-                        .parameters
-                        .iter()
-                        .map(|parameter| parameter.pattern.clone())
-                        .collect::<Vec<_>>();
-                    let (patterns, binders) = self.resolve_pattern_vector(&surface_patterns)?;
-                    let scope_checkpoint = self.scopes.len();
-                    self.push_binder_scope_many(&binders);
-                    let resolved_body = self.resolve_block(&operational.body);
-                    self.scopes.truncate(scope_checkpoint);
-                    let body = resolved_body?;
-                    let parameters = patterns
-                        .into_iter()
-                        .zip(&operational.header.parameters)
-                        .map(|(pattern, parameter)| {
-                            Ok(ResolvedTypedPattern {
-                                pattern,
-                                annotation: self.resolve_type(&parameter.annotation)?,
-                                span: parameter.span,
-                            })
+                            equations: equations.into_vec(),
                         })
-                        .collect::<Result<Vec<_>, ResolveError>>()?;
-                    if parameters.is_empty() {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            operational.header.span,
-                            "the resolver produced no operational parameter",
-                        ));
                     }
-                    ResolvedDefinitionKind::InlineOperational(ResolvedInlineOperationalGlobal {
-                        header: ResolvedInlineOperationalHeader {
-                            name: global.clone(),
-                            parameters,
-                            result_type: self.resolve_type(&operational.header.result_type)?,
-                            requirements,
-                            type_parameters: type_parameters.clone().into_boxed_slice(),
-                            span: operational.header.span,
-                        },
-                        body,
-                    })
-                }
-            };
-            definitions.push(ResolvedDefinition {
+                    SurfaceDefinitionKind::InlineOperational(operational) => {
+                        let requirements = ResolvedRequirementBuffer(
+                            self.resolve_requirements(
+                                RequirementOwner::Global(global.id),
+                                &operational.header.requirements,
+                            )?
+                            .into_vec(),
+                        );
+                        let surface_patterns = operational
+                            .header
+                            .parameters
+                            .iter()
+                            .map(|parameter| parameter.pattern.clone())
+                            .collect::<Vec<_>>();
+                        let (patterns, binders) = self.resolve_pattern_vector(&surface_patterns)?;
+                        let mut patterns = ResolvedPatternBuffer(patterns);
+                        let scope_checkpoint = self.scopes.len();
+                        self.push_binder_scope_many(&binders);
+                        let resolved_body = self.resolve_block(&operational.body).map(|body| {
+                            ResolvedExpressionOwner::new(ResolvedExpr {
+                                kind: ResolvedExprKind::Block(body),
+                                span: operational.body.span,
+                            })
+                        });
+                        self.scopes.truncate(scope_checkpoint);
+                        let body = resolved_body?;
+                        let mut parameters = ResolvedTypedPatternBuffer(Vec::new());
+                        parameters.0.try_reserve(patterns.0.len()).map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                operational.header.span,
+                                "operational parameter storage exceeded its work budget",
+                            )
+                        })?;
+                        patterns.0.reverse();
+                        for parameter in &operational.header.parameters {
+                            let pattern = patterns.pop().ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    parameter.span,
+                                    "the resolver lost an operational parameter pattern",
+                                )
+                            })?;
+                            let pattern = ResolvedPatternOwner::new(pattern);
+                            let annotation = ResolvedTypeOccurrenceOwner::new(
+                                self.resolve_type(&parameter.annotation)?,
+                            );
+                            parameters.0.push(ResolvedTypedPattern {
+                                pattern: pattern.into_inner(),
+                                annotation: annotation.into_inner(),
+                                span: parameter.span,
+                            });
+                        }
+                        if !patterns.0.is_empty() {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                operational.header.span,
+                                "the resolver retained an extra operational parameter pattern",
+                            ));
+                        }
+                        if parameters.is_empty() {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                operational.header.span,
+                                "the resolver produced no operational parameter",
+                            ));
+                        }
+                        let result_type = ResolvedTypeOccurrenceOwner::new(
+                            self.resolve_type(&operational.header.result_type)?,
+                        );
+                        if !matches!(body.kind, ResolvedExprKind::Block(_)) {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                operational.body.span,
+                                "the resolver produced the wrong operational body payload",
+                            ));
+                        }
+                        let ResolvedExprKind::Block(body) = body.into_inner().kind else {
+                            unreachable!("the operational body shape was checked")
+                        };
+                        ResolvedDefinitionKind::InlineOperational(ResolvedInlineOperationalGlobal {
+                            header: ResolvedInlineOperationalHeader {
+                                name: global.clone(),
+                                parameters: parameters.into_vec(),
+                                result_type: result_type.into_inner(),
+                                requirements: requirements.into_boxed_slice(),
+                                type_parameters: type_parameters.clone().into_boxed_slice(),
+                                span: operational.header.span,
+                            },
+                            body,
+                        })
+                    }
+                };
+                Ok(kind)
+            })();
+            self.type_scopes.truncate(type_scope_checkpoint);
+            let kind = kind?;
+            definitions.0.push(ResolvedDefinition {
                 kind,
                 span: definition.span,
             });
-            self.type_scopes.truncate(type_scope_checkpoint);
         }
 
-        let implementations = self.resolve_implementations(
+        let implementations = ResolvedImplementationBuffer(self.resolve_implementations(
             &surface.implementations,
             pending_implementations,
             surface.span,
-        )?;
+        )?);
 
         Ok(ResolvedDeclarations {
             registry,
-            interfaces,
-            implementations,
-            definitions,
+            interfaces: interfaces.into_vec(),
+            implementations: implementations.into_vec(),
+            definitions: definitions.into_vec(),
         })
     }
 
@@ -3220,128 +3719,139 @@ impl Resolver {
             ));
         }
 
-        declarations
-            .iter()
-            .zip(pending)
-            .map(|(implementation, pending)| {
-                let type_scope_checkpoint = self.type_scopes.len();
-                self.type_scopes.push(
-                    pending
-                        .head_parameters
-                        .iter()
-                        .chain(&pending.prerequisite_only_parameters)
-                        .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
-                        .collect(),
-                );
+        let mut implementations =
+            ResolvedImplementationBuffer(Vec::with_capacity(declarations.len()));
+        for (implementation, pending) in declarations.iter().zip(pending) {
+            let type_scope_checkpoint = self.type_scopes.len();
+            self.type_scopes.push(
+                pending
+                    .head_parameters
+                    .iter()
+                    .chain(&pending.prerequisite_only_parameters)
+                    .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
+                    .collect(),
+            );
 
-                let result = (|| {
-                    let interface = self.interface_reference(&implementation.interface)?;
-                    let argument = self.resolve_type(&implementation.argument)?;
-                    let prerequisites = self.resolve_requirements(
+            let result = (|| -> Result<ResolvedImplementation, ResolveError> {
+                let interface = self.interface_reference(&implementation.interface)?;
+                let argument =
+                    ResolvedTypeOccurrenceOwner::new(self.resolve_type(&implementation.argument)?);
+                let prerequisites = ResolvedRequirementBuffer(
+                    self.resolve_requirements(
                         RequirementOwner::Impl(pending.id),
                         &implementation.prerequisites,
-                    )?;
-                    let method_groups = pending
-                        .method_groups
-                        .into_iter()
-                        .map(|group| {
-                            let equations = implementation
-                                .equations
-                                .get(group.equations.clone())
-                                .ok_or_else(|| {
-                                error(
-                                    ResolveReason::InternalState,
-                                    implementation.span,
-                                    "the resolver retained an invalid method-group range",
-                                )
-                            })?;
-                            let first = equations.first().ok_or_else(|| {
-                                error(
-                                    ResolveReason::InternalState,
-                                    implementation.span,
-                                    "the resolver retained an empty method group",
-                                )
-                            })?;
-                            let last = equations.last().ok_or_else(|| {
-                                error(
-                                    ResolveReason::InternalState,
-                                    implementation.span,
-                                    "the resolver retained an empty method group",
-                                )
-                            })?;
-                            let span = first.span.cover(last.span).ok_or_else(|| {
-                                error(
-                                    ResolveReason::InternalState,
-                                    implementation.span,
-                                    "one implementation method group crosses source files",
-                                )
-                            })?;
-                            let binder = group.binder.ok_or_else(|| {
-                                error(
-                                    ResolveReason::InternalState,
-                                    first.span,
-                                    "the resolver did not allocate a hidden method binder",
-                                )
-                            })?;
-                            let method =
-                                self.method_names.get(&first.name.text).and_then(|binding| {
-                                    match binding.term {
-                                        ResolvedTermName::Method(method) => Some(method),
-                                        ResolvedTermName::Global(_) => None,
-                                    }
-                                });
-                            let identity =
-                                method.map(|method| ImplMethodId::new(pending.id, method));
-                            let equations = equations
-                                .iter()
-                                .map(|equation| {
-                                    let scope_checkpoint = self.scopes.len();
-                                    let (patterns, binders) =
-                                        self.resolve_pattern_vector(&equation.patterns)?;
-                                    self.push_binder_scope_many(&binders);
-                                    let body = self.resolve_expr(&equation.body);
-                                    self.scopes.truncate(scope_checkpoint);
-                                    Ok(ResolvedEquation {
-                                        name: crate::resolved::ResolvedEquationHead {
-                                            binder: binder.id,
-                                            spelling: equation.name.text.clone(),
-                                            origin: Origin::Source(equation.name.span),
-                                        },
-                                        patterns,
-                                        body: body?,
-                                        span: equation.span,
-                                    })
-                                })
-                                .collect::<Result<Vec<_>, ResolveError>>()?;
-                            Ok(ResolvedImplementationMethodGroup {
-                                method,
-                                identity,
-                                binder,
-                                equations: equations.into_boxed_slice(),
-                                span,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    )?
+                    .into_vec(),
+                );
+                let mut method_groups = ResolvedImplementationMethodGroupBuffer(Vec::new());
+                method_groups
+                    .0
+                    .try_reserve(pending.method_groups.len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            implementation.span,
+                            "implementation method-group storage exceeded its work budget",
+                        )
+                    })?;
+                for group in pending.method_groups {
+                    let equations = implementation
+                        .equations
+                        .get(group.equations.clone())
+                        .ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                implementation.span,
+                                "the resolver retained an invalid method-group range",
+                            )
+                        })?;
+                    let first = equations.first().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            implementation.span,
+                            "the resolver retained an empty method group",
+                        )
+                    })?;
+                    let last = equations.last().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            implementation.span,
+                            "the resolver retained an empty method group",
+                        )
+                    })?;
+                    let span = first.span.cover(last.span).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            implementation.span,
+                            "one implementation method group crosses source files",
+                        )
+                    })?;
+                    let binder = group.binder.ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            first.span,
+                            "the resolver did not allocate a hidden method binder",
+                        )
+                    })?;
+                    let method = self.method_names.get(&first.name.text).and_then(|binding| {
+                        match binding.term {
+                            ResolvedTermName::Method(method) => Some(method),
+                            ResolvedTermName::Global(_) => None,
+                        }
+                    });
+                    let identity = method.map(|method| ImplMethodId::new(pending.id, method));
+                    let mut resolved_equations =
+                        ResolvedEquationBuffer(Vec::with_capacity(equations.len()));
+                    for equation in equations {
+                        let scope_checkpoint = self.scopes.len();
+                        let (patterns, binders) =
+                            self.resolve_pattern_vector(&equation.patterns)?;
+                        let patterns = ResolvedPatternBuffer(patterns);
+                        self.push_binder_scope_many(&binders);
+                        let body = self
+                            .resolve_expr(&equation.body)
+                            .map(ResolvedExpressionOwner::new);
+                        self.scopes.truncate(scope_checkpoint);
+                        let body = body?;
+                        resolved_equations.0.push(ResolvedEquation {
+                            name: crate::resolved::ResolvedEquationHead {
+                                binder: binder.id,
+                                spelling: equation.name.text.clone(),
+                                origin: Origin::Source(equation.name.span),
+                            },
+                            patterns: patterns.into_vec(),
+                            body: body.into_inner(),
+                            span: equation.span,
+                        });
+                    }
+                    method_groups.0.push(ResolvedImplementationMethodGroup {
+                        method,
+                        identity,
+                        binder,
+                        equations: resolved_equations.into_boxed_slice(),
+                        span,
+                    });
+                }
 
-                    Ok(ResolvedImplementation {
-                        id: pending.id,
-                        public: implementation.public,
-                        interface,
-                        argument,
-                        head_parameters: pending.head_parameters.into_boxed_slice(),
-                        prerequisite_only_parameters: pending
-                            .prerequisite_only_parameters
-                            .into_boxed_slice(),
-                        prerequisites,
-                        method_groups: method_groups.into_boxed_slice(),
-                        span: implementation.span,
-                    })
-                })();
+                Ok(ResolvedImplementation {
+                    id: pending.id,
+                    public: implementation.public,
+                    interface,
+                    argument: argument.into_inner(),
+                    head_parameters: pending.head_parameters.into_boxed_slice(),
+                    prerequisite_only_parameters: pending
+                        .prerequisite_only_parameters
+                        .into_boxed_slice(),
+                    prerequisites: prerequisites.into_boxed_slice(),
+                    method_groups: method_groups.into_boxed_slice(),
+                    span: implementation.span,
+                })
+            })();
 
-                self.type_scopes.truncate(type_scope_checkpoint);
-                result
-            })
-            .collect()
+            self.type_scopes.truncate(type_scope_checkpoint);
+            implementations.0.push(result?);
+        }
+        Ok(implementations.into_vec())
     }
 
     fn resolve_registry(
@@ -3478,7 +3988,7 @@ impl Resolver {
                 origin: Origin::Source(declaration.span),
             })
             .collect::<Vec<_>>();
-        let mut constructors = Vec::new();
+        let mut constructors = ResolvedConstructorOwnerBuffer(Vec::new());
         for (((declaration, owner), ids), (_, parameters)) in type_declarations
             .iter()
             .zip(&nominal_ids)
@@ -3491,38 +4001,72 @@ impl Resolver {
                     .map(|parameter| (parameter.spelling.clone(), parameter.clone()))
                     .collect(),
             );
-            for (constructor, id) in declaration.constructors.iter().zip(ids) {
-                let payload = match constructor.fields.as_slice() {
-                    [] => None,
-                    [field] => Some(self.resolve_type(field)?.ty),
-                    fields => {
-                        self.type_work.charge(1).map_err(|()| {
-                            error(
-                                ResolveReason::TypeResourceExhausted,
-                                constructor.span,
-                                "constructor payload synthesis exceeded its type-work budget",
-                            )
-                        })?;
-                        Some(Type::Tuple(
-                            fields
-                                .iter()
-                                .map(|field| self.resolve_type(field).map(|resolved| resolved.ty))
-                                .collect::<Result<Vec<_>, _>>()?
-                                .into_boxed_slice(),
-                        ))
-                    }
-                };
-                constructors.push(ResolvedConstructor {
-                    id: *id,
-                    owner: *owner,
-                    spelling: constructor.name.text.clone(),
-                    payload,
-                    origin: Origin::Source(constructor.span),
-                });
-            }
+            let result = (|| -> Result<(), ResolveError> {
+                for (constructor, id) in declaration.constructors.iter().zip(ids) {
+                    let payload = match constructor.fields.as_slice() {
+                        [] => None,
+                        [field] => {
+                            let ResolvedType {
+                                ty,
+                                provenance,
+                                origin,
+                                ..
+                            } = self.resolve_type(field)?;
+                            drop(provenance);
+                            discard_origin_iteratively(origin);
+                            Some(IterativeTypeOwner::new(ty))
+                        }
+                        fields => {
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    constructor.span,
+                                    "constructor payload synthesis exceeded its type-work budget",
+                                )
+                            })?;
+                            let mut elements = Vec::new();
+                            elements.try_reserve(fields.len()).map_err(|_| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    constructor.span,
+                                    "constructor payload storage exceeded its type-work budget",
+                                )
+                            })?;
+                            for field in fields {
+                                let ResolvedType {
+                                    ty,
+                                    provenance,
+                                    origin,
+                                    ..
+                                } = self.resolve_type(field)?;
+                                drop(provenance);
+                                discard_origin_iteratively(origin);
+                                elements.push(IterativeTypeOwner::new(ty));
+                            }
+                            Some(IterativeTypeOwner::new(Type::Tuple(
+                                elements
+                                    .into_iter()
+                                    .map(IterativeTypeOwner::into_inner)
+                                    .collect::<Vec<_>>()
+                                    .into_boxed_slice(),
+                            )))
+                        }
+                    };
+                    constructors.0.push(ResolvedConstructor {
+                        id: *id,
+                        owner: *owner,
+                        spelling: constructor.name.text.clone(),
+                        payload: payload.map(IterativeTypeOwner::into_inner),
+                        origin: Origin::Source(constructor.span),
+                    });
+                }
+                Ok(())
+            })();
             let _ = self.type_scopes.pop();
+            result?;
         }
-        Ok(ResolvedRegistry::new(nominals, constructors).with_type_parameters(nominal_parameters))
+        Ok(ResolvedRegistry::new(nominals, constructors.into_vec())
+            .with_type_parameters(nominal_parameters))
     }
 
     fn push_binder_scope_many(&mut self, binders: &[Binder]) {
@@ -3545,10 +4089,15 @@ impl Resolver {
             Sequence(std::slice::Iter<'a, SurfaceType>),
             Tuple(usize, crate::source::Span),
             Function(crate::source::Span),
-            Application(NominalTypeId, usize, crate::source::Span),
+            Application(
+                NominalTypeId,
+                &'a [SurfaceType],
+                crate::source::Span,
+                crate::source::Span,
+            ),
         }
         let mut tasks = vec![Task::Visit(surface)];
-        let mut completed = Vec::new();
+        let mut completed = ResolvedTypeBuffer(Vec::new());
         let mut provenance = Vec::new();
         while let Some(task) = tasks.pop() {
             #[cfg(test)]
@@ -3631,7 +4180,12 @@ impl Resolver {
                                     arguments.len(),
                                 ));
                             }
-                            tasks.push(Task::Application(id, arguments.len(), current.span));
+                            tasks.push(Task::Application(
+                                id,
+                                arguments,
+                                current.span,
+                                constructor.span(),
+                            ));
                             tasks.push(Task::Sequence(arguments.iter()));
                         }
                         SurfaceTypeKind::Tuple(elements) => {
@@ -3672,6 +4226,7 @@ impl Resolver {
                     completed.push((
                         Type::Tuple(
                             elements
+                                .into_vec()
                                 .into_iter()
                                 .map(|(ty, _)| ty)
                                 .collect::<Vec<_>>()
@@ -3681,14 +4236,14 @@ impl Resolver {
                     ));
                 }
                 Task::Function(span) => {
-                    let (codomain, codomain_root) = completed.pop().ok_or_else(|| {
+                    let (codomain, codomain_root) = completed.pop_owned().ok_or_else(|| {
                         error(
                             ResolveReason::InternalState,
                             surface.span,
                             "the resolver lost a function codomain",
                         )
                     })?;
-                    let (domain, domain_root) = completed.pop().ok_or_else(|| {
+                    let (domain, domain_root) = completed.pop_owned().ok_or_else(|| {
                         error(
                             ResolveReason::InternalState,
                             surface.span,
@@ -3701,11 +4256,22 @@ impl Resolver {
                         codomain: codomain_root,
                     });
                     completed.push((
-                        Type::Function(Box::new(domain), Box::new(codomain)),
+                        Type::Function(
+                            Box::new(domain.into_inner()),
+                            Box::new(codomain.into_inner()),
+                        ),
                         provenance.len() - 1,
                     ));
                 }
-                Task::Application(owner, count, span) => {
+                Task::Application(owner, source_arguments, span, constructor_span) => {
+                    let count = source_arguments.len();
+                    self.type_work.charge(count).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "source type resolution exceeded its work budget",
+                        )
+                    })?;
                     let split = completed.len().checked_sub(count).ok_or_else(|| {
                         error(
                             ResolveReason::InternalState,
@@ -3714,26 +4280,22 @@ impl Resolver {
                         )
                     })?;
                     let arguments = completed.split_off(split);
-                    let roots = arguments
-                        .iter()
-                        .map(|(_, root)| *root)
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice();
-                    provenance.push(ResolvedTypeProvenanceNode::Application {
-                        span,
-                        arguments: roots,
-                    });
-                    completed.push((
-                        Type::AppliedNominal(
-                            owner,
-                            arguments
-                                .into_iter()
-                                .map(|(ty, _)| ty)
-                                .collect::<Vec<_>>()
-                                .into_boxed_slice(),
-                        ),
-                        provenance.len() - 1,
-                    ));
+                    provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
+                    let mut function = Type::Nominal(owner);
+                    let mut function_root = provenance.len() - 1;
+                    for ((argument, argument_root), source_argument) in
+                        arguments.into_vec().into_iter().zip(source_arguments)
+                    {
+                        provenance.push(ResolvedTypeProvenanceNode::Application {
+                            span,
+                            function: function_root,
+                            argument: argument_root,
+                            argument_span: source_argument.span,
+                        });
+                        function = Type::Application(Box::new(function), Box::new(argument));
+                        function_root = provenance.len() - 1;
+                    }
+                    completed.push((function, function_root));
                 }
             }
         }
@@ -3744,7 +4306,7 @@ impl Resolver {
                 "the resolver retained incomplete type state",
             ));
         }
-        let (ty, root) = completed.pop().ok_or_else(|| {
+        let (ty, root) = completed.pop_owned().ok_or_else(|| {
             error(
                 ResolveReason::InternalState,
                 surface.span,
@@ -3752,7 +4314,7 @@ impl Resolver {
             )
         })?;
         Ok(ResolvedType {
-            ty,
+            ty: ty.into_inner(),
             provenance: ResolvedTypeProvenance::new(provenance, root),
             origin: Origin::Source(surface.span),
             span: surface.span,
@@ -3966,9 +4528,9 @@ impl Resolver {
         initial: ResolveTask<'a>,
     ) -> Result<ResolvedExpr, ResolveError> {
         let initial_span = initial.span();
-        let mut tasks = vec![initial];
-        let mut expressions = Vec::new();
-        let mut declarations = Vec::new();
+        let mut tasks = ResolveTaskBuffer(vec![initial]);
+        let mut expressions = ResolvedExpressionBuffer(Vec::new());
+        let mut declarations = ResolvedDeclarationBuffer(Vec::new());
 
         while let Some(task) = tasks.pop() {
             match task {
@@ -3999,7 +4561,7 @@ impl Resolver {
                 }
                 ResolveTask::VisitRecursiveGroup(group) => {
                     let mut first_members = HashMap::with_capacity(group.members.len());
-                    let mut binders = Vec::with_capacity(group.members.len());
+                    let mut binders = ResolvedBinderBuffer(Vec::with_capacity(group.members.len()));
                     for member in &group.members {
                         if let Some(first_span) =
                             first_members.get(member.binder.name.text.as_str()).copied()
@@ -4034,7 +4596,7 @@ impl Resolver {
                             "the resolver lost the current lexical scope",
                         ));
                     };
-                    for binder in &binders {
+                    for binder in binders.iter() {
                         scope.insert(
                             binder.spelling.clone(),
                             ResolvedTermBinding::local(ResolvedTermName::Global(binder.id)),
@@ -4072,15 +4634,9 @@ impl Resolver {
                     });
                 }
                 ResolveTask::FinishBinding(binding) => {
-                    let Some(initializer) = expressions.pop() else {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            binding.span,
-                            "the resolver lost a binding initializer",
-                        ));
-                    };
-                    let (mut patterns, binders) =
+                    let (patterns, binders) =
                         self.resolve_pattern_vector(std::slice::from_ref(&binding.pattern))?;
+                    let mut patterns = ResolvedPatternBuffer(patterns);
                     let pattern = patterns.pop().ok_or_else(|| {
                         error(
                             ResolveReason::InternalState,
@@ -4088,11 +4644,20 @@ impl Resolver {
                             "the resolver produced no binding pattern",
                         )
                     })?;
+                    let pattern = ResolvedPatternOwner::new(pattern);
                     let annotation = binding
                         .annotation
                         .as_ref()
                         .map(|annotation| self.resolve_type(annotation))
-                        .transpose()?;
+                        .transpose()?
+                        .map(ResolvedTypeOccurrenceOwner::new);
+                    let initializer = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            binding.span,
+                            "the resolver lost a binding initializer",
+                        )
+                    })?;
                     let Some(scope) = self.scopes.last_mut() else {
                         return Err(error(
                             ResolveReason::InternalState,
@@ -4108,9 +4673,9 @@ impl Resolver {
                     }
                     declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
                         ResolvedBinding {
-                            pattern,
-                            annotation,
-                            initializer,
+                            pattern: pattern.into_inner(),
+                            annotation: annotation.map(ResolvedTypeOccurrenceOwner::into_inner),
+                            initializer: initializer.into_inner(),
                             span: binding.span,
                         },
                     )));
@@ -4125,23 +4690,38 @@ impl Resolver {
                             "the resolver lost a recursive group member",
                         ));
                     }
+                    let mut annotations = ResolvedTypeOccurrenceBuffer(Vec::new());
+                    annotations
+                        .0
+                        .try_reserve(group.members.len())
+                        .map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                group.span,
+                                "recursive annotation storage exceeded its work budget",
+                            )
+                        })?;
+                    for member in &group.members {
+                        annotations.0.push(self.resolve_type(&member.annotation)?);
+                    }
                     let expression_start = expressions.len() - group.members.len();
-                    let initializers = expressions.split_off(expression_start);
+                    let initializers = expressions.split_off(expression_start).into_vec();
                     let members = group
                         .members
                         .iter()
-                        .zip(binders)
+                        .zip(binders.into_vec())
+                        .zip(annotations.into_vec())
                         .zip(initializers)
-                        .map(|((member, binder), initializer)| {
-                            Ok(ResolvedRecursiveMember {
+                        .map(|(((member, binder), annotation), initializer)| {
+                            ResolvedRecursiveMember {
                                 introducer_span: member.introducer_span,
                                 binder,
-                                annotation: self.resolve_type(&member.annotation)?,
+                                annotation,
                                 initializer,
                                 span: member.span,
-                            })
+                            }
                         })
-                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                        .collect::<Vec<_>>();
                     declarations.push(ResolvedLocalDeclaration::Recursive(
                         ResolvedRecursiveGroup {
                             members,
@@ -4154,13 +4734,13 @@ impl Resolver {
                     scope_checkpoint,
                     span,
                 } => {
-                    let Some(result) = expressions.pop() else {
-                        return Err(error(
+                    let result = expressions.pop_owned().ok_or_else(|| {
+                        error(
                             ResolveReason::InternalState,
                             span,
                             "the resolver lost a block result",
-                        ));
-                    };
+                        )
+                    })?;
                     if declaration_start > declarations.len() {
                         return Err(error(
                             ResolveReason::InternalState,
@@ -4168,12 +4748,12 @@ impl Resolver {
                             "the resolver lost a block binding",
                         ));
                     }
-                    let block_declarations = declarations.split_off(declaration_start);
+                    let block_declarations = declarations.split_off(declaration_start).into_vec();
                     self.scopes.truncate(scope_checkpoint);
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Block(ResolvedBlock {
                             declarations: block_declarations,
-                            result: Box::new(result),
+                            result: Box::new(result.into_inner()),
                             span,
                         }),
                         span,
@@ -4184,23 +4764,29 @@ impl Resolver {
                     scope_checkpoint,
                     span,
                 } => {
-                    let Some(body_expression) = expressions.pop() else {
-                        return Err(error(
+                    let body_expression = expressions.pop_owned().ok_or_else(|| {
+                        error(
                             ResolveReason::InternalState,
                             span,
                             "the resolver lost a function body",
-                        ));
-                    };
-                    let ResolvedExprKind::Block(body) = body_expression.kind else {
+                        )
+                    })?;
+                    if !matches!(body_expression.kind, ResolvedExprKind::Block(_)) {
                         return Err(error(
                             ResolveReason::InternalState,
                             span,
                             "the resolver produced the wrong function body payload",
                         ));
+                    }
+                    let ResolvedExprKind::Block(body) = body_expression.into_inner().kind else {
+                        unreachable!("the function body shape was checked")
                     };
                     self.scopes.truncate(scope_checkpoint);
                     expressions.push(ResolvedExpr {
-                        kind: ResolvedExprKind::Function(ResolvedFunctionExpr { pattern, body }),
+                        kind: ResolvedExprKind::Function(ResolvedFunctionExpr {
+                            pattern: pattern.into_inner(),
+                            body,
+                        }),
                         span,
                     });
                 }
@@ -4212,7 +4798,7 @@ impl Resolver {
                             "the resolver lost a tuple element",
                         )
                     })?;
-                    let elements = expressions.split_off(split);
+                    let elements = expressions.split_off(split).into_vec();
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Tuple(elements),
                         span,
@@ -4221,13 +4807,13 @@ impl Resolver {
             }
         }
 
-        let Some(result) = expressions.pop() else {
-            return Err(error(
+        let result = expressions.pop_owned().ok_or_else(|| {
+            error(
                 ResolveReason::InternalState,
                 initial_span,
                 "the resolver produced no expression",
-            ));
-        };
+            )
+        })?;
         if !expressions.is_empty() || !declarations.is_empty() {
             return Err(error(
                 ResolveReason::InternalState,
@@ -4235,14 +4821,14 @@ impl Resolver {
                 "the resolver retained incomplete expression state",
             ));
         }
-        Ok(result)
+        Ok(result.into_inner())
     }
 
     fn visit_expression<'a>(
         &mut self,
         expression: &'a SurfaceExpr,
-        tasks: &mut Vec<ResolveTask<'a>>,
-        expressions: &mut Vec<ResolvedExpr>,
+        tasks: &mut ResolveTaskBuffer<'a>,
+        expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
             SurfaceExprKind::Integer(value) => expressions.push(ResolvedExpr {
@@ -4385,8 +4971,9 @@ impl Resolver {
             }
             SurfaceExprKind::Block(block) => tasks.push(ResolveTask::VisitBlock(block)),
             SurfaceExprKind::Function(function) => {
-                let (mut patterns, binders) =
+                let (patterns, binders) =
                     self.resolve_pattern_vector(std::slice::from_ref(&function.parameter))?;
+                let mut patterns = ResolvedPatternBuffer(patterns);
                 let parameter = patterns.pop().ok_or_else(|| {
                     error(
                         ResolveReason::InternalState,
@@ -4397,7 +4984,7 @@ impl Resolver {
                 let scope_checkpoint = self.scopes.len();
                 self.push_binder_scope_many(&binders);
                 tasks.push(ResolveTask::FinishFunction {
-                    parameter,
+                    parameter: ResolvedPatternOwner::new(parameter),
                     scope_checkpoint,
                     span: expression.span,
                 });
@@ -4411,12 +4998,15 @@ impl Resolver {
                 tasks.extend(elements.iter().rev().map(ResolveTask::VisitExpr));
             }
             SurfaceExprKind::Match(match_expression) => {
-                let scrutinee = self.resolve_expr(&match_expression.scrutinee)?;
-                let mut arms = Vec::with_capacity(match_expression.arms.len());
+                let scrutinee =
+                    ResolvedExpressionOwner::new(self.resolve_expr(&match_expression.scrutinee)?);
+                let mut arms =
+                    ResolvedMatchArmBuffer(Vec::with_capacity(match_expression.arms.len()));
                 for arm in &match_expression.arms {
                     let scope_checkpoint = self.scopes.len();
-                    let (mut patterns, binders) =
+                    let (patterns, binders) =
                         self.resolve_pattern_vector(std::slice::from_ref(&arm.pattern))?;
+                    let mut patterns = ResolvedPatternBuffer(patterns);
                     let pattern = patterns.pop().ok_or_else(|| {
                         error(
                             ResolveReason::InternalState,
@@ -4424,25 +5014,57 @@ impl Resolver {
                             "the resolver produced no match pattern",
                         )
                     })?;
+                    let pattern = ResolvedPatternOwner::new(pattern);
                     self.push_binder_scope_many(&binders);
-                    let body = self.resolve_expr(&arm.body);
+                    let body = self
+                        .resolve_expr(&arm.body)
+                        .map(ResolvedExpressionOwner::new);
                     self.scopes.truncate(scope_checkpoint);
-                    arms.push(ResolvedMatchArm {
-                        pattern,
-                        body: body?,
+                    let body = body?;
+                    arms.0.push(ResolvedMatchArm {
+                        pattern: pattern.into_inner(),
+                        body: body.into_inner(),
                         span: arm.span,
                     });
                 }
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Match(ResolvedMatchExpr {
-                        scrutinee: Box::new(scrutinee),
-                        arms,
+                        scrutinee: Box::new(scrutinee.into_inner()),
+                        arms: arms.into_vec(),
                     }),
                     span: expression.span,
                 });
             }
         }
         Ok(())
+    }
+}
+
+struct ResolvedBinderBuffer(Vec<Binder>);
+
+impl Deref for ResolvedBinderBuffer {
+    type Target = [Binder];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ResolvedBinderBuffer {
+    fn push(&mut self, binder: Binder) {
+        self.0.push(binder);
+    }
+
+    fn into_vec(mut self) -> Vec<Binder> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedBinderBuffer {
+    fn drop(&mut self) {
+        for binder in self.0.drain(..) {
+            discard_origin_iteratively(binder.origin);
+        }
     }
 }
 
@@ -4461,7 +5083,7 @@ enum ResolveTask<'a> {
     FinishBinding(&'a SurfaceBinding),
     FinishRecursiveGroup {
         group: &'a SurfaceRecursiveGroup,
-        binders: Vec<Binder>,
+        binders: ResolvedBinderBuffer,
     },
     FinishBlock {
         declaration_start: usize,
@@ -4469,7 +5091,7 @@ enum ResolveTask<'a> {
         span: crate::source::Span,
     },
     FinishFunction {
-        parameter: ResolvedPattern,
+        parameter: ResolvedPatternOwner,
         scope_checkpoint: usize,
         span: crate::source::Span,
     },
@@ -4477,6 +5099,36 @@ enum ResolveTask<'a> {
         count: usize,
         span: crate::source::Span,
     },
+}
+
+struct ResolveTaskBuffer<'a>(Vec<ResolveTask<'a>>);
+
+impl<'a> Deref for ResolveTaskBuffer<'a> {
+    type Target = Vec<ResolveTask<'a>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> ResolveTaskBuffer<'a> {
+    fn push(&mut self, task: ResolveTask<'a>) {
+        self.0.push(task);
+    }
+
+    fn pop(&mut self) -> Option<ResolveTask<'a>> {
+        self.0.pop()
+    }
+
+    fn extend(&mut self, tasks: impl IntoIterator<Item = ResolveTask<'a>>) {
+        self.0.extend(tasks);
+    }
+}
+
+impl Drop for ResolveTaskBuffer<'_> {
+    fn drop(&mut self) {
+        self.0.clear();
+    }
 }
 
 impl ResolveTask<'_> {
@@ -4517,7 +5169,7 @@ fn schedule_binary<'a>(
     kind: BinaryKind,
     span: crate::source::Span,
     binary: &'a BinaryExpr,
-    tasks: &mut Vec<ResolveTask<'a>>,
+    tasks: &mut ResolveTaskBuffer<'a>,
 ) {
     tasks.push(ResolveTask::FinishBinary {
         kind,
@@ -4529,24 +5181,24 @@ fn schedule_binary<'a>(
 }
 
 fn take_expression_pair(
-    expressions: &mut Vec<ResolvedExpr>,
+    expressions: &mut ResolvedExpressionBuffer,
     span: crate::source::Span,
 ) -> Result<(ResolvedExpr, ResolvedExpr), ResolveError> {
-    let Some(right) = expressions.pop() else {
-        return Err(error(
+    let right = expressions.pop_owned().ok_or_else(|| {
+        error(
             ResolveReason::InternalState,
             span,
             "the resolver lost a right operand",
-        ));
-    };
-    let Some(left) = expressions.pop() else {
-        return Err(error(
+        )
+    })?;
+    let left = expressions.pop_owned().ok_or_else(|| {
+        error(
             ResolveReason::InternalState,
             span,
             "the resolver lost a left operand",
-        ));
-    };
-    Ok((left, right))
+        )
+    })?;
+    Ok((left.into_inner(), right.into_inner()))
 }
 
 fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> ResolveError {
@@ -4727,6 +5379,27 @@ mod tests {
     };
 
     static IMPORT_BUDGET_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn recursive_resolution_buffers_do_not_expose_broad_mutation() {
+        let source = include_str!("resolve.rs");
+        let broad_mutation_trait = ["Deref", "Mut"].concat();
+        assert!(
+            !source.contains(&broad_mutation_trait),
+            "resolver-owned recursive buffers must not implement broad mutation",
+        );
+        for owner in [
+            "ResolvedTypeBuffer",
+            "ResolvedExpressionBuffer",
+            "ResolvedDeclarationBuffer",
+            "ResolveTaskBuffer",
+        ] {
+            assert!(
+                source.contains(&format!("struct {owner}")),
+                "the source guard must remain attached to {owner}",
+            );
+        }
+    }
 
     struct HiddenInterfaceBudgetFixture(PathBuf);
 
@@ -5613,6 +6286,453 @@ mod tests {
     }
 
     #[test]
+    fn late_expression_resolution_errors_discard_deep_completed_work_on_a_small_stack() {
+        const WIDTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("late-resolver-expression-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("late-resolver.ash", "x")
+                    .expect("the resolver fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the range should be ordered"))
+                    .expect("the range should belong to the fixture");
+                let module = ModuleId::new(0);
+                let owner = NominalTypeId::new(module, 0);
+                let name = |text: &str| {
+                    SurfaceReference::Unqualified(SurfaceName {
+                        text: text.to_owned(),
+                        span,
+                    })
+                };
+                let wide = || SurfaceType {
+                    kind: SurfaceTypeKind::Application {
+                        constructor: name("Wide"),
+                        arguments: vec![
+                            SurfaceType {
+                                kind: SurfaceTypeKind::Int,
+                                span,
+                            };
+                            WIDTH
+                        ],
+                    },
+                    span,
+                };
+                let deep_block = || SurfaceExpr {
+                    kind: SurfaceExprKind::Block(SurfaceBlock {
+                        declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
+                            SurfaceBinding {
+                                pattern: SurfacePattern {
+                                    kind: SurfacePatternKind::Wildcard,
+                                    span,
+                                },
+                                annotation: Some(wide()),
+                                initializer: SurfaceExpr {
+                                    kind: SurfaceExprKind::Unit,
+                                    span,
+                                },
+                                span,
+                            },
+                        ))],
+                        result: Box::new(SurfaceExpr {
+                            kind: SurfaceExprKind::Unit,
+                            span,
+                        }),
+                        span,
+                    }),
+                    span,
+                };
+                let missing = || SurfaceExpr {
+                    kind: SurfaceExprKind::Name(name("missing")),
+                    span,
+                };
+                let resolver = || {
+                    let mut resolver = Resolver::new(module);
+                    resolver.type_names.insert("Wide".to_owned(), owner);
+                    resolver.nominal_parameter_counts.insert(owner, WIDTH);
+                    resolver
+                };
+
+                let tuple = SurfaceExpr {
+                    kind: SurfaceExprKind::Tuple(vec![deep_block(), missing()]),
+                    span,
+                };
+                assert_eq!(
+                    resolver()
+                        .resolve_expr(&tuple)
+                        .expect_err("the late tuple sibling should be unknown")
+                        .reason,
+                    ResolveReason::UnknownName,
+                );
+
+                let matched = SurfaceExpr {
+                    kind: SurfaceExprKind::Match(crate::surface::SurfaceMatchExpr {
+                        scrutinee: Box::new(deep_block()),
+                        arms: vec![
+                            crate::surface::SurfaceMatchArm {
+                                pattern: SurfacePattern {
+                                    kind: SurfacePatternKind::Wildcard,
+                                    span,
+                                },
+                                body: deep_block(),
+                                span,
+                            },
+                            crate::surface::SurfaceMatchArm {
+                                pattern: SurfacePattern {
+                                    kind: SurfacePatternKind::Wildcard,
+                                    span,
+                                },
+                                body: missing(),
+                                span,
+                            },
+                        ],
+                    }),
+                    span,
+                };
+                assert_eq!(
+                    resolver()
+                        .resolve_expr(&matched)
+                        .expect_err("the late match body should be unknown")
+                        .reason,
+                    ResolveReason::UnknownName,
+                );
+
+                let late_annotation = SurfaceExpr {
+                    kind: SurfaceExprKind::Block(SurfaceBlock {
+                        declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(
+                            SurfaceBinding {
+                                pattern: SurfacePattern {
+                                    kind: SurfacePatternKind::Wildcard,
+                                    span,
+                                },
+                                annotation: Some(SurfaceType {
+                                    kind: SurfaceTypeKind::Named(name("Missing")),
+                                    span,
+                                }),
+                                initializer: deep_block(),
+                                span,
+                            },
+                        ))],
+                        result: Box::new(SurfaceExpr {
+                            kind: SurfaceExprKind::Unit,
+                            span,
+                        }),
+                        span,
+                    }),
+                    span,
+                };
+                assert_eq!(
+                    resolver()
+                        .resolve_expr(&late_annotation)
+                        .expect_err("the late binding annotation should be unknown")
+                        .reason,
+                    ResolveReason::UnknownType,
+                );
+            })
+            .expect("the late-resolution thread should start")
+            .join()
+            .expect("late resolver errors must dismantle all completed work iteratively");
+    }
+
+    const DEEP_DECLARATION_TYPE_WIDTH: usize = 32_768;
+
+    fn declaration_fixture(name: &str, text: &str) -> SurfaceModule {
+        let source = SourceFile::new(name, text).expect("the declaration fixture should fit");
+        let tree = parse(lex(&source).expect("the declaration fixture should lex"));
+        project_module(&source, &tree).expect("the declaration fixture should project")
+    }
+
+    fn declaration_name(text: &str, span: crate::source::Span) -> SurfaceReference {
+        SurfaceReference::Unqualified(SurfaceName {
+            text: text.to_owned(),
+            span,
+        })
+    }
+
+    fn declaration_named_type(text: &str, span: crate::source::Span) -> SurfaceType {
+        SurfaceType {
+            kind: SurfaceTypeKind::Named(declaration_name(text, span)),
+            span,
+        }
+    }
+
+    fn deep_declaration_type(span: crate::source::Span) -> SurfaceType {
+        SurfaceType {
+            kind: SurfaceTypeKind::Application {
+                constructor: declaration_name("Wide", span),
+                arguments: vec![
+                    SurfaceType {
+                        kind: SurfaceTypeKind::Int,
+                        span,
+                    };
+                    DEEP_DECLARATION_TYPE_WIDTH
+                ],
+            },
+            span,
+        }
+    }
+
+    fn deep_declaration_block(span: crate::source::Span) -> SurfaceExpr {
+        SurfaceExpr {
+            kind: SurfaceExprKind::Block(SurfaceBlock {
+                declarations: vec![SurfaceLocalDeclaration::Binding(Box::new(SurfaceBinding {
+                    pattern: SurfacePattern {
+                        kind: SurfacePatternKind::Wildcard,
+                        span,
+                    },
+                    annotation: Some(deep_declaration_type(span)),
+                    initializer: SurfaceExpr {
+                        kind: SurfaceExprKind::Unit,
+                        span,
+                    },
+                    span,
+                }))],
+                result: Box::new(SurfaceExpr {
+                    kind: SurfaceExprKind::Unit,
+                    span,
+                }),
+                span,
+            }),
+            span,
+        }
+    }
+
+    fn declaration_resolver(surface: &SurfaceModule) -> Resolver {
+        let module = ModuleId::new(0);
+        let mut resolver = Resolver::new(module);
+        resolver
+            .validate_local_namespaces(surface)
+            .expect("the ownership fixture namespaces should be valid");
+        let owner = NominalTypeId::new(ModuleId::new(1), 0);
+        resolver.type_names.insert("Wide".to_owned(), owner);
+        resolver
+            .nominal_parameter_counts
+            .insert(owner, DEEP_DECLARATION_TYPE_WIDTH);
+        resolver
+    }
+
+    fn expected_declaration_error(
+        result: Result<ResolvedDeclarations, ResolveError>,
+        message: &str,
+    ) -> ResolveError {
+        match result {
+            Err(error) => error,
+            Ok(_) => panic!("{message}"),
+        }
+    }
+
+    #[test]
+    fn late_interface_and_requirement_errors_discard_deep_declarations_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("late-interface-requirement-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut interfaces = declaration_fixture(
+                    "late-interface.ash",
+                    concat!(
+                        "interface Marker<A> {\nmark : A\n}\n\n",
+                        "interface Target<A> {\nfirst : A\nsecond : A\n}\n",
+                    ),
+                );
+                let span = interfaces.span;
+                interfaces.interfaces[1].methods[0].annotation = deep_declaration_type(span);
+                interfaces.interfaces[1].methods[1].annotation =
+                    declaration_named_type("Marker", span);
+                let error = expected_declaration_error(
+                    declaration_resolver(&interfaces).resolve_declarations(&interfaces),
+                    "the late method annotation should use an interface as a type",
+                );
+                assert_eq!(error.reason, ResolveReason::TypeKind);
+
+                let mut requirements = declaration_fixture(
+                    "late-requirement.ash",
+                    concat!(
+                        "interface Marker<A> {\nmark : A\n}\n\n",
+                        "value : Unit -> Unit where Marker<Int>, Marker<Int>\n",
+                        "value () = ()\n",
+                    ),
+                );
+                let span = requirements.span;
+                let SurfaceDefinitionKind::Equational(definition) =
+                    &mut requirements.definitions[0].kind
+                else {
+                    panic!("the requirement fixture should remain equational")
+                };
+                definition.interface.requirements[0].argument = deep_declaration_type(span);
+                definition.interface.requirements[1].interface = declaration_name("Missing", span);
+                let error = expected_declaration_error(
+                    declaration_resolver(&requirements).resolve_declarations(&requirements),
+                    "the later requirement should name no interface",
+                );
+                assert_eq!(error.reason, ResolveReason::UnknownInterface);
+            })
+            .expect("the declaration-disposal thread should start")
+            .join()
+            .expect("late interface and requirement errors must dispose deep work iteratively");
+    }
+
+    #[test]
+    fn late_definition_and_inline_errors_discard_deep_declarations_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("late-definition-inline-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut equations = declaration_fixture(
+                    "late-equation.ash",
+                    concat!(
+                        "value : Unit -> Unit\n",
+                        "value () = ()\n",
+                        "value other = missing\n",
+                    ),
+                );
+                let span = equations.span;
+                let SurfaceDefinitionKind::Equational(definition) =
+                    &mut equations.definitions[0].kind
+                else {
+                    panic!("the equation fixture should remain equational")
+                };
+                definition.equations[0].body = deep_declaration_block(span);
+                let error = expected_declaration_error(
+                    declaration_resolver(&equations).resolve_declarations(&equations),
+                    "the later equation body should name no term",
+                );
+                assert_eq!(error.reason, ResolveReason::UnknownName);
+
+                let mut definitions = declaration_fixture(
+                    "late-definition.ash",
+                    concat!(
+                        "first : Unit -> Unit\nfirst () = ()\n\n",
+                        "second : Unit -> Unit\nsecond () = missing\n",
+                    ),
+                );
+                let span = definitions.span;
+                let SurfaceDefinitionKind::Equational(first) = &mut definitions.definitions[0].kind
+                else {
+                    panic!("the first definition should remain equational")
+                };
+                first.equations[0].body = deep_declaration_block(span);
+                let error = expected_declaration_error(
+                    declaration_resolver(&definitions).resolve_declarations(&definitions),
+                    "the later definition body should name no term",
+                );
+                assert_eq!(error.reason, ResolveReason::UnknownName);
+
+                let mut operational = declaration_fixture(
+                    "late-operational.ash",
+                    concat!(
+                        "interface Marker<A> {\nmark : A\n}\n\n",
+                        "fn operational(first : Int, second : Int) -> Int {\n0\n}\n",
+                    ),
+                );
+                let span = operational.span;
+                let SurfaceDefinitionKind::InlineOperational(definition) =
+                    &mut operational.definitions[0].kind
+                else {
+                    panic!("the operational fixture should remain inline")
+                };
+                definition.header.parameters[0].annotation = deep_declaration_type(span);
+                definition.header.parameters[1].annotation = declaration_named_type("Marker", span);
+                let error = expected_declaration_error(
+                    declaration_resolver(&operational).resolve_declarations(&operational),
+                    "the later operational parameter annotation should be unknown",
+                );
+                assert_eq!(error.reason, ResolveReason::TypeKind);
+            })
+            .expect("the declaration-disposal thread should start")
+            .join()
+            .expect("late definition and inline errors must dispose deep work iteratively");
+    }
+
+    #[test]
+    fn late_implementation_errors_discard_deep_groups_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("late-implementation-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut surface = declaration_fixture(
+                    "late-implementation.ash",
+                    concat!(
+                        "interface Marker<A> {\nmark : A -> A\n}\n\n",
+                        "impl Marker<Int> {\nmark value = value\n}\n\n",
+                        "impl Marker<Bool> {\n",
+                        "mark value = value\n",
+                        "mark other = missing\n",
+                        "}\n",
+                    ),
+                );
+                let span = surface.span;
+                surface.implementations[0].equations[0].body = deep_declaration_block(span);
+                surface.implementations[1].equations[0].body = deep_declaration_block(span);
+                let error = expected_declaration_error(
+                    declaration_resolver(&surface).resolve_declarations(&surface),
+                    "the later implementation equation should name no term",
+                );
+                assert_eq!(error.reason, ResolveReason::UnknownName);
+            })
+            .expect("the implementation-disposal thread should start")
+            .join()
+            .expect("late implementation errors must dispose deep groups iteratively");
+    }
+
+    #[test]
+    fn late_registry_and_export_errors_discard_deep_declarations_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("late-registry-export-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut registry = declaration_fixture(
+                    "late-registry.ash",
+                    concat!(
+                        "type First =\nFirst(Int)\n\n",
+                        "type Later =\nLater(Int, Int)\n",
+                    ),
+                );
+                let span = registry.span;
+                registry.type_declarations[0].constructors[0].fields[0] =
+                    deep_declaration_type(span);
+                registry.type_declarations[1].constructors[0].fields[0] =
+                    deep_declaration_type(span);
+                registry.type_declarations[1].constructors[0].fields[1] =
+                    declaration_named_type("Missing", span);
+                let error = declaration_resolver(&registry)
+                    .resolve_registry(&registry.type_declarations)
+                    .expect_err("the later constructor field should name no type");
+                assert_eq!(error.reason, ResolveReason::UnknownType);
+
+                let mut exported = declaration_fixture(
+                    "late-export.ash",
+                    "private_value : Unit -> Unit\nprivate_value () = ()\n",
+                );
+                let span = exported.span;
+                let SurfaceDefinitionKind::Equational(definition) =
+                    &mut exported.definitions[0].kind
+                else {
+                    panic!("the export fixture should remain equational")
+                };
+                definition.equations[0].body = deep_declaration_block(span);
+                let mut resolver = declaration_resolver(&exported);
+                let declarations = resolver
+                    .resolve_declarations(&exported)
+                    .expect("the complete deep declaration should resolve before export staging");
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                let error = build_export_candidate(
+                    &exported,
+                    &declarations.registry,
+                    &declarations.interfaces,
+                    &declarations.definitions,
+                    std::mem::take(&mut resolver.public_import_candidate),
+                    &mut resolver.type_work,
+                )
+                .expect_err("export staging should fail after complete declaration resolution");
+                assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+            })
+            .expect("the registry-disposal thread should start")
+            .join()
+            .expect("late registry and export errors must dispose deep declarations iteratively");
+    }
+
+    #[test]
     fn free_type_discovery_charges_before_retaining_each_name() {
         let source = SourceFile::new("free-type-budget.ash", "A B C")
             .expect("the budget fixture should fit");
@@ -5785,5 +6905,224 @@ mod tests {
             "wide applications retained {} pending resolver tasks",
             resolver.max_type_pending_tasks
         );
+    }
+
+    #[test]
+    fn nominal_application_provenance_records_each_unary_fold_exactly() {
+        let source = SourceFile::new("application-provenance.ash", "Pair<Int, Bool>")
+            .expect("the provenance fixture should fit");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the range is ordered"))
+                .expect("the range belongs to the fixture")
+        };
+        let full_span = span(0, 15);
+        let constructor_span = span(0, 4);
+        let first_span = span(5, 8);
+        let second_span = span(10, 14);
+        let owner = NominalTypeId::new(source.id(), 0);
+        let annotation = SurfaceType {
+            kind: SurfaceTypeKind::Application {
+                constructor: SurfaceReference::Unqualified(SurfaceName {
+                    text: "Pair".to_owned(),
+                    span: constructor_span,
+                }),
+                arguments: vec![
+                    SurfaceType {
+                        kind: SurfaceTypeKind::Int,
+                        span: first_span,
+                    },
+                    SurfaceType {
+                        kind: SurfaceTypeKind::Bool,
+                        span: second_span,
+                    },
+                ],
+            },
+            span: full_span,
+        };
+        let mut resolver = Resolver::new(ModuleId::new(0));
+        resolver.type_names.insert("Pair".to_owned(), owner);
+        resolver.nominal_parameter_counts.insert(owner, 2);
+
+        let resolved = resolver
+            .resolve_type(&annotation)
+            .expect("the saturated application should resolve");
+
+        let Type::Application(second_function, second_argument) = &resolved.ty else {
+            panic!("the second source argument should be the outer unary application")
+        };
+        assert_eq!(second_argument.as_ref(), &Type::Bool);
+        let Type::Application(first_function, first_argument) = second_function.as_ref() else {
+            panic!("the first source argument should be the inner unary application")
+        };
+        assert_eq!(first_function.as_ref(), &Type::Nominal(owner));
+        assert_eq!(first_argument.as_ref(), &Type::Int);
+
+        let nodes = resolved.provenance.nodes();
+        assert_eq!(nodes.len(), 5);
+        assert_eq!(resolved.provenance.root(), 4);
+        assert_eq!(nodes[0], ResolvedTypeProvenanceNode::Fact(first_span));
+        assert_eq!(nodes[1], ResolvedTypeProvenanceNode::Fact(second_span));
+        assert_eq!(nodes[2], ResolvedTypeProvenanceNode::Fact(constructor_span));
+        assert_eq!(
+            nodes[3],
+            ResolvedTypeProvenanceNode::Application {
+                span: full_span,
+                function: 2,
+                argument: 0,
+                argument_span: first_span,
+            }
+        );
+        assert_eq!(
+            nodes[4],
+            ResolvedTypeProvenanceNode::Application {
+                span: full_span,
+                function: 3,
+                argument: 1,
+                argument_span: second_span,
+            }
+        );
+        crate::types::discard_type_iteratively(resolved.ty);
+    }
+
+    #[test]
+    fn nominal_application_retention_is_exact_and_transactional_per_source_argument() {
+        const ARGUMENTS: usize = 3;
+        const EXACT_WORK: usize = 1 + 2 * ARGUMENTS;
+
+        let source = SourceFile::new("application-retention.ash", "Triple<Int, Bool, Unit>")
+            .expect("the retention fixture should fit");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the range is ordered"))
+                .expect("the range belongs to the fixture")
+        };
+        let full_span = span(0, 23);
+        let constructor_span = span(0, 6);
+        let owner = NominalTypeId::new(source.id(), 0);
+        let annotation = SurfaceType {
+            kind: SurfaceTypeKind::Application {
+                constructor: SurfaceReference::Unqualified(SurfaceName {
+                    text: "Triple".to_owned(),
+                    span: constructor_span,
+                }),
+                arguments: vec![
+                    SurfaceType {
+                        kind: SurfaceTypeKind::Int,
+                        span: span(7, 10),
+                    },
+                    SurfaceType {
+                        kind: SurfaceTypeKind::Bool,
+                        span: span(12, 16),
+                    },
+                    SurfaceType {
+                        kind: SurfaceTypeKind::Unit,
+                        span: span(18, 22),
+                    },
+                ],
+            },
+            span: full_span,
+        };
+        let resolver = |limit| {
+            let mut resolver =
+                Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(limit));
+            resolver.type_names.insert("Triple".to_owned(), owner);
+            resolver.nominal_parameter_counts.insert(owner, ARGUMENTS);
+            resolver
+        };
+
+        let mut short = resolver(EXACT_WORK - 1);
+        let failure = short
+            .resolve_type(&annotation)
+            .expect_err("one missing fold-retention unit must reject the whole application");
+        assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(failure.primary.span(), full_span);
+        assert_eq!(
+            failure.primary.message(),
+            "source type resolution exceeded its work budget"
+        );
+        assert_eq!(short.type_work.used(), 1 + ARGUMENTS);
+
+        let mut exact = resolver(EXACT_WORK);
+        let resolved = exact
+            .resolve_type(&annotation)
+            .expect("one retained unary node per source argument should fit exactly");
+        assert_eq!(exact.type_work.used(), EXACT_WORK);
+        assert_eq!(exact.type_work.charge(1), Err(()));
+        assert_eq!(
+            resolved
+                .provenance
+                .nodes()
+                .iter()
+                .filter(|node| matches!(node, ResolvedTypeProvenanceNode::Application { .. }))
+                .count(),
+            ARGUMENTS
+        );
+        crate::types::discard_type_iteratively(resolved.ty);
+    }
+
+    #[test]
+    fn late_sibling_failure_discards_a_wide_application_on_a_small_stack() {
+        const WIDTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("resolver-late-sibling-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("late-sibling.ash", "Wide<Int>, Missing")
+                    .expect("the disposal fixture should fit");
+                let span = |start, end| {
+                    source
+                        .span(ByteRange::new(start, end).expect("the range is ordered"))
+                        .expect("the range belongs to the fixture")
+                };
+                let wide_span = span(0, 9);
+                let constructor_span = span(0, 4);
+                let argument_span = span(5, 8);
+                let missing_span = span(11, 18);
+                let owner = NominalTypeId::new(source.id(), 0);
+                let annotation = SurfaceType {
+                    kind: SurfaceTypeKind::Tuple(vec![
+                        SurfaceType {
+                            kind: SurfaceTypeKind::Application {
+                                constructor: SurfaceReference::Unqualified(SurfaceName {
+                                    text: "Wide".to_owned(),
+                                    span: constructor_span,
+                                }),
+                                arguments: vec![
+                                    SurfaceType {
+                                        kind: SurfaceTypeKind::Int,
+                                        span: argument_span,
+                                    };
+                                    WIDTH
+                                ],
+                            },
+                            span: wide_span,
+                        },
+                        SurfaceType {
+                            kind: SurfaceTypeKind::Named(SurfaceReference::Unqualified(
+                                SurfaceName {
+                                    text: "Missing".to_owned(),
+                                    span: missing_span,
+                                },
+                            )),
+                            span: missing_span,
+                        },
+                    ]),
+                    span: span(0, 18),
+                };
+                let mut resolver = Resolver::new(ModuleId::new(0));
+                resolver.type_names.insert("Wide".to_owned(), owner);
+                resolver.nominal_parameter_counts.insert(owner, WIDTH);
+
+                let error = resolver
+                    .resolve_type(&annotation)
+                    .expect_err("the later unknown sibling should reject resolution");
+                assert_eq!(error.reason, ResolveReason::UnknownType);
+                assert_eq!(error.primary.span(), missing_span);
+            })
+            .expect("the disposal thread should start")
+            .join()
+            .expect("late resolver failure should dispose completed types iteratively");
     }
 }

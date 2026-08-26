@@ -252,8 +252,8 @@ fn finite_nominal_tree_patterns_execute() {
         "type IntTree =\nLeaf(Int)\n| Node(IntTree, IntTree)\n\ndepth : IntTree -> Int\ndepth (Leaf value) = 1\ndepth (Node(left, right)) = depth left + depth right\n\nmain : Unit -> Int\nmain () = depth (Node(Leaf(1), Leaf(2)))\n",
     );
 
-    assert_eq!(observation.value.to_string(), "2");
-    assert_eq!(observation.ty.to_string(), "Int");
+    assert_eq!(observation.value().to_string(), "2");
+    assert_eq!(observation.ty().to_string(), "Int");
 }
 
 #[test]
@@ -262,8 +262,8 @@ fn operational_tuple_domains_are_distinct_from_curried_functions() {
         "fn add(left : Int, right : Int) -> Int {\nleft + right\n}\n\nmain : Unit -> Int\nmain () = add(20, 22)\n",
     );
 
-    assert_eq!(observation.value.to_string(), "42");
-    assert_eq!(observation.ty.to_string(), "Int");
+    assert_eq!(observation.value().to_string(), "42");
+    assert_eq!(observation.ty().to_string(), "Int");
 }
 
 #[test]
@@ -272,8 +272,8 @@ fn payload_constructors_are_higher_order_unary_values() {
         "type Wrapped =\nWrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\nmake 42\n}\n\nmain : Unit -> Int\nmain () = match build Wrap {\nWrap(value) => value\n}\n",
     );
 
-    assert_eq!(observation.value.to_string(), "42");
-    assert_eq!(observation.ty.to_string(), "Int");
+    assert_eq!(observation.value().to_string(), "42");
+    assert_eq!(observation.ty().to_string(), "Int");
 }
 
 #[test]
@@ -291,8 +291,8 @@ fn local_tuple_patterns_are_irrefutable() {
     let observation =
         run("main : Unit -> Int\nmain () = {\nlet (left, right) = (20, 22)\nleft + right\n}\n");
 
-    assert_eq!(observation.value.to_string(), "42");
-    assert_eq!(observation.ty.to_string(), "Int");
+    assert_eq!(observation.value().to_string(), "42");
+    assert_eq!(observation.ty().to_string(), "Int");
 }
 
 #[test]
@@ -301,8 +301,8 @@ fn explicit_match_and_equations_have_equivalent_recursive_coverage() {
         "type Tree =\nTip(Int)\n| Fork(Tree, Tree)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn size_match(tree : Tree) -> Int {\nmatch tree {\nTip(value) => 1\nFork(left, right) => size_match left + size_match right\n}\n}\n\nmain : Unit -> Int\nmain () = size (Fork(Tip(0), Tip(0))) + size_match (Fork(Tip(0), Tip(0)))\n",
     );
 
-    assert_eq!(observation.value.to_string(), "4");
-    assert_eq!(observation.ty.to_string(), "Int");
+    assert_eq!(observation.value().to_string(), "4");
+    assert_eq!(observation.ty().to_string(), "Int");
 }
 
 #[test]
@@ -311,7 +311,7 @@ fn constructor_guarded_recursive_data_renders_cycles_structurally() {
         "type Stream =\nNext(Int, Stream)\n\nmain : Unit -> Stream\nmain () = {\nlet rec ones : Stream = Next(1, ones)\nones\n}\n",
     );
 
-    assert_eq!(observation.value.to_string(), "Next(1, <cycle>)");
+    assert_eq!(observation.value().to_string(), "Next(1, <cycle>)");
     assert_eq!(observation.type_display(), "Stream");
 }
 

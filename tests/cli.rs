@@ -90,8 +90,8 @@ fn false_literal_has_exact_library_and_cli_observations() {
         roots: ModuleRoots::empty(),
     })
     .expect("false should run end to end");
-    assert!(matches!(observation.value, Value::Boolean(false)));
-    assert_eq!(observation.ty, Type::Bool);
+    assert!(matches!(observation.value(), Value::Boolean(false)));
+    assert_eq!(observation.ty(), &Type::Bool);
 
     let output = ash(&[source.path()]);
     assert_eq!(output.status.code(), Some(0));

@@ -111,7 +111,7 @@ fn public_generic_impl_composes_over_an_unnameable_hidden_carrier() {
     })
     .expect("hidden generic implementation facts should remain usable without exported names");
     assert_eq!(observation.value_display(), "42");
-    assert_eq!(observation.ty, Type::Int);
+    assert_eq!(observation.ty(), &Type::Int);
 }
 
 #[test]
@@ -144,5 +144,5 @@ fn public_generic_impl_uses_an_opaque_constructor_only_in_its_defining_module() 
         "opaque generic implementation bodies should retain defining-module constructor access",
     );
     assert_eq!(observation.value_display(), "42");
-    assert_eq!(observation.ty, Type::Int);
+    assert_eq!(observation.ty(), &Type::Int);
 }

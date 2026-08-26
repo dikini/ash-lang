@@ -105,8 +105,10 @@ fn contains_inference(root: &Type) -> bool {
     while let Some(ty) = pending.pop() {
         match ty {
             Type::Inference(_) => return true,
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
-                pending.extend(elements.iter());
+            Type::Tuple(elements) => pending.extend(elements.iter()),
+            Type::Application(function, argument) => {
+                pending.push(argument);
+                pending.push(function);
             }
             Type::Function(domain, codomain) => {
                 pending.push(codomain);
@@ -144,7 +146,7 @@ fn imported_polymorphic_scheme_instantiates_at_unrelated_types_without_re_genera
 
     assert_eq!(exported.scheme.type_parameters.len(), 1);
     assert!(exported.scheme.requirements.is_empty());
-    assert!(!contains_inference(&exported.scheme.value_type));
+    assert!(!contains_inference(exported.scheme.value_type()));
     assert_eq!(dependency.exports().module(), dependency.module());
 }
 

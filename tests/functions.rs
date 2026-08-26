@@ -150,7 +150,7 @@ fn validated_program(fixture: &ModuleFixture) -> (ValidatedProgram, Type) {
         .iter()
         .find(|scheme| scheme.spelling == "main")
         .expect("entry should declare main");
-    let Type::Function(domain, codomain) = &main.scheme.value_type else {
+    let Type::Function(domain, codomain) = main.scheme.value_type() else {
         panic!("main should have a function scheme");
     };
     assert_eq!(domain.as_ref(), &Type::Unit);
@@ -510,8 +510,8 @@ fn a_later_global_types_and_runs_with_an_earlier_global_in_lexical_scope() {
         .run()
         .expect("the completed first global should be in scope");
 
-    assert_eq!(observation.value.to_string(), "42");
-    assert_eq!(observation.ty, Type::Int);
+    assert_eq!(observation.value().to_string(), "42");
+    assert_eq!(observation.ty(), &Type::Int);
 }
 
 #[test]
@@ -598,8 +598,8 @@ fn every_function_corpus_module_evaluates_to_42_as_an_int() {
     ] {
         let fixture = ModuleFixture::load(text);
         let observation = fixture.run().expect("valid function program should run");
-        assert_eq!(observation.value.to_string(), "42", "{name}");
-        assert_eq!(observation.ty, Type::Int, "{name}");
+        assert_eq!(observation.value().to_string(), "42", "{name}");
+        assert_eq!(observation.ty(), &Type::Int, "{name}");
     }
 }
 
@@ -616,7 +616,7 @@ fn a_returned_function_exposes_its_code_origin_and_captured_environment() {
         "}\n",
     ));
     let observation = fixture.run().expect("function value should evaluate");
-    let Value::Function(closure) = observation.value else {
+    let Value::Function(closure) = observation.value() else {
         panic!("expected an inspectable function value");
     };
 
@@ -630,7 +630,7 @@ fn a_returned_function_exposes_its_code_origin_and_captured_environment() {
         closure.origin.generated_reason(),
         Some(GeneratedReason::FunctionLowering)
     );
-    assert_eq!(observation.ty.to_string(), "Int -> Int");
+    assert_eq!(observation.ty().to_string(), "Int -> Int");
     let debug = format!("{closure:?}");
     assert!(debug.contains("Closure"));
     assert!(!debug.contains("nodes:"));
@@ -654,8 +654,8 @@ fn an_escaped_function_uses_its_captured_environment_not_the_caller_environment(
         .run()
         .expect("the escaped closure should retain captured");
 
-    assert_eq!(observation.value.to_string(), "42");
-    assert_eq!(observation.ty, Type::Int);
+    assert_eq!(observation.value().to_string(), "42");
+    assert_eq!(observation.ty(), &Type::Int);
 }
 
 #[test]

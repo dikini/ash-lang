@@ -4,7 +4,7 @@ use super::dialect::{ArenaId, NodeId};
 use crate::{
     resolved::BinderId,
     source::{Origin, discard_origin_iteratively},
-    types::{Type, discard_type_iteratively},
+    types::{Type, discard_type_iteratively, replace_type_iteratively},
 };
 
 /// A typed Core binder definition and opaque capability for its owning arena.
@@ -17,7 +17,7 @@ pub struct TypedBinder {
     arena: ArenaId,
     id: BinderId,
     ty: Type,
-    origin: Origin,
+    origin: Option<Origin>,
 }
 
 impl TypedBinder {
@@ -26,7 +26,7 @@ impl TypedBinder {
             arena,
             id,
             ty,
-            origin,
+            origin: Some(origin),
         }
     }
 
@@ -49,24 +49,39 @@ impl TypedBinder {
     /// Returns the binder's causal provenance.
     #[must_use]
     pub const fn origin(&self) -> &Origin {
-        &self.origin
+        self.origin
+            .as_ref()
+            .expect("a live typed binder retains its origin")
     }
 
     pub(super) fn rewrite_type<F>(&mut self, rewrite: &mut F) -> Result<(), super::BuildError>
     where
         F: FnMut(&Type) -> Result<Type, super::BuildError>,
     {
-        self.ty = rewrite(&self.ty)?;
+        let rewritten = rewrite(&self.ty)?;
+        replace_type_iteratively(&mut self.ty, rewritten);
         Ok(())
     }
 
     pub(crate) fn replace_type(&mut self, ty: Type) {
-        self.ty = ty;
+        replace_type_iteratively(&mut self.ty, ty);
     }
 
-    pub(super) fn discard_metadata(self) {
-        discard_type_iteratively(self.ty);
-        discard_origin_iteratively(self.origin);
+    pub(crate) fn discard_metadata(mut self) {
+        self.discard_contents();
+    }
+
+    fn discard_contents(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
+        if let Some(origin) = self.origin.take() {
+            discard_origin_iteratively(origin);
+        }
+    }
+}
+
+impl Drop for TypedBinder {
+    fn drop(&mut self) {
+        self.discard_contents();
     }
 }
 

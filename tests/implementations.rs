@@ -390,12 +390,12 @@ fn checked_impl_method_owns_substituted_constrained_scheme() {
     };
     assert_eq!(method_requirement.id, prerequisite.id);
     assert_eq!(method_requirement.interface, prerequisite.interface);
-    assert_eq!(method_requirement.argument, prerequisite.argument);
-    let Type::Function(domain, codomain) = &method.scheme.value_type else {
+    assert_eq!(method_requirement.argument(), prerequisite.argument());
+    let Type::Function(domain, codomain) = method.scheme.value_type() else {
         panic!("the substituted method scheme should remain callable");
     };
-    assert_eq!(domain.as_ref(), &implementation.argument);
-    assert_eq!(codomain.as_ref(), &implementation.argument);
+    assert_eq!(domain.as_ref(), implementation.argument());
+    assert_eq!(codomain.as_ref(), implementation.argument());
     assert_eq!(method.id.implementation(), implementation.id);
     assert_eq!(method.id.method(), method.method);
 }

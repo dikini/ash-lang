@@ -8,6 +8,38 @@ use super::{
 };
 use crate::source::{GeneratedReason, Origin};
 
+struct CorePatternBuffer(Vec<CorePattern>);
+
+impl CorePatternBuffer {
+    fn push(&mut self, pattern: CorePattern) {
+        self.0.push(pattern);
+    }
+
+    fn pop(&mut self) -> Option<CorePattern> {
+        self.0.pop()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn split_off(&mut self, at: usize) -> Vec<CorePattern> {
+        self.0.split_off(at)
+    }
+}
+
+impl Drop for CorePatternBuffer {
+    fn drop(&mut self) {
+        for pattern in self.0.drain(..) {
+            pattern.discard_iteratively();
+        }
+    }
+}
+
 /// Why a validated Core traversal could not construct unchecked output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransformError {
@@ -324,19 +356,22 @@ fn rebuild_pattern(
     }
 
     let mut work = vec![Task::Visit(pattern)];
-    let mut rebuilt = Vec::new();
+    let mut rebuilt = CorePatternBuffer(Vec::new());
     while let Some(task) = work.pop() {
         match task {
             Task::Visit(pattern) => match &pattern.kind {
-                CorePatternKind::Binder(binder) => rebuilt.push(CorePattern::new(
-                    pattern.ty.clone(),
-                    pattern.origin.clone(),
-                    CorePatternKind::Binder(builder.resolved_binder(
+                CorePatternKind::Binder(binder) => {
+                    let binder = builder.resolved_binder(
                         binder.id(),
                         binder.ty().clone(),
                         binder.origin().clone(),
-                    )?),
-                )),
+                    )?;
+                    rebuilt.push(CorePattern::new(
+                        pattern.ty.clone(),
+                        pattern.origin.clone(),
+                        CorePatternKind::Binder(binder),
+                    ));
+                }
                 CorePatternKind::Wildcard => rebuilt.push(CorePattern::new(
                     pattern.ty.clone(),
                     pattern.origin.clone(),
@@ -404,6 +439,7 @@ fn rebuild_pattern(
     if rebuilt.is_empty() {
         Ok(result)
     } else {
+        result.discard_iteratively();
         Err(TransformError::InvalidValidatedInput)
     }
 }
@@ -503,4 +539,74 @@ fn remap(remapped: &[Option<NodeId>], original: NodeId) -> Result<NodeId, Transf
 
 fn node_index(id: NodeId) -> Result<usize, TransformError> {
     usize::try_from(id.value()).map_err(|_| TransformError::InvalidValidatedInput)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        resolved::BinderId,
+        source::{ByteRange, SourceFile},
+        types::Type,
+    };
+
+    fn application_type(depth: usize) -> Type {
+        let mut result = Type::Unit;
+        for _ in 0..depth {
+            result = Type::Application(Box::new(result), Box::new(Type::Unit));
+        }
+        result
+    }
+
+    #[test]
+    fn late_pattern_rebuild_failure_discards_completed_patterns_iteratively() {
+        std::thread::Builder::new()
+            .name("late-pattern-transform-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_000;
+                let source =
+                    SourceFile::new("transform-owner.ash", "()").expect("the fixture should fit");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("fixture span"),
+                );
+                let binder_id = BinderId::new(0);
+                let mut builder = CoreBuilder::new();
+                builder
+                    .reserve_resolved_binders([binder_id])
+                    .expect("the test binder is reserved");
+                let binder = builder
+                    .resolved_binder(binder_id, Type::Unit, origin.clone())
+                    .expect("the first materialization succeeds");
+                let pattern = CorePattern::new(
+                    Type::Tuple(vec![application_type(DEPTH), Type::Unit].into_boxed_slice()),
+                    origin.clone(),
+                    CorePatternKind::Tuple(
+                        vec![
+                            CorePattern::new(
+                                application_type(DEPTH),
+                                origin.clone(),
+                                CorePatternKind::Wildcard,
+                            ),
+                            CorePattern::new(Type::Unit, origin, CorePatternKind::Binder(binder)),
+                        ]
+                        .into_boxed_slice(),
+                    ),
+                );
+
+                let error = rebuild_pattern(&mut builder, &pattern)
+                    .expect_err("the duplicate binder materialization is rejected");
+                assert_eq!(
+                    error,
+                    TransformError::Build(BuildError::DuplicateResolvedBinder)
+                );
+                pattern.discard_iteratively();
+                drop(builder);
+            })
+            .expect("small-stack transform thread should start")
+            .join()
+            .expect("late pattern-transform teardown must fit the small stack");
+    }
 }

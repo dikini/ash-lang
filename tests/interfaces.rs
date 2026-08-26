@@ -112,7 +112,7 @@ fn observe_source(text: &str, expected_value: &str, expected_type: Type) {
     .expect("the interface fixture should complete the modular pipeline");
 
     assert_eq!(observation.value_display(), expected_value);
-    assert_eq!(observation.ty, expected_type);
+    assert_eq!(observation.ty(), &expected_type);
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
     for scheme in checked.schemes() {
         assert_eq!(scheme.scheme.type_parameters.len(), 1);
         assert_eq!(scheme.scheme.requirements.len(), 1);
-        assert!(matches!(scheme.scheme.value_type, Type::Function(_, _)));
+        assert!(matches!(scheme.scheme.value_type(), Type::Function(_, _)));
         let requirement = &scheme.scheme.requirements[0];
         assert_eq!(
             requirement.id.owner(),
@@ -242,8 +242,8 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
         );
         assert_eq!(requirement.id.declaration(), 0);
         assert_eq!(
-            requirement.argument,
-            Type::Variable(scheme.scheme.type_parameters[0])
+            requirement.argument(),
+            &Type::Variable(scheme.scheme.type_parameters[0])
         );
     }
 }
@@ -457,7 +457,7 @@ fn facade_selection_lowers_through_the_original_core_binder() {
     })
     .expect("the facade program should complete the public pipeline");
     assert_eq!(observation.value_display(), "true");
-    assert_eq!(observation.ty, Type::Bool);
+    assert_eq!(observation.ty(), &Type::Bool);
 
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the facade interface graph should load");

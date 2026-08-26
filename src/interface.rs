@@ -80,10 +80,16 @@ impl InterfaceConstraintBudget {
             };
             self.charge(1)?;
             match ty {
-                Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+                Type::Tuple(elements) => {
                     self.charge(1)?;
                     pending.try_reserve(1).map_err(|_| ())?;
                     pending.push(Task::Sequence(elements.iter()));
+                }
+                Type::Application(function, argument) => {
+                    self.charge(2)?;
+                    pending.try_reserve(2).map_err(|_| ())?;
+                    pending.push(Task::Type(argument));
+                    pending.push(Task::Type(function));
                 }
                 Type::Function(domain, codomain) => {
                     self.charge(2)?;
@@ -144,10 +150,16 @@ fn type_contains_any_variable(
         budget.charge(1)?;
         match ty {
             Type::Variable(_) => return Ok(true),
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+            Type::Tuple(elements) => {
                 budget.charge(elements.len())?;
                 pending.try_reserve(elements.len()).map_err(|_| ())?;
                 pending.extend(elements.iter().rev());
+            }
+            Type::Application(function, argument) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push(argument);
+                pending.push(function);
             }
             Type::Function(domain, codomain) => {
                 budget.charge(2)?;
@@ -172,10 +184,16 @@ fn schedule_type_children<'a>(
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<(), ()> {
     match ty {
-        Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+        Type::Tuple(elements) => {
             budget.charge(elements.len())?;
             pending.try_reserve(elements.len()).map_err(|_| ())?;
             pending.extend(elements.iter().rev());
+        }
+        Type::Application(function, argument) => {
+            budget.charge(2)?;
+            pending.try_reserve(2).map_err(|_| ())?;
+            pending.push(argument);
+            pending.push(function);
         }
         Type::Function(domain, codomain) => {
             budget.charge(2)?;
@@ -214,12 +232,14 @@ pub(crate) fn same_type_with_constraint_budget(
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (Type::Inference(left), Type::Inference(right)) if left == right => {}
-            (Type::AppliedNominal(left_id, left), Type::AppliedNominal(right_id, right))
-                if left_id == right_id && left.len() == right.len() =>
-            {
-                budget.charge(left.len())?;
-                pending.try_reserve(left.len()).map_err(|_| ())?;
-                pending.extend(left.iter().zip(right).rev());
+            (
+                Type::Application(left_function, left_argument),
+                Type::Application(right_function, right_argument),
+            ) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push((left_argument, right_argument));
+                pending.push((left_function, right_function));
             }
             (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
                 if left_parameters == right_parameters =>
@@ -339,10 +359,17 @@ where
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(candidate), Type::Nominal(goal)) if candidate == goal => {}
             (
-                Type::AppliedNominal(candidate_id, candidate_types),
-                Type::AppliedNominal(goal_id, goal_types),
-            ) if candidate_id == goal_id && candidate_types.len() == goal_types.len() => {
-                schedule_match_pairs(candidate_types, goal_types, &mut pending, constraint_budget)?;
+                Type::Application(candidate_function, candidate_argument),
+                Type::Application(goal_function, goal_argument),
+            ) => {
+                constraint_budget
+                    .charge(2)
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+                pending.push((candidate_argument, goal_argument));
+                pending.push((candidate_function, goal_function));
             }
             (Type::Tuple(candidate_types), Type::Tuple(goal_types))
                 if candidate_types.len() == goal_types.len() =>
@@ -408,7 +435,7 @@ fn validate_match_type(
             .charge(1)
             .map_err(|()| HeadMatchFailure::ConstraintResource)?;
         match ty {
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+            Type::Tuple(elements) => {
                 budget
                     .charge(elements.len())
                     .map_err(|()| HeadMatchFailure::ConstraintResource)?;
@@ -416,6 +443,16 @@ fn validate_match_type(
                     .try_reserve(elements.len())
                     .map_err(|_| HeadMatchFailure::ConstraintResource)?;
                 pending.extend(elements.iter().rev());
+            }
+            Type::Application(function, argument) => {
+                budget
+                    .charge(2)
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+                pending.push(argument);
+                pending.push(function);
             }
             Type::Function(domain, codomain) => {
                 budget
@@ -479,10 +516,17 @@ fn match_types_equal(
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (
-                Type::AppliedNominal(left_id, left_types),
-                Type::AppliedNominal(right_id, right_types),
-            ) if left_id == right_id && left_types.len() == right_types.len() => {
-                schedule_match_pairs(left_types, right_types, &mut pending, budget)?;
+                Type::Application(left_function, left_argument),
+                Type::Application(right_function, right_argument),
+            ) => {
+                budget
+                    .charge(2)
+                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+                pending.push((left_argument, right_argument));
+                pending.push((left_function, right_function));
             }
             (Type::Tuple(left_types), Type::Tuple(right_types))
                 if left_types.len() == right_types.len() =>
@@ -597,17 +641,33 @@ where
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (
-                Type::AppliedNominal(left_id, left_types),
-                Type::AppliedNominal(right_id, right_types),
-            ) if left_id == right_id && left_types.len() == right_types.len() => {
-                schedule_overlap_pairs(
-                    left_types,
-                    left.side,
-                    right_types,
-                    right.side,
-                    &mut pending,
-                    budget,
-                )?;
+                Type::Application(left_function, left_argument),
+                Type::Application(right_function, right_argument),
+            ) => {
+                budget.charge(2).map_err(|()| OverlapFailure::Resource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| OverlapFailure::Resource)?;
+                pending.push((
+                    OverlapHead {
+                        side: left.side,
+                        ty: left_argument,
+                    },
+                    OverlapHead {
+                        side: right.side,
+                        ty: right_argument,
+                    },
+                ));
+                pending.push((
+                    OverlapHead {
+                        side: left.side,
+                        ty: left_function,
+                    },
+                    OverlapHead {
+                        side: right.side,
+                        ty: right_function,
+                    },
+                ));
             }
             (Type::Tuple(left_types), Type::Tuple(right_types))
                 if left_types.len() == right_types.len() =>
@@ -777,7 +837,7 @@ fn overlap_occurs<'a>(
             continue;
         }
         match head.ty {
-            Type::Tuple(elements) | Type::AppliedNominal(_, elements) => {
+            Type::Tuple(elements) => {
                 budget
                     .charge(elements.len())
                     .map_err(|()| OverlapFailure::Resource)?;
@@ -788,6 +848,20 @@ fn overlap_occurs<'a>(
                     side: head.side,
                     ty,
                 }));
+            }
+            Type::Application(function, argument) => {
+                budget.charge(2).map_err(|()| OverlapFailure::Resource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| OverlapFailure::Resource)?;
+                pending.push(OverlapHead {
+                    side: head.side,
+                    ty: argument,
+                });
+                pending.push(OverlapHead {
+                    side: head.side,
+                    ty: function,
+                });
             }
             Type::Function(domain, codomain) => {
                 budget.charge(2).map_err(|()| OverlapFailure::Resource)?;
@@ -1050,7 +1124,7 @@ pub struct EvidenceSubstitution {
 }
 
 impl EvidenceSubstitution {
-    fn new(parameter: TypeVariableId, argument: Type) -> Self {
+    pub(crate) fn new(parameter: TypeVariableId, argument: Type) -> Self {
         Self {
             parameter,
             argument,
@@ -1423,7 +1497,7 @@ pub struct CheckedRequirement {
     /// Stable checked interface identity.
     pub interface: InterfaceId,
     /// Fully resolved requirement argument.
-    pub argument: Type,
+    pub(crate) argument: Type,
     /// Causal declaration provenance.
     pub origin: Origin,
     /// Complete source requirement span.
@@ -1440,6 +1514,14 @@ impl Drop for CheckedRequirement {
     }
 }
 
+impl CheckedRequirement {
+    /// Borrows the fully resolved requirement argument.
+    #[must_use]
+    pub const fn argument(&self) -> &Type {
+        &self.argument
+    }
+}
+
 /// A checked source scheme whose requirements remain outside ordinary types.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ConstrainedScheme {
@@ -1448,7 +1530,7 @@ pub struct ConstrainedScheme {
     /// Ordered explicit interface requirements.
     pub requirements: Box<[CheckedRequirement]>,
     /// Source value type without an enclosing `forall` node.
-    pub value_type: Type,
+    pub(crate) value_type: Type,
 }
 
 /// Authentication token for one successfully checked local interface.
@@ -1487,6 +1569,12 @@ pub struct CheckedImplementation {
 }
 
 impl ConstrainedScheme {
+    /// Borrows the source value type without its outer rank-1 binders.
+    #[must_use]
+    pub const fn value_type(&self) -> &Type {
+        &self.value_type
+    }
+
     #[cfg(test)]
     pub(crate) fn from_rank1_type(scheme: Type) -> Self {
         match scheme {
@@ -1795,6 +1883,47 @@ mod tests {
     }
 
     #[test]
+    fn one_way_head_matching_visits_application_function_and_argument_separately() {
+        let function_parameter = TypeVariableId::new(0);
+        let argument_parameter = TypeVariableId::new(1);
+        let function_candidate = Type::Application(
+            Box::new(Type::Variable(function_parameter)),
+            Box::new(Type::Bool),
+        );
+        let goal = Type::Application(Box::new(Type::Int), Box::new(Type::Bool));
+
+        let function_substitution = match_implementation_head(
+            std::iter::once(function_parameter),
+            &function_candidate,
+            &goal,
+            &mut InterfaceConstraintBudget::default(),
+            &mut TypeWorkBudget::default(),
+        )
+        .expect("the checked application heads should be valid")
+        .expect("the function position should match");
+        assert_eq!(function_substitution.len(), 1);
+        assert_eq!(function_substitution[0].parameter(), function_parameter);
+        assert_eq!(function_substitution[0].argument(), &Type::Int);
+
+        let argument_candidate = Type::Application(
+            Box::new(Type::Int),
+            Box::new(Type::Variable(argument_parameter)),
+        );
+        let argument_substitution = match_implementation_head(
+            std::iter::once(argument_parameter),
+            &argument_candidate,
+            &goal,
+            &mut InterfaceConstraintBudget::default(),
+            &mut TypeWorkBudget::default(),
+        )
+        .expect("the checked application heads should be valid")
+        .expect("the argument position should match");
+        assert_eq!(argument_substitution.len(), 1);
+        assert_eq!(argument_substitution[0].parameter(), argument_parameter);
+        assert_eq!(argument_substitution[0].argument(), &Type::Bool);
+    }
+
+    #[test]
     fn one_way_head_matcher_preserves_repeated_candidate_variables() {
         let parameter = TypeVariableId::new(0);
         let candidate = Type::Tuple(
@@ -2086,6 +2215,106 @@ mod tests {
                 &left,
                 std::iter::empty(),
                 &right,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn overlap_considers_decisive_variables_in_each_application_position() {
+        let left_function = TypeVariableId::new(0);
+        let function_variable_head = Type::Application(
+            Box::new(Type::Variable(left_function)),
+            Box::new(Type::Bool),
+        );
+        let concrete = Type::Application(Box::new(Type::Int), Box::new(Type::Bool));
+
+        assert_eq!(
+            implementation_heads_overlap(
+                std::iter::once(left_function),
+                &function_variable_head,
+                std::iter::empty(),
+                &concrete,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(true)
+        );
+
+        let right_argument = TypeVariableId::new(1);
+        let argument_variable_head = Type::Application(
+            Box::new(Type::Int),
+            Box::new(Type::Variable(right_argument)),
+        );
+        assert_eq!(
+            implementation_heads_overlap(
+                std::iter::empty(),
+                &concrete,
+                std::iter::once(right_argument),
+                &argument_variable_head,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(true)
+        );
+
+        let rigid_function_mismatch = Type::Application(Box::new(Type::Bool), Box::new(Type::Bool));
+        assert_eq!(
+            implementation_heads_overlap(
+                std::iter::empty(),
+                &rigid_function_mismatch,
+                std::iter::once(right_argument),
+                &argument_variable_head,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(false)
+        );
+        let rigid_argument_mismatch = Type::Application(Box::new(Type::Int), Box::new(Type::Int));
+        assert_eq!(
+            implementation_heads_overlap(
+                std::iter::once(left_function),
+                &function_variable_head,
+                std::iter::empty(),
+                &rigid_argument_mismatch,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn strict_subterm_termination_visits_application_function_and_argument() {
+        let function_variable = TypeVariableId::new(0);
+        let argument_variable = TypeVariableId::new(1);
+        let function_subterm = Type::Application(
+            Box::new(Type::Int),
+            Box::new(Type::Variable(function_variable)),
+        );
+        let argument_subterm = Type::Variable(argument_variable);
+        let head = Type::Application(
+            Box::new(function_subterm.clone()),
+            Box::new(argument_subterm.clone()),
+        );
+
+        assert_eq!(
+            implementation_prerequisite_terminates(
+                &function_subterm,
+                &head,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            implementation_prerequisite_terminates(
+                &argument_subterm,
+                &head,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            implementation_prerequisite_terminates(
+                &head,
+                &head,
                 &mut InterfaceConstraintBudget::default(),
             ),
             Ok(false)

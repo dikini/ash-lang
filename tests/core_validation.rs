@@ -1607,6 +1607,37 @@ fn foreign_binder_rejection_admits_payloads_before_checking_capability() {
 }
 
 #[test]
+fn foreign_binder_rejection_dismantles_wide_binder_metadata_on_a_small_stack() {
+    const WIDTH: usize = 32_768;
+
+    std::thread::Builder::new()
+        .name("foreign-wide-binder-disposal".to_owned())
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let file = source("()");
+            let origin = whole_origin(&file);
+            let mut ty = Type::Unit;
+            for _ in 0..WIDTH {
+                ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+            }
+            let mut owner = CoreBuilder::new();
+            let foreign = owner.binder(ty, origin.clone()).expect("owner binder");
+
+            let mut receiver = CoreBuilder::new();
+            let body = receiver
+                .unit(Type::Unit, origin.clone())
+                .expect("receiver body");
+            assert_eq!(
+                receiver.function(foreign, body, Type::Unit, origin),
+                Err(BuildError::ForeignBinder),
+            );
+        })
+        .expect("test thread should start")
+        .join()
+        .expect("foreign binder teardown should fit the small stack");
+}
+
+#[test]
 fn validates_all_pure_value_and_computation_families() {
     let file = source("core");
     let origin = whole_origin(&file);

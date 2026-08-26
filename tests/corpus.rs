@@ -346,13 +346,13 @@ fn every_valid_corpus_presentation_has_its_exact_library_and_cli_observation() {
             run(case.path).unwrap_or_else(|error| panic!("{} was rejected by {error}", case.id));
 
         assert_eq!(
-            observation.value.to_string(),
+            observation.value().to_string(),
             case.expected_value,
             "{}",
             case.id
         );
         assert_eq!(
-            observation.ty.to_string(),
+            observation.ty().to_string(),
             case.expected_type,
             "{}",
             case.id

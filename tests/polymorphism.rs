@@ -28,6 +28,19 @@ fn run(text: &str) -> ash::driver::Observation {
     run_module("polymorphism.ash", text).expect("fixture should run")
 }
 
+#[test]
+fn observation_parts_have_a_public_iterative_type_disposal_path() {
+    let observation = run("main : Unit -> Int\nmain () = 42\n");
+    let parts = observation.into_parts();
+
+    assert_eq!(parts.value_display(), "42");
+    assert_eq!(parts.type_display(), "Int");
+    let (value, ty) = parts.into_pair();
+    assert_eq!(value.to_string(), "42");
+    assert_eq!(ty.to_string(), "Int");
+    ash::types::discard_type_iteratively(ty);
+}
+
 fn reason(text: &str) -> String {
     let failure: PipelineFailure =
         run_module("polymorphism-rejection.ash", text).expect_err("fixture should be rejected");
@@ -117,6 +130,43 @@ fn explicit_type_operations_survive_both_core_transforms_and_erasure() {
 }
 
 #[test]
+fn core_transforms_preserve_the_canonical_result_application_tree() {
+    let (before, source, module) = elaborated(concat!(
+        "type Wrapped<A> =\nWrapped(A)\n\n",
+        "main : Unit -> Wrapped<Int>\n",
+        "main () = Wrapped(40 + 2)\n",
+    ));
+    let before_type = before
+        .node(before.root())
+        .expect("the validated root should exist")
+        .ty
+        .clone();
+    assert!(matches!(before_type, ash::types::Type::Application(_, _)));
+
+    for transformed in [
+        identity_traversal(&before).expect("identity traversal"),
+        fold_literal_primitives(&before).expect("literal folding"),
+    ] {
+        let transformed = validate_modules(transformed, &[&source], &[(module, source.id())])
+            .expect("transformed Core validates");
+        assert!(ash::types::same_type(
+            &transformed
+                .node(transformed.root())
+                .expect("the transformed root should exist")
+                .ty,
+            &before_type,
+        ));
+        assert_eq!(
+            evaluate(&transformed)
+                .expect("transformed Core evaluates")
+                .value
+                .to_string(),
+            "Wrapped(42)",
+        );
+    }
+}
+
+#[test]
 fn implicitly_quantified_global_instantiates_at_unrelated_types() {
     let observation = run(
         "id : A -> A\nid value = value\n\nmain : Unit -> (Int, Bool)\nmain () = (id(42), id(true))\n",
@@ -144,6 +194,43 @@ fn parameterized_constructors_are_ordinary_polymorphic_values() {
 
     assert_eq!(observation.value_display(), "Some(42)");
     assert_eq!(observation.type_display(), "Option<Int>");
+}
+
+#[test]
+fn wide_nominal_application_remains_width_through_elaboration_and_core() {
+    const WIDTH: usize = 256;
+
+    std::thread::Builder::new()
+        .name("wide-canonical-application-pipeline".to_owned())
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let parameters = (0..WIDTH)
+                .map(|index| format!("A{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let arguments = std::iter::repeat_n("Int", WIDTH)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let source = format!(
+                "type Wide<{parameters}> =\nWide\n\nmain : Unit -> Wide<{arguments}>\nmain () = Wide\n"
+            );
+
+            let observation = run(&source);
+            let mut current = observation.ty();
+            let mut application_cells = 0;
+            while let ash::types::Type::Application(function, argument) = current {
+                assert_eq!(argument.as_ref(), &ash::types::Type::Int);
+                application_cells += 1;
+                current = function;
+            }
+            assert_eq!(application_cells, WIDTH);
+            assert!(matches!(current, ash::types::Type::Nominal(_)));
+            assert_eq!(observation.value_display(), "Wide");
+            drop(observation);
+        })
+        .expect("the wide pipeline thread should start")
+        .join()
+        .expect("the wide source, Core program, and observation should dispose on a small stack");
 }
 
 #[test]
