@@ -62,10 +62,10 @@ that closure.
 
 ### `lib-ash`
 
-The first bounded `lib-ash` increment is implemented: implementation
+The first bounded `lib-ash` increment is complete: implementation
 availability is explicit, and targeted imports can re-export selected names and
 implementation authorizations. The retained
-[evidence report](lib-ash/imports-evidence.md) records its implemented boundary.
+[evidence report](lib-ash/imports-evidence.md) records its reviewed boundary.
 The complete milestone remains open. Later proposals may add the language
 mechanisms needed to define stronger libraries: higher-kinded parameters,
 method-local type parameters, multi-parameter interfaces, associated outputs
@@ -90,7 +90,7 @@ narrow, reorder, or remove it.
 
 1. Replace automatic direct-import implementation availability with explicit
    implementation selectors. Add targeted name and implementation re-exports,
-   transitive authorization routes, and a migration corpus. This implemented
+   transitive authorization routes, and a migration corpus. This completed
    first increment was accepted by
    [CP-0008](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md)
    and is retained by the

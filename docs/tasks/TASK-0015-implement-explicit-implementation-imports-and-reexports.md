@@ -128,8 +128,17 @@ or evaluator forms.
   lint, relative-link inspection, whitespace checking, and `cargo xtask verify`
   pass. The all-target inventory is 330 library tests, 10 `ash` binary tests,
   648 integration tests, and one `xtask` test: 989 tests. Independent
-  documentation and authority review remains; Task 9 final verification and
-  lifecycle cleanup have not begun.
+  review and final verification are complete; lifecycle cleanup remains.
+- Task 9's three independent reviews cover semantic and specification
+  agreement; implementation, route, resource, and Core quality; and evidence,
+  migration, links, authority boundaries, and exclusions. Review corrected one
+  normative route-order distinction, stale current-dialect wording, and exact
+  evidence attributions. Repeat review of the corrected state has no Critical,
+  Important, or Minor findings. The exact final pre-cleanup gate passes all 989
+  tests, formatting, all-target checking, clippy with warnings denied, test
+  listing, `cargo xtask verify`, full-tree Markdown lint, and whitespace
+  checking. The first increment is retained without closing or tagging the
+  complete `lib-ash` milestone.
 - The execution plan defines focused red-green increments, review checkpoints,
   migration, retained evidence, and lifecycle cleanup.
 
@@ -156,11 +165,11 @@ destruction, and the absence of later `lib-ash` or `pack-ash` mechanisms.
 
 ## Discoveries
 
-The current linked validator authenticates an imported implementation only when
-its defining module is the immediate dependency. Transitive re-exports require
-each checked module group to retain its lightweight public implementation
-authorization entries so validation can follow summary edges to the defining
-module without retaining dependency bodies in summaries.
+Before Task 6, the linked validator authenticated an imported implementation
+only when its defining module was the immediate dependency. Transitive
+re-exports required each checked module group to retain its lightweight public
+implementation authorization entries so validation could follow summary edges
+to the defining module without retaining dependency bodies in summaries.
 
 Imported global, nominal, constructor, interface, and method facts already
 retain defining identities independently from source aliases. Public name
@@ -249,4 +258,4 @@ promoting DN-0025's later kinds, interface forms, package model, or artifact
 model into current Ash. The tool guide describes observed source reasons and
 authorization-route labels but does not define their semantics. Retained
 Modular Ash reports remain unchanged. Independent documentation and authority
-review remains before Task 9 cleanup.
+review and final pre-cleanup verification pass. Task 9 cleanup remains.

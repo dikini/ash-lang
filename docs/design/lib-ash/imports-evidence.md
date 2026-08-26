@@ -17,8 +17,8 @@ interface, library, package, and artifact pressure separate.
 ## Scope and checkpoints
 
 The implementation work starts from unsigned authorization checkpoint
-`4f0541d`. Its principal unsigned checkpoints through the retained Task 7
-evidence are:
+`4f0541d`. Its principal unsigned checkpoints through the reviewed product
+boundary are:
 
 - `850de5a`, which parses the independent targeted name and implementation
   channels and targeted public imports;
@@ -30,12 +30,14 @@ evidence are:
 - `b8e7ba4`, which retains and authenticates lightweight linked authorization
   tables before Core synthesis; and
 - `768e0ed`, `4a4783e`, `2acc601`, and `534404a`, which close the deep-resource,
-  diagnostic, route-retention, and source-relationship evidence.
+  diagnostic, route-retention, and source-relationship evidence; and
+- `76e8104`, which reconciles the normative specification, executable examples,
+  tool guide, trajectory, design state, and this retained evidence report.
 
-The task remains active while specification and documentation reconciliation,
-independent review, final verification, and transition-artifact cleanup are
-completed. These checkpoints are evidence boundaries, not independent semantic
-authority.
+The implementation, specification, evidence, independent reviews, and final
+pre-cleanup verification are complete. Transition-artifact cleanup remains a
+lifecycle step. These checkpoints are evidence boundaries, not independent
+semantic authority.
 
 ## Implemented boundary
 
@@ -72,9 +74,12 @@ primary matrix. It proves that:
 - one public targeted import re-exports global, nominal, constructor,
   interface, method, and implementation channels under the selected spellings;
 - a base, facade, and entry module complete the public pipeline through two
-  explicit implementation selectors; and
-- shortest implementation routes win deterministically, while equal-length
-  choices follow dependency, import, selector, and stable hop ordering.
+  explicit implementation selectors.
+
+Shortest implementation routes win deterministically. The separate rank and
+hop-key probes in [`src/resolved.rs`](../../../src/resolved.rs) prove that
+equal-length choices follow dependency, import, selector, and stable graph-local
+hop ordering without consulting process-global source allocation.
 
 The transitive and diamond cases in
 [`tests/interface_modules.rs`](../../../tests/interface_modules.rs) and
@@ -128,7 +133,8 @@ source diagnostics.
 
 [`tests/interface_diagnostics.rs`](../../../tests/interface_diagnostics.rs)
 retains exact labels for unavailable selections, selected prerequisite chains,
-overlap routes, and concrete cycles. A selected facade prerequisite failure
+and concrete cycles. The structural overlap witness cited above owns the
+overlap-route labels. A selected facade prerequisite failure
 relates the source occurrence and declaration, the name import used by the
 occurrence, the interface declarations, every selected implementation route
 hop, the implementation declaration, and the supplying method. The CLI witness
@@ -246,19 +252,21 @@ and normative-example coverage also lives in
 
 ## Verification status
 
-At the Task 7 boundary, focused suites, all-target checking, the full workspace
-test suite, clippy with warnings denied, formatting, doctests, and whitespace
-checking pass. Three independent semantic, implementation, resource,
-diagnostic, and architecture reviews have no open findings. The Task 8
-documentation passes Markdown lint, relative-link inspection, whitespace
-checking, and `cargo xtask verify`. The all-target inventory contains 330
-library tests, 10 `ash` binary tests, 648 integration tests, and one `xtask`
-test: 989 tests.
+The final pre-cleanup gate passes formatting, all-target and all-feature
+checking, the complete workspace test suite, clippy with warnings denied, the
+test inventory, `cargo xtask verify`, full-tree Markdown lint, and whitespace
+checking. The inventory contains 330 library tests, 10 `ash` binary tests, 648
+integration tests, and one `xtask` test: 989 tests.
 
-The task remains active because independent review of the normative and
-informative reconciliation and the final Task 9 root verification have not yet
-run. This report records the implemented evidence without pre-empting those
-lifecycle gates.
+Three independent Task 9 reviews cover CP-0008 and specification agreement;
+parser, resolver, summary, route, validation, resource, and Core quality; and
+evidence, migration, links, authority boundaries, and exclusions. Review
+corrected the normative distinction between transient route ranks and the
+final `ModuleId`-bearing hop key, stale current-dialect wording, and two
+evidence-report attributions. The exact corrected state passed repeat review
+with no Critical, Important, or Minor findings. Retained Modular Ash reports
+remain unchanged, and the transition changes no production Core or evaluator
+file.
 
 ## Intentional exclusions and remaining pressure
 
@@ -275,6 +283,5 @@ stable identities, body-free summaries, and authenticated route model, but they
 require separate semantic authority and evidence. The complete `lib-ash`
 milestone still requires its later comparison corpus, combined identity and
 summary audit, Core-versus-library simplification analysis, retained linked
-program, and closure review. TASK-0015 still requires independent Task 8
-documentation review and Task 9 verification and lifecycle cleanup before its
-product checkpoint.
+program, and closure review. The retained first-increment checkpoint receives
+no `lib-ash` tag; only transition-artifact cleanup remains.

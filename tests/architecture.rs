@@ -76,7 +76,7 @@ const CORE_AND_EVALUATOR_SOURCES: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn current_source_exposes_only_the_modular_source_pipeline() {
+fn current_source_exposes_only_one_source_pipeline() {
     assert!(
         !DRIVER_SOURCE.contains("run_source("),
         "the current driver must not retain the historical file-result pipeline"
@@ -105,8 +105,8 @@ fn current_source_exposes_only_the_modular_source_pipeline() {
         "the public parser must enter the declarations-only module grammar"
     );
     assert!(
-        PARSER_GRAMMAR.contains("&MODULAR_ASH_DIALECT"),
-        "the selected grammar must be Modular Ash"
+        PARSER_GRAMMAR.contains("&CURRENT_ASH_DIALECT"),
+        "the selected grammar must be current Ash"
     );
     assert!(
         !PARSER_GRAMMAR.contains("MINI_ASH_DIALECT"),

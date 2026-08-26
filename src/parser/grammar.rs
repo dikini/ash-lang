@@ -120,7 +120,7 @@ pub(super) struct ParserDialect {
 }
 
 /// The sole closed assembly of syntax forms selected for Ash modules.
-const MODULAR_ASH_DIALECT: ParserDialect = ParserDialect {
+const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
     global_definitions: &[
         GlobalDefinitionForm::Equational,
         GlobalDefinitionForm::InlineOperational,
@@ -182,7 +182,7 @@ const MODULAR_ASH_DIALECT: ParserDialect = ParserDialect {
 };
 
 pub(super) const fn selected_dialect() -> &'static ParserDialect {
-    &MODULAR_ASH_DIALECT
+    &CURRENT_ASH_DIALECT
 }
 
 pub(super) fn module(parser: &mut Parser<'_>) {

@@ -111,9 +111,10 @@ For one identity, the shortest route wins. Equal-length routes use dependency
 order, then import source order, then selector source order. These ranks choose
 the current winner but do not enter a public authorization route. If the ranks
 are equal, the lexicographic sequence of graph-local `(from ModuleId, to
-ModuleId, import byte range)` hop keys breaks the tie. Process-global source
-allocation, hash-map iteration, and the numeric order of `ModuleId` values do
-not choose a route.
+ModuleId, import byte range)` hop keys breaks the tie. `ModuleId` participates
+only inside that final graph-local hop key; it does not replace dependency,
+import, or selector rank. Process-global source allocation and hash-map
+iteration do not choose a route.
 
 Effective availability and public authorization choose routes independently.
 Any explicit implementation item may supply the effective winner. Only a
