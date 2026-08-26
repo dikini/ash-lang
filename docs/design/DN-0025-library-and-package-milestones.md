@@ -96,9 +96,9 @@ narrow, reorder, or remove it.
 2. Add explicit `Type` and function kinds and higher-kinded parameters without
    kind inference or kind polymorphism in this increment. Make checking,
    summaries, substitution, and independent Core validation kind-aware. The
-   absence of kind inference is a phase-dependent constraint, not a permanent
-   language principle; later work may consider bounded declaration-local kind
-   inference separately from kind polymorphism.
+   absence of kind inference is a phase-dependent semantic boundary, not a
+   permanent language principle; later work may consider bounded
+   declaration-local kind inference separately from kind polymorphism.
 3. Add method-local type parameters. Keep ordinary source rank-1 and admit
    polymorphic term slots only as authenticated compiler-generated interface
    evidence.
