@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No implementation task is currently active.
+- [TASK-0016: Implement Explicit Kinds and Higher-Kinded Parameters](TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md)
