@@ -2,7 +2,7 @@
 
 - ID: `DN-0025`
 - Status: exploring
-- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [CP-0008: Explicit Implementation Imports and Re-exports](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md), the [explicit-import evidence](lib-ash/imports-evidence.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
+- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), the [explicit-import evidence](lib-ash/imports-evidence.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
 
 > This design note is informative. It does not define current Ash, accept
 > language semantics, or accept a package or artifact architecture.
@@ -91,9 +91,7 @@ narrow, reorder, or remove it.
 1. Replace automatic direct-import implementation availability with explicit
    implementation selectors. Add targeted name and implementation re-exports,
    transitive authorization routes, and a migration corpus. This completed
-   first increment was accepted by
-   [CP-0008](../proposals/CP-0008-explicit-implementation-imports-and-reexports.md)
-   and is retained by the
+   first increment is retained by the
    [explicit-import evidence report](lib-ash/imports-evidence.md).
 2. Add explicit `Type` and function kinds and higher-kinded parameters without
    kind inference or kind polymorphism. Make checking, summaries,
@@ -676,11 +674,11 @@ type-class-like constraints rather than module APIs.
 ## Required authority transitions
 
 This note can guide comparison and proposal work but cannot authorize product
-implementation. CP-0008 and TASK-0015 authorized the implemented first
-increment; the current specification and retained evidence record its result.
-Further language changes for `lib-ash` require one or more change proposals and
-tasks. Package, cache, and linker architecture that does not alter language
-semantics requires accepted architectural decisions and tasks. Any
+implementation. The completed first increment followed the change-proposal and
+task workflow; the current specification and retained evidence record its
+result. Further language changes for `lib-ash` require one or more change
+proposals and tasks. Package, cache, and linker architecture that does not alter
+language semantics requires accepted architectural decisions and tasks. Any
 source-visible package or import semantic change also requires a change
 proposal. Current specification text changes only with retained implementation
 evidence.

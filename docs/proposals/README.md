@@ -22,6 +22,4 @@ No change proposal is currently under consideration.
 
 ## Accepted changes
 
-- [CP-0008: Explicit Implementation Imports and Re-exports](CP-0008-explicit-implementation-imports-and-reexports.md)
-  — replace automatic direct-import implementation availability with explicit
-  selectors and add targeted name and implementation re-exports.
+No accepted change proposal is currently awaiting implementation.

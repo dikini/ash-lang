@@ -4,11 +4,9 @@ This report records implementation evidence for the first `lib-ash` increment:
 explicit implementation imports and targeted name and implementation
 re-exports. It is informative, not normative. The
 [Ash specification](../../../spec/README.md) alone defines the current
-language. The accepted
-[change proposal](../../proposals/CP-0008-explicit-implementation-imports-and-reexports.md)
-authorized this increment, and
-[TASK-0015](../../tasks/TASK-0015-implement-explicit-implementation-imports-and-reexports.md)
-organizes its implementation and review.
+language. Git history retains the accepted semantic transition, implementation
+task, and execution plan; those temporary artifacts no longer occupy the
+current tree after the reviewed product checkpoint.
 
 This report does not close the complete `lib-ash` milestone. The retained
 [milestone note](../DN-0025-library-and-package-milestones.md) keeps later type,
@@ -32,12 +30,14 @@ boundary are:
 - `768e0ed`, `4a4783e`, `2acc601`, and `534404a`, which close the deep-resource,
   diagnostic, route-retention, and source-relationship evidence; and
 - `76e8104`, which reconciles the normative specification, executable examples,
-  tool guide, trajectory, design state, and this retained evidence report.
+  tool guide, trajectory, design state, and this retained evidence report; and
+- `95e17c0`, which retains the independent reviews, exact final gate, review
+  corrections, and completed first-increment status.
 
 The implementation, specification, evidence, independent reviews, and final
-pre-cleanup verification are complete. Transition-artifact cleanup remains a
-lifecycle step. These checkpoints are evidence boundaries, not independent
-semantic authority.
+verification are complete. The current tree contains the product evidence and
+omits the transition-only artifacts. These checkpoints are evidence boundaries,
+not independent semantic authority.
 
 ## Implemented boundary
 
@@ -258,11 +258,11 @@ test inventory, `cargo xtask verify`, full-tree Markdown lint, and whitespace
 checking. The inventory contains 330 library tests, 10 `ash` binary tests, 648
 integration tests, and one `xtask` test: 989 tests.
 
-Three independent Task 9 reviews cover CP-0008 and specification agreement;
-parser, resolver, summary, route, validation, resource, and Core quality; and
-evidence, migration, links, authority boundaries, and exclusions. Review
-corrected the normative distinction between transient route ranks and the
-final `ModuleId`-bearing hop key, stale current-dialect wording, and two
+Three independent product reviews cover transition and specification
+agreement; parser, resolver, summary, route, validation, resource, and Core
+quality; and evidence, migration, links, authority boundaries, and exclusions.
+Review corrected the normative distinction between transient route ranks and
+the final `ModuleId`-bearing hop key, stale current-dialect wording, and two
 evidence-report attributions. The exact corrected state passed repeat review
 with no Critical, Important, or Minor findings. Retained Modular Ash reports
 remain unchanged, and the transition changes no production Core or evaluator
@@ -284,4 +284,5 @@ require separate semantic authority and evidence. The complete `lib-ash`
 milestone still requires its later comparison corpus, combined identity and
 summary audit, Core-versus-library simplification analysis, retained linked
 program, and closure review. The retained first-increment checkpoint receives
-no `lib-ash` tag; only transition-artifact cleanup remains.
+no `lib-ash` tag. Git retains the removed transition artifacts and their
+history.
