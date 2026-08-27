@@ -107,6 +107,7 @@ impl OwnedTypeSequence {
 }
 
 type CoreTypeBinders<'a> = HashMap<crate::types::TypeVariableId, (&'a Kind, NodeId)>;
+type CoreAbstractionOwners = HashMap<NodeId, BinderId>;
 
 #[derive(Clone, Copy)]
 enum MonotypeVariableKinds<'scope, 'kind> {
@@ -402,8 +403,9 @@ impl<'program, 'source> Validator<'program, 'source> {
         let nominal_parameter_owners = self.validate_registry()?;
         self.validate_envelopes()?;
         self.validate_graph()?;
-        self.collect_binders()?;
-        let type_binders = self.collect_type_binders(&nominal_parameter_owners)?;
+        let abstraction_owners = self.collect_binders()?;
+        let type_binders =
+            self.collect_type_binders(&nominal_parameter_owners, &abstraction_owners)?;
         self.validate_node_types(&nominal_parameter_owners, &type_binders)?;
         self.validate_scopes()?;
         self.validate_type_scopes()
@@ -630,6 +632,78 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(parameter_owners)
     }
 
+    fn validate_global_parameter_rows(
+        &self,
+        nominal_parameter_owners: &HashMap<
+            crate::types::TypeVariableId,
+            crate::types::NominalTypeId,
+        >,
+    ) -> Result<(), ValidationError> {
+        let registry = &self.program.registry;
+        let rows = registry.global_parameter_rows();
+        if rows.len() != registry.global_parameter_position_count() {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        let parameter_count = rows.iter().try_fold(0_usize, |count, row| {
+            count.checked_add(row.parameters().len())
+        });
+        let Some(parameter_count) = parameter_count else {
+            return Err(ValidationError::new(ValidationReason::Resource, None));
+        };
+        let retained_work = rows
+            .len()
+            .checked_mul(2)
+            .and_then(|work| {
+                parameter_count
+                    .checked_mul(2)
+                    .and_then(|cells| work.checked_add(cells))
+            })
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+        self.charge_type_work(retained_work)?;
+
+        let mut owners = HashSet::new();
+        let mut parameters = HashSet::new();
+        owners
+            .try_reserve(rows.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        parameters
+            .try_reserve(parameter_count)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        let relation = self
+            .module_sources
+            .as_ref()
+            .expect("global row validation requires a module relation");
+
+        for row in rows {
+            let owner = row.owner();
+            let Some(owner_module) = owner.module() else {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            };
+            let indexed = registry.global_parameter_row(owner);
+            if row.parameters().is_empty()
+                || !relation.contains_key(&owner_module)
+                || !owners.insert(owner)
+                || indexed.is_none_or(|indexed| !std::ptr::eq(indexed, row))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            for parameter in row.parameters() {
+                let Some(parameter_module) = parameter.module() else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                let canonical = registry.type_variable(*parameter);
+                if parameter_module != owner_module
+                    || canonical.is_none_or(|canonical| canonical.id != *parameter)
+                    || nominal_parameter_owners.contains_key(parameter)
+                    || !parameters.insert(*parameter)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn validate_module_registry(
         &self,
     ) -> Result<HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>, ValidationError>
@@ -839,6 +913,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         }) {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
+        self.validate_global_parameter_rows(&parameter_owners)?;
         Ok(parameter_owners)
     }
 
@@ -1619,7 +1694,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(())
     }
 
-    fn collect_binders(&mut self) -> Result<(), ValidationError> {
+    fn collect_binders(&mut self) -> Result<CoreAbstractionOwners, ValidationError> {
+        let mut abstraction_owners = HashMap::new();
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
             match &node.kind {
@@ -1637,6 +1713,25 @@ impl<'program, 'source> Validator<'program, 'source> {
                 PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
                     for member in group.members() {
                         self.collect_binder(id, member.binder(), ValidationReason::NodeType, true)?;
+                        let initializer = member.initializer();
+                        if self.module_sources.is_some()
+                            && matches!(
+                                self.node(initializer)?.kind,
+                                PureExprKind::Computation(PureComputation::TypeAbstraction(_))
+                            )
+                        {
+                            self.charge_type_work(1)?;
+                            if abstraction_owners.contains_key(&initializer) {
+                                return Err(ValidationError::new(
+                                    ValidationReason::Registry,
+                                    Some(initializer),
+                                ));
+                            }
+                            abstraction_owners.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, Some(initializer))
+                            })?;
+                            abstraction_owners.insert(initializer, member.binder().id());
+                        }
                     }
                 }
                 PureExprKind::Computation(PureComputation::Match(match_node)) => {
@@ -1662,7 +1757,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 ) => {}
             }
         }
-        Ok(())
+        Ok(abstraction_owners)
     }
 
     fn collect_binder(
@@ -1705,8 +1800,10 @@ impl<'program, 'source> Validator<'program, 'source> {
             crate::types::TypeVariableId,
             crate::types::NominalTypeId,
         >,
+        abstraction_owners: &CoreAbstractionOwners,
     ) -> Result<CoreTypeBinders<'program>, ValidationError> {
         let mut definitions = HashMap::new();
+        let mut consumed_rows = 0_usize;
         for (index, node) in self.program.nodes.iter().enumerate() {
             let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
                 &node.kind
@@ -1714,7 +1811,21 @@ impl<'program, 'source> Validator<'program, 'source> {
                 continue;
             };
             let id = node_id(self.program.arena, index)?;
+            let mut linked_identity_class = None;
             for (parameter, kind) in abstraction.parameters() {
+                let parameter_is_resolved =
+                    matches!(parameter, crate::types::TypeVariableId::Resolved { .. });
+                if self.module_sources.is_some() {
+                    self.charge_type_work(1)?;
+                    if linked_identity_class
+                        .replace(parameter_is_resolved)
+                        .is_some_and(|class| class != parameter_is_resolved)
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                } else if !parameter_is_resolved {
+                    self.charge_type_work(1)?;
+                }
                 match parameter {
                     crate::types::TypeVariableId::Resolved { .. } => {
                         let Some(canonical) = self.program.registry.type_variable(*parameter)
@@ -1728,7 +1839,6 @@ impl<'program, 'source> Validator<'program, 'source> {
                         }
                     }
                     crate::types::TypeVariableId::Generated(_) => {
-                        self.charge_type_work(1)?;
                         self.charge_kind(kind)?;
                     }
                 }
@@ -1750,6 +1860,55 @@ impl<'program, 'source> Validator<'program, 'source> {
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
                 definitions.insert(*parameter, (kind, id));
             }
+            let linked_row = if linked_identity_class == Some(true) {
+                let owner = abstraction_owners
+                    .get(&id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+                let row = self
+                    .program
+                    .registry
+                    .global_parameter_row(*owner)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+                if row.parameters().len() != abstraction.parameters().len() {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
+                Some((*owner, row))
+            } else {
+                None
+            };
+            if let Some((owner, row)) = linked_row {
+                let source = node
+                    .origin
+                    .as_ref()
+                    .expect("validated envelopes have origins")
+                    .primary_span()
+                    .source();
+                let relation = self
+                    .module_sources
+                    .as_ref()
+                    .expect("linked rows require a module relation");
+                for ((actual, _), expected) in abstraction.parameters().iter().zip(row.parameters())
+                {
+                    self.charge_type_work(1)?;
+                    if actual != expected
+                        || actual.module() != owner.module()
+                        || actual
+                            .module()
+                            .is_none_or(|module| relation.get(&module).copied() != Some(source))
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                }
+                self.charge_type_work(1)?;
+                consumed_rows = consumed_rows
+                    .checked_add(1)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            }
+        }
+        if self.module_sources.is_some()
+            && consumed_rows != self.program.registry.global_parameter_rows().len()
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
         }
         Ok(definitions)
     }
@@ -2937,9 +3096,1553 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
 mod tests {
     use super::*;
     use crate::{
-        core::{CoreBuilder, PureValue},
+        core::{CoreBuilder, PureValue, type_ops::TypeAbstractionNode},
+        elaborate::{Elaborator, check_module, link_modules},
+        module::{ModuleGraph, ModuleRoots, load_module_graph},
+        resolve::{DependencyExports, resolve_module},
+        resolved::{CheckedModule, CoreGlobalParameterRowMutationForTest},
         source::ByteRange,
+        validate_linked_facts_for_test,
     };
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static LINKED_VALIDATION_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+    struct LinkedValidationDirectory(PathBuf);
+
+    impl LinkedValidationDirectory {
+        fn create() -> Self {
+            loop {
+                let id = LINKED_VALIDATION_TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+                let directory = std::env::temp_dir().join(format!(
+                    "ash-linked-core-authority-{}-{id}",
+                    std::process::id(),
+                ));
+                match fs::create_dir(&directory) {
+                    Ok(()) => return Self(directory),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        panic!("linked Core authority fixture should be creatable: {error}")
+                    }
+                }
+            }
+        }
+
+        fn write(&self, name: &str, source: &str) -> PathBuf {
+            let path = self.0.join(name);
+            fs::write(&path, source).expect("linked Core authority fixture should be writable");
+            path
+        }
+    }
+
+    impl Drop for LinkedValidationDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct LinkedCoreValidationFixture {
+        directory: LinkedValidationDirectory,
+        graph: ModuleGraph,
+        program: UnvalidatedProgram,
+        module_sources: Vec<(ModuleId, SourceId)>,
+        globals: HashMap<String, (BinderId, Box<[crate::types::TypeVariableId]>)>,
+    }
+
+    impl LinkedCoreValidationFixture {
+        fn compile(dependency_source: &str, entry_source: &str, expected_globals: &[&str]) -> Self {
+            let directory = LinkedValidationDirectory::create();
+            directory.write("dependency.ash", dependency_source);
+            let entry = directory.write("entry.ash", entry_source);
+            let graph = load_module_graph(&entry, &ModuleRoots::empty())
+                .expect("the linked Core authority graph should load");
+            let checked = checked_linked_validation_graph(&graph);
+            let mut globals = HashMap::new();
+            for spelling in expected_globals {
+                let scheme = checked
+                    .iter()
+                    .flat_map(|module| module.schemes())
+                    .find(|scheme| scheme.spelling == *spelling)
+                    .unwrap_or_else(|| panic!("the checked {spelling} scheme should exist"));
+                let parameters = scheme
+                    .scheme
+                    .type_parameters
+                    .iter()
+                    .map(|(parameter, _)| *parameter)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                assert!(
+                    globals
+                        .insert((*spelling).to_owned(), (scheme.binder, parameters))
+                        .is_none(),
+                    "each requested linked global should have one checked scheme",
+                );
+            }
+            let linked = link_modules(checked, graph.entry())
+                .expect("the checked Core authority graph should link");
+            let linked = validate_linked_facts_for_test(linked)
+                .expect("the linked Core authority evidence should authenticate");
+            let mut elaborator = Elaborator::for_module_program(&linked)
+                .expect("the linked Core authority binder namespace should fit");
+            let typed = elaborator
+                .synthesize_module_program(&linked)
+                .expect("the authenticated linked program should lower to Core");
+            let program = elaborator
+                .finish(typed.node)
+                .expect("the linked Core authority root should finish");
+            let module_sources = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect();
+            Self {
+                directory,
+                graph,
+                program,
+                module_sources,
+                globals,
+            }
+        }
+
+        fn global(&self, spelling: &str) -> (BinderId, &[crate::types::TypeVariableId]) {
+            let (binder, parameters) = self
+                .globals
+                .get(spelling)
+                .unwrap_or_else(|| panic!("the linked {spelling} identity should be retained"));
+            (*binder, parameters)
+        }
+
+        fn validate(self) -> Result<ValidatedProgram, ValidationError> {
+            let Self {
+                directory,
+                graph,
+                program,
+                module_sources,
+                globals: _,
+            } = self;
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let result = validate_modules(program, &sources, &module_sources);
+            drop(directory);
+            result
+        }
+    }
+
+    fn checked_linked_validation_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
+        let mut checked = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let dependency = checked
+                        .iter()
+                        .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                        .expect("dependency order should check the target first");
+                    DependencyExports::new(edge, dependency.exports())
+                        .expect("checked dependency exports should authenticate their edge")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies)
+                .expect("the linked Core authority graph should resolve");
+            checked.push(
+                check_module(resolved).expect("the linked Core authority graph should check"),
+            );
+        }
+        checked
+    }
+
+    fn linked_global_abstraction(program: &UnvalidatedProgram, global: BinderId) -> NodeId {
+        let mut result = None;
+        for node in &program.nodes {
+            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+            else {
+                continue;
+            };
+            for member in group.members() {
+                if member.binder().id() == global {
+                    assert!(
+                        result.replace(member.initializer()).is_none(),
+                        "a linked global should have exactly one recursive member",
+                    );
+                }
+            }
+        }
+        let abstraction = result.expect("the linked global recursive member should exist");
+        let node = program
+            .nodes
+            .get(
+                abstraction
+                    .index()
+                    .expect("the abstraction index should fit"),
+            )
+            .expect("the linked global initializer should belong to its arena");
+        assert!(
+            matches!(
+                node.kind,
+                PureExprKind::Computation(PureComputation::TypeAbstraction(_))
+            ),
+            "a polymorphic linked global should own a type abstraction",
+        );
+        abstraction
+    }
+
+    fn swap_type_variable_identity(
+        identity: &mut crate::types::TypeVariableId,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        if *identity == left {
+            *identity = right;
+        } else if *identity == right {
+            *identity = left;
+        }
+    }
+
+    fn swap_type_variable_identities(
+        root: &mut Type,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        let mut work = vec![root];
+        while let Some(ty) = work.pop() {
+            match ty {
+                Type::Variable(identity) => swap_type_variable_identity(identity, left, right),
+                Type::Tuple(elements) => work.extend(elements.iter_mut()),
+                Type::Application(function, argument) | Type::Function(function, argument) => {
+                    work.push(argument);
+                    work.push(function);
+                }
+                Type::Forall(parameters, body) => {
+                    for (parameter, _) in parameters {
+                        swap_type_variable_identity(parameter, left, right);
+                    }
+                    work.push(body);
+                }
+                Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+            }
+        }
+    }
+
+    fn swap_binder_type_variables(
+        binder: &mut crate::core::TypedBinder,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        let mut ty = binder.ty().clone();
+        swap_type_variable_identities(&mut ty, left, right);
+        binder.replace_type(ty);
+    }
+
+    fn coherently_swap_core_type_variables(
+        program: &mut UnvalidatedProgram,
+        left: crate::types::TypeVariableId,
+        right: crate::types::TypeVariableId,
+    ) {
+        for node in &mut program.nodes {
+            swap_type_variable_identities(&mut node.ty, left, right);
+            match &mut node.kind {
+                PureExprKind::Value(PureValue::Function(function)) => {
+                    swap_binder_type_variables(function.parameter_mut(), left, right);
+                }
+                PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                    swap_binder_type_variables(binding.binder_mut(), left, right);
+                }
+                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                    for member in group.members_mut() {
+                        swap_binder_type_variables(member.binder_mut(), left, right);
+                    }
+                }
+                PureExprKind::Computation(PureComputation::Match(match_expression)) => {
+                    for arm in match_expression.arms_mut() {
+                        arm.pattern_mut()
+                            .rewrite_types(&mut |ty| {
+                                let mut rewritten = ty.clone();
+                                swap_type_variable_identities(&mut rewritten, left, right);
+                                Ok(rewritten)
+                            })
+                            .expect(
+                                "the admitted linked pattern types should remain representable",
+                            );
+                    }
+                }
+                PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) => {
+                    let parameters = abstraction
+                        .parameters()
+                        .iter()
+                        .map(|(parameter, kind)| {
+                            let mut parameter = *parameter;
+                            swap_type_variable_identity(&mut parameter, left, right);
+                            (parameter, kind.clone())
+                        })
+                        .collect();
+                    *abstraction = TypeAbstractionNode::new(parameters, abstraction.body());
+                }
+                PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+                    application
+                        .rewrite_types(&mut |ty| {
+                            let mut rewritten = ty.clone();
+                            swap_type_variable_identities(&mut rewritten, left, right);
+                            Ok(rewritten)
+                        })
+                        .expect("the admitted linked type arguments should remain representable");
+                }
+                PureExprKind::Value(
+                    PureValue::Integer(_)
+                    | PureValue::Boolean(_)
+                    | PureValue::Unit(_)
+                    | PureValue::Constructor(_),
+                )
+                | PureExprKind::Variable(_)
+                | PureExprKind::Computation(
+                    PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_),
+                ) => {}
+            }
+        }
+    }
+
+    #[test]
+    fn linked_core_rejects_coherent_resolved_binder_owner_swap() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub first<A : Type> : A -> A\n",
+                "first value = value\n\n",
+                "pub second<B : Type> : B -> B\n",
+                "second value = value\n",
+            ),
+            concat!(
+                "import dependency (first, second)\n",
+                "main : Unit -> Int\n",
+                "main () = first(second(1))\n",
+            ),
+            &["first", "second"],
+        );
+        let (first, first_parameters) = fixture.global("first");
+        let first_parameter = first_parameters[0];
+        let (second, second_parameters) = fixture.global("second");
+        let second_parameter = second_parameters[0];
+        assert_ne!(first_parameter, second_parameter);
+        let first_abstraction = linked_global_abstraction(&fixture.program, first);
+        let second_abstraction = linked_global_abstraction(&fixture.program, second);
+
+        coherently_swap_core_type_variables(
+            &mut fixture.program,
+            first_parameter,
+            second_parameter,
+        );
+        for (abstraction, expected) in [
+            (first_abstraction, second_parameter),
+            (second_abstraction, first_parameter),
+        ] {
+            let node = &fixture.program.nodes[abstraction
+                .index()
+                .expect("the linked abstraction index should fit")];
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                &node.kind
+            else {
+                panic!("the coherently mutated initializer should remain an abstraction");
+            };
+            assert_eq!(abstraction.parameters()[0].0, expected);
+            let Type::Forall(parameters, _) = &node.ty else {
+                panic!("the coherently mutated abstraction should retain its scheme");
+            };
+            assert_eq!(parameters[0].0, expected);
+        }
+
+        let error = fixture
+            .validate()
+            .expect_err("linked validation must reject resolved binders under the wrong owner");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(first_abstraction));
+    }
+
+    #[test]
+    fn linked_core_rejects_coherent_resolved_binder_reorder() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub choose<A : Type, B : Type> : A -> B -> A\n",
+                "choose left right = left\n",
+            ),
+            concat!(
+                "import dependency (choose)\n",
+                "main : Unit -> Int\n",
+                "main () = choose(1)(true)\n",
+            ),
+            &["choose"],
+        );
+        let (choose, parameters) = fixture.global("choose");
+        let [first_parameter, second_parameter] = parameters else {
+            panic!("choose should retain two checked type parameters");
+        };
+        let first_parameter = *first_parameter;
+        let second_parameter = *second_parameter;
+        assert_ne!(first_parameter, second_parameter);
+        let choose_abstraction = linked_global_abstraction(&fixture.program, choose);
+
+        coherently_swap_core_type_variables(
+            &mut fixture.program,
+            first_parameter,
+            second_parameter,
+        );
+        let node = &fixture.program.nodes[choose_abstraction
+            .index()
+            .expect("the linked abstraction index should fit")];
+        let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) = &node.kind
+        else {
+            panic!("the coherently reordered initializer should remain an abstraction");
+        };
+        let reordered = [second_parameter, first_parameter];
+        assert!(
+            abstraction
+                .parameters()
+                .iter()
+                .map(|(parameter, _)| *parameter)
+                .eq(reordered),
+        );
+        let Type::Forall(scheme_parameters, _) = &node.ty else {
+            panic!("the coherently reordered abstraction should retain its scheme");
+        };
+        assert!(
+            scheme_parameters
+                .iter()
+                .map(|(parameter, _)| *parameter)
+                .eq(reordered),
+        );
+
+        let error = fixture
+            .validate()
+            .expect_err("linked validation must reject reordered resolved global binders");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(choose_abstraction));
+    }
+
+    #[test]
+    fn linked_core_rejects_row_position_cardinality_before_later_node_type() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub identity<A : Type> : A -> A\n",
+                "identity value = value\n",
+            ),
+            concat!(
+                "import dependency (identity)\n",
+                "main : Unit -> Int\n",
+                "main () = identity(1)\n",
+            ),
+            &["identity"],
+        );
+        Arc::get_mut(&mut fixture.program.registry)
+            .expect("the unchecked fixture owns the linked registry")
+            .clear_global_parameter_positions_for_core_test();
+        fixture
+            .program
+            .nodes
+            .last_mut()
+            .expect("the linked fixture has a root")
+            .ty = Type::Bool;
+
+        let error = fixture
+            .validate()
+            .expect_err("row/index cardinality must be authenticated before node types");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), None);
+    }
+
+    #[test]
+    fn linked_core_sequential_bind_cannot_claim_a_resolved_global_row() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub identity<A : Type> : A -> A\n",
+                "identity value = value\n",
+            ),
+            concat!(
+                "import dependency (identity)\n",
+                "main : Unit -> Int\n",
+                "main () = identity(1)\n",
+            ),
+            &["identity"],
+        );
+        let (identity, _) = fixture.global("identity");
+        let abstraction = linked_global_abstraction(&fixture.program, identity);
+        let group_index = fixture
+            .program
+            .nodes
+            .iter()
+            .position(|node| {
+                let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+                else {
+                    return false;
+                };
+                group.members().len() == 1 && group.members()[0].binder().id() == identity
+            })
+            .expect("the dependency global owns a singleton recursive group");
+        let PureExprKind::Computation(PureComputation::RecursiveBind(group)) =
+            fixture.program.nodes[group_index].kind.clone()
+        else {
+            unreachable!("the selected node is a recursive group")
+        };
+        let member = &group.members()[0];
+        fixture.program.nodes[group_index].kind = PureExprKind::Computation(PureComputation::Bind(
+            super::super::binding::BindingNode::new(
+                member.binder().clone(),
+                member.initializer(),
+                group.body(),
+            ),
+        ));
+
+        let error = fixture
+            .validate()
+            .expect_err("a sequential bind must not authenticate a linked global row");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(abstraction));
+    }
+
+    fn linked_row_structure_fixture() -> LinkedCoreValidationFixture {
+        LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub type Holder<N : Type> = Holder(N)\n\n",
+                "pub interface Witness<I : Type> {\n",
+                "witness : I -> Bool\n",
+                "}\n\n",
+                "pub first<A : Type, B : Type> : A -> B -> A\n",
+                "first left right = left\n\n",
+                "pub second<C : Type> : C -> C\n",
+                "second value = value\n\n",
+                "pub plain : Unit -> Int\n",
+                "plain () = 1\n",
+            ),
+            concat!(
+                "import dependency (first, second, plain)\n",
+                "main : Unit -> Int\n",
+                "main () = first(second(1))(plain())\n",
+            ),
+            &["first", "second", "plain"],
+        )
+    }
+
+    type GlobalRowShape = (BinderId, Vec<crate::types::TypeVariableId>);
+
+    fn global_row_shape(registry: &crate::resolved::ResolvedRegistry) -> Vec<GlobalRowShape> {
+        registry
+            .global_parameter_rows()
+            .iter()
+            .map(|row| (row.owner(), row.parameters().to_vec()))
+            .collect()
+    }
+
+    fn canonical_type_variable_shape(
+        registry: &crate::resolved::ResolvedRegistry,
+    ) -> HashMap<crate::types::TypeVariableId, crate::resolved::ResolvedTypeVariable> {
+        registry
+            .type_variables()
+            .map(|parameter| (parameter.id, parameter.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn linked_core_rejects_each_independent_registry_row_structure_mutation() {
+        #[derive(Clone, Copy, Debug)]
+        enum Case {
+            Empty,
+            GeneratedOwner,
+            ForeignOwner,
+            GeneratedParameter,
+            ForeignParameter,
+            MissingCanonical,
+            NominalParameter,
+            DuplicateWithinRow,
+            DuplicateAcrossRows,
+            WrongPosition,
+            DuplicateOwner,
+            MissingRow,
+            ExtraUnconsumedRow,
+            SurplusPosition,
+        }
+
+        for case in [
+            Case::Empty,
+            Case::GeneratedOwner,
+            Case::ForeignOwner,
+            Case::GeneratedParameter,
+            Case::ForeignParameter,
+            Case::MissingCanonical,
+            Case::NominalParameter,
+            Case::DuplicateWithinRow,
+            Case::DuplicateAcrossRows,
+            Case::WrongPosition,
+            Case::DuplicateOwner,
+            Case::MissingRow,
+            Case::ExtraUnconsumedRow,
+            Case::SurplusPosition,
+        ] {
+            let mut fixture = linked_row_structure_fixture();
+            let (first_owner, first_parameters) = fixture.global("first");
+            let (second_owner, second_parameters) = fixture.global("second");
+            let (plain_owner, plain_parameters) = fixture.global("plain");
+            assert!(plain_parameters.is_empty());
+            let second_abstraction = linked_global_abstraction(&fixture.program, second_owner);
+            let registry = fixture.program.registry.as_ref();
+            let nominal_parameter = registry
+                .nominal_parameter_entries()
+                .flat_map(|(_, parameters)| parameters)
+                .next()
+                .expect("the structure fixture retains one nominal parameter")
+                .id;
+            let row_parameters = registry
+                .global_parameter_rows()
+                .iter()
+                .flat_map(|row| row.parameters().iter().copied())
+                .collect::<HashSet<_>>();
+            let unowned_parameter = registry
+                .type_variables()
+                .map(|parameter| parameter.id)
+                .find(|parameter| {
+                    !row_parameters.contains(parameter) && *parameter != nominal_parameter
+                })
+                .expect("the structure fixture retains one interface-only parameter");
+            let owner_module = first_owner
+                .module()
+                .expect("linked global owners are resolved");
+            let foreign_module = ModuleId::new(owner_module.value().saturating_add(10_000));
+            let generated_owner = BinderId::generated(u32::MAX);
+            let foreign_owner = BinderId::resolved(foreign_module, 0);
+            let generated_parameter = crate::types::TypeVariableId::generated(u32::MAX);
+            let foreign_parameter = crate::types::TypeVariableId::resolved(foreign_module, 0);
+            let registry = fixture.program.registry.as_ref();
+            let original_rows = global_row_shape(registry);
+            let original_positions = original_rows
+                .iter()
+                .enumerate()
+                .map(|(position, (owner, _))| (*owner, position))
+                .collect::<HashMap<_, _>>();
+            let original_canonical = canonical_type_variable_shape(registry);
+            assert_eq!(original_rows.len(), 2);
+            assert_eq!(original_rows[0].0, first_owner);
+            assert_eq!(original_rows[0].1, first_parameters);
+            assert_eq!(original_rows[1].0, second_owner);
+            assert_eq!(original_rows[1].1, second_parameters);
+
+            let mut expected_rows = original_rows.clone();
+            let mut expected_positions = original_positions.clone();
+            let mut expected_canonical = original_canonical.clone();
+            let mutation = match case {
+                Case::Empty => {
+                    expected_rows[0].1.clear();
+                    CoreGlobalParameterRowMutationForTest::EmptyFirstRow
+                }
+                Case::GeneratedOwner => {
+                    expected_rows[0].0 = generated_owner;
+                    expected_positions.remove(&first_owner);
+                    expected_positions.insert(generated_owner, 0);
+                    CoreGlobalParameterRowMutationForTest::ReplaceFirstOwner(generated_owner)
+                }
+                Case::ForeignOwner => {
+                    expected_rows[0].0 = foreign_owner;
+                    expected_positions.remove(&first_owner);
+                    expected_positions.insert(foreign_owner, 0);
+                    CoreGlobalParameterRowMutationForTest::ReplaceFirstOwner(foreign_owner)
+                }
+                Case::GeneratedParameter => {
+                    expected_rows[0].1[0] = generated_parameter;
+                    CoreGlobalParameterRowMutationForTest::ReplaceFirstParameter(
+                        generated_parameter,
+                    )
+                }
+                Case::ForeignParameter => {
+                    expected_rows[0].1[0] = foreign_parameter;
+                    CoreGlobalParameterRowMutationForTest::ReplaceFirstParameter(foreign_parameter)
+                }
+                Case::MissingCanonical => {
+                    assert!(expected_canonical.remove(&second_parameters[0]).is_some());
+                    CoreGlobalParameterRowMutationForTest::RemoveCanonicalParameter(
+                        second_parameters[0],
+                    )
+                }
+                Case::NominalParameter => {
+                    expected_rows[0].1[0] = nominal_parameter;
+                    CoreGlobalParameterRowMutationForTest::ReplaceFirstParameter(nominal_parameter)
+                }
+                Case::DuplicateWithinRow => {
+                    expected_rows[0].1[1] = expected_rows[0].1[0];
+                    CoreGlobalParameterRowMutationForTest::DuplicateFirstParameter
+                }
+                Case::DuplicateAcrossRows => {
+                    expected_rows[1].1[0] = expected_rows[0].1[0];
+                    CoreGlobalParameterRowMutationForTest::DuplicateAcrossRows
+                }
+                Case::WrongPosition => {
+                    expected_positions.insert(first_owner, 1);
+                    expected_positions.insert(second_owner, 0);
+                    CoreGlobalParameterRowMutationForTest::SwapFirstOwnerPositions
+                }
+                Case::DuplicateOwner => {
+                    expected_rows[1].0 = first_owner;
+                    expected_positions.remove(&second_owner);
+                    expected_positions.insert(generated_owner, usize::MAX);
+                    CoreGlobalParameterRowMutationForTest::DuplicateFirstOwner {
+                        filler: generated_owner,
+                    }
+                }
+                Case::MissingRow => {
+                    let (removed_owner, _) = expected_rows
+                        .pop()
+                        .expect("the structure fixture has a last row");
+                    expected_positions.remove(&removed_owner);
+                    CoreGlobalParameterRowMutationForTest::RemoveLastRow
+                }
+                Case::ExtraUnconsumedRow => {
+                    let position = expected_rows.len();
+                    expected_rows.push((plain_owner, vec![unowned_parameter]));
+                    expected_positions.insert(plain_owner, position);
+                    CoreGlobalParameterRowMutationForTest::AppendRow {
+                        owner: plain_owner,
+                        parameter: unowned_parameter,
+                    }
+                }
+                Case::SurplusPosition => {
+                    expected_positions.insert(generated_owner, usize::MAX);
+                    CoreGlobalParameterRowMutationForTest::AddSurplusPosition(generated_owner)
+                }
+            };
+            assert_eq!(first_parameters.len(), 2);
+            assert!(
+                Arc::get_mut(&mut fixture.program.registry)
+                    .expect("each unchecked fixture uniquely owns its registry")
+                    .corrupt_global_parameter_rows_for_core_test(mutation)
+            );
+
+            let registry = fixture.program.registry.as_ref();
+            assert_eq!(
+                global_row_shape(registry),
+                expected_rows,
+                "the mutation must change exactly its intended ordered row cells: {case:?}",
+            );
+            assert_eq!(
+                registry.global_parameter_position_count(),
+                expected_positions.len(),
+                "the mutation must retain the exact intended index cardinality: {case:?}",
+            );
+            let position_probes = original_positions
+                .keys()
+                .chain(expected_positions.keys())
+                .copied()
+                .chain([plain_owner, generated_owner, foreign_owner])
+                .collect::<HashSet<_>>();
+            for owner in position_probes {
+                assert_eq!(
+                    registry.global_parameter_position_for_core_test(owner),
+                    expected_positions.get(&owner).copied(),
+                    "the mutation must preserve every unrelated raw owner position: {case:?}",
+                );
+                let expected_row = expected_positions
+                    .get(&owner)
+                    .and_then(|position| expected_rows.get(*position))
+                    .filter(|(row_owner, _)| *row_owner == owner);
+                assert_eq!(
+                    registry
+                        .global_parameter_row(owner)
+                        .map(|row| { (row.owner(), row.parameters().to_vec()) }),
+                    expected_row.cloned(),
+                    "the mutation must preserve every unrelated exact owner lookup: {case:?}",
+                );
+            }
+            assert_eq!(
+                canonical_type_variable_shape(registry),
+                expected_canonical,
+                "the mutation must preserve every unrelated canonical record: {case:?}",
+            );
+
+            let error = fixture
+                .validate()
+                .expect_err("every structural mutation must reject linked Core");
+            assert_eq!(error.reason(), ValidationReason::Registry, "{case:?}");
+            assert_eq!(
+                error.node(),
+                matches!(case, Case::MissingRow).then_some(second_abstraction),
+                "{case:?}",
+            );
+        }
+    }
+
+    fn linked_fixture_sources(fixture: &LinkedCoreValidationFixture) -> Vec<&SourceFile> {
+        fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect()
+    }
+
+    fn nominal_parameter_owner_fixture(
+        fixture: &LinkedCoreValidationFixture,
+    ) -> HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId> {
+        fixture
+            .program
+            .registry
+            .nominal_parameter_entries()
+            .flat_map(|(owner, parameters)| {
+                parameters
+                    .iter()
+                    .map(move |parameter| (parameter.id, owner))
+            })
+            .collect()
+    }
+
+    fn kind_node_count(root: &Kind) -> usize {
+        let mut count = 0_usize;
+        let mut pending = vec![root];
+        while let Some(kind) = pending.pop() {
+            count += 1;
+            if let Kind::Arrow(domain, codomain) = kind {
+                pending.push(codomain);
+                pending.push(domain);
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn linked_core_row_structure_work_is_exact_atomic_and_retryable() {
+        let fixture = linked_row_structure_fixture();
+        let sources = linked_fixture_sources(&fixture);
+        let nominal_owners = nominal_parameter_owner_fixture(&fixture);
+        let rows = fixture.program.registry.global_parameter_rows();
+        let row_count = rows.len();
+        let parameter_count = rows.iter().map(|row| row.parameters().len()).sum::<usize>();
+        // Each row and parameter has one visit and one uniqueness cell.
+        let expected_work = 2 * row_count + 2 * parameter_count;
+
+        let exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the fixture module/source relation is canonical");
+        exact
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - expected_work)
+            .expect("the exact row-structure allowance fits");
+        exact
+            .validate_global_parameter_rows(&nominal_owners)
+            .expect("row visits and uniqueness storage fit exactly");
+        assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the one-short relation is canonical");
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (expected_work - 1))
+            .expect("the one-short row allowance fits");
+        let error = short
+            .validate_global_parameter_rows(&nominal_owners)
+            .expect_err("row storage and visits must precharge atomically");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(
+            short.type_work.get(),
+            CORE_VALIDATION_TYPE_WORK_LIMIT - (expected_work - 1),
+            "the aggregate row precharge publishes no partial ledger work",
+        );
+
+        let retry = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the retry relation is canonical");
+        retry
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - expected_work)
+            .expect("the retry exact allowance fits");
+        retry
+            .validate_global_parameter_rows(&nominal_owners)
+            .expect("a failed attempt publishes no row-validation state");
+    }
+
+    #[test]
+    fn linked_core_owner_map_and_scalar_row_consumption_are_exact_and_retryable() {
+        let fixture = linked_row_structure_fixture();
+        let sources = linked_fixture_sources(&fixture);
+        let nominal_owners = nominal_parameter_owner_fixture(&fixture);
+        let row_count = fixture.program.registry.global_parameter_rows().len();
+        let parameter_count = fixture
+            .program
+            .registry
+            .global_parameter_rows()
+            .iter()
+            .map(|row| row.parameters().len())
+            .sum::<usize>();
+
+        let mut direct = Validator::new(&fixture.program, &sources);
+        let direct_owners = direct
+            .collect_binders()
+            .expect("the direct scan validates the same binder metadata");
+        assert!(direct_owners.is_empty());
+        let direct_work = direct.type_work.get();
+
+        let mut measured =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the measured relation is canonical");
+        let measured_owners = measured
+            .collect_binders()
+            .expect("the linked scan retains immediate recursive owners");
+        let owner_count = measured_owners.len();
+        assert_eq!(measured.type_work.get() - direct_work, owner_count);
+
+        let exact_owner_work = direct_work + owner_count;
+        let mut exact_owner =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the exact owner relation is canonical");
+        exact_owner
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_owner_work)
+            .expect("the exact owner-map allowance fits");
+        assert_eq!(
+            exact_owner
+                .collect_binders()
+                .expect("each owner entry is charged before retention")
+                .len(),
+            owner_count,
+        );
+        assert_eq!(exact_owner.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let mut short_owner =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the one-short owner relation is canonical");
+        short_owner
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_owner_work - 1))
+            .expect("the one-short owner-map allowance fits");
+        let error = short_owner
+            .collect_binders()
+            .expect_err("one missing owner-entry unit must reject before publication");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(short_owner.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        // Linked resolved matching charges one class visit, canonical Kind
+        // comparison, and row-identity comparison per parameter, then one
+        // scalar consumption unit per row. It retains no S-cell bitmap/set.
+        let matching_work = 3 * parameter_count + row_count;
+        let mut exact_match =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the exact matching relation is canonical");
+        let exact_match_owners = exact_match
+            .collect_binders()
+            .expect("the exact matching fixture retains owners");
+        exact_match
+            .charge_type_work(
+                CORE_VALIDATION_TYPE_WORK_LIMIT - exact_match.type_work.get() - matching_work,
+            )
+            .expect("the exact row-matching allowance fits");
+        exact_match
+            .collect_type_binders(&nominal_owners, &exact_match_owners)
+            .expect("identity, Kind, and scalar consumption work fits exactly");
+        assert_eq!(exact_match.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let mut short_match =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the one-short matching relation is canonical");
+        let short_match_owners = short_match
+            .collect_binders()
+            .expect("the one-short matching fixture retains owners");
+        short_match
+            .charge_type_work(
+                CORE_VALIDATION_TYPE_WORK_LIMIT - short_match.type_work.get() - (matching_work - 1),
+            )
+            .expect("the one-short matching allowance fits");
+        let error = short_match
+            .collect_type_binders(&nominal_owners, &short_match_owners)
+            .expect_err("the final scalar consumption unit is required");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(short_match.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let mut retry = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the retry relation is canonical");
+        let retry_owners = retry
+            .collect_binders()
+            .expect("the retry fixture retains owners");
+        retry
+            .collect_type_binders(&nominal_owners, &retry_owners)
+            .expect("failed owner and consumption attempts publish no retained state");
+    }
+
+    #[test]
+    fn linked_arrow_kind_row_matching_work_is_exact_atomic_and_retryable() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub relay<F : Type -> Type, A : Type> : F<A> -> F<A>\n",
+                "relay value = value\n",
+            ),
+            concat!(
+                "import dependency (relay)\n",
+                "main : Unit -> Unit\n",
+                "main () = ()\n",
+            ),
+            &["relay"],
+        );
+        let sources = linked_fixture_sources(&fixture);
+        let nominal_owners = nominal_parameter_owner_fixture(&fixture);
+        let rows = fixture.program.registry.global_parameter_rows();
+        let row_count = rows.len();
+        let parameter_count = rows.iter().map(|row| row.parameters().len()).sum::<usize>();
+        let canonical_kind_work = rows
+            .iter()
+            .flat_map(|row| row.parameters())
+            .map(|parameter| {
+                let canonical = fixture
+                    .program
+                    .registry
+                    .type_variable(*parameter)
+                    .expect("each retained row parameter has a canonical record");
+                kind_node_count(&canonical.kind)
+            })
+            .sum::<usize>();
+        assert_eq!(parameter_count, 2);
+        assert_eq!(
+            canonical_kind_work, 4,
+            "the fixture includes one Arrow Kind"
+        );
+
+        // R class visits, K_R canonical Kind nodes, R row-identity visits,
+        // and S scalar row consumptions: 2R + K_R + S.
+        let matching_work = 2 * parameter_count + canonical_kind_work + row_count;
+        let mut exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the exact Arrow-Kind relation is canonical");
+        let exact_owners = exact
+            .collect_binders()
+            .expect("the exact Arrow-Kind fixture retains its owner");
+        exact
+            .charge_type_work(
+                CORE_VALIDATION_TYPE_WORK_LIMIT - exact.type_work.get() - matching_work,
+            )
+            .expect("the exact Arrow-Kind matching allowance fits");
+        exact
+            .collect_type_binders(&nominal_owners, &exact_owners)
+            .expect("the exact Arrow-Kind matching work fits");
+        assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let mut short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the one-short Arrow-Kind relation is canonical");
+        let short_owners = short
+            .collect_binders()
+            .expect("the one-short Arrow-Kind fixture retains its owner");
+        short
+            .charge_type_work(
+                CORE_VALIDATION_TYPE_WORK_LIMIT - short.type_work.get() - (matching_work - 1),
+            )
+            .expect("the one-short Arrow-Kind matching allowance fits");
+        let error = short
+            .collect_type_binders(&nominal_owners, &short_owners)
+            .expect_err("one missing scalar consumption unit must reject");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let mut retry = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the Arrow-Kind retry relation is canonical");
+        let retry_owners = retry
+            .collect_binders()
+            .expect("the Arrow-Kind retry retains its owner");
+        retry
+            .collect_type_binders(&nominal_owners, &retry_owners)
+            .expect("a failed Arrow-Kind attempt publishes no retained state");
+    }
+
+    #[test]
+    fn linked_generated_only_matching_has_no_identity_class_delta() {
+        let file = SourceFile::new("generated-work.ash", "Generated")
+            .expect("the generated-work source fits");
+        let origin = Origin::Source(
+            file.span(ByteRange::new(0, 9).expect("the generated-work range is ordered"))
+                .expect("the generated-work span fits"),
+        );
+        let first = crate::types::TypeVariableId::generated(73);
+        let second = crate::types::TypeVariableId::generated(74);
+        let parameters = vec![
+            (first, Kind::Type),
+            (
+                second,
+                Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+            ),
+        ];
+        let scheme_parameters = parameters.clone().into_boxed_slice();
+        let mut builder = CoreBuilder::new();
+        let body = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("the generated-work body fits");
+        let root = builder
+            .type_abstraction(
+                parameters,
+                body,
+                Type::Forall(scheme_parameters, Box::new(Type::Unit)),
+                origin,
+            )
+            .expect("the generated-work abstraction fits");
+        let program = builder
+            .finish(root)
+            .expect("the generated-work program finishes");
+        let root_node = &program.nodes[root.index().expect("the generated-work root index fits")];
+        let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+            &root_node.kind
+        else {
+            panic!("the generated-work root remains a type abstraction");
+        };
+        let parameter_count = abstraction.parameters().len();
+        let kind_work = abstraction
+            .parameters()
+            .iter()
+            .map(|(_, kind)| kind_node_count(kind))
+            .sum::<usize>();
+        let expected_work = parameter_count + kind_work;
+        let sources = [&file];
+        let module_sources = [(ModuleId::new(7_732), file.id())];
+        let nominal_owners = HashMap::new();
+        let abstraction_owners = CoreAbstractionOwners::new();
+
+        let direct = Validator::new(&program, &sources);
+        direct
+            .collect_type_binders(&nominal_owners, &abstraction_owners)
+            .expect("direct generated-only binders are structurally valid");
+        assert_eq!(direct.type_work.get(), expected_work);
+
+        let measured = Validator::new_modules(&program, &sources, &module_sources)
+            .expect("the measured generated-only relation is canonical");
+        measured
+            .collect_type_binders(&nominal_owners, &abstraction_owners)
+            .expect("linked generated-only binders are structurally valid");
+        assert_eq!(
+            measured.type_work.get(),
+            expected_work,
+            "module awareness must not add a second generated-parameter visit",
+        );
+
+        let exact = Validator::new_modules(&program, &sources, &module_sources)
+            .expect("the exact generated-only relation is canonical");
+        exact
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - expected_work)
+            .expect("the exact generated-only allowance fits");
+        exact
+            .collect_type_binders(&nominal_owners, &abstraction_owners)
+            .expect("G + K_G work fits exactly");
+        assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let short = Validator::new_modules(&program, &sources, &module_sources)
+            .expect("the one-short generated-only relation is canonical");
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (expected_work - 1))
+            .expect("the one-short generated-only allowance fits");
+        let error = short
+            .collect_type_binders(&nominal_owners, &abstraction_owners)
+            .expect_err("one missing generated Kind unit must reject");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let retry = Validator::new_modules(&program, &sources, &module_sources)
+            .expect("the generated-only retry relation is canonical");
+        retry
+            .collect_type_binders(&nominal_owners, &abstraction_owners)
+            .expect("a failed generated-only attempt publishes no retained state");
+    }
+
+    #[test]
+    fn linked_core_rejects_a_shared_recursive_abstraction_initializer() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub first<A : Type> : A -> A\n",
+                "first value = value\n\n",
+                "pub second<B : Type> : B -> B\n",
+                "second value = value\n",
+            ),
+            concat!(
+                "import dependency (first, second)\n",
+                "main : Unit -> Int\n",
+                "main () = first(second(1))\n",
+            ),
+            &["first", "second"],
+        );
+        let (first, _) = fixture.global("first");
+        let (second, _) = fixture.global("second");
+        let first_abstraction = linked_global_abstraction(&fixture.program, first);
+        let second_abstraction = linked_global_abstraction(&fixture.program, second);
+        let group_index = fixture
+            .program
+            .nodes
+            .iter()
+            .position(|node| {
+                let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+                else {
+                    return false;
+                };
+                group
+                    .members()
+                    .iter()
+                    .any(|member| member.binder().id() == first)
+                    && group
+                        .members()
+                        .iter()
+                        .any(|member| member.binder().id() == second)
+            })
+            .expect("the linked globals share one recursive module group");
+        let PureExprKind::Computation(PureComputation::RecursiveBind(group)) =
+            fixture.program.nodes[group_index].kind.clone()
+        else {
+            unreachable!("the selected node is a recursive group")
+        };
+        let connector = NodeId::new(
+            fixture.program.arena,
+            u32::try_from(fixture.program.nodes.len()).expect("the connector index fits"),
+        );
+        let old_body = group.body();
+        let connector_origin = fixture.program.nodes[group_index]
+            .origin
+            .clone()
+            .expect("the linked group has provenance");
+        fixture.program.nodes.push(StoredNode {
+            dialect: DialectId::PURE,
+            ty: Type::Tuple(Box::new([Type::Unit, Type::Unit])),
+            origin: Some(connector_origin),
+            kind: PureExprKind::Computation(PureComputation::Tuple(
+                super::super::data::TupleNode::new(vec![second_abstraction, old_body]),
+            )),
+        });
+        let members = group
+            .members()
+            .iter()
+            .map(|member| {
+                super::super::recursion::RecursiveBindingMember::new(
+                    member.binder().clone(),
+                    first_abstraction,
+                )
+            })
+            .collect();
+        fixture.program.nodes[group_index].kind =
+            PureExprKind::Computation(PureComputation::RecursiveBind(
+                super::super::recursion::RecursiveBindingNode::new(members, connector),
+            ));
+
+        let error = fixture
+            .validate()
+            .expect_err("two recursive owners cannot share one abstraction initializer");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(first_abstraction));
+    }
+
+    #[test]
+    fn linked_resolved_abstractions_reject_mixed_identity_classes_and_kind_mismatch() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            MixedIdentity,
+            CanonicalKind,
+        }
+
+        for mutation in [Mutation::MixedIdentity, Mutation::CanonicalKind] {
+            let mut fixture = LinkedCoreValidationFixture::compile(
+                concat!(
+                    "pub choose<A : Type, B : Type> : A -> B -> A\n",
+                    "choose left right = left\n",
+                ),
+                concat!(
+                    "import dependency (choose)\n",
+                    "main : Unit -> Int\n",
+                    "main () = choose(1)(true)\n",
+                ),
+                &["choose"],
+            );
+            let (choose, _) = fixture.global("choose");
+            let abstraction_id = linked_global_abstraction(&fixture.program, choose);
+            let node = &mut fixture.program.nodes
+                [abstraction_id.index().expect("the abstraction index fits")];
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                &mut node.kind
+            else {
+                unreachable!("the linked initializer is a type abstraction")
+            };
+            let mut abstraction_parameters = abstraction.parameters().to_vec();
+            let abstraction_body = abstraction.body();
+            let Type::Forall(scheme_parameters, body) = &node.ty else {
+                unreachable!("the linked abstraction has an outer scheme")
+            };
+            let mut scheme_parameters = scheme_parameters.to_vec();
+            let body = body.clone();
+            match mutation {
+                Mutation::MixedIdentity => {
+                    let generated = crate::types::TypeVariableId::generated(u32::MAX);
+                    abstraction_parameters[1].0 = generated;
+                    scheme_parameters[1].0 = generated;
+                }
+                Mutation::CanonicalKind => {
+                    let mismatched = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+                    abstraction_parameters[0].1 = mismatched.clone();
+                    scheme_parameters[0].1 = mismatched;
+                }
+            }
+            *abstraction = TypeAbstractionNode::new(abstraction_parameters, abstraction_body);
+            node.ty = Type::Forall(scheme_parameters.into_boxed_slice(), body);
+
+            let error = fixture
+                .validate()
+                .expect_err("linked resolved abstractions require one canonical row class");
+            assert_eq!(error.reason(), ValidationReason::Registry, "{mutation:?}");
+            assert_eq!(error.node(), Some(abstraction_id), "{mutation:?}");
+        }
+    }
+
+    #[test]
+    fn linked_resolved_abstraction_source_must_match_its_parameter_module() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub identity<A : Type> : A -> A\n",
+                "identity value = value\n",
+            ),
+            concat!(
+                "import dependency (identity)\n",
+                "main : Unit -> Int\n",
+                "main () = identity(1)\n",
+            ),
+            &["identity"],
+        );
+        let (identity, parameters) = fixture.global("identity");
+        let abstraction = linked_global_abstraction(&fixture.program, identity);
+        let parameter_source = fixture
+            .module_sources
+            .iter()
+            .find(|(module, _)| Some(*module) == parameters[0].module())
+            .map(|(_, source)| *source)
+            .expect("the parameter module has a canonical source");
+        let foreign_origin = fixture
+            .program
+            .nodes
+            .iter()
+            .filter_map(|node| node.origin.as_ref())
+            .find(|origin| origin.primary_span().source() != parameter_source)
+            .expect("the entry module supplies a distinct valid origin")
+            .clone();
+        fixture.program.nodes[abstraction.index().expect("the abstraction index fits")].origin =
+            Some(foreign_origin);
+
+        let error = fixture
+            .validate()
+            .expect_err("a resolved abstraction cannot claim another module's source");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(abstraction));
+    }
+
+    #[test]
+    fn module_validation_accepts_generated_only_abstractions_without_rows() {
+        let file = SourceFile::new("generated-only.ash", "Generated")
+            .expect("the generated-only source fits");
+        let node_origin = Origin::Source(
+            file.span(ByteRange::new(0, 9).expect("the generated-only range is ordered"))
+                .expect("the generated-only span fits"),
+        );
+        let parameter = crate::types::TypeVariableId::generated(73);
+        let mut builder = CoreBuilder::new();
+        let body = builder
+            .unit(Type::Unit, node_origin.clone())
+            .expect("the generated abstraction body fits");
+        let root = builder
+            .type_abstraction(
+                vec![(parameter, Kind::Type)],
+                body,
+                Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(Type::Unit)),
+                node_origin,
+            )
+            .expect("the generated abstraction fits");
+        let module = ModuleId::new(7_731);
+
+        validate_modules(
+            builder
+                .finish(root)
+                .expect("the generated program finishes"),
+            &[&file],
+            &[(module, file.id())],
+        )
+        .expect("generated-only abstractions never consult resolved owner rows");
+    }
+
+    #[test]
+    fn single_source_validation_accepts_direct_resolved_abstractions_without_rows() {
+        let file = SourceFile::new("direct-resolved.ash", "A direct")
+            .expect("the direct resolved source fits");
+        let parameter_origin = Origin::Source(
+            file.span(ByteRange::new(0, 1).expect("the parameter range is ordered"))
+                .expect("the parameter span fits"),
+        );
+        let body_origin = Origin::Source(
+            file.span(ByteRange::new(2, 8).expect("the body range is ordered"))
+                .expect("the body span fits"),
+        );
+        let parameter = crate::types::TypeVariableId::resolved(file.id().into(), 0);
+        let registry =
+            crate::resolved::ResolvedRegistry::default().with_additional_type_variables([
+                crate::resolved::ResolvedTypeVariable {
+                    id: parameter,
+                    spelling: "A".to_owned(),
+                    kind: Kind::Type,
+                    origin: parameter_origin,
+                },
+            ]);
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let body = builder
+            .unit(Type::Unit, body_origin.clone())
+            .expect("the direct abstraction body fits");
+        let root = builder
+            .type_abstraction(
+                vec![(parameter, Kind::Type)],
+                body,
+                Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(Type::Unit)),
+                body_origin,
+            )
+            .expect("the direct resolved abstraction fits");
+
+        validate(
+            builder.finish(root).expect("the direct program finishes"),
+            &[&file],
+        )
+        .expect("single-source resolved abstractions retain canonical-map compatibility");
+    }
+
+    fn coherently_swapped_linked_owner_fixture()
+    -> (LinkedCoreValidationFixture, NodeId, NodeId, BinderId) {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub first<A : Type> : A -> A\n",
+                "first value = value\n\n",
+                "pub second<B : Type> : B -> B\n",
+                "second value = value\n",
+            ),
+            concat!(
+                "import dependency (first, second)\n",
+                "main : Unit -> Int\n",
+                "main () = first(second(1))\n",
+            ),
+            &["first", "second"],
+        );
+        let (first, first_parameters) = fixture.global("first");
+        let first_parameter = first_parameters[0];
+        let (second, second_parameters) = fixture.global("second");
+        let second_parameter = second_parameters[0];
+        let first_abstraction = linked_global_abstraction(&fixture.program, first);
+        let second_abstraction = linked_global_abstraction(&fixture.program, second);
+        coherently_swap_core_type_variables(
+            &mut fixture.program,
+            first_parameter,
+            second_parameter,
+        );
+        (fixture, first_abstraction, second_abstraction, first)
+    }
+
+    #[test]
+    fn linked_core_preserves_registry_graph_binder_and_abstraction_precedence() {
+        let (mut row_first, _, _, _) = coherently_swapped_linked_owner_fixture();
+        Arc::get_mut(&mut row_first.program.registry)
+            .expect("the row-precedence fixture owns its registry")
+            .clear_global_parameter_positions_for_core_test();
+        row_first.program.root = NodeId::new(row_first.program.arena, u32::MAX);
+        let error = row_first
+            .validate()
+            .expect_err("registry row structure precedes a malformed graph root");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), None);
+
+        let (mut graph_first, _, _, _) = coherently_swapped_linked_owner_fixture();
+        graph_first.program.root = NodeId::new(graph_first.program.arena, u32::MAX);
+        let error = graph_first
+            .validate()
+            .expect_err("graph validation precedes owning-abstraction row matching");
+        assert_eq!(error.reason(), ValidationReason::Root);
+        assert_eq!(error.node(), None);
+
+        let (mut binder_first, _, _, first_owner) = coherently_swapped_linked_owner_fixture();
+        let owner_source = binder_first
+            .module_sources
+            .iter()
+            .find(|(module, _)| Some(*module) == first_owner.module())
+            .map(|(_, source)| *source)
+            .expect("the owner module has a canonical source");
+        let foreign_origin = binder_first
+            .program
+            .nodes
+            .iter()
+            .filter_map(|node| node.origin.as_ref())
+            .find(|origin| origin.primary_span().source() != owner_source)
+            .expect("the entry module supplies foreign binder provenance")
+            .clone();
+        let group_index = binder_first
+            .program
+            .nodes
+            .iter()
+            .position(|node| {
+                let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+                else {
+                    return false;
+                };
+                group
+                    .members()
+                    .iter()
+                    .any(|member| member.binder().id() == first_owner)
+            })
+            .expect("the first owner belongs to one recursive group");
+        let group_id = NodeId::new(
+            binder_first.program.arena,
+            u32::try_from(group_index).expect("the group index fits"),
+        );
+        let PureExprKind::Computation(PureComputation::RecursiveBind(group)) =
+            &mut binder_first.program.nodes[group_index].kind
+        else {
+            unreachable!("the selected node is a recursive group")
+        };
+        let binder = group
+            .members_mut()
+            .iter_mut()
+            .find(|member| member.binder().id() == first_owner)
+            .expect("the group retains the first owner")
+            .binder_mut();
+        *binder = TypedBinder::new(
+            binder_first.program.arena,
+            binder.id(),
+            binder.ty().clone(),
+            foreign_origin,
+        );
+        let error = binder_first
+            .validate()
+            .expect_err("binder metadata precedes owning-abstraction row matching");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(group_id));
+
+        let (mut node_type_later, first_abstraction, _, _) =
+            coherently_swapped_linked_owner_fixture();
+        node_type_later
+            .program
+            .nodes
+            .last_mut()
+            .expect("the fixture has a root node")
+            .ty = Type::Bool;
+        let error = node_type_later
+            .validate()
+            .expect_err("the first owning abstraction precedes later node typing");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(first_abstraction));
+
+        let (mut scope_later, first_abstraction, _, _) = coherently_swapped_linked_owner_fixture();
+        let later_variable = scope_later
+            .program
+            .nodes
+            .iter_mut()
+            .enumerate()
+            .rev()
+            .find_map(|(index, node)| {
+                matches!(node.kind, PureExprKind::Variable(_)).then_some((index, node))
+            })
+            .expect("the fixture retains a later variable occurrence");
+        later_variable.1.kind = PureExprKind::Variable(super::super::variable::VariableNode::new(
+            BinderId::generated(u32::MAX),
+        ));
+        assert!(
+            later_variable.0
+                > first_abstraction
+                    .index()
+                    .expect("the first abstraction index fits"),
+        );
+        let error = scope_later
+            .validate()
+            .expect_err("the first owning abstraction precedes later term scope");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(first_abstraction));
+    }
 
     fn source() -> SourceFile {
         SourceFile::new("test.ash", "()").expect("test source")

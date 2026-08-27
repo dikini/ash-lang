@@ -1,18 +1,281 @@
 use ash::{
     core::{
         BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
-        CorePatternKind, Primitive, PureComputation, PureExprKind, PureValue, ValidationReason,
+        CorePatternKind, Primitive, PureComputation, PureExprKind, PureValue, ValidatedProgram,
+        ValidationReason,
         transform::{fold_literal_primitives, identity_traversal},
         validate,
     },
+    elaborate::{Elaborator, check_module, link_modules},
+    eval::{Value, evaluate},
+    evidence_validation::validate_interface_evidence,
     integer::Integer,
-    resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry, ResolvedTypeVariable},
+    module::{ModuleGraph, ModuleRoots, load_module_graph},
+    resolve::{DependencyExports, resolve_module},
+    resolved::{
+        CheckedModule, ResolvedConstructor, ResolvedNominalType, ResolvedRegistry,
+        ResolvedTypeVariable,
+    },
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
     types::{
         ConstructorId, InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, same_type,
     },
 };
-use std::sync::Arc;
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+static LINKED_CORE_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct LinkedCoreFixture(PathBuf);
+
+impl LinkedCoreFixture {
+    fn create() -> Self {
+        loop {
+            let id = LINKED_CORE_TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+            let directory = std::env::temp_dir().join(format!(
+                "ash-linked-core-validation-{}-{id}",
+                std::process::id(),
+            ));
+            match fs::create_dir(&directory) {
+                Ok(()) => return Self(directory),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("linked Core fixture should be creatable: {error}"),
+            }
+        }
+    }
+
+    fn write(&self, name: &str, source: &str) -> PathBuf {
+        let path = self.0.join(name);
+        fs::write(&path, source).expect("linked Core fixture should be writable");
+        path
+    }
+}
+
+impl Drop for LinkedCoreFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn checked_linked_core_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("dependency order should check the target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("checked dependency exports should authenticate their edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the linked Core fixture graph should resolve");
+        checked.push(check_module(resolved).expect("the linked Core fixture graph should check"));
+    }
+    checked
+}
+
+fn assert_higher_kinded_linked_core(
+    program: &ValidatedProgram,
+    option: NominalTypeId,
+    relay: ash::resolved::BinderId,
+    relay_parameter: TypeVariableId,
+) {
+    let mut work = vec![program.root()];
+    let mut relay_abstraction = None;
+    let mut relay_instantiation = None;
+    while let Some(id) = work.pop() {
+        let node = program
+            .node(id)
+            .expect("every linked Core child should belong to the validated arena");
+        match &node.kind {
+            PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                for member in group.members() {
+                    if member.binder().id() == relay {
+                        assert!(
+                            relay_abstraction.replace(member.initializer()).is_none(),
+                            "relay should have exactly one linked recursive definition",
+                        );
+                    }
+                }
+            }
+            PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+                let function = program
+                    .node(application.function())
+                    .expect("the linked type application function should exist");
+                if matches!(
+                    function.kind,
+                    PureExprKind::Variable(variable) if variable.binder() == relay
+                ) {
+                    assert!(
+                        relay_instantiation.replace(id).is_none(),
+                        "relay should have exactly one linked type instantiation",
+                    );
+                }
+            }
+            PureExprKind::Value(_)
+            | PureExprKind::Variable(_)
+            | PureExprKind::Computation(
+                PureComputation::Bind(_)
+                | PureComputation::Apply(_)
+                | PureComputation::Primitive(_)
+                | PureComputation::Tuple(_)
+                | PureComputation::Match(_)
+                | PureComputation::TypeAbstraction(_),
+            ) => {}
+        }
+        work.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+    }
+
+    let abstraction_id = relay_abstraction.expect("relay should retain its linked initializer");
+    let abstraction_node = program
+        .node(abstraction_id)
+        .expect("relay's linked initializer should exist");
+    let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+        &abstraction_node.kind
+    else {
+        panic!("relay should retain an explicit outer type abstraction");
+    };
+    assert_eq!(abstraction.parameters().len(), 1);
+    assert_eq!(abstraction.parameters()[0].0, relay_parameter);
+    assert!(matches!(abstraction.parameters()[0].1, Kind::Arrow(_, _)));
+    let Type::Forall(scheme_parameters, scheme_body) = &abstraction_node.ty else {
+        panic!("relay's abstraction should expose its outer Forall");
+    };
+    assert_eq!(scheme_parameters.as_ref(), abstraction.parameters());
+    assert!(same_type(
+        &program
+            .node(abstraction.body())
+            .expect("relay's abstraction body should exist")
+            .ty,
+        scheme_body,
+    ));
+
+    let instantiation_id =
+        relay_instantiation.expect("the entry module should instantiate linked relay");
+    let instantiation_node = program
+        .node(instantiation_id)
+        .expect("relay's linked type application should exist");
+    let PureExprKind::Computation(PureComputation::TypeApplication(instantiation)) =
+        &instantiation_node.kind
+    else {
+        panic!("relay should be used through an explicit type application");
+    };
+    let function = program
+        .node(instantiation.function())
+        .expect("relay's type-application function should exist");
+    assert!(same_type(&function.ty, &abstraction_node.ty));
+    assert_eq!(instantiation.arguments(), &[Type::Nominal(option)]);
+    let option_int = Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Int));
+    let substituted = Type::Function(Box::new(option_int.clone()), Box::new(option_int));
+    assert!(same_type(&instantiation_node.ty, &substituted));
+}
+
+fn assert_integer_evaluation(program: &ValidatedProgram, expected: &str) {
+    let evaluation = evaluate(program).expect("validated linked Core should erase and evaluate");
+    let Value::Integer(value) = evaluation.value else {
+        panic!("the transformed linked program should evaluate to an integer");
+    };
+    assert_eq!(
+        value,
+        Integer::parse_decimal(expected).expect("the expected integer should parse"),
+    );
+}
+
+#[test]
+fn linked_higher_kinded_core_revalidates_after_both_transforms() {
+    let fixture = LinkedCoreFixture::create();
+    fixture.write(
+        "dependency.ash",
+        concat!(
+            "pub type Option<A> =\nNone\n| Some(A)\n\n",
+            "pub interface Observe<F : Type -> Type> {\n",
+            "observe : F<Int> -> Int\n",
+            "}\n\n",
+            "pub impl Observe<Option> {\n",
+            "observe value = 42\n",
+            "}\n",
+            "\n",
+            "pub relay<F : Type -> Type> : F<Int> -> F<Int>\n",
+            "relay value = value\n",
+        ),
+    );
+    let entry = fixture.write(
+        "entry.ash",
+        concat!(
+            "import dependency (Option, Some, observe, relay, impl Observe)\n",
+            "main : Unit -> Int\n",
+            "main () = observe(relay(Some(1)))\n",
+        ),
+    );
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("the linked higher-kinded Core graph should load");
+    let checked = checked_linked_core_graph(&graph);
+    let option = checked
+        .iter()
+        .flat_map(|module| module.registry().nominals())
+        .find(|nominal| nominal.spelling == "Option")
+        .expect("the defining Option identity should remain checked")
+        .id;
+    let relay_scheme = checked
+        .iter()
+        .flat_map(|module| module.schemes())
+        .find(|scheme| scheme.spelling == "relay")
+        .expect("the checked relay scheme should remain available");
+    let relay = relay_scheme.binder;
+    let [(relay_parameter, relay_kind)] = relay_scheme.scheme.type_parameters.as_ref() else {
+        panic!("relay should have one checked type parameter");
+    };
+    assert!(matches!(relay_kind, Kind::Arrow(_, _)));
+    let relay_parameter = *relay_parameter;
+    let linked =
+        link_modules(checked, graph.entry()).expect("the checked higher-kinded graph should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("linked higher-kinded evidence should authenticate");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the linked binder namespace should fit");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("authenticated linked kinds should lower to Core");
+    assert_eq!(typed.ty, Type::Int);
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the linked Core root should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let original = ash::core::validate_modules(unchecked, &sources, &module_sources)
+        .expect("linked higher-kinded Core should independently validate");
+    assert_higher_kinded_linked_core(&original, option, relay, relay_parameter);
+    let identity = identity_traversal(&original).expect("the identity transform should rebuild");
+    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+        .expect("the identity transform should independently revalidate");
+    assert_higher_kinded_linked_core(&identity, option, relay, relay_parameter);
+    assert_integer_evaluation(&identity, "42");
+    let folded =
+        fold_literal_primitives(&original).expect("literal folding should independently rebuild");
+    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+        .expect("literal folding should independently revalidate");
+    assert_higher_kinded_linked_core(&folded, option, relay, relay_parameter);
+    assert_integer_evaluation(&folded, "42");
+}
 
 #[test]
 fn structurally_validates_higher_kinded_outer_instantiation() {

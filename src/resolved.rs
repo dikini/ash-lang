@@ -1121,6 +1121,27 @@ pub(crate) enum LinkedGlobalParameterRowMutationForTest {
     DuplicateOwner,
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) enum CoreGlobalParameterRowMutationForTest {
+    EmptyFirstRow,
+    ReplaceFirstOwner(BinderId),
+    ReplaceFirstParameter(TypeVariableId),
+    DuplicateFirstParameter,
+    DuplicateAcrossRows,
+    SwapFirstOwnerPositions,
+    DuplicateFirstOwner {
+        filler: BinderId,
+    },
+    RemoveLastRow,
+    AppendRow {
+        owner: BinderId,
+        parameter: TypeVariableId,
+    },
+    RemoveCanonicalParameter(TypeVariableId),
+    AddSurplusPosition(BinderId),
+}
+
 impl ResolvedModuleProgram {
     pub(crate) fn new(
         registry: Arc<ResolvedRegistry>,
@@ -12157,6 +12178,147 @@ impl ResolvedRegistry {
             .get(&owner)
             .and_then(|position| self.global_parameter_rows.get(*position))
             .filter(|row| row.owner == owner)
+    }
+
+    pub(crate) fn global_parameter_position_count(&self) -> usize {
+        self.global_parameter_positions.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_global_parameter_positions_for_core_test(&mut self) {
+        self.global_parameter_positions.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn global_parameter_position_for_core_test(&self, owner: BinderId) -> Option<usize> {
+        self.global_parameter_positions.get(&owner).copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_global_parameter_rows_for_core_test(
+        &mut self,
+        mutation: CoreGlobalParameterRowMutationForTest,
+    ) -> bool {
+        match mutation {
+            CoreGlobalParameterRowMutationForTest::EmptyFirstRow => {
+                let Some(row) = self.global_parameter_rows.first_mut() else {
+                    return false;
+                };
+                row.parameters = Box::new([]);
+            }
+            CoreGlobalParameterRowMutationForTest::ReplaceFirstOwner(owner) => {
+                let Some(row) = self.global_parameter_rows.first_mut() else {
+                    return false;
+                };
+                let previous = row.owner;
+                if previous == owner || self.global_parameter_positions.contains_key(&owner) {
+                    return false;
+                }
+                let Some(position) = self.global_parameter_positions.remove(&previous) else {
+                    return false;
+                };
+                row.owner = owner;
+                self.global_parameter_positions.insert(owner, position);
+            }
+            CoreGlobalParameterRowMutationForTest::ReplaceFirstParameter(parameter) => {
+                let Some(first) = self
+                    .global_parameter_rows
+                    .first_mut()
+                    .and_then(|row| row.parameters.first_mut())
+                else {
+                    return false;
+                };
+                *first = parameter;
+            }
+            CoreGlobalParameterRowMutationForTest::DuplicateFirstParameter => {
+                let Some(row) = self.global_parameter_rows.first_mut() else {
+                    return false;
+                };
+                let [first, second, ..] = row.parameters.as_mut() else {
+                    return false;
+                };
+                *second = *first;
+            }
+            CoreGlobalParameterRowMutationForTest::DuplicateAcrossRows => {
+                let [first, second, ..] = self.global_parameter_rows.as_mut() else {
+                    return false;
+                };
+                let Some(parameter) = first.parameters.first().copied() else {
+                    return false;
+                };
+                let Some(replaced) = second.parameters.first_mut() else {
+                    return false;
+                };
+                *replaced = parameter;
+            }
+            CoreGlobalParameterRowMutationForTest::SwapFirstOwnerPositions => {
+                let [first, second, ..] = self.global_parameter_rows.as_ref() else {
+                    return false;
+                };
+                let (first_owner, second_owner) = (first.owner, second.owner);
+                let Some(first_position) =
+                    self.global_parameter_positions.get(&first_owner).copied()
+                else {
+                    return false;
+                };
+                let Some(second_position) =
+                    self.global_parameter_positions.get(&second_owner).copied()
+                else {
+                    return false;
+                };
+                self.global_parameter_positions
+                    .insert(first_owner, second_position);
+                self.global_parameter_positions
+                    .insert(second_owner, first_position);
+            }
+            CoreGlobalParameterRowMutationForTest::DuplicateFirstOwner { filler } => {
+                let [first, second, ..] = self.global_parameter_rows.as_mut() else {
+                    return false;
+                };
+                if self.global_parameter_positions.contains_key(&filler) {
+                    return false;
+                }
+                let duplicate = first.owner;
+                let replaced = second.owner;
+                self.global_parameter_positions.remove(&replaced);
+                second.owner = duplicate;
+                self.global_parameter_positions.insert(filler, usize::MAX);
+            }
+            CoreGlobalParameterRowMutationForTest::RemoveLastRow => {
+                let mut rows = std::mem::take(&mut self.global_parameter_rows).into_vec();
+                let Some(removed) = rows.pop() else {
+                    return false;
+                };
+                self.global_parameter_positions.remove(&removed.owner);
+                self.global_parameter_rows = rows.into_boxed_slice();
+            }
+            CoreGlobalParameterRowMutationForTest::AppendRow { owner, parameter } => {
+                if self.global_parameter_positions.contains_key(&owner) {
+                    return false;
+                }
+                let mut rows = std::mem::take(&mut self.global_parameter_rows).into_vec();
+                let position = rows.len();
+                rows.push(ResolvedGlobalParameterRow {
+                    owner,
+                    parameters: Box::new([parameter]),
+                });
+                self.global_parameter_positions.insert(owner, position);
+                self.global_parameter_rows = rows.into_boxed_slice();
+            }
+            CoreGlobalParameterRowMutationForTest::RemoveCanonicalParameter(parameter) => {
+                let Some(removed) = self.type_variables.remove(&parameter) else {
+                    return false;
+                };
+                discard_resolved_type_variable(removed);
+            }
+            CoreGlobalParameterRowMutationForTest::AddSurplusPosition(owner) => {
+                if self.global_parameter_positions.contains_key(&owner) {
+                    return false;
+                }
+                self.global_parameter_positions.insert(owner, usize::MAX);
+            }
+        }
+        true
     }
 
     /// Renders a type with source declaration spellings for nominal identities.
