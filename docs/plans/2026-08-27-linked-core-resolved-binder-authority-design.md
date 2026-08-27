@@ -74,7 +74,9 @@ generated Core identities and retain local abstraction ownership.
 `combine_checked_registries` already visits every checked global scheme in
 dependency and declaration order and authenticates its ordered parameter list
 against canonical registry records. During that charged pass it will retain a
-row for each non-empty scheme and reject duplicate owners, duplicate parameter
+row for each non-empty scheme. The semantic validation pass will use a
+pre-reserved, constraint-charged owner set to reject duplicate owners before
+aggregate retention precharge. It already rejects duplicate parameter
 identities, non-resolved identities, missing canonical records, and parameters
 owned by a nominal row before publication.
 
@@ -89,10 +91,12 @@ so their disposal does not add recursive payload ownership.
 
 ## Independent Core validation
 
-Module-aware Core validation derives the stable term owner of an abstraction
-from a `Bind` or `RecursiveBind` member whose initializer is that exact
-`TypeAbstractionNode`. Node identities may change across transforms; the
-owning `BinderId` does not.
+Module-aware Core validation derives the stable term owner of a resolved
+abstraction only from a `RecursiveBind` member whose initializer is that exact
+`TypeAbstractionNode`. Final linked globals are emitted through recursive module
+groups; a sequential `Bind` is local Core and cannot claim resolved-global row
+authority. Node identities may change across transforms; the owning `BinderId`
+does not.
 
 For an abstraction containing resolved parameters, validation requires:
 
@@ -106,9 +110,11 @@ For an abstraction containing resolved parameters, validation requires:
 7. every retained row to be consumed exactly once.
 
 A missing, extra, duplicate, reordered, wrong-owner, nominal, or interface-only
-identity fails with `ValidationReason::Registry` before later node or scope
-failures. The validator removes the existing fallback that treats canonical
-map membership as sufficient resolved-binder authority.
+identity fails with `ValidationReason::Registry`. Existing registry, envelope,
+graph, and term-binder metadata passes retain their established precedence;
+resolved-row authentication still precedes ordinary node-type and term/type-
+scope validation. The validator removes the existing fallback that treats
+canonical map membership as sufficient resolved-binder authority.
 
 Generated abstractions do not consult these rows. Their existing structural
 rules continue to require one local abstraction owner, positional agreement
@@ -134,11 +140,12 @@ Let `S` be the number of retained non-empty global rows, `R` the number of
 parameter identities in those rows, and `K_R` the number of canonical Kind
 nodes compared for those identities.
 
-The combined-registry retention delta is `2S + R`: one row slot, one position-
-index slot, and one ordered identity slot. The existing combined-registry pass
-already visits the `R` checked parameters and their canonical Kinds, so
-capturing the authenticated identities does not add a duplicate Kind traversal
-or clone.
+The combined-registry type-work retention delta is `2S + R`: one row slot, one
+position-index slot, and one ordered identity slot. The semantic validation
+pass additionally charges its constraint ledger for the pre-reserved `S`-entry
+owner-uniqueness index. The existing combined-registry pass already visits the
+`R` checked parameters and their canonical Kinds, so capturing the authenticated
+identities does not add a duplicate Kind traversal or clone.
 
 Independent registry validation charges row visits, identity visits,
 uniqueness storage, and canonical Kind comparisons. Core abstraction
