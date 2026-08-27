@@ -1709,6 +1709,23 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 PureExprKind::Computation(PureComputation::Bind(binding)) => {
                     self.collect_binder(id, binding.binder(), ValidationReason::NodeType, true)?;
+                    let initializer = binding.initializer();
+                    if self.module_sources.is_some()
+                        && let PureExprKind::Computation(PureComputation::TypeAbstraction(
+                            abstraction,
+                        )) = &self.node(initializer)?.kind
+                        && abstraction
+                            .parameters()
+                            .first()
+                            .is_some_and(|(parameter, _)| {
+                                matches!(parameter, crate::types::TypeVariableId::Resolved { .. })
+                            })
+                    {
+                        return Err(ValidationError::new(
+                            ValidationReason::Registry,
+                            Some(initializer),
+                        ));
+                    }
                 }
                 PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
                     for member in group.members() {
@@ -3633,6 +3650,55 @@ mod tests {
         let error = fixture
             .validate()
             .expect_err("a sequential bind must not authenticate a linked global row");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(abstraction));
+    }
+
+    #[test]
+    fn linked_core_rejects_a_recursive_abstraction_shared_with_a_sequential_bind() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub identity<A : Type> : A -> A\n",
+                "identity value = value\n",
+            ),
+            concat!(
+                "import dependency (identity)\n",
+                "main : Unit -> Int\n",
+                "main () = identity(1)\n",
+            ),
+            &["identity"],
+        );
+        let (identity, _) = fixture.global("identity");
+        let abstraction = linked_global_abstraction(&fixture.program, identity);
+        let abstraction_node = &fixture.program.nodes[abstraction.value() as usize];
+        let binder = TypedBinder::new(
+            fixture.program.arena,
+            BinderId::generated(u32::MAX),
+            abstraction_node.ty.clone(),
+            abstraction_node
+                .origin
+                .clone()
+                .expect("the linked abstraction retains an origin"),
+        );
+        let previous_root = fixture.program.root;
+        let root_node = &fixture.program.nodes[previous_root.value() as usize];
+        let shared_root = NodeId::new(
+            fixture.program.arena,
+            u32::try_from(fixture.program.nodes.len()).expect("the fixture fits one arena"),
+        );
+        fixture.program.nodes.push(StoredNode {
+            dialect: DialectId::PURE,
+            ty: root_node.ty.clone(),
+            origin: root_node.origin.clone(),
+            kind: PureExprKind::Computation(PureComputation::Bind(
+                super::super::binding::BindingNode::new(binder, abstraction, previous_root),
+            )),
+        });
+        fixture.program.root = shared_root;
+
+        let error = fixture
+            .validate()
+            .expect_err("a resolved abstraction must have only its recursive owner");
         assert_eq!(error.reason(), ValidationReason::Registry);
         assert_eq!(error.node(), Some(abstraction));
     }

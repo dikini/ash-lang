@@ -2131,6 +2131,9 @@ fn authenticate_linked_global_parameter_rows(
     if row_position != rows.len() {
         return Err(unknown(program.result().span));
     }
+    if rows.len() != registry.global_parameter_position_count() {
+        return Err(unknown(program.result().span));
+    }
     Ok(())
 }
 
@@ -4849,6 +4852,7 @@ mod tests {
             LinkedGlobalParameterRowMutationForTest::ParameterOrder,
             LinkedGlobalParameterRowMutationForTest::RowOrder,
             LinkedGlobalParameterRowMutationForTest::OwnerPosition,
+            LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition,
             LinkedGlobalParameterRowMutationForTest::MissingRow,
             LinkedGlobalParameterRowMutationForTest::ExtraRow,
             LinkedGlobalParameterRowMutationForTest::DuplicateOwner,
@@ -4889,7 +4893,8 @@ mod tests {
                 | LinkedGlobalParameterRowMutationForTest::OwnerPosition => *first_span,
                 LinkedGlobalParameterRowMutationForTest::MissingRow
                 | LinkedGlobalParameterRowMutationForTest::DuplicateOwner => *second_span,
-                LinkedGlobalParameterRowMutationForTest::ExtraRow => result_span,
+                LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition
+                | LinkedGlobalParameterRowMutationForTest::ExtraRow => result_span,
             };
             assert!(
                 program.corrupt_linked_global_parameter_rows_for_test(mutation),
@@ -5034,6 +5039,21 @@ mod tests {
                         program
                             .registry()
                             .global_parameter_row(original_owners[1])
+                            .is_none()
+                    );
+                }
+                LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition => {
+                    let rows = program.registry().global_parameter_rows();
+                    assert_eq!(rows.len(), 2);
+                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners);
+                    assert_eq!(
+                        program.registry().global_parameter_position_count(),
+                        rows.len() + 1,
+                    );
+                    assert!(
+                        program
+                            .registry()
+                            .global_parameter_row(empty_owner)
                             .is_none()
                     );
                 }

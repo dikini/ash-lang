@@ -1116,6 +1116,7 @@ pub(crate) enum LinkedGlobalParameterRowMutationForTest {
     ParameterOrder,
     RowOrder,
     OwnerPosition,
+    SurplusOwnerPosition,
     MissingRow,
     ExtraRow,
     DuplicateOwner,
@@ -1323,6 +1324,17 @@ impl ResolvedModuleProgram {
                 registry
                     .global_parameter_positions
                     .insert(second_owner, first_position);
+            }
+            LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition => {
+                let Some(owner) = empty_owner else {
+                    return false;
+                };
+                if registry.global_parameter_rows.is_empty()
+                    || registry.global_parameter_positions.contains_key(&owner)
+                {
+                    return false;
+                }
+                registry.global_parameter_positions.insert(owner, 0);
             }
             LinkedGlobalParameterRowMutationForTest::MissingRow => {
                 let mut rows = std::mem::take(&mut registry.global_parameter_rows).into_vec();
