@@ -10523,6 +10523,25 @@ impl Drop for ExportSummary {
     }
 }
 
+/// Ordered resolved type-variable identities owned by one non-empty global scheme.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedGlobalParameterRow {
+    owner: BinderId,
+    parameters: Box<[TypeVariableId]>,
+}
+
+impl ResolvedGlobalParameterRow {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn owner(&self) -> BinderId {
+        self.owner
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn parameters(&self) -> &[TypeVariableId] {
+        &self.parameters
+    }
+}
+
 /// Immutable resolved metadata for one source file.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResolvedRegistry {
@@ -10532,6 +10551,8 @@ pub struct ResolvedRegistry {
     constructor_positions: HashMap<ConstructorId, usize>,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
     type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
+    global_parameter_rows: Box<[ResolvedGlobalParameterRow]>,
+    global_parameter_positions: HashMap<BinderId, usize>,
     abstract_nominal_names: HashMap<NominalTypeId, String>,
     abstract_nominal_kinds: HashMap<NominalTypeId, NonMaterializedNominalKindFact>,
 }
@@ -10646,6 +10667,7 @@ struct CombinedRegistryCounts {
     nominal_parameters: usize,
     interfaces: usize,
     schemes: usize,
+    global_rows: usize,
     global_parameters: usize,
     implementations: usize,
     implementation_parameters: usize,
@@ -10663,6 +10685,8 @@ struct CombinedRegistryBuilder {
     canonical_variables: ResolvedTypeVariableBuffer,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
     type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
+    global_parameter_rows: Vec<ResolvedGlobalParameterRow>,
+    global_parameter_positions: HashMap<BinderId, usize>,
 }
 
 impl CombinedRegistryBuilder {
@@ -10676,6 +10700,8 @@ impl CombinedRegistryBuilder {
             canonical_variables: ResolvedTypeVariableBuffer(Vec::new()),
             nominal_parameters: HashMap::new(),
             type_variables: HashMap::new(),
+            global_parameter_rows: Vec::new(),
+            global_parameter_positions: HashMap::new(),
         };
         builder
             .nominals
@@ -10713,7 +10739,40 @@ impl CombinedRegistryBuilder {
             .type_variables
             .try_reserve(counts.type_variables)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .global_parameter_rows
+            .try_reserve_exact(counts.global_rows)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .global_parameter_positions
+            .try_reserve(counts.global_rows)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         Ok(builder)
+    }
+
+    fn retain_global_parameter_row(
+        &mut self,
+        _validated: &ValidatedCheckedRegistries<'_>,
+        owner: BinderId,
+        parameters: &[(TypeVariableId, Kind)],
+    ) -> Result<(), ResolvedBuildFailure> {
+        debug_assert!(owner.module().is_some());
+        debug_assert!(!parameters.is_empty());
+        let mut retained = Vec::new();
+        retained
+            .try_reserve_exact(parameters.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        retained.extend(parameters.iter().map(|(identity, _)| *identity));
+        let retained = retained.into_boxed_slice();
+
+        let position = self.global_parameter_rows.len();
+        let displaced = self.global_parameter_positions.insert(owner, position);
+        debug_assert!(displaced.is_none());
+        self.global_parameter_rows.push(ResolvedGlobalParameterRow {
+            owner,
+            parameters: retained,
+        });
+        Ok(())
     }
 
     fn install_parameter_row(
@@ -10761,6 +10820,9 @@ impl CombinedRegistryBuilder {
             constructor_positions: std::mem::take(&mut self.constructor_positions),
             nominal_parameters: std::mem::take(&mut self.nominal_parameters),
             type_variables: std::mem::take(&mut self.type_variables),
+            global_parameter_rows: std::mem::take(&mut self.global_parameter_rows)
+                .into_boxed_slice(),
+            global_parameter_positions: std::mem::take(&mut self.global_parameter_positions),
             abstract_nominal_names: HashMap::new(),
             abstract_nominal_kinds: HashMap::new(),
         }
@@ -10850,6 +10912,9 @@ fn checked_registry_counts(
             }
         }
         for scheme in checked.schemes() {
+            if !scheme.scheme.type_parameters.is_empty() {
+                checked_accumulate(&mut counts.global_rows, 1)?;
+            }
             checked_accumulate(
                 &mut counts.global_parameters,
                 scheme.scheme.type_parameters.len(),
@@ -10893,6 +10958,13 @@ fn checked_registry_counts(
                 .and_then(|constructors| work.checked_add(constructors))
         })
         .and_then(|work| work.checked_add(counts.type_variables))
+        .and_then(|work| {
+            counts
+                .global_rows
+                .checked_mul(2)
+                .and_then(|global_rows| work.checked_add(global_rows))
+        })
+        .and_then(|work| work.checked_add(counts.global_parameters))
         .ok_or(ResolvedBuildFailure::TypeResource)?;
     type_accumulate(&mut counts.retention_type_work, builder_storage)?;
     let deterministic_visits = counts
@@ -10914,6 +10986,7 @@ fn checked_registry_counts(
         .checked_add(counts.nominals)
         .and_then(|work| work.checked_add(counts.family_entries))
         .and_then(|work| work.checked_add(counts.constructors))
+        .and_then(|work| work.checked_add(counts.global_rows))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     counts.fixed_constraint_work = deterministic_visits
         .checked_add(uniqueness)
@@ -10921,11 +10994,23 @@ fn checked_registry_counts(
     Ok(counts)
 }
 
-fn validate_checked_registries(
-    modules: &[CheckedModule],
+/// Borrowed authority that the checked registry set passed semantic validation.
+struct ValidatedCheckedRegistries<'a> {
+    modules: &'a [CheckedModule],
+}
+
+impl ValidatedCheckedRegistries<'_> {
+    #[cfg(test)]
+    fn modules(&self) -> &[CheckedModule] {
+        self.modules
+    }
+}
+
+fn validate_checked_registries<'a>(
+    modules: &'a [CheckedModule],
     counts: &CombinedRegistryCounts,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
-) -> Result<(), ResolvedBuildFailure> {
+) -> Result<ValidatedCheckedRegistries<'a>, ResolvedBuildFailure> {
     constraint_work
         .charge(counts.fixed_constraint_work)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -10933,6 +11018,7 @@ fn validate_checked_registries(
     let mut nominal_ids = HashSet::new();
     let mut family_ids = HashSet::new();
     let mut constructor_ids = HashSet::new();
+    let mut global_owners = HashSet::new();
     module_ids
         .try_reserve(counts.modules)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
@@ -10944,6 +11030,9 @@ fn validate_checked_registries(
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     constructor_ids
         .try_reserve(counts.constructors)
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    global_owners
+        .try_reserve(counts.global_rows)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
 
     for checked in modules {
@@ -11011,7 +11100,10 @@ fn validate_checked_registries(
             }
         }
         for scheme in checked.schemes() {
-            if scheme.binder.module() != Some(module) {
+            if scheme.binder.module() != Some(module)
+                || (!scheme.scheme.type_parameters.is_empty()
+                    && !global_owners.insert(scheme.binder))
+            {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             local_variable_count = local_variable_count
@@ -11034,6 +11126,7 @@ fn validate_checked_registries(
         || nominal_ids.len() != counts.nominals
         || family_ids.len() != counts.family_entries
         || constructor_ids.len() != counts.constructors
+        || global_owners.len() != counts.global_rows
     {
         return Err(ResolvedBuildFailure::InvalidState);
     }
@@ -11161,7 +11254,7 @@ fn validate_checked_registries(
     if type_variable_ids.len() != counts.type_variables {
         return Err(ResolvedBuildFailure::InvalidState);
     }
-    Ok(())
+    Ok(ValidatedCheckedRegistries { modules })
 }
 
 fn try_clone_string(value: &str) -> Result<String, ResolvedBuildFailure> {
@@ -11216,10 +11309,10 @@ fn clone_type_variable_row_after_combined_precharge(
 }
 
 fn retain_checked_registries(
-    modules: &[CheckedModule],
+    validated: ValidatedCheckedRegistries<'_>,
     mut builder: CombinedRegistryBuilder,
 ) -> Result<ResolvedRegistry, ResolvedBuildFailure> {
-    for checked in modules {
+    for checked in validated.modules {
         let registry = checked.registry();
         for nominal in registry.nominals() {
             let position = builder.nominals.0.len();
@@ -11286,6 +11379,13 @@ fn retain_checked_registries(
                 .push(clone_type_variable_after_combined_precharge(canonical)?);
         }
         for scheme in checked.schemes() {
+            if !scheme.scheme.type_parameters.is_empty() {
+                builder.retain_global_parameter_row(
+                    &validated,
+                    scheme.binder,
+                    &scheme.scheme.type_parameters,
+                )?;
+            }
             for (identity, _) in &scheme.scheme.type_parameters {
                 let canonical = registry
                     .type_variables
@@ -11351,6 +11451,8 @@ impl ResolvedRegistry {
             constructor_positions,
             nominal_parameters: HashMap::new(),
             type_variables: HashMap::new(),
+            global_parameter_rows: Box::new([]),
+            global_parameter_positions: HashMap::new(),
             abstract_nominal_names: HashMap::new(),
             abstract_nominal_kinds: HashMap::new(),
         }
@@ -11623,12 +11725,12 @@ impl ResolvedRegistry {
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
         let counts = checked_registry_counts(modules)?;
-        validate_checked_registries(modules, &counts, constraint_work)?;
+        let validated = validate_checked_registries(modules, &counts, constraint_work)?;
         type_work
             .charge(counts.retention_type_work)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         let builder = CombinedRegistryBuilder::with_counts(&counts)?;
-        retain_checked_registries(modules, builder)
+        retain_checked_registries(validated, builder)
     }
 
     /// Attaches ordered declaration parameters after nominal identity allocation.
@@ -11823,6 +11925,22 @@ impl ResolvedRegistry {
         self.type_variables.len()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn global_parameter_rows(&self) -> &[ResolvedGlobalParameterRow] {
+        &self.global_parameter_rows
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn global_parameter_row(
+        &self,
+        owner: BinderId,
+    ) -> Option<&ResolvedGlobalParameterRow> {
+        self.global_parameter_positions
+            .get(&owner)
+            .and_then(|position| self.global_parameter_rows.get(*position))
+            .filter(|row| row.owner == owner)
+    }
+
     /// Renders a type with source declaration spellings for nominal identities.
     #[must_use]
     pub fn display_type(&self, ty: &Type) -> String {
@@ -11947,9 +12065,11 @@ impl ResolvedRegistry {
         let constructors = std::mem::take(&mut self.constructors);
         let nominal_parameters = std::mem::take(&mut self.nominal_parameters);
         let type_variables = std::mem::take(&mut self.type_variables);
+        let global_parameter_rows = std::mem::take(&mut self.global_parameter_rows);
         let abstract_nominal_kinds = std::mem::take(&mut self.abstract_nominal_kinds);
         self.nominal_positions.clear();
         self.constructor_positions.clear();
+        self.global_parameter_positions.clear();
         for nominal in nominals.into_vec() {
             discard_origin_iteratively(nominal.origin);
         }
@@ -11965,6 +12085,7 @@ impl ResolvedRegistry {
         for parameter in type_variables.into_values() {
             discard_resolved_type_variable(parameter);
         }
+        drop(global_parameter_rows);
         drop(abstract_nominal_kinds);
     }
 }
@@ -14015,9 +14136,16 @@ mod tests {
                 constructor_positions,
                 nominal_parameters,
                 type_variables,
+                global_parameter_rows,
+                global_parameter_positions,
                 abstract_nominal_names,
                 abstract_nominal_kinds,
             } = registry;
+            let global_parameter_rows: &Box<[ResolvedGlobalParameterRow]> = global_parameter_rows;
+            for row in global_parameter_rows {
+                let ResolvedGlobalParameterRow { owner, parameters } = row;
+                let _ = (owner, parameters);
+            }
             let constructors: &Box<[ResolvedConstructor]> = constructors;
             for constructor in constructors {
                 linked_constructor_fields(constructor);
@@ -14029,6 +14157,8 @@ mod tests {
                 constructor_positions,
                 nominal_parameters,
                 type_variables,
+                global_parameter_rows,
+                global_parameter_positions,
                 abstract_nominal_names,
                 abstract_nominal_kinds,
             );
@@ -14381,12 +14511,13 @@ mod tests {
         // constructor, every owner slot and canonical identity, and the
         // nominal/global/implementation mirrors. The interface carrier mirror
         // belongs to the consuming linked-evidence validator. TypeWork owns
-        // only the ten-cell-per-owner retention batch.
-        const CONSTRAINT_WORK: usize = 13 * OWNER_COUNT + 11;
-        // Four cells per owner retain the canonical-variable staging rows;
-        // seven fixed cells retain family, nominal, and constructor staging,
-        // destination, and index storage.
-        const TYPE_WORK: usize = 14 * OWNER_COUNT + 7;
+        // only the canonical records plus the scalar global row. The fixed
+        // final cell reserves the non-empty global-owner uniqueness index.
+        const CONSTRAINT_WORK: usize = 13 * OWNER_COUNT + 12;
+        // Five cells per owner retain the canonical-variable staging rows and
+        // the scalar global-parameter identities. Nine fixed cells retain the
+        // family, nominal, constructor, global-row, and row-index storage.
+        const TYPE_WORK: usize = 15 * OWNER_COUNT + 9;
         std::thread::Builder::new()
             .name("wide-combined-registry".to_owned())
             .stack_size(256 * 1024)
@@ -14435,6 +14566,10 @@ mod tests {
                         .nominal_parameters(owner)
                         .expect("the complete wide nominal row should be retained");
                     assert_eq!(parameters.len(), OWNER_COUNT);
+                    let global_row = combined
+                        .global_parameter_row(BinderId::resolved(module, 0))
+                        .expect("the complete wide global row should be retained");
+                    assert_eq!(global_row.parameters().len(), OWNER_COUNT);
                     assert_eq!(combined.type_variables.len(), WIDTH);
                     assert!(
                         parameters
@@ -14465,12 +14600,12 @@ mod tests {
 
     #[test]
     fn combine_checked_prices_the_canonical_interface_kind_before_retention() {
-        const CONSTRAINT_WORK: usize = 24;
-        // The one-owner fixture normally costs 21 TypeWork cells. Replacing
+        const CONSTRAINT_WORK: usize = 25;
+        // The one-owner fixture normally costs 24 TypeWork cells. Replacing
         // the canonical interface Kind `Type` with `Type -> Type` adds two
         // retained Kind nodes even though the independently retained interface
         // carrier remains shallow for evidence validation to reject later.
-        const TYPE_WORK: usize = 23;
+        const TYPE_WORK: usize = 26;
         let mut modules = wide_combined_registry_fixture(4);
         let interface_parameter = modules[0].interface_facts[0].parameter.id;
         Arc::get_mut(&mut modules[0].registry)
@@ -14620,6 +14755,260 @@ mod tests {
         }
     }
 
+    fn global_parameter_row_fixture() -> Vec<CheckedModule> {
+        fn parameter(module: ModuleId, local: u32, span: Span) -> ResolvedTypeVariable {
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, local),
+                spelling: format!("T{local}"),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            }
+        }
+
+        fn scheme(
+            owner: BinderId,
+            parameters: &[ResolvedTypeVariable],
+            span: Span,
+        ) -> CheckedGlobalScheme {
+            CheckedGlobalScheme {
+                binder: owner,
+                spelling: format!("global{}", owner.local()),
+                scheme: ConstrainedScheme {
+                    type_parameters: parameters
+                        .iter()
+                        .map(|parameter| (parameter.id, Kind::Type))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    requirements: Box::new([]),
+                    value_type: Type::Tuple(
+                        parameters
+                            .iter()
+                            .map(|parameter| Type::Variable(parameter.id))
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    ),
+                },
+                origin: Origin::Source(span),
+            }
+        }
+
+        let source = SourceFile::new("global-parameter-rows.ash", "rows")
+            .expect("the global-row source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the global-row range should be ordered"))
+            .expect("the global-row span should fit");
+        let first_module = ModuleId::new(9_704);
+        let second_module = ModuleId::new(9_705);
+        let first_parameters = [
+            parameter(first_module, 0, span),
+            parameter(first_module, 1, span),
+        ];
+        let second_parameters = [parameter(second_module, 0, span)];
+        let first_registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables(first_parameters.iter().cloned());
+        let second_registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables(second_parameters.iter().cloned());
+        let mut first = registry_only_checked_module(first_module, first_registry, span);
+        first.schemes = vec![
+            scheme(BinderId::resolved(first_module, 0), &first_parameters, span),
+            scheme(BinderId::resolved(first_module, 1), &[], span),
+        ];
+        let mut second = registry_only_checked_module(second_module, second_registry, span);
+        second.schemes = vec![scheme(
+            BinderId::resolved(second_module, 0),
+            &second_parameters,
+            span,
+        )];
+        vec![first, second]
+    }
+
+    #[test]
+    fn combine_checked_retains_borrowed_global_parameter_rows_in_dependency_order() {
+        const GLOBAL_ROWS: usize = 2;
+        const GLOBAL_PARAMETERS: usize = 3;
+        const CONSTRAINT_WORK: usize = 18;
+        const PREEXISTING_RETENTION_TYPE_WORK: usize = 3 * GLOBAL_PARAMETERS;
+        const ROW_RETENTION_TYPE_WORK: usize = 2 * GLOBAL_ROWS + GLOBAL_PARAMETERS;
+        const TYPE_WORK: usize = PREEXISTING_RETENTION_TYPE_WORK + ROW_RETENTION_TYPE_WORK;
+
+        let modules = global_parameter_row_fixture();
+        let counts = checked_registry_counts(&modules).expect("the row counts should fit");
+        assert_eq!(counts.global_rows, GLOBAL_ROWS);
+        assert_eq!(counts.global_parameters, GLOBAL_PARAMETERS);
+        assert_eq!(
+            counts.retention_type_work - PREEXISTING_RETENTION_TYPE_WORK,
+            ROW_RETENTION_TYPE_WORK,
+            "rows retain only one row slot, one owner index slot, and each scalar identity",
+        );
+
+        let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+        let mut exact_constraint =
+            crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+        assert_eq!(
+            ResolvedRegistry::combine_checked(&modules, &mut type_short, &mut exact_constraint,),
+            Err(ResolvedBuildFailure::TypeResource),
+        );
+        assert_eq!(type_short.used(), 0, "the aggregate precharge is atomic");
+        assert_eq!(exact_constraint.used(), CONSTRAINT_WORK);
+
+        let mut type_work = TypeWorkBudget::with_limit(TYPE_WORK);
+        let mut constraint_work =
+            crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+        let combined =
+            ResolvedRegistry::combine_checked(&modules, &mut type_work, &mut constraint_work)
+                .expect("the exact global-row budgets should fit");
+        assert_eq!(type_work.used(), TYPE_WORK);
+        assert_eq!(constraint_work.used(), CONSTRAINT_WORK);
+
+        let first_owner = BinderId::resolved(ModuleId::new(9_704), 0);
+        let empty_owner = BinderId::resolved(ModuleId::new(9_704), 1);
+        let second_owner = BinderId::resolved(ModuleId::new(9_705), 0);
+        let rows = combined.global_parameter_rows();
+        assert_eq!(
+            rows.iter()
+                .map(ResolvedGlobalParameterRow::owner)
+                .collect::<Vec<_>>(),
+            [first_owner, second_owner],
+        );
+        assert_eq!(
+            rows.iter()
+                .map(ResolvedGlobalParameterRow::parameters)
+                .collect::<Vec<_>>(),
+            [
+                [
+                    TypeVariableId::resolved(ModuleId::new(9_704), 0),
+                    TypeVariableId::resolved(ModuleId::new(9_704), 1),
+                ]
+                .as_slice(),
+                [TypeVariableId::resolved(ModuleId::new(9_705), 0)].as_slice(),
+            ],
+        );
+        assert_eq!(combined.global_parameter_row(first_owner), rows.first(),);
+        assert_eq!(combined.global_parameter_row(second_owner), rows.get(1),);
+        assert_eq!(combined.global_parameter_row(empty_owner), None);
+    }
+
+    #[test]
+    fn combine_checked_excludes_non_global_and_empty_parameter_owners() {
+        let mut modules = wide_combined_registry_fixture(8);
+        let module = modules[0].module;
+        let span = modules[0].span;
+        let empty_owner = BinderId::resolved(module, 2);
+        modules[0].schemes.push(CheckedGlobalScheme {
+            binder: empty_owner,
+            spelling: "empty".to_owned(),
+            scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
+            origin: Origin::Source(span),
+        });
+        let combined = ResolvedRegistry::combine_checked(
+            &modules,
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect("the exclusion fixture should combine");
+        let rows = combined.global_parameter_rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].owner(), BinderId::resolved(module, 0));
+        assert_eq!(
+            rows[0].parameters(),
+            [
+                TypeVariableId::resolved(module, 4),
+                TypeVariableId::resolved(module, 5),
+            ],
+        );
+        assert_eq!(combined.global_parameter_row(empty_owner), None);
+        for excluded in [
+            TypeVariableId::resolved(module, 0),
+            TypeVariableId::resolved(module, 1),
+            TypeVariableId::resolved(module, 2),
+            TypeVariableId::resolved(module, 3),
+            TypeVariableId::resolved(module, 6),
+            TypeVariableId::resolved(module, 7),
+        ] {
+            assert!(
+                rows.iter().all(|row| !row.parameters().contains(&excluded)),
+                "nominal, interface, and implementation-head parameters must not enter rows",
+            );
+        }
+    }
+
+    #[test]
+    fn combine_checked_rejects_duplicate_global_parameter_row_owners_before_type_precharge() {
+        std::thread::Builder::new()
+            .name("duplicate-global-row-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut modules = global_parameter_row_fixture();
+                let module = modules[0].module;
+                let span = modules[0].span;
+                let duplicate_owner = modules[0].schemes[0].binder;
+                modules[0].schemes[1].binder = duplicate_owner;
+                modules[0].schemes[1].scheme.type_parameters =
+                    Box::new([(TypeVariableId::resolved(module, 2), Kind::Type)]);
+                modules[0].schemes[1].scheme.value_type =
+                    Type::Variable(TypeVariableId::resolved(module, 2));
+                Arc::get_mut(&mut modules[0].registry)
+                    .expect("the duplicate-owner registry should be unique")
+                    .insert_type_variable(ResolvedTypeVariable {
+                        id: TypeVariableId::resolved(module, 2),
+                        spelling: "T2".to_owned(),
+                        kind: Kind::Type,
+                        origin: Origin::Source(span),
+                    });
+
+                let counts = checked_registry_counts(&modules)
+                    .expect("the duplicate-owner aggregate counts should fit");
+                assert_eq!(counts.global_rows, 3);
+                assert_eq!(counts.fixed_constraint_work, 10);
+
+                let mut type_work = TypeWorkBudget::default();
+                let mut constraint_work = crate::interface::InterfaceConstraintBudget::default();
+                assert_eq!(
+                    ResolvedRegistry::combine_checked(
+                        &modules,
+                        &mut type_work,
+                        &mut constraint_work,
+                    ),
+                    Err(ResolvedBuildFailure::InvalidState),
+                );
+                assert_eq!(type_work.used(), 0);
+                assert_eq!(constraint_work.used(), counts.fixed_constraint_work);
+
+                let mut untouched_type = TypeWorkBudget::default();
+                let mut constraint_short = crate::interface::InterfaceConstraintBudget::with_limit(
+                    counts.fixed_constraint_work - 1,
+                );
+                assert_eq!(
+                    ResolvedRegistry::combine_checked(
+                        &modules,
+                        &mut untouched_type,
+                        &mut constraint_short,
+                    ),
+                    Err(ResolvedBuildFailure::ConstraintResource),
+                );
+                assert_eq!(constraint_short.used(), 0);
+                assert_eq!(untouched_type.used(), 0);
+                drop(modules);
+            })
+            .expect("the duplicate-owner worker should spawn")
+            .join()
+            .expect("rejected global-row owners must tear down on a small stack");
+    }
+
+    #[test]
+    fn combine_checked_prevalidation_returns_a_borrowed_retention_witness() {
+        const CONSTRAINT_WORK: usize = 18;
+        let modules = global_parameter_row_fixture();
+        let counts = checked_registry_counts(&modules).expect("the row counts should fit");
+        let mut constraint_work =
+            crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+        let witness: ValidatedCheckedRegistries<'_> =
+            validate_checked_registries(&modules, &counts, &mut constraint_work)
+                .expect("the exact prevalidation budget should produce row-retention authority");
+        assert_eq!(constraint_work.used(), CONSTRAINT_WORK);
+        assert_eq!(witness.modules().len(), modules.len());
+    }
+
     fn empty_parameter_combined_registry_fixture(width: usize) -> Vec<CheckedModule> {
         let source = SourceFile::new("empty-combined-registry.ash", "Empty")
             .expect("the empty combined fixture source should fit");
@@ -14756,7 +15145,9 @@ mod tests {
             NominalParameterOrder,
             InterfaceParameterOwner,
             GlobalParameterOwner,
-            GlobalParameterOrder,
+            DuplicateGlobalParameterIdentity,
+            GeneratedGlobalParameterIdentity,
+            NominalGlobalParameterIdentity,
             GlobalMirrorKind,
             ImplementationParameterOwner,
             ImplementationParameterOrder,
@@ -14766,43 +15157,45 @@ mod tests {
         }
 
         let mutations = [
-            (Mutation::ConstructorOwner, 12, 0),
-            (Mutation::ConstructorIdentityOwner, 12, 0),
-            (Mutation::FamilyOrdinal, 12, 0),
+            (Mutation::ConstructorOwner, 13, 0),
+            (Mutation::ConstructorIdentityOwner, 13, 0),
+            (Mutation::FamilyOrdinal, 13, 0),
             (Mutation::FamilyOrder, 13, 0),
-            (Mutation::NominalPosition, 12, 0),
-            (Mutation::NominalPositionExtra, 12, 0),
-            (Mutation::ConstructorPosition, 12, 0),
-            (Mutation::ConstructorPositionExtra, 12, 0),
+            (Mutation::NominalPosition, 13, 0),
+            (Mutation::NominalPositionExtra, 13, 0),
+            (Mutation::ConstructorPosition, 13, 0),
+            (Mutation::ConstructorPositionExtra, 13, 0),
             (Mutation::MissingEmptyParameterRow, 9, 0),
-            (Mutation::ExtraParameterRow, 12, 0),
-            (Mutation::AbstractName, 12, 0),
-            (Mutation::AbstractKind, 12, 0),
-            (Mutation::CanonicalValueIdentity, 17, 0),
-            (Mutation::MissingNominalCanonical, 12, 0),
-            (Mutation::MissingInterfaceCanonical, 12, 0),
-            (Mutation::MissingGlobalCanonical, 12, 0),
-            (Mutation::MissingImplementationCanonical, 12, 0),
+            (Mutation::ExtraParameterRow, 13, 0),
+            (Mutation::AbstractName, 13, 0),
+            (Mutation::AbstractKind, 13, 0),
+            (Mutation::CanonicalValueIdentity, 18, 0),
+            (Mutation::MissingNominalCanonical, 13, 0),
+            (Mutation::MissingInterfaceCanonical, 13, 0),
+            (Mutation::MissingGlobalCanonical, 13, 0),
+            (Mutation::MissingImplementationCanonical, 13, 0),
             (Mutation::ForeignZeroParameterGlobal, 12, 0),
-            (Mutation::ForeignZeroHeadImplementation, 12, 0),
-            (Mutation::ExtraCanonicalVariable, 12, 0),
-            (Mutation::CanonicalMirrorSpelling, 17, 0),
-            (Mutation::CanonicalMirrorOrigin, 18, 0),
-            (Mutation::CanonicalMirrorKind, 19, 0),
-            (Mutation::NominalMirrorSpelling, 17, 0),
-            (Mutation::NominalMirrorOrigin, 18, 0),
-            (Mutation::NominalMirrorKind, 19, 0),
-            (Mutation::NominalParameterOwner, 25, 0),
-            (Mutation::NominalParameterOrder, 25, 0),
-            (Mutation::InterfaceParameterOwner, 19, 0),
-            (Mutation::GlobalParameterOwner, 30, 0),
-            (Mutation::GlobalParameterOrder, 30, 0),
-            (Mutation::GlobalMirrorKind, 21, 0),
-            (Mutation::ImplementationParameterOwner, 35, 0),
-            (Mutation::ImplementationParameterOrder, 35, 0),
-            (Mutation::ImplementationMirrorSpelling, 22, 0),
-            (Mutation::ImplementationMirrorOrigin, 23, 0),
-            (Mutation::ImplementationMirrorKind, 24, 0),
+            (Mutation::ForeignZeroHeadImplementation, 13, 0),
+            (Mutation::ExtraCanonicalVariable, 13, 0),
+            (Mutation::CanonicalMirrorSpelling, 18, 0),
+            (Mutation::CanonicalMirrorOrigin, 19, 0),
+            (Mutation::CanonicalMirrorKind, 20, 0),
+            (Mutation::NominalMirrorSpelling, 18, 0),
+            (Mutation::NominalMirrorOrigin, 19, 0),
+            (Mutation::NominalMirrorKind, 20, 0),
+            (Mutation::NominalParameterOwner, 26, 0),
+            (Mutation::NominalParameterOrder, 26, 0),
+            (Mutation::InterfaceParameterOwner, 20, 0),
+            (Mutation::GlobalParameterOwner, 31, 0),
+            (Mutation::DuplicateGlobalParameterIdentity, 31, 0),
+            (Mutation::GeneratedGlobalParameterIdentity, 21, 0),
+            (Mutation::NominalGlobalParameterIdentity, 21, 0),
+            (Mutation::GlobalMirrorKind, 22, 0),
+            (Mutation::ImplementationParameterOwner, 36, 0),
+            (Mutation::ImplementationParameterOrder, 36, 0),
+            (Mutation::ImplementationMirrorSpelling, 23, 0),
+            (Mutation::ImplementationMirrorOrigin, 24, 0),
+            (Mutation::ImplementationMirrorKind, 25, 0),
         ];
         for (mutation, expected_constraint_work, expected_type_work) in mutations {
             let mut modules = match mutation {
@@ -14811,7 +15204,7 @@ mod tests {
                 Mutation::NominalParameterOwner
                 | Mutation::NominalParameterOrder
                 | Mutation::GlobalParameterOwner
-                | Mutation::GlobalParameterOrder
+                | Mutation::DuplicateGlobalParameterIdentity
                 | Mutation::ImplementationParameterOwner
                 | Mutation::ImplementationParameterOrder => wide_combined_registry_fixture(8),
                 _ => wide_combined_registry_fixture(4),
@@ -15018,9 +15411,21 @@ mod tests {
                         .unwrap()
                         .0 = TypeVariableId::resolved(ModuleId::new(99), 0);
                 }
-                Mutation::GlobalParameterOrder => {
+                Mutation::DuplicateGlobalParameterIdentity => {
                     let parameters = &mut modules[0].schemes[0].scheme.type_parameters;
                     parameters[1].0 = parameters[0].0;
+                }
+                Mutation::GeneratedGlobalParameterIdentity => {
+                    modules[0].schemes[0].scheme.type_parameters[0].0 =
+                        TypeVariableId::generated(99);
+                }
+                Mutation::NominalGlobalParameterIdentity => {
+                    modules[0].schemes[0].scheme.type_parameters[0].0 = registry
+                        .nominal_parameters
+                        .get(&registry.nominals[0].id)
+                        .and_then(|parameters| parameters.first())
+                        .expect("the fixture has a nominal parameter")
+                        .id;
                 }
                 Mutation::GlobalMirrorKind => {
                     modules[0].schemes[0].scheme.type_parameters[0].1 =
@@ -19069,6 +19474,8 @@ mod tests {
                         parameter_id,
                         parameter(generated_origin(&source, DEPTH)),
                     )]),
+                    global_parameter_rows: Box::new([]),
+                    global_parameter_positions: HashMap::new(),
                     abstract_nominal_names: HashMap::new(),
                     abstract_nominal_kinds: HashMap::new(),
                 };
