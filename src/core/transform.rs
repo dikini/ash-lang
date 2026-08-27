@@ -807,12 +807,106 @@ mod tests {
         }
     }
 
+    fn row_bearing_fold_program_with_initial_type_work(
+        registry: Arc<ResolvedRegistry>,
+        owner: BinderId,
+        parameter: TypeVariableId,
+        origin: Origin,
+        initial_type_work: usize,
+    ) -> Result<UnvalidatedProgram, BuildError> {
+        let parameter_kind = registry
+            .type_variable(parameter)
+            .ok_or(BuildError::InvalidPayload)?
+            .kind
+            .clone();
+        let mut builder = CoreBuilder::with_registry(registry);
+        builder.charge_type_work_for_test(initial_type_work)?;
+        builder.reserve_resolved_binders([owner])?;
+        let left = builder.integer(
+            crate::integer::Integer::parse_decimal("1").expect("the left literal should parse"),
+            Type::Int,
+            origin.clone(),
+        )?;
+        let right = builder.integer(
+            crate::integer::Integer::parse_decimal("2").expect("the right literal should parse"),
+            Type::Int,
+            origin.clone(),
+        )?;
+        let body = builder.primitive(Primitive::Add, left, right, Type::Int, origin.clone())?;
+        let parameter_binder = builder.binder(Type::Unit, origin.clone())?;
+        let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+        let function = builder.function(
+            parameter_binder,
+            body,
+            function_type.clone(),
+            origin.clone(),
+        )?;
+        let scheme = Type::Forall(
+            Box::new([(parameter, parameter_kind.clone())]),
+            Box::new(function_type),
+        );
+        let abstraction = builder.type_abstraction(
+            vec![(parameter, parameter_kind)],
+            function,
+            scheme.clone(),
+            origin.clone(),
+        )?;
+        let global = builder.resolved_binder(owner, scheme, origin.clone())?;
+        let group_body = builder.unit(Type::Unit, origin.clone())?;
+        let root = builder.recursive_binding(
+            vec![(global, abstraction)],
+            group_body,
+            Type::Unit,
+            origin,
+        )?;
+        builder.finish(root)
+    }
+
     fn application_type(depth: usize) -> Type {
         let mut result = Type::Unit;
         for _ in 0..depth {
             result = Type::Application(Box::new(result), Box::new(Type::Unit));
         }
         result
+    }
+
+    fn application_spine_depth(root: &Type) -> usize {
+        let mut depth = 0;
+        let mut current = root;
+        loop {
+            match current {
+                Type::Application(function, argument) => {
+                    assert!(matches!(argument.as_ref(), Type::Unit));
+                    depth += 1;
+                    current = function;
+                }
+                Type::Unit => return depth,
+                _ => panic!("the deep transform payload must remain a Unit application spine"),
+            }
+        }
+    }
+
+    fn deep_arrow_kind(depth: usize) -> Kind {
+        let mut result = Kind::Type;
+        for _ in 0..depth {
+            result = Kind::Arrow(Box::new(Kind::Type), Box::new(result));
+        }
+        result
+    }
+
+    fn arrow_kind_depth(root: &Kind) -> usize {
+        let mut depth = 0;
+        let mut current = root;
+        loop {
+            match current {
+                Kind::Arrow(domain, codomain) => {
+                    assert!(matches!(domain.as_ref(), Kind::Type));
+                    depth += 1;
+                    current = codomain;
+                }
+                Kind::Type => return depth,
+            }
+        }
     }
 
     #[test]
@@ -846,6 +940,114 @@ mod tests {
         assert!(Arc::ptr_eq(folded.registry(), &registry));
         assert_eq!(global_row_shape(identity.registry()), rows);
         assert_eq!(global_row_shape(folded.registry()), rows);
+    }
+
+    #[test]
+    fn row_bearing_construction_and_identity_have_exact_independent_type_work() {
+        std::thread::Builder::new()
+            .name("exact-row-bearing-construction-and-identity".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                // Input literals and primitive: three admitted Int cells = 3.
+                // Function: Unit binder 1 + three-cell function result = 4.
+                // Abstraction: one record + three Arrow Kind nodes + eight-cell scheme = 12.
+                // Recursive owner/root: eight-cell scheme binder + Unit result = 9.
+                // Recursive body Unit = 1. The shared registry and its row add 0.
+                const CONSTRUCTION_WORK: usize = 3 + 4 + 12 + 9 + 1;
+                // Identity literals and primitive: three clone/admission pairs = 6.
+                // Function: Unit binder clone/admission 2 + result clone/admission 6 = 8.
+                // Abstraction: scheme clone/admission 16 + parameter record/Arrow Kind 4 = 20.
+                // Recursive owner/root: scheme binder clone/admission 16 + Unit result 2 = 18.
+                // Recursive body Unit clone/admission = 2. The shared row again adds 0.
+                const IDENTITY_WORK: usize = 6 + 8 + 20 + 18 + 2;
+
+                let fixture = linked_row_bearing_fold_fixture();
+                let registry = Arc::clone(fixture.program.registry());
+                let rows = global_row_shape(&registry);
+                let [(owner, parameters)] = rows.as_slice() else {
+                    panic!("the exact construction fixture should retain one global row");
+                };
+                let [parameter] = parameters.as_slice() else {
+                    panic!("the exact construction row should retain one parameter");
+                };
+                let source = fixture
+                    .graph
+                    .modules()
+                    .first()
+                    .expect("the exact construction fixture should retain its entry module")
+                    .source();
+                let origin = deep_origin(source, super::super::CORE_PAYLOAD_DEPTH_LIMIT - 1);
+                let registry_owners_before = Arc::strong_count(&registry);
+
+                let short = row_bearing_fold_program_with_initial_type_work(
+                    Arc::clone(&registry),
+                    *owner,
+                    *parameter,
+                    origin.clone(),
+                    TYPE_WORK_LIMIT - (CONSTRUCTION_WORK - 1),
+                )
+                .expect_err("one-short construction must reject without publishing a program");
+                assert_eq!(short, BuildError::TypeWorkExceeded);
+                assert_eq!(Arc::strong_count(&registry), registry_owners_before);
+
+                let unchecked = row_bearing_fold_program_with_initial_type_work(
+                    Arc::clone(&registry),
+                    *owner,
+                    *parameter,
+                    origin,
+                    TYPE_WORK_LIMIT - CONSTRUCTION_WORK,
+                )
+                .expect("the exact construction allowance should succeed on a fresh retry");
+                assert!(Arc::ptr_eq(&unchecked.registry, &registry));
+                assert_eq!(global_row_shape(&unchecked.registry), rows);
+                let sources = fixture.sources();
+                let program = super::super::validate::validate_modules(
+                    unchecked,
+                    &sources,
+                    &fixture.module_sources,
+                )
+                .expect("the exact constructed row-bearing Core should freshly validate");
+                assert!(Arc::ptr_eq(program.registry(), &registry));
+                assert_eq!(global_row_shape(program.registry()), rows);
+                assert_eq!(program.node_count(), 7);
+
+                let registry_owners_before = Arc::strong_count(&registry);
+                let short = rebuild_with_initial_type_work(
+                    &program,
+                    false,
+                    TYPE_WORK_LIMIT - (IDENTITY_WORK - 1),
+                )
+                .expect_err("one-short identity rebuild must publish no transformed program");
+                assert_eq!(short, TransformError::Build(BuildError::TypeWorkExceeded));
+                assert_eq!(Arc::strong_count(&registry), registry_owners_before);
+
+                let identity = rebuild_with_initial_type_work(
+                    &program,
+                    false,
+                    TYPE_WORK_LIMIT - IDENTITY_WORK,
+                )
+                .expect("the exact identity allowance should succeed on a fresh retry");
+                assert!(Arc::ptr_eq(&identity.registry, &registry));
+                assert_eq!(global_row_shape(&identity.registry), rows);
+                let identity = super::super::validate::validate_modules(
+                    identity,
+                    &sources,
+                    &fixture.module_sources,
+                )
+                .expect("the exact identity result should freshly validate");
+                assert!(Arc::ptr_eq(identity.registry(), &registry));
+                assert_eq!(global_row_shape(identity.registry()), rows);
+                assert_eq!(identity.node_count(), 7);
+
+                drop(identity);
+                drop(program);
+                drop(sources);
+                drop(fixture);
+                drop(registry);
+            })
+            .expect("the small-stack construction/identity worker should start")
+            .join()
+            .expect("accepted and rejected construction/identity states should dismantle");
     }
 
     #[test]
@@ -887,79 +1089,29 @@ mod tests {
                     origin_depth(&origin),
                     super::super::CORE_PAYLOAD_DEPTH_LIMIT - 1,
                 );
-                let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
-                builder
-                    .reserve_resolved_binders([*owner])
-                    .expect("the authentic global owner should reserve once");
-                let left = builder
-                    .integer(
-                        crate::integer::Integer::parse_decimal("1")
-                            .expect("the left literal should parse"),
-                        Type::Int,
-                        origin.clone(),
-                    )
-                    .expect("the left literal should fit");
-                let right = builder
-                    .integer(
-                        crate::integer::Integer::parse_decimal("2")
-                            .expect("the right literal should parse"),
-                        Type::Int,
-                        origin.clone(),
-                    )
-                    .expect("the right literal should fit");
-                let body = builder
-                    .primitive(Primitive::Add, left, right, Type::Int, origin.clone())
-                    .expect("the foldable primitive should fit");
-                let parameter_binder = builder
-                    .binder(Type::Unit, origin.clone())
-                    .expect("the fold function parameter should fit");
-                let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
-                let function = builder
-                    .function(
-                        parameter_binder,
-                        body,
-                        function_type.clone(),
-                        origin.clone(),
-                    )
-                    .expect("the fold function should fit");
-                let scheme = Type::Forall(
-                    Box::new([(*parameter, canonical.kind.clone())]),
-                    Box::new(function_type),
-                );
-                let abstraction = builder
-                    .type_abstraction(
-                        vec![(*parameter, canonical.kind.clone())],
-                        function,
-                        scheme.clone(),
-                        origin.clone(),
-                    )
-                    .expect("the higher-kinded fold abstraction should fit");
-                let global = builder
-                    .resolved_binder(*owner, scheme, origin.clone())
-                    .expect("the authentic global owner should materialize once");
-                let group_body = builder
-                    .unit(Type::Unit, origin.clone())
-                    .expect("the recursive group body should fit");
-                let root = builder
-                    .recursive_binding(vec![(global, abstraction)], group_body, Type::Unit, origin)
-                    .expect("the authentic recursive owner should fit");
+                let unchecked = row_bearing_fold_program_with_initial_type_work(
+                    Arc::clone(&registry),
+                    *owner,
+                    *parameter,
+                    origin,
+                    0,
+                )
+                .expect("the row-bearing fold fixture should construct");
+                assert!(Arc::ptr_eq(&unchecked.registry, &registry));
+                assert_eq!(global_row_shape(&unchecked.registry), rows);
+                assert_eq!(unchecked.nodes.len(), 7);
+                assert!(unchecked.nodes.iter().any(|node| matches!(
+                    node.kind,
+                    PureExprKind::Computation(PureComputation::Primitive(_)),
+                )));
                 let sources = fixture.sources();
                 let program = super::super::validate::validate_modules(
-                    builder
-                        .finish(root)
-                        .expect("the fold fixture should finish"),
+                    unchecked,
                     &sources,
                     &fixture.module_sources,
                 )
                 .expect("the row-bearing higher-kinded fold fixture should validate");
                 assert!(Arc::ptr_eq(program.registry(), &registry));
-                assert!(matches!(
-                    program
-                        .node(body)
-                        .expect("the exact fold body should exist")
-                        .kind,
-                    PureExprKind::Computation(PureComputation::Primitive(_)),
-                ));
 
                 let registry_owners_before = Arc::strong_count(&registry);
                 let short = rebuild_with_initial_type_work(
@@ -1068,6 +1220,144 @@ mod tests {
                 .expect("the exact transform allowance fits");
         super::super::validate::validate(transformed, &[&source])
             .expect("the exact transform preserves canonical binder kinds");
+    }
+
+    #[test]
+    fn row_bearing_deep_abstraction_failure_dismantles_integrated_transform_state() {
+        std::thread::Builder::new()
+            .name("integrated-row-bearing-transform-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const TYPE_DEPTH: usize = 32_768;
+                const KIND_DEPTH: usize = 16_384;
+                const KIND_NODES: usize = 2 * KIND_DEPTH + 1;
+                const TYPE_CELLS: usize = 2 * TYPE_DEPTH + 1;
+                // Forall root + binder record + binder Kind + body Type.
+                const SCHEME_WORK: usize = 1 + 1 + KIND_NODES + TYPE_CELLS;
+                // The abstraction payload independently clones its binder
+                // record and Kind after the body remap succeeds.
+                const PARAMETER_WORK: usize = 1 + KIND_NODES;
+                const REBUILD_WORK: usize = SCHEME_WORK + PARAMETER_WORK + SCHEME_WORK;
+                const BODY_WORK: usize = 1;
+
+                let fixture = linked_row_bearing_fold_fixture();
+                let registry = Arc::clone(fixture.program.registry());
+                let rows = global_row_shape(&registry);
+                let [(owner, parameters)] = rows.as_slice() else {
+                    panic!("the integrated transform fixture must retain one global row");
+                };
+                let [resolved_parameter] = parameters.as_slice() else {
+                    panic!("the integrated transform row must retain one parameter");
+                };
+                assert!(owner.module().is_some());
+                assert!(matches!(
+                    registry
+                        .type_variable(*resolved_parameter)
+                        .expect("the row parameter must retain its canonical record")
+                        .kind,
+                    Kind::Arrow(_, _),
+                ));
+
+                let source = fixture
+                    .graph
+                    .modules()
+                    .first()
+                    .expect("the integrated fixture must retain its source")
+                    .source();
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the integrated range is ordered"))
+                    .expect("the integrated span belongs to its source");
+                let generated_parameter = TypeVariableId::generated(90_001);
+                let parameter_kind = deep_arrow_kind(KIND_DEPTH);
+                let expression = super::super::TypedExpr {
+                    ty: Type::Forall(
+                        Box::new([(generated_parameter, parameter_kind.clone())]),
+                        Box::new(application_type(TYPE_DEPTH)),
+                    ),
+                    origin: deep_origin(source, super::super::CORE_PAYLOAD_DEPTH_LIMIT),
+                    kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        super::super::type_ops::TypeAbstractionNode::new(
+                            vec![(generated_parameter, parameter_kind)],
+                            fixture.program.root(),
+                        ),
+                    )),
+                };
+
+                let Type::Forall(scheme_parameters, scheme_body) = &expression.ty else {
+                    panic!("the integrated input must retain its deep scheme");
+                };
+                assert_eq!(scheme_parameters[0].0, generated_parameter);
+                assert_eq!(arrow_kind_depth(&scheme_parameters[0].1), KIND_DEPTH);
+                assert_eq!(application_spine_depth(scheme_body), TYPE_DEPTH);
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    &expression.kind
+                else {
+                    panic!("the integrated input must remain a type abstraction");
+                };
+                assert_eq!(abstraction.body(), fixture.program.root());
+                assert_eq!(abstraction.parameters()[0].0, generated_parameter);
+                assert_eq!(arrow_kind_depth(&abstraction.parameters()[0].1), KIND_DEPTH);
+                assert_eq!(
+                    origin_depth(&expression.origin),
+                    super::super::CORE_PAYLOAD_DEPTH_LIMIT,
+                );
+                const { assert!(BODY_WORK + REBUILD_WORK < TYPE_WORK_LIMIT) };
+
+                let owners_before = Arc::strong_count(&registry);
+                let mut output = CoreBuilder::with_registry(Arc::clone(&registry));
+                let body = output
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("the mapped output body must fit");
+                let mut remapped = vec![None; fixture.program.node_count()];
+                remapped[node_index(fixture.program.root()).expect("the root index must fit")] =
+                    Some(body);
+                output
+                    .charge_type_work_for_test(TYPE_WORK_LIMIT - BODY_WORK - (REBUILD_WORK - 1))
+                    .expect("the late one-short allowance must fit");
+                let error =
+                    rebuild_node(&mut output, &fixture.program, &remapped, &expression, false)
+                        .expect_err(
+                            "one missing final admission cell must reject the rebuilt abstraction",
+                        );
+                assert_eq!(error, TransformError::Build(BuildError::TypeWorkExceeded));
+                drop(output);
+                assert_eq!(Arc::strong_count(&registry), owners_before);
+                assert_eq!(global_row_shape(&registry), rows);
+
+                let mut exact_output = CoreBuilder::with_registry(Arc::clone(&registry));
+                let exact_body = exact_output
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("the exact mapped output body must fit");
+                let mut exact_remapped = vec![None; fixture.program.node_count()];
+                exact_remapped
+                    [node_index(fixture.program.root()).expect("the exact root index must fit")] =
+                    Some(exact_body);
+                exact_output
+                    .charge_type_work_for_test(TYPE_WORK_LIMIT - BODY_WORK - REBUILD_WORK)
+                    .expect("the exact integrated allowance must fit");
+                let rebuilt = rebuild_node(
+                    &mut exact_output,
+                    &fixture.program,
+                    &exact_remapped,
+                    &expression,
+                    false,
+                )
+                .expect("the exact integrated allowance must rebuild the abstraction");
+                let exact = exact_output
+                    .finish(rebuilt)
+                    .expect("the exact integrated output must finish unchecked");
+                assert!(Arc::ptr_eq(&exact.registry, &registry));
+                assert_eq!(global_row_shape(&exact.registry), rows);
+                exact.discard_iteratively();
+                assert_eq!(Arc::strong_count(&registry), owners_before);
+
+                expression.discard_iteratively();
+                drop(fixture);
+                drop(registry);
+            })
+            .expect("the integrated transform worker must start")
+            .join()
+            .expect("integrated rejected and exact transform state must dismantle on 256 KiB");
     }
 
     #[test]

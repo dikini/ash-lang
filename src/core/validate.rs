@@ -3941,6 +3941,688 @@ mod tests {
         count
     }
 
+    struct ConsumingModuleValidationAttempt {
+        result: Result<ValidatedProgram, ValidationError>,
+        type_work: usize,
+    }
+
+    fn run_module_validation_phases_for_test(
+        validator: &mut Validator<'_, '_>,
+    ) -> Result<(), ValidationError> {
+        let nominal_parameter_owners = validator.validate_registry()?;
+        validator.validate_envelopes()?;
+        validator.validate_graph()?;
+        let abstraction_owners = validator.collect_binders()?;
+        let type_binders =
+            validator.collect_type_binders(&nominal_parameter_owners, &abstraction_owners)?;
+        validator.validate_node_types(&nominal_parameter_owners, &type_binders)?;
+        validator.validate_scopes()?;
+        validator.validate_type_scopes()
+    }
+
+    fn validate_modules_with_initial_type_work_for_test(
+        program: UnvalidatedProgram,
+        sources: &[&SourceFile],
+        module_sources: &[(ModuleId, SourceId)],
+        initial_type_work: usize,
+    ) -> ConsumingModuleValidationAttempt {
+        let mut validator = match Validator::new_modules(&program, sources, module_sources) {
+            Ok(validator) => validator,
+            Err(error) => {
+                program.discard_iteratively();
+                return ConsumingModuleValidationAttempt {
+                    result: Err(error),
+                    type_work: 0,
+                };
+            }
+        };
+        if let Err(error) = validator.charge_type_work(initial_type_work) {
+            let type_work = validator.type_work.get();
+            drop(validator);
+            program.discard_iteratively();
+            return ConsumingModuleValidationAttempt {
+                result: Err(error),
+                type_work,
+            };
+        }
+        if let Err(error) = run_module_validation_phases_for_test(&mut validator) {
+            let type_work = validator.type_work.get();
+            drop(validator);
+            program.discard_iteratively();
+            return ConsumingModuleValidationAttempt {
+                result: Err(error),
+                type_work,
+            };
+        }
+        let type_work = validator.type_work.get();
+        drop(validator);
+
+        let (registry, arena, stored_nodes, root) = program.into_parts();
+        let mut nodes = Vec::with_capacity(stored_nodes.len());
+        for (index, stored) in stored_nodes.into_iter().enumerate() {
+            let node = match node_id(arena, index) {
+                Ok(node) => node,
+                Err(error) => {
+                    return ConsumingModuleValidationAttempt {
+                        result: Err(error),
+                        type_work,
+                    };
+                }
+            };
+            let Some(origin) = stored.origin else {
+                return ConsumingModuleValidationAttempt {
+                    result: Err(ValidationError::new(
+                        ValidationReason::Provenance,
+                        Some(node),
+                    )),
+                    type_work,
+                };
+            };
+            nodes.push(TypedExpr {
+                ty: stored.ty,
+                origin,
+                kind: stored.kind,
+            });
+        }
+
+        ConsumingModuleValidationAttempt {
+            result: Ok(ValidatedProgram::new(PureProgram::new(
+                registry, arena, nodes, root,
+            ))),
+            type_work,
+        }
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct CompleteModuleValidationWork {
+        ordinary_registry: usize,
+        row_structure: usize,
+        envelopes: usize,
+        graph: usize,
+        ordinary_binders: usize,
+        initializer_owners: usize,
+        resolved_matching: usize,
+        generated_matching: usize,
+        node_types: usize,
+        term_scopes: usize,
+        type_scopes: usize,
+    }
+
+    impl CompleteModuleValidationWork {
+        fn total(&self) -> usize {
+            self.ordinary_registry
+                + self.row_structure
+                + self.envelopes
+                + self.graph
+                + self.ordinary_binders
+                + self.initializer_owners
+                + self.resolved_matching
+                + self.generated_matching
+                + self.node_types
+                + self.term_scopes
+                + self.type_scopes
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct LinkedValidationTerms {
+        rows: usize,
+        resolved_parameters: usize,
+        resolved_kind_nodes: usize,
+        initializer_owners: usize,
+        generated_parameters: usize,
+        generated_kind_nodes: usize,
+    }
+
+    impl LinkedValidationTerms {
+        fn row_structure(self) -> usize {
+            2 * self.rows + 2 * self.resolved_parameters
+        }
+
+        fn resolved_matching(self) -> usize {
+            2 * self.resolved_parameters + self.resolved_kind_nodes + self.rows
+        }
+
+        fn generated_matching(self) -> usize {
+            self.generated_parameters + self.generated_kind_nodes
+        }
+    }
+
+    fn linked_validation_terms(program: &UnvalidatedProgram) -> LinkedValidationTerms {
+        let rows = program.registry.global_parameter_rows();
+        let resolved_parameters = rows.iter().map(|row| row.parameters().len()).sum();
+        let resolved_kind_nodes = rows
+            .iter()
+            .flat_map(|row| row.parameters())
+            .map(|parameter| {
+                kind_node_count(
+                    &program
+                        .registry
+                        .type_variable(*parameter)
+                        .expect("each row parameter has a canonical record")
+                        .kind,
+                )
+            })
+            .sum();
+        let initializer_owners = program
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+                else {
+                    return None;
+                };
+                Some(
+                    group
+                        .members()
+                        .iter()
+                        .filter(|member| {
+                            matches!(
+                                program.nodes[member
+                                    .initializer()
+                                    .index()
+                                    .expect("initializer index fits")]
+                                .kind,
+                                PureExprKind::Computation(PureComputation::TypeAbstraction(_))
+                            )
+                        })
+                        .count(),
+                )
+            })
+            .sum();
+        let mut generated_parameters = 0;
+        let mut generated_kind_nodes = 0;
+        for node in &program.nodes {
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                &node.kind
+            else {
+                continue;
+            };
+            for (parameter, kind) in abstraction.parameters() {
+                if matches!(parameter, crate::types::TypeVariableId::Generated(_)) {
+                    generated_parameters += 1;
+                    generated_kind_nodes += kind_node_count(kind);
+                }
+            }
+        }
+        LinkedValidationTerms {
+            rows: rows.len(),
+            resolved_parameters,
+            resolved_kind_nodes,
+            initializer_owners,
+            generated_parameters,
+            generated_kind_nodes,
+        }
+    }
+
+    fn arrow_kind(depth: usize) -> Kind {
+        let mut kind = Kind::Type;
+        for _ in 0..depth {
+            kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+        }
+        kind
+    }
+
+    fn linked_complete_validation_fixture(
+        generated_kind_depth: usize,
+        generated_type_depth: usize,
+        generated_origin_depth: usize,
+    ) -> LinkedCoreValidationFixture {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub relay<F : Type -> Type> : F<Unit> -> F<Unit>\n",
+                "relay value = value\n",
+            ),
+            concat!(
+                "import dependency (relay)\n",
+                "main : Unit -> Unit\n",
+                "main () = ()\n",
+            ),
+            &["relay"],
+        );
+        let (owner, parameters) = fixture.global("relay");
+        let [resolved_parameter] = parameters else {
+            panic!("the cumulative fixture retains one resolved parameter");
+        };
+        let resolved_parameter = *resolved_parameter;
+        let resolved_kind = fixture
+            .program
+            .registry
+            .type_variable(resolved_parameter)
+            .expect("the resolved parameter has one canonical record")
+            .kind
+            .clone();
+        let owner_module = owner
+            .module()
+            .expect("the resolved global owner belongs to a module");
+        let owner_source = fixture
+            .graph
+            .modules()
+            .iter()
+            .find(|module| module.id() == owner_module)
+            .expect("the owner module belongs to the fixture graph")
+            .source();
+        let owner_origin = Origin::Source(
+            owner_source
+                .span(ByteRange::new(0, 1).expect("the owner range is ordered"))
+                .expect("the owner span belongs to its source"),
+        );
+        let generated_origin = generated_origin(owner_source, generated_origin_depth);
+
+        let mut builder = CoreBuilder::with_registry(Arc::clone(&fixture.program.registry));
+        builder
+            .reserve_resolved_binders([owner])
+            .expect("the authentic resolved owner reserves once");
+        let resolved_value_type = Type::Application(
+            Box::new(Type::Variable(resolved_parameter)),
+            Box::new(Type::Unit),
+        );
+        let resolved_argument = builder
+            .binder(resolved_value_type.clone(), owner_origin.clone())
+            .expect("the resolved function argument fits");
+        let resolved_body = builder
+            .variable(
+                resolved_argument.id(),
+                resolved_value_type.clone(),
+                owner_origin.clone(),
+            )
+            .expect("the resolved function body fits");
+        let resolved_function_type = Type::Function(
+            Box::new(resolved_value_type.clone()),
+            Box::new(resolved_value_type),
+        );
+        let resolved_function = builder
+            .function(
+                resolved_argument,
+                resolved_body,
+                resolved_function_type.clone(),
+                owner_origin.clone(),
+            )
+            .expect("the resolved function fits");
+        let resolved_scheme = Type::Forall(
+            Box::new([(resolved_parameter, resolved_kind.clone())]),
+            Box::new(resolved_function_type),
+        );
+        let resolved_abstraction = builder
+            .type_abstraction(
+                vec![(resolved_parameter, resolved_kind)],
+                resolved_function,
+                resolved_scheme.clone(),
+                owner_origin.clone(),
+            )
+            .expect("the resolved abstraction fits");
+        let global = builder
+            .resolved_binder(owner, resolved_scheme, owner_origin.clone())
+            .expect("the authentic resolved owner materializes once");
+
+        let generated_value_type = function_type(generated_type_depth);
+        let generated_argument = builder
+            .binder(generated_value_type.clone(), generated_origin.clone())
+            .expect("the generated function argument fits");
+        let generated_body = builder
+            .variable(
+                generated_argument.id(),
+                generated_value_type.clone(),
+                generated_origin.clone(),
+            )
+            .expect("the generated function body fits");
+        let generated_body_type = Type::Function(
+            Box::new(generated_value_type.clone()),
+            Box::new(generated_value_type),
+        );
+        let generated_body = builder
+            .function(
+                generated_argument,
+                generated_body,
+                generated_body_type.clone(),
+                generated_origin.clone(),
+            )
+            .expect("the generated function fits");
+        let generated_parameter = crate::types::TypeVariableId::generated(90_000);
+        let generated_kind = arrow_kind(generated_kind_depth);
+        let generated_scheme = Type::Forall(
+            Box::new([(generated_parameter, generated_kind.clone())]),
+            Box::new(generated_body_type),
+        );
+        let generated_abstraction = builder
+            .type_abstraction(
+                vec![(generated_parameter, generated_kind)],
+                generated_body,
+                generated_scheme.clone(),
+                generated_origin.clone(),
+            )
+            .expect("the generated abstraction fits");
+        let root = builder
+            .recursive_binding(
+                vec![(global, resolved_abstraction)],
+                generated_abstraction,
+                generated_scheme,
+                generated_origin,
+            )
+            .expect("the cumulative recursive group fits");
+        fixture.program = builder
+            .finish(root)
+            .expect("the cumulative validation fixture finishes");
+        fixture
+    }
+
+    fn run_complete_module_validation_phases(
+        validator: &mut Validator<'_, '_>,
+        terms: LinkedValidationTerms,
+    ) -> Result<CompleteModuleValidationWork, ValidationError> {
+        let mut previous = validator.type_work.get();
+        let nominal_parameter_owners = validator.validate_registry()?;
+        let registry_total = validator.type_work.get() - previous;
+        let ordinary_registry = registry_total
+            .checked_sub(terms.row_structure())
+            .expect("row structure is part of registry work");
+
+        previous = validator.type_work.get();
+        validator.validate_envelopes()?;
+        let envelopes = validator.type_work.get() - previous;
+
+        previous = validator.type_work.get();
+        validator.validate_graph()?;
+        let graph = validator.type_work.get() - previous;
+
+        previous = validator.type_work.get();
+        let abstraction_owners = validator.collect_binders()?;
+        let binder_total = validator.type_work.get() - previous;
+        let ordinary_binders = binder_total
+            .checked_sub(terms.initializer_owners)
+            .expect("initializer owners are part of binder collection");
+
+        previous = validator.type_work.get();
+        let type_binders =
+            validator.collect_type_binders(&nominal_parameter_owners, &abstraction_owners)?;
+        assert_eq!(
+            validator.type_work.get() - previous,
+            terms.resolved_matching() + terms.generated_matching(),
+            "resolved and generated matching are the complete type-binder phase",
+        );
+
+        previous = validator.type_work.get();
+        validator.validate_node_types(&nominal_parameter_owners, &type_binders)?;
+        let node_types = validator.type_work.get() - previous;
+
+        previous = validator.type_work.get();
+        validator.validate_scopes()?;
+        let term_scopes = validator.type_work.get() - previous;
+
+        previous = validator.type_work.get();
+        validator.validate_type_scopes()?;
+        let type_scopes = validator.type_work.get() - previous;
+
+        Ok(CompleteModuleValidationWork {
+            ordinary_registry,
+            row_structure: terms.row_structure(),
+            envelopes,
+            graph,
+            ordinary_binders,
+            initializer_owners: terms.initializer_owners,
+            resolved_matching: terms.resolved_matching(),
+            generated_matching: terms.generated_matching(),
+            node_types,
+            term_scopes,
+            type_scopes,
+        })
+    }
+
+    #[test]
+    fn complete_linked_core_validation_work_is_additive_exact_and_retryable() {
+        const S: usize = 1;
+        const R: usize = 1;
+        const K_R: usize = 3;
+        const O: usize = 1;
+        const G: usize = 1;
+        const K_G: usize = 3;
+        // The ordinary module-registry scan visits the one canonical global
+        // parameter record before row authentication begins.
+        const CANONICAL_REGISTRY_RECORDS: usize = R;
+        const ROW_STRUCTURE: usize = 2 * S + 2 * R;
+        // The seven stored envelopes contain 42 Type/binder-Kind cells:
+        // 3 + 7 + 12 for the resolved value/function/scheme, 1 + 3 + 8 for
+        // the generated value/function/scheme, and 8 for the group envelope.
+        const ENVELOPE_TYPE_AND_KIND_CELLS: usize = 42;
+        const GRAPH_TYPE_WORK: usize = 0;
+        // Ordinary binder admission revisits the resolved argument (3), the
+        // resolved global scheme (12), and the generated argument (1).
+        const BINDER_TYPE_AND_KIND_CELLS: usize = 16;
+        // Resolved matching fuses R identity-class visits, K_R canonical Kind
+        // comparisons, and R ordered-row identity visits. The final S is only
+        // a scalar consumed-row count; the validator retains no S-cell set.
+        const RESOLVED_MATCHING: usize = 2 * R + K_R + S;
+        const GENERATED_MATCHING: usize = G + K_G;
+        // Per-node Kind synthesis and structural agreement are independently
+        // additive: resolved variable/function/abstraction 10 + 22 + 32,
+        // generated variable/function/abstraction 3 + 8 + 18, and the
+        // recursive root 34.
+        const RESOLVED_VARIABLE_NODE_WORK: usize = 10;
+        const RESOLVED_FUNCTION_NODE_WORK: usize = 22;
+        const RESOLVED_ABSTRACTION_NODE_WORK: usize = 32;
+        const GENERATED_VARIABLE_NODE_WORK: usize = 3;
+        const GENERATED_FUNCTION_NODE_WORK: usize = 8;
+        const GENERATED_ABSTRACTION_NODE_WORK: usize = 18;
+        const RECURSIVE_ROOT_NODE_WORK: usize = 34;
+        const NODE_KIND_AND_TYPE_WORK: usize = RESOLVED_VARIABLE_NODE_WORK
+            + RESOLVED_FUNCTION_NODE_WORK
+            + RESOLVED_ABSTRACTION_NODE_WORK
+            + GENERATED_VARIABLE_NODE_WORK
+            + GENERATED_FUNCTION_NODE_WORK
+            + GENERATED_ABSTRACTION_NODE_WORK
+            + RECURSIVE_ROOT_NODE_WORK;
+        // Graph and term-scope analysis retain no Type-work cells for this
+        // closed tree. Type-scope analysis consumes 42 envelope cells, 16
+        // binder cells, and 5 free-variable set entries.
+        const TERM_SCOPE_TYPE_WORK: usize = 0;
+        const TYPE_SCOPE_WORK: usize = 42 + 16 + 5;
+        const EXPECTED: CompleteModuleValidationWork = CompleteModuleValidationWork {
+            ordinary_registry: CANONICAL_REGISTRY_RECORDS,
+            row_structure: ROW_STRUCTURE,
+            envelopes: ENVELOPE_TYPE_AND_KIND_CELLS,
+            graph: GRAPH_TYPE_WORK,
+            ordinary_binders: BINDER_TYPE_AND_KIND_CELLS,
+            initializer_owners: O,
+            resolved_matching: RESOLVED_MATCHING,
+            generated_matching: GENERATED_MATCHING,
+            node_types: NODE_KIND_AND_TYPE_WORK,
+            term_scopes: TERM_SCOPE_TYPE_WORK,
+            type_scopes: TYPE_SCOPE_WORK,
+        };
+
+        assert_eq!(CORE_VALIDATION_TYPE_WORK_LIMIT, 983_040);
+        let fixture = linked_complete_validation_fixture(1, 0, 1);
+        let sources = linked_fixture_sources(&fixture);
+        let terms = linked_validation_terms(&fixture.program);
+        assert_eq!(
+            terms,
+            LinkedValidationTerms {
+                rows: S,
+                resolved_parameters: R,
+                resolved_kind_nodes: K_R,
+                initializer_owners: O,
+                generated_parameters: G,
+                generated_kind_nodes: K_G,
+            }
+        );
+
+        let mut measured =
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the measured module/source relation is canonical");
+        assert_eq!(
+            run_complete_module_validation_phases(&mut measured, terms)
+                .expect("the measured cumulative fixture validates"),
+            EXPECTED,
+        );
+
+        let exact_work = EXPECTED.total();
+        assert_eq!(exact_work, 264);
+        let mut exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the exact module/source relation is canonical");
+        exact
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work)
+            .expect("the exact cumulative precharge fits");
+        assert_eq!(
+            run_complete_module_validation_phases(&mut exact, terms)
+                .expect("the complete additive allowance fits"),
+            EXPECTED,
+        );
+        assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let rows_before = global_row_shape(&fixture.program.registry);
+        let owners_before = Arc::strong_count(&fixture.program.registry);
+        let mut short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the one-short module/source relation is canonical");
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1))
+            .expect("the one-short cumulative precharge fits");
+        let error = run_complete_module_validation_phases(&mut short, terms)
+            .expect_err("one missing cumulative unit rejects without a validated capability");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        drop(short);
+        assert_eq!(Arc::strong_count(&fixture.program.registry), owners_before);
+        assert_eq!(global_row_shape(&fixture.program.registry), rows_before);
+
+        let mut retry = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the retry module/source relation is canonical");
+        retry
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work)
+            .expect("the retry cumulative precharge fits");
+        assert_eq!(
+            run_complete_module_validation_phases(&mut retry, terms)
+                .expect("the same fixture succeeds with its exact allowance on retry"),
+            EXPECTED,
+        );
+    }
+
+    #[test]
+    fn deep_linked_core_validator_states_are_disposed_on_a_small_stack() {
+        const KIND_DEPTH: usize = 4_096;
+        const TYPE_DEPTH: usize = super::super::dialect::CORE_PAYLOAD_DEPTH_LIMIT - 2;
+        const ORIGIN_DEPTH: usize = super::super::dialect::CORE_PAYLOAD_DEPTH_LIMIT;
+        const DEEP_KIND_NODES: usize = 2 * KIND_DEPTH + 1;
+
+        fn validate_fixture_with_initial_type_work(
+            fixture: LinkedCoreValidationFixture,
+            initial_type_work: usize,
+        ) -> ConsumingModuleValidationAttempt {
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                program,
+                module_sources,
+                globals,
+            } = fixture;
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let attempt = validate_modules_with_initial_type_work_for_test(
+                program,
+                &sources,
+                &module_sources,
+                initial_type_work,
+            );
+            drop(sources);
+            drop(globals);
+            drop(graph);
+            drop(directory);
+            attempt
+        }
+
+        std::thread::Builder::new()
+            .name("deep-linked-core-validation-owner".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let accepted_fixture =
+                    linked_complete_validation_fixture(KIND_DEPTH, TYPE_DEPTH, ORIGIN_DEPTH);
+                let sources = linked_fixture_sources(&accepted_fixture);
+                let terms = linked_validation_terms(&accepted_fixture.program);
+                assert_eq!(terms.rows, 1);
+                assert_eq!(terms.resolved_parameters, 1);
+                assert_eq!(terms.resolved_kind_nodes, 3);
+                assert_eq!(terms.initializer_owners, 1);
+                assert_eq!(terms.generated_parameters, 1);
+                assert_eq!(terms.generated_kind_nodes, DEEP_KIND_NODES);
+                assert_eq!(terms.row_structure(), 4);
+                assert_eq!(terms.resolved_matching(), 6);
+                assert_eq!(terms.generated_matching(), DEEP_KIND_NODES + 1);
+
+                let mut measured = Validator::new_modules(
+                    &accepted_fixture.program,
+                    &sources,
+                    &accepted_fixture.module_sources,
+                )
+                .expect("the deep measured relation is canonical");
+                let expected = run_complete_module_validation_phases(&mut measured, terms)
+                    .expect("the deep row-bearing validator state is accepted");
+                let exact_work = expected.total();
+                assert_eq!(measured.type_work.get(), exact_work);
+                assert!(exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
+                drop(measured);
+                drop(sources);
+
+                let accepted_registry = Arc::clone(&accepted_fixture.program.registry);
+                let accepted_rows = global_row_shape(&accepted_registry);
+                let accepted = validate_fixture_with_initial_type_work(
+                    accepted_fixture,
+                    CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work,
+                );
+                assert_eq!(accepted.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+                let accepted = accepted
+                    .result
+                    .expect("the owned deep fixture validates with its exact allowance");
+                assert!(Arc::ptr_eq(accepted.registry(), &accepted_registry));
+                assert_eq!(global_row_shape(accepted.registry()), accepted_rows);
+                drop(accepted);
+                drop(accepted_registry);
+
+                let rejected_fixture =
+                    linked_complete_validation_fixture(KIND_DEPTH, TYPE_DEPTH, ORIGIN_DEPTH);
+                assert_eq!(linked_validation_terms(&rejected_fixture.program), terms,);
+                let rejected_registry = Arc::downgrade(&rejected_fixture.program.registry);
+                let rejected = validate_fixture_with_initial_type_work(
+                    rejected_fixture,
+                    CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1),
+                );
+                assert_eq!(rejected.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+                assert_eq!(
+                    rejected
+                        .result
+                        .expect_err("one missing unit must consume and reject the deep program")
+                        .reason(),
+                    ValidationReason::Resource,
+                );
+                assert!(
+                    rejected_registry.upgrade().is_none(),
+                    "rejection must release the program's registry and its retained row",
+                );
+
+                let retry_fixture =
+                    linked_complete_validation_fixture(KIND_DEPTH, TYPE_DEPTH, ORIGIN_DEPTH);
+                assert_eq!(linked_validation_terms(&retry_fixture.program), terms);
+                let retry_registry = Arc::clone(&retry_fixture.program.registry);
+                let retry_rows = global_row_shape(&retry_registry);
+                let retry = validate_fixture_with_initial_type_work(
+                    retry_fixture,
+                    CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work,
+                );
+                assert_eq!(retry.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+                let retry = retry
+                    .result
+                    .expect("a fresh owned deep fixture retries with its exact allowance");
+                assert!(Arc::ptr_eq(retry.registry(), &retry_registry));
+                assert_eq!(global_row_shape(retry.registry()), retry_rows);
+                drop(retry);
+                drop(retry_registry);
+            })
+            .expect("the deep linked validation worker should start")
+            .join()
+            .expect("accepted and rejected deep row states dismantle on 256 KiB");
+    }
+
     #[test]
     fn linked_core_row_structure_work_is_exact_atomic_and_retryable() {
         let fixture = linked_row_structure_fixture();

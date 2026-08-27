@@ -4323,6 +4323,7 @@ mod tests {
     #[test]
     fn deep_public_linked_value_kinding_fits_the_default_budget_on_a_small_stack() {
         const DEPTH: usize = 32_768;
+        const GENERATED_ORIGIN_DEPTH: usize = 16_384;
         // Checked/source type equality is fused into synthesis. The canonical
         // lookup separately charges both checked and source Kind pairs, while
         // each scheduled codomain owns one continuation cell. Iterative
@@ -4330,8 +4331,15 @@ mod tests {
         // coverage-set cell proves the owner binder was visited; the module
         // and binder-owner authentication indexes add two fixed cells. Linked
         // registry-row authentication visits the identity row and parameter.
+        const DEEP_TYPE_AND_KIND_WORK: usize = 9 * DEPTH;
+        const PREEXISTING_FIXED_WORK: usize = 63;
+        // Replacing the predecessor Source-Origin comparison with generated
+        // causes plus its Source leaf adds exactly one cell per cause. Keep
+        // that independent deep payload within the production constraint cap.
+        const GENERATED_ORIGIN_DELTA: usize = GENERATED_ORIGIN_DEPTH;
         const ROW_WORK: usize = 2;
-        const EXACT_WORK: usize = 9 * DEPTH + 63 + ROW_WORK;
+        const EXACT_WORK: usize =
+            DEEP_TYPE_AND_KIND_WORK + PREEXISTING_FIXED_WORK + GENERATED_ORIGIN_DELTA + ROW_WORK;
         // TypeWork retains only the two canonical environment records.
         const EXACT_TYPE_WORK: usize = 2;
 
@@ -4354,6 +4362,34 @@ mod tests {
                     ty
                 }
 
+                fn deep_origin(span: Span) -> Origin {
+                    let mut origin = Origin::Source(span);
+                    for _ in 0..GENERATED_ORIGIN_DEPTH {
+                        origin = Origin::Generated {
+                            cause: Box::new(origin),
+                            reason: crate::source::GeneratedReason::TypeChecking,
+                        };
+                    }
+                    origin
+                }
+
+                fn generated_origin_depth(mut origin: &Origin) -> usize {
+                    let mut depth = 0;
+                    loop {
+                        match origin {
+                            Origin::Generated { cause, reason } => {
+                                assert_eq!(*reason, crate::source::GeneratedReason::TypeChecking);
+                                depth += 1;
+                                origin = cause;
+                            }
+                            Origin::Source(_) => return depth,
+                            Origin::Related { .. } => {
+                                panic!("the deep fixture must use only generated causes")
+                            }
+                        }
+                    }
+                }
+
                 fn fixture() -> ResolvedModuleProgram {
                     let mut program = entry_program(concat!(
                         "identity<A> : A -> A\n",
@@ -4367,17 +4403,47 @@ mod tests {
                         .registry()
                         .type_variable(parameter)
                         .expect("the source binder should be canonical");
+                    let origin_span = canonical.origin.primary_span();
                     let canonical_parameter = ResolvedTypeVariable {
                         id: parameter,
                         spelling: canonical.spelling.clone(),
                         kind: deep_kind(),
-                        origin: canonical.origin.clone(),
+                        origin: deep_origin(origin_span),
                     };
                     assert!(program.replace_first_global_kind_boundary_for_test(
                         module,
-                        (canonical_parameter, deep_kind(), deep_kind()),
+                        (
+                            canonical_parameter,
+                            deep_kind(),
+                            deep_kind(),
+                            deep_origin(origin_span),
+                        ),
                         (deep_value_type(parameter), deep_value_type(parameter)),
                     ));
+                    let [row] = program.registry().global_parameter_rows() else {
+                        panic!("the deep fixture must retain exactly one global row");
+                    };
+                    assert_eq!(row.parameters(), [parameter]);
+                    let canonical = program
+                        .registry()
+                        .type_variable(parameter)
+                        .expect("the deep source binder must remain canonical");
+                    assert_eq!(
+                        generated_origin_depth(&canonical.origin),
+                        GENERATED_ORIGIN_DEPTH,
+                    );
+                    let source_origin = match program.groups()[0].definitions()[0].kind() {
+                        ResolvedDefinitionKind::Equational(global) => {
+                            &global.interface.type_parameters[0].origin
+                        }
+                        ResolvedDefinitionKind::InlineOperational(_) => {
+                            panic!("the deep fixture must remain equational")
+                        }
+                    };
+                    assert_eq!(
+                        generated_origin_depth(source_origin),
+                        GENERATED_ORIGIN_DEPTH,
+                    );
                     program
                 }
 
@@ -5034,6 +5100,26 @@ mod tests {
 
     #[test]
     fn linked_registry_rows_have_exact_constraint_work_and_no_type_work() {
+        const GROUPS: usize = 2;
+        const TYPE_VARIABLES: usize = 4;
+        const GLOBAL_SCHEMES: usize = 3;
+        const GLOBAL_ROWS: usize = 2;
+        const GLOBAL_PARAMETERS: usize = 4;
+        const ROOT_VISIT_WORK: usize = 1;
+        const AUTHENTICATION_INDEX_WORK: usize = GROUPS + TYPE_VARIABLES;
+        const GROUP_VISIT_WORK: usize = GROUPS;
+        const GLOBAL_SCHEME_VISIT_WORK: usize = GLOBAL_SCHEMES;
+        const GLOBAL_OWNER_IDENTITY_WORK: usize = GLOBAL_PARAMETERS;
+        const OWNER_COVERAGE_WORK: usize = 1;
+        const ROW_AUTHENTICATION_WORK: usize = GLOBAL_ROWS + GLOBAL_PARAMETERS;
+        const EXACT_AUTHENTICATION_WORK: usize = ROOT_VISIT_WORK
+            + AUTHENTICATION_INDEX_WORK
+            + GROUP_VISIT_WORK
+            + GLOBAL_SCHEME_VISIT_WORK
+            + GLOBAL_OWNER_IDENTITY_WORK
+            + OWNER_COVERAGE_WORK
+            + ROW_AUTHENTICATION_WORK;
+
         let program = linked_registry_row_program();
         let row_count = program.registry().global_parameter_rows().len();
         let parameter_count = program
@@ -5043,8 +5129,20 @@ mod tests {
             .map(|row| row.parameters().len())
             .sum::<usize>();
         let exact_row_work = row_count + parameter_count;
-        assert!(row_count > 1);
-        assert!(parameter_count > row_count);
+        assert_eq!(program.groups().len(), GROUPS);
+        assert_eq!(program.registry().type_variable_count(), TYPE_VARIABLES);
+        assert_eq!(
+            program
+                .groups()
+                .iter()
+                .map(|group| group.schemes().len())
+                .sum::<usize>(),
+            GLOBAL_SCHEMES,
+        );
+        assert_eq!(row_count, GLOBAL_ROWS);
+        assert_eq!(parameter_count, GLOBAL_PARAMETERS);
+        assert_eq!(exact_row_work, ROW_AUTHENTICATION_WORK);
+        assert_eq!(EXACT_AUTHENTICATION_WORK, 23);
 
         let mut row_short = InterfaceConstraintBudget::with_limit(exact_row_work - 1);
         assert_eq!(
@@ -5061,12 +5159,8 @@ mod tests {
             .expect("a fresh exact-budget fixture must authenticate its rows");
         assert_eq!(row_exact.used(), exact_row_work);
 
-        let mut authentication_measured = InterfaceConstraintBudget::default();
-        authenticate_linked_registry_facts(&retry, &mut authentication_measured)
-            .expect("the complete linked registry should authenticate");
-        let exact_authentication_work = authentication_measured.used();
         let mut authentication_short =
-            InterfaceConstraintBudget::with_limit(exact_authentication_work - 1);
+            InterfaceConstraintBudget::with_limit(EXACT_AUTHENTICATION_WORK - 1);
         let mut untouched_type_work = TypeWorkBudget::with_limit(0);
         let rejected = validate_interface_evidence_with_budget(
             linked_registry_row_program(),
@@ -5079,8 +5173,14 @@ mod tests {
                 .reason(),
             EvidenceValidationReason::ConstraintResourceExhausted,
         );
-        assert_eq!(authentication_short.used(), exact_authentication_work - 1);
+        assert_eq!(authentication_short.used(), EXACT_AUTHENTICATION_WORK - 1,);
         assert_eq!(untouched_type_work.used(), 0);
+
+        let mut authentication_exact =
+            InterfaceConstraintBudget::with_limit(EXACT_AUTHENTICATION_WORK);
+        authenticate_linked_registry_facts(&retry, &mut authentication_exact)
+            .expect("the immutable fixture must retry with the exact authentication formula");
+        assert_eq!(authentication_exact.used(), EXACT_AUTHENTICATION_WORK);
 
         let mut measured_constraint_work = InterfaceConstraintBudget::default();
         let mut measured_type_work = TypeWorkBudget::default();

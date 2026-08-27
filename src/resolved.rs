@@ -1977,10 +1977,10 @@ impl ResolvedModuleProgram {
     pub(crate) fn replace_first_global_kind_boundary_for_test(
         &mut self,
         module: ModuleId,
-        parameter_kinds: (ResolvedTypeVariable, Kind, Kind),
+        parameter_kinds: (ResolvedTypeVariable, Kind, Kind, Origin),
         value_types: (Type, Type),
     ) -> bool {
-        let (canonical_parameter, checked_kind, source_kind) = parameter_kinds;
+        let (canonical_parameter, checked_kind, source_kind, source_origin) = parameter_kinds;
         let parameter = canonical_parameter.id;
         let Some(group_index) = self.groups.iter().position(|group| group.module == module) else {
             return false;
@@ -2032,7 +2032,12 @@ impl ResolvedModuleProgram {
         let ResolvedDefinitionKind::Equational(global) = &mut definition.kind else {
             return false;
         };
-        global.interface.type_parameters[source_parameter_index].kind = source_kind;
+        let source_parameter = &mut global.interface.type_parameters[source_parameter_index];
+        source_parameter.kind = source_kind;
+        discard_origin_iteratively(std::mem::replace(
+            &mut source_parameter.origin,
+            source_origin,
+        ));
         discard_type_iteratively(std::mem::replace(
             &mut global.interface.annotation.ty,
             value_types.1,
@@ -15204,9 +15209,21 @@ mod tests {
 
     #[test]
     fn combine_checked_retains_borrowed_global_parameter_rows_in_dependency_order() {
+        const MODULES: usize = 2;
+        const GLOBAL_SCHEMES: usize = 3;
         const GLOBAL_ROWS: usize = 2;
         const GLOBAL_PARAMETERS: usize = 3;
-        const CONSTRAINT_WORK: usize = 18;
+        const PREEXISTING_FIXED_CONSTRAINT_WORK: usize = 2 * MODULES + GLOBAL_SCHEMES;
+        const GLOBAL_OWNER_UNIQUENESS_WORK: usize = GLOBAL_ROWS;
+        const FIXED_CONSTRAINT_WORK: usize =
+            PREEXISTING_FIXED_CONSTRAINT_WORK + GLOBAL_OWNER_UNIQUENESS_WORK;
+        const TYPE_VARIABLE_UNIQUENESS_WORK: usize = GLOBAL_PARAMETERS;
+        const GLOBAL_PARAMETER_VISIT_WORK: usize = GLOBAL_PARAMETERS;
+        const CANONICAL_KIND_COMPARISON_WORK: usize = GLOBAL_PARAMETERS;
+        const CONSTRAINT_WORK: usize = FIXED_CONSTRAINT_WORK
+            + TYPE_VARIABLE_UNIQUENESS_WORK
+            + GLOBAL_PARAMETER_VISIT_WORK
+            + CANONICAL_KIND_COMPARISON_WORK;
         const PREEXISTING_RETENTION_TYPE_WORK: usize = 3 * GLOBAL_PARAMETERS;
         const ROW_RETENTION_TYPE_WORK: usize = 2 * GLOBAL_ROWS + GLOBAL_PARAMETERS;
         const TYPE_WORK: usize = PREEXISTING_RETENTION_TYPE_WORK + ROW_RETENTION_TYPE_WORK;
@@ -15215,11 +15232,27 @@ mod tests {
         let counts = checked_registry_counts(&modules).expect("the row counts should fit");
         assert_eq!(counts.global_rows, GLOBAL_ROWS);
         assert_eq!(counts.global_parameters, GLOBAL_PARAMETERS);
+        assert_eq!(counts.fixed_constraint_work, FIXED_CONSTRAINT_WORK);
+        assert_eq!(
+            counts.fixed_constraint_work - PREEXISTING_FIXED_CONSTRAINT_WORK,
+            GLOBAL_OWNER_UNIQUENESS_WORK,
+            "each non-empty global scheme owns one pre-retention owner-uniqueness cell",
+        );
         assert_eq!(
             counts.retention_type_work - PREEXISTING_RETENTION_TYPE_WORK,
             ROW_RETENTION_TYPE_WORK,
             "rows retain only one row slot, one owner index slot, and each scalar identity",
         );
+
+        let mut constraint_short =
+            crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+        let mut untouched_type = TypeWorkBudget::with_limit(TYPE_WORK);
+        assert_eq!(
+            ResolvedRegistry::combine_checked(&modules, &mut untouched_type, &mut constraint_short,),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(constraint_short.used(), CONSTRAINT_WORK - 1);
+        assert_eq!(untouched_type.used(), 0);
 
         let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
         let mut exact_constraint =
