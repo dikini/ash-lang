@@ -17,8 +17,8 @@ use crate::{
     source::{Origin, Span, discard_origin_iteratively},
     types::{
         ConstructorId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
-        clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
-        same_kind_with_charge,
+        clone_arrows_with_budget, clone_kind_with_budget, clone_type_with_budget,
+        discard_type_iteratively, same_kind_with_charge,
     },
 };
 
@@ -4274,6 +4274,24 @@ pub struct ResolvedRegistry {
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
     type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
     abstract_nominal_names: HashMap<NominalTypeId, String>,
+    abstract_nominal_kinds: HashMap<NominalTypeId, NonMaterializedNominalKindFact>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NonMaterializedNominalKindFact {
+    kind: Kind,
+    origin: Span,
+}
+
+pub(crate) enum CanonicalNominalKind<'a> {
+    Parameters {
+        parameters: &'a [ResolvedTypeVariable],
+        origin: Span,
+    },
+    Frozen {
+        kind: &'a Kind,
+        origin: Span,
+    },
 }
 
 struct ResolvedConstructorBuffer(Vec<ResolvedConstructor>);
@@ -4317,6 +4335,7 @@ impl ResolvedRegistry {
             nominal_parameters: HashMap::new(),
             type_variables: HashMap::new(),
             abstract_nominal_names: HashMap::new(),
+            abstract_nominal_kinds: HashMap::new(),
         }
     }
 
@@ -4406,19 +4425,52 @@ impl ResolvedRegistry {
             ));
         }
 
-        let abstract_nominal_names = imported
+        let abstract_nominal_count = imported
             .nominals()
             .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
-            .map(|fact| {
-                let spelling = fact.display_spelling.as_deref().unwrap_or("hidden");
-                let display = if fact.display_is_private {
-                    format!("<private {spelling}>")
-                } else {
-                    spelling.to_owned()
-                };
-                (fact.id, display)
-            })
-            .collect();
+            .count();
+        budget
+            .charge(abstract_nominal_count)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut abstract_nominal_names = HashMap::new();
+        let mut abstract_nominal_kinds = HashMap::new();
+        abstract_nominal_names
+            .try_reserve(abstract_nominal_count)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        abstract_nominal_kinds
+            .try_reserve(abstract_nominal_count)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for fact in imported
+            .nominals()
+            .filter(|fact| fact.access != ImportedTypeAccess::Transparent)
+        {
+            let kind = clone_arrows_with_budget(
+                fact.parameters.iter().map(|parameter| &parameter.kind),
+                Kind::Type,
+                budget,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let origin = fact.origin.primary_span();
+            if abstract_nominal_kinds
+                .insert(fact.id, NonMaterializedNominalKindFact { kind, origin })
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if abstract_nominal_names
+                .insert(fact.id, {
+                    let spelling = fact.display_spelling.as_deref().unwrap_or("hidden");
+                    if fact.display_is_private {
+                        format!("<private {spelling}>")
+                    } else {
+                        spelling.to_owned()
+                    }
+                })
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
         let mut additional_type_variables = Vec::new();
         additional_type_variables
             .try_reserve(self.type_variables.len())
@@ -4433,7 +4485,7 @@ impl ResolvedRegistry {
             .with_type_parameters_with_budget(parameters, budget)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
             .with_additional_type_variables(additional_type_variables)
-            .with_abstract_nominal_names(abstract_nominal_names))
+            .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds))
     }
 
     /// Combines complete defining registries by canonical semantic identity.
@@ -4557,8 +4609,16 @@ impl ResolvedRegistry {
         self
     }
 
-    fn with_abstract_nominal_names(mut self, names: HashMap<NominalTypeId, String>) -> Self {
+    fn with_abstract_nominal_facts(
+        mut self,
+        names: HashMap<NominalTypeId, String>,
+        kinds: HashMap<NominalTypeId, NonMaterializedNominalKindFact>,
+    ) -> Self {
         self.abstract_nominal_names = names;
+        let displaced = std::mem::replace(&mut self.abstract_nominal_kinds, kinds);
+        for fact in displaced.into_values() {
+            discard_non_materialized_nominal_kind_fact(fact);
+        }
         self
     }
 
@@ -4617,6 +4677,21 @@ impl ResolvedRegistry {
     ) -> Option<&[ResolvedTypeVariable]> {
         self.nominal(id)?;
         self.nominal_parameters.get(&id).map(Box::as_ref)
+    }
+
+    pub(crate) fn nominal_kind(&self, id: NominalTypeId) -> Option<CanonicalNominalKind<'_>> {
+        if let Some(nominal) = self.nominal(id) {
+            return Some(CanonicalNominalKind::Parameters {
+                parameters: self.nominal_parameters.get(&id).map_or(&[], Box::as_ref),
+                origin: nominal.origin.primary_span(),
+            });
+        }
+        self.abstract_nominal_kinds
+            .get(&id)
+            .map(|fact| CanonicalNominalKind::Frozen {
+                kind: &fact.kind,
+                origin: fact.origin,
+            })
     }
 
     pub(crate) fn nominal_parameter_entries(
@@ -4759,6 +4834,7 @@ impl ResolvedRegistry {
         let constructors = std::mem::take(&mut self.constructors);
         let nominal_parameters = std::mem::take(&mut self.nominal_parameters);
         let type_variables = std::mem::take(&mut self.type_variables);
+        let abstract_nominal_kinds = std::mem::take(&mut self.abstract_nominal_kinds);
         self.nominal_positions.clear();
         self.constructor_positions.clear();
         for nominal in nominals.into_vec() {
@@ -4776,11 +4852,16 @@ impl ResolvedRegistry {
         for parameter in type_variables.into_values() {
             discard_resolved_type_variable(parameter);
         }
+        drop(abstract_nominal_kinds);
     }
 }
 
 fn discard_resolved_type_variable(parameter: ResolvedTypeVariable) {
     discard_origin_iteratively(parameter.origin);
+}
+
+fn discard_non_materialized_nominal_kind_fact(fact: NonMaterializedNominalKindFact) {
+    drop(fact);
 }
 
 pub(crate) fn clone_resolved_type_variable_with_budget(
@@ -6105,6 +6186,211 @@ mod tests {
             Err(ImportedNominalMergeFailure::Conflict),
         );
         assert_eq!(mismatch.used(), 2);
+    }
+
+    #[test]
+    fn checker_view_retains_abstract_kind_without_structural_visibility() {
+        // One private sidecar record plus the five nodes of
+        // `(Type -> Type) -> Type` are the complete retention boundary.
+        const EXACT_WORK: usize = 1 + 5;
+        let source = SourceFile::new("abstract-kind-view.ash", "F")
+            .expect("the abstract Kind fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the binder range should be ordered"))
+            .expect("the binder range should belong to the fixture");
+        let module = ModuleId::new(810);
+        let nominal = NominalTypeId::new(module, 0);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let mut imported = ImportedFacts::default();
+        imported
+            .merge_nominal(
+                ImportedNominalFact {
+                    id: nominal,
+                    parameter_count: 1,
+                    parameters: Box::new([ResolvedTypeVariable {
+                        id: parameter,
+                        spelling: "F".to_owned(),
+                        kind: function_kind.clone(),
+                        origin: Origin::Source(span),
+                    }]),
+                    constructors: Box::new([]),
+                    access: ImportedTypeAccess::Opaque,
+                    display_spelling: Some("Abstract".to_owned()),
+                    display_is_private: false,
+                    origin: Origin::Source(span),
+                },
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the abstract nominal fixture should be unique");
+
+        let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert!(matches!(
+            ResolvedRegistry::default().checker_view(&imported, &mut short),
+            Err(ResolvedBuildFailure::TypeResource),
+        ));
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(
+            imported
+                .nominal(nominal)
+                .map(|fact| (&fact.parameters[0].kind, fact.access)),
+            Some((&function_kind, ImportedTypeAccess::Opaque)),
+            "failed sidecar construction must not mutate the source fact",
+        );
+
+        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+        let view = ResolvedRegistry::default()
+            .checker_view(&imported, &mut exact)
+            .expect("one record plus every derived Kind node should fit exactly");
+        assert_eq!(exact.used(), EXACT_WORK);
+        let CanonicalNominalKind::Frozen { kind, origin } = view
+            .nominal_kind(nominal)
+            .expect("the checker view should expose one abstract Kind fact")
+        else {
+            panic!("the abstract nominal must not masquerade as a structural declaration");
+        };
+        assert_eq!(
+            kind,
+            &Kind::Arrow(Box::new(function_kind), Box::new(Kind::Type)),
+        );
+        assert_eq!(origin, span);
+        assert!(view.nominal(nominal).is_none());
+        assert!(view.nominal_parameters(nominal).is_none());
+        assert!(view.canonical_nominal_parameters(nominal).is_none());
+        assert!(view.constructor(ConstructorId::new(nominal, 0)).is_none());
+        assert!(view.constructors().is_empty());
+    }
+
+    #[test]
+    fn checker_view_abstract_kind_failure_and_drop_are_stack_safe() {
+        const DEPTH: usize = 32_768;
+        // The parameter has 2D+1 nodes. The nominal Kind retains that domain,
+        // one Arrow, and one Type result, beside one sidecar record.
+        const DERIVED_KIND_NODES: usize = 2 * DEPTH + 3;
+        const EXACT_WORK: usize = 1 + DERIVED_KIND_NODES;
+
+        std::thread::Builder::new()
+            .name("abstract-kind-sidecar".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-abstract-kind.ash", "F")
+                    .expect("the deep abstract fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the binder range should be ordered"))
+                    .expect("the binder range should belong to the fixture");
+                let module = ModuleId::new(811);
+                let nominal = NominalTypeId::new(module, 0);
+                let mut parameter_kind = Kind::Type;
+                for _ in 0..DEPTH {
+                    parameter_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(parameter_kind));
+                }
+                let mut imported = ImportedFacts::default();
+                imported
+                    .merge_nominal(
+                        ImportedNominalFact {
+                            id: nominal,
+                            parameter_count: 1,
+                            parameters: Box::new([ResolvedTypeVariable {
+                                id: TypeVariableId::resolved(module, 0),
+                                spelling: "F".to_owned(),
+                                kind: parameter_kind,
+                                origin: Origin::Source(span),
+                            }]),
+                            constructors: Box::new([]),
+                            access: ImportedTypeAccess::Hidden,
+                            display_spelling: None,
+                            display_is_private: true,
+                            origin: Origin::Source(span),
+                        },
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .expect("the deep abstract nominal should be unique");
+
+                let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+                assert!(matches!(
+                    ResolvedRegistry::default().checker_view(&imported, &mut short),
+                    Err(ResolvedBuildFailure::TypeResource),
+                ));
+                assert_eq!(short.used(), EXACT_WORK - 1);
+
+                let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+                let view = ResolvedRegistry::default()
+                    .checker_view(&imported, &mut exact)
+                    .expect("the exact deep sidecar should fit");
+                assert_eq!(exact.used(), EXACT_WORK);
+                let CanonicalNominalKind::Frozen { kind, .. } = view
+                    .nominal_kind(nominal)
+                    .expect("the deep abstract Kind should remain available")
+                else {
+                    panic!("the deep abstract nominal must use the frozen sidecar");
+                };
+                let mut node_budget = TypeWorkBudget::with_limit(DERIVED_KIND_NODES);
+                crate::types::charge_kind_nodes(kind, &mut node_budget)
+                    .expect("the retained Kind must have the published node count");
+                assert_eq!(node_budget.used(), DERIVED_KIND_NODES);
+            })
+            .expect("the deep sidecar thread should start")
+            .join()
+            .expect("deep sidecar failure, success, and teardown must be stack-safe");
+    }
+
+    #[test]
+    fn abstract_nominal_kind_publication_replaces_and_discards_old_facts_iteratively() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("replace-abstract-kind-sidecar".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("replace-abstract-kind.ash", "Old New")
+                    .expect("the replacement fixture should fit");
+                let old_span = source
+                    .span(ByteRange::new(0, 3).expect("the old range should be ordered"))
+                    .expect("the old span should belong to the fixture");
+                let new_span = source
+                    .span(ByteRange::new(4, 7).expect("the new range should be ordered"))
+                    .expect("the new span should belong to the fixture");
+                let module = ModuleId::new(812);
+                let old = NominalTypeId::new(module, 0);
+                let new = NominalTypeId::new(module, 1);
+                let mut deep_kind = Kind::Type;
+                for _ in 0..DEPTH {
+                    deep_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(deep_kind));
+                }
+
+                let mut registry = ResolvedRegistry::default();
+                registry.abstract_nominal_kinds.insert(
+                    old,
+                    NonMaterializedNominalKindFact {
+                        kind: deep_kind,
+                        origin: old_span,
+                    },
+                );
+                let mut replacement = HashMap::new();
+                replacement.insert(
+                    new,
+                    NonMaterializedNominalKindFact {
+                        kind: Kind::Type,
+                        origin: new_span,
+                    },
+                );
+
+                let registry = registry.with_abstract_nominal_facts(HashMap::new(), replacement);
+                assert!(
+                    registry.nominal_kind(old).is_none(),
+                    "publication must discard every fact from the displaced allocation",
+                );
+                assert!(matches!(
+                    registry.nominal_kind(new),
+                    Some(CanonicalNominalKind::Frozen {
+                        kind: Kind::Type,
+                        origin,
+                    }) if origin == new_span
+                ));
+            })
+            .expect("the replacement thread should start")
+            .join()
+            .expect("deep displaced Kind publication and teardown must remain stack-safe");
     }
 
     fn resolved_interface_with_annotation(

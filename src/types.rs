@@ -994,6 +994,25 @@ pub(crate) fn arrows_with_budget(
         }))
 }
 
+/// Clones borrowed arrow domains and folds them over one owned result Kind.
+///
+/// The budget charges exactly the nodes retained in the returned Kind: every
+/// result node, every cloned domain node, and one new Arrow per domain.
+pub(crate) fn clone_arrows_with_budget<'a>(
+    domains: impl DoubleEndedIterator<Item = &'a Kind>,
+    result: Kind,
+    budget: &mut TypeWorkBudget,
+) -> Result<Kind, ()> {
+    charge_kind_nodes(&result, budget)?;
+    let mut kind = result;
+    for domain in domains.rev() {
+        let domain = clone_kind_with_budget(domain, budget)?;
+        budget.charge(1)?;
+        kind = Kind::Arrow(Box::new(domain), Box::new(kind));
+    }
+    Ok(kind)
+}
+
 #[cfg(test)]
 thread_local! {
     static KIND_NODE_CHARGE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

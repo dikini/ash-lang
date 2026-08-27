@@ -18,12 +18,54 @@ use crate::{
     source::Span,
     types::{
         InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
-        charge_kind_descendants, clone_kind_with_budget, render_kind_with_budget,
-        same_kind_with_budget,
+        charge_kind_descendants, charge_kind_with_charge, clone_arrows_with_budget,
+        clone_kind_with_budget, render_kind_with_budget, same_kind_with_budget,
+        same_kind_with_charge,
     },
 };
 
 static TYPE_KIND: Kind = Kind::Type;
+
+/// Minimal charging seam for the total kind-synthesis engine.
+///
+/// Resolved checking supplies [`TypeWorkBudget`]. Linked evidence validation
+/// supplies its graph-wide constraint ledger without importing that layer into
+/// the kind module.
+pub(crate) trait KindWorkLedger {
+    fn charge(&mut self, work: usize) -> Result<(), ()>;
+}
+
+impl KindWorkLedger for TypeWorkBudget {
+    fn charge(&mut self, work: usize) -> Result<(), ()> {
+        TypeWorkBudget::charge(self, work)
+    }
+}
+
+enum SynthesisLedger<'a> {
+    Resolved(&'a mut TypeWorkBudget),
+    BodyFree(&'a mut dyn KindWorkLedger),
+}
+
+impl KindWorkLedger for SynthesisLedger<'_> {
+    fn charge(&mut self, work: usize) -> Result<(), ()> {
+        match self {
+            Self::Resolved(budget) => budget.charge(work),
+            Self::BodyFree(budget) => budget.charge(work),
+        }
+    }
+}
+
+impl SynthesisLedger<'_> {
+    fn resolved_budget(&mut self, span: Span) -> Result<&mut TypeWorkBudget, KindFailure> {
+        match self {
+            Self::Resolved(budget) => Ok(*budget),
+            Self::BodyFree(_) => Err(KindFailure::internal(
+                span,
+                "body-free kind synthesis attempted to retain a source diagnostic",
+            )),
+        }
+    }
+}
 
 /// The semantic reason that prevented resolved kind checking.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -217,6 +259,18 @@ impl<'a> KindEnvironments<'a> {
         }
     }
 
+    pub(crate) fn contains_declared(&self, identity: TypeVariableId) -> bool {
+        self.delta.contains_key(&identity)
+    }
+
+    pub(crate) fn contains_inference(&self, identity: InferenceVariableId) -> bool {
+        self.omega.contains_key(&identity)
+    }
+
+    pub(crate) fn contains_nominal(&self, identity: NominalTypeId) -> bool {
+        self.xi.contains_key(&identity)
+    }
+
     pub(crate) fn insert_declared(
         &mut self,
         identity: TypeVariableId,
@@ -287,7 +341,37 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
-    #[allow(dead_code, reason = "Task 6 supplies the fixed inference environment")]
+    /// Installs one linked owner's canonical binder identities in their retained
+    /// order. The registry supplies the immutable defining kinds; no global
+    /// type-variable map traversal or kind inference is involved.
+    pub(crate) fn install_canonical_owner_ids(
+        &mut self,
+        registry: &'a crate::resolved::ResolvedRegistry,
+        parameters: &[TypeVariableId],
+        budget: &mut TypeWorkBudget,
+        span: Span,
+    ) -> Result<(), KindFailure> {
+        self.clear_declared();
+        for identity in parameters {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "linked owner-binder lookup exceeded its type-work budget",
+                )
+            })?;
+            let parameter = registry.type_variable(*identity).ok_or_else(|| {
+                KindFailure::internal(span, "a linked owner binder has no canonical registry fact")
+            })?;
+            self.insert_declared(
+                *identity,
+                &parameter.kind,
+                parameter.origin.primary_span(),
+                budget,
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn insert_inference(
         &mut self,
         identity: InferenceVariableId,
@@ -334,6 +418,48 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
+    /// Synthesizes a monotype kind against fixed environments without source
+    /// provenance. Malformed types therefore remain internal-stage failures.
+    pub(crate) fn synthesize_body_free_kind<'environment>(
+        &'environment self,
+        ty: &Type,
+        fallback_span: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<&'environment Kind, KindFailure>
+    where
+        'a: 'environment,
+    {
+        self.synthesize(ty, None, fallback_span, budget)
+            .map(|fact| fact.kind)
+    }
+
+    /// Checks a body-free linked value monotype with traversal and Kind
+    /// comparison charged to the caller's owning ledger.
+    pub(crate) fn expect_body_free_value_type_with_ledger(
+        &self,
+        ty: &Type,
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(ty, None, span, &mut ledger)?;
+        let equal =
+            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free value kind checking exceeded its owning work budget",
+                )
+            })?;
+        if equal {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "a checked body-free value scheme does not end at kind Type",
+            ))
+        }
+    }
+
     pub(crate) fn insert_nominal(
         &mut self,
         identity: NominalTypeId,
@@ -358,28 +484,51 @@ impl<'a> KindEnvironments<'a> {
         self.xi.try_reserve(1).map_err(|_| {
             KindFailure::resource(origin, "nominal kind environment could not reserve storage")
         })?;
-        budget.charge(1).map_err(|()| {
+        let kind = clone_arrows_with_budget(
+            parameters.iter().map(|parameter| &parameter.kind),
+            Kind::Type,
+            budget,
+        )
+        .map_err(|()| {
             KindFailure::resource(
                 origin,
                 "nominal kind retention exceeded its type-work budget",
             )
         })?;
-        let mut kind = Kind::Type;
-        for parameter in parameters.iter().rev() {
-            let domain = clone_kind_with_budget(&parameter.kind, budget).map_err(|()| {
-                KindFailure::resource(
-                    origin,
-                    "nominal kind retention exceeded its type-work budget",
-                )
-            })?;
-            budget.charge(1).map_err(|()| {
-                KindFailure::resource(
-                    origin,
-                    "nominal kind retention exceeded its type-work budget",
-                )
-            })?;
-            kind = Kind::Arrow(Box::new(domain), Box::new(kind));
+        self.xi.insert(identity, NominalKindFact { kind, origin });
+        Ok(())
+    }
+
+    pub(crate) fn insert_frozen_nominal(
+        &mut self,
+        identity: NominalTypeId,
+        kind: &Kind,
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        if self.xi.contains_key(&identity) {
+            charge_lookup_attempt(origin, budget)?;
+            return Err(KindFailure::internal(
+                origin,
+                "a nominal type has more than one canonical kind",
+            ));
         }
+
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(
+                origin,
+                "nominal environment-record retention exceeded its type-work budget",
+            )
+        })?;
+        self.xi.try_reserve(1).map_err(|_| {
+            KindFailure::resource(origin, "nominal kind environment could not reserve storage")
+        })?;
+        let kind = clone_kind_with_budget(kind, budget).map_err(|()| {
+            KindFailure::resource(
+                origin,
+                "nominal kind retention exceeded its type-work budget",
+            )
+        })?;
         self.xi.insert(identity, NominalKindFact { kind, origin });
         Ok(())
     }
@@ -576,6 +725,20 @@ impl<'a> KindEnvironments<'a> {
     where
         'a: 'environment,
     {
+        let mut ledger = SynthesisLedger::Resolved(budget);
+        self.synthesize_with_ledger(ty, provenance, fallback_span, &mut ledger)
+    }
+
+    fn synthesize_with_ledger<'environment>(
+        &'environment self,
+        ty: &Type,
+        provenance: Option<&ResolvedTypeProvenance>,
+        fallback_span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<KindFact<'environment>, KindFailure>
+    where
+        'a: 'environment,
+    {
         enum Task<'t> {
             Visit(&'t Type, Option<usize>),
             Sequence {
@@ -700,12 +863,14 @@ impl<'a> KindEnvironments<'a> {
                                     "a resolved type variable has no canonical kind",
                                 )
                             })?;
-                            charge_kind_descendants(fact.kind, budget).map_err(|()| {
-                                KindFailure::resource(
-                                    span,
-                                    "declaration kind lookup exceeded its type-work budget",
-                                )
-                            })?;
+                            charge_kind_descendants_with_ledger(fact.kind, budget).map_err(
+                                |()| {
+                                    KindFailure::resource(
+                                        span,
+                                        "declaration kind lookup exceeded its type-work budget",
+                                    )
+                                },
+                            )?;
                             fact.occurrence = span;
                             push_completed!(completed, fact, span);
                         }
@@ -718,12 +883,14 @@ impl<'a> KindEnvironments<'a> {
                                     "an inference variable has no fixed kind",
                                 )
                             })?;
-                            charge_kind_descendants(fact.kind, budget).map_err(|()| {
-                                KindFailure::resource(
-                                    span,
-                                    "inference kind lookup exceeded its type-work budget",
-                                )
-                            })?;
+                            charge_kind_descendants_with_ledger(fact.kind, budget).map_err(
+                                |()| {
+                                    KindFailure::resource(
+                                        span,
+                                        "inference kind lookup exceeded its type-work budget",
+                                    )
+                                },
+                            )?;
                             fact.occurrence = span;
                             push_completed!(completed, fact, span);
                         }
@@ -733,12 +900,14 @@ impl<'a> KindEnvironments<'a> {
                             let fact = self.xi.get(identity).ok_or_else(|| {
                                 KindFailure::internal(span, "a nominal type has no canonical kind")
                             })?;
-                            charge_kind_descendants(&fact.kind, budget).map_err(|()| {
-                                KindFailure::resource(
-                                    span,
-                                    "nominal kind lookup exceeded its type-work budget",
-                                )
-                            })?;
+                            charge_kind_descendants_with_ledger(&fact.kind, budget).map_err(
+                                |()| {
+                                    KindFailure::resource(
+                                        span,
+                                        "nominal kind lookup exceeded its type-work budget",
+                                    )
+                                },
+                            )?;
                             push_completed!(
                                 completed,
                                 KindFact {
@@ -848,14 +1017,14 @@ impl<'a> KindEnvironments<'a> {
                         KindFailure::internal(span, "resolved tuple kind synthesis lost an element")
                     })?;
                     for found in &completed[split..] {
-                        let equal = same_kind_with_budget(&TYPE_KIND, found.kind, budget).map_err(
-                            |()| {
-                                KindFailure::resource(
-                                    found.occurrence,
-                                    "tuple kind checking exceeded its type-work budget",
-                                )
-                            },
-                        )?;
+                        let equal =
+                            same_kind_with_charge(&TYPE_KIND, found.kind, || budget.charge(1))
+                                .map_err(|()| {
+                                    KindFailure::resource(
+                                        found.occurrence,
+                                        "tuple kind checking exceeded its type-work budget",
+                                    )
+                                })?;
                         if !equal {
                             if provenance.is_none() {
                                 return Err(KindFailure::internal(
@@ -863,6 +1032,7 @@ impl<'a> KindEnvironments<'a> {
                                     "a checked body-free tuple element has the wrong kind",
                                 ));
                             }
+                            let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
                             return Err(KindFailure::Source(Box::new(structured_error(
                                 KindReason::ExpectedType,
                                 found.occurrence,
@@ -872,7 +1042,7 @@ impl<'a> KindEnvironments<'a> {
                                 found.origin.map(|origin| {
                                     (origin, "the found kind is fixed by this declaration")
                                 }),
-                                budget,
+                                diagnostic_budget,
                             )?)));
                         }
                     }
@@ -904,6 +1074,7 @@ impl<'a> KindEnvironments<'a> {
                                 "a checked body-free type applies a non-function kind",
                             ));
                         }
+                        let diagnostic_budget = budget.resolved_budget(span)?;
                         return Err(KindFailure::Source(Box::new(not_applicable_error(
                             KindReason::NotApplicable,
                             span,
@@ -916,16 +1087,16 @@ impl<'a> KindEnvironments<'a> {
                                     "the applied type's kind is fixed by this declaration",
                                 )
                             }),
-                            budget,
+                            diagnostic_budget,
                         )?)));
                     };
-                    let equal =
-                        same_kind_with_budget(domain, argument.kind, budget).map_err(|()| {
-                            KindFailure::resource(
-                                argument_span,
-                                "type-application kind checking exceeded its type-work budget",
-                            )
-                        })?;
+                    let equal = same_kind_with_charge(domain, argument.kind, || budget.charge(1))
+                        .map_err(|()| {
+                        KindFailure::resource(
+                            argument_span,
+                            "type-application kind checking exceeded its type-work budget",
+                        )
+                    })?;
                     if !equal {
                         if provenance.is_none() {
                             return Err(KindFailure::internal(
@@ -933,6 +1104,7 @@ impl<'a> KindEnvironments<'a> {
                                 "a checked body-free type application has the wrong argument kind",
                             ));
                         }
+                        let diagnostic_budget = budget.resolved_budget(argument_span)?;
                         return Err(KindFailure::Source(Box::new(structured_error(
                             KindReason::Argument,
                             argument_span,
@@ -942,7 +1114,7 @@ impl<'a> KindEnvironments<'a> {
                             function.origin.map(|origin| {
                                 (origin, "the applied type's parameter kind is declared here")
                             }),
-                            budget,
+                            diagnostic_budget,
                         )?)));
                     }
                     push_completed!(
@@ -971,14 +1143,14 @@ impl<'a> KindEnvironments<'a> {
                     for (found, label) in
                         [(domain, "function domain"), (codomain, "function codomain")]
                     {
-                        let equal = same_kind_with_budget(&TYPE_KIND, found.kind, budget).map_err(
-                            |()| {
-                                KindFailure::resource(
-                                    found.occurrence,
-                                    "function kind checking exceeded its type-work budget",
-                                )
-                            },
-                        )?;
+                        let equal =
+                            same_kind_with_charge(&TYPE_KIND, found.kind, || budget.charge(1))
+                                .map_err(|()| {
+                                    KindFailure::resource(
+                                        found.occurrence,
+                                        "function kind checking exceeded its type-work budget",
+                                    )
+                                })?;
                         if !equal {
                             if provenance.is_none() {
                                 return Err(KindFailure::internal(
@@ -986,6 +1158,7 @@ impl<'a> KindEnvironments<'a> {
                                     "a checked body-free function component has the wrong kind",
                                 ));
                             }
+                            let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
                             return Err(KindFailure::Source(Box::new(structured_error(
                                 KindReason::ExpectedType,
                                 found.occurrence,
@@ -995,7 +1168,7 @@ impl<'a> KindEnvironments<'a> {
                                 found.origin.map(|origin| {
                                     (origin, "the found kind is fixed by this declaration")
                                 }),
-                                budget,
+                                diagnostic_budget,
                             )?)));
                         }
                     }
@@ -1981,7 +2154,7 @@ fn structured_error(
     })
 }
 
-fn charge_synthesis_cell(span: Span, budget: &mut TypeWorkBudget) -> Result<(), KindFailure> {
+fn charge_synthesis_cell(span: Span, budget: &mut impl KindWorkLedger) -> Result<(), KindFailure> {
     budget.charge(1).map_err(|()| {
         KindFailure::resource(
             span,
@@ -1990,7 +2163,23 @@ fn charge_synthesis_cell(span: Span, budget: &mut TypeWorkBudget) -> Result<(), 
     })
 }
 
-fn charge_lookup_attempt(span: Span, budget: &mut TypeWorkBudget) -> Result<(), KindFailure> {
+fn charge_kind_descendants_with_ledger(
+    kind: &Kind,
+    budget: &mut SynthesisLedger<'_>,
+) -> Result<(), ()> {
+    if let SynthesisLedger::Resolved(type_work) = budget {
+        return charge_kind_descendants(kind, type_work);
+    }
+    match kind {
+        Kind::Type => Ok(()),
+        Kind::Arrow(domain, codomain) => {
+            charge_kind_with_charge(domain, || budget.charge(1))?;
+            charge_kind_with_charge(codomain, || budget.charge(1))
+        }
+    }
+}
+
+fn charge_lookup_attempt(span: Span, budget: &mut impl KindWorkLedger) -> Result<(), KindFailure> {
     budget.charge(1).map_err(|()| {
         KindFailure::resource(
             span,
@@ -2076,7 +2265,7 @@ fn provenance_node_span(node: &ResolvedTypeProvenanceNode) -> Span {
 fn require_fact_node(
     node: Option<&ResolvedTypeProvenanceNode>,
     span: Span,
-    budget: &mut TypeWorkBudget,
+    budget: &mut impl KindWorkLedger,
 ) -> Result<(), KindFailure> {
     if node.is_none() || matches!(node, Some(ResolvedTypeProvenanceNode::Fact(_))) {
         Ok(())

@@ -187,6 +187,175 @@ fn polymorphic_global_instantiates_freshly_inside_another_global() {
 }
 
 #[test]
+fn higher_kinded_instantiation_preserves_fixed_kinds() {
+    let source = concat!(
+        "type Pair<A, B> = Pair(A, B)\n\n",
+        "keep<F : Type -> Type, A> : F<A> -> F<A>\n",
+        "keep value = value\n\n",
+        "main : Unit -> Pair<Int, Bool>\n",
+        "main () = keep(Pair(42, true))\n",
+    );
+    let (program, _, _) = elaborated(source);
+    let observation = run(source);
+    assert_eq!(observation.value_display(), "Pair(42, true)");
+    assert_eq!(observation.type_display(), "Pair<Int, Bool>");
+
+    let mut work = vec![program.root()];
+    let mut found_partial_constructor = false;
+    while let Some(id) = work.pop() {
+        let node = program.node(id).expect("validated node");
+        if let PureExprKind::Computation(PureComputation::TypeApplication(operation)) = &node.kind {
+            if let [
+                ash::types::Type::Application(function, argument),
+                ash::types::Type::Bool,
+            ] = operation.arguments()
+                && matches!(function.as_ref(), ash::types::Type::Nominal(_))
+                && matches!(argument.as_ref(), ash::types::Type::Int)
+            {
+                found_partial_constructor = true;
+            }
+            work.push(operation.function());
+        } else {
+            for index in 0..node.kind.child_count() {
+                work.push(node.kind.child_at(index).expect("validated child"));
+            }
+        }
+    }
+    assert!(
+        found_partial_constructor,
+        "the higher-kinded argument should zonk to the partial Pair<Int> constructor"
+    );
+}
+
+#[test]
+fn eligible_local_relay_generalizes_higher_kinded_parameters() {
+    fn assert_no_scheme_below_function(ty: &ash::types::Type) {
+        let mut work = vec![(ty, false)];
+        while let Some((ty, below_function)) = work.pop() {
+            match ty {
+                ash::types::Type::Forall(_, body) => {
+                    assert!(
+                        !below_function,
+                        "a generalized scheme must not occur below a term-function arrow"
+                    );
+                    work.push((body, below_function));
+                }
+                ash::types::Type::Function(domain, codomain) => {
+                    work.push((codomain, true));
+                    work.push((domain, true));
+                }
+                ash::types::Type::Application(function, argument) => {
+                    work.push((argument, below_function));
+                    work.push((function, below_function));
+                }
+                ash::types::Type::Tuple(elements) => {
+                    work.extend(elements.iter().map(|element| (element, below_function)));
+                }
+                ash::types::Type::Int
+                | ash::types::Type::Bool
+                | ash::types::Type::Unit
+                | ash::types::Type::Nominal(_)
+                | ash::types::Type::Variable(_)
+                | ash::types::Type::Inference(_) => {}
+            }
+        }
+    }
+
+    fn has_expected_kinds(parameters: &[(ash::types::TypeVariableId, ash::types::Kind)]) -> bool {
+        matches!(
+            parameters,
+            [
+                (
+                    _,
+                    ash::types::Kind::Arrow(function_domain, function_codomain),
+                ),
+                (_, ash::types::Kind::Type),
+            ] if matches!(function_domain.as_ref(), ash::types::Kind::Type)
+                && matches!(function_codomain.as_ref(), ash::types::Kind::Type)
+        )
+    }
+
+    let source = concat!(
+        "type Pair<A, B> = Pair(A, B)\n\n",
+        "keep<F : Type -> Type, A> : F<A> -> F<A>\n",
+        "keep value = value\n\n",
+        "main : Unit -> Pair<Int, Bool>\n",
+        "main () = {\n",
+        "let relay = fn(value) {\n",
+        "keep(value)\n",
+        "}\n",
+        "relay(Pair(42, true))\n",
+        "}\n",
+    );
+    let (program, _, _) = elaborated(source);
+    let observation = run(source);
+    assert_eq!(observation.value_display(), "Pair(42, true)");
+    assert_eq!(observation.type_display(), "Pair<Int, Bool>");
+
+    let mut work = vec![program.root()];
+    let mut local_relay = None;
+    let mut found_partial_pair = false;
+    while let Some(id) = work.pop() {
+        let node = program.node(id).expect("validated node");
+        assert_no_scheme_below_function(&node.ty);
+        match &node.kind {
+            PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                let initializer = program
+                    .node(binding.initializer())
+                    .expect("the local initializer should be retained");
+                if let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    &initializer.kind
+                    && has_expected_kinds(abstraction.parameters())
+                {
+                    let ash::types::Type::Forall(initializer_parameters, initializer_body) =
+                        &initializer.ty
+                    else {
+                        panic!("a type abstraction must expose one outer scheme");
+                    };
+                    let ash::types::Type::Forall(binder_parameters, binder_body) =
+                        binding.binder().ty()
+                    else {
+                        panic!("the local binder must expose the same outer scheme");
+                    };
+                    assert_eq!(initializer_parameters.as_ref(), abstraction.parameters());
+                    assert_eq!(binder_parameters.as_ref(), abstraction.parameters());
+                    assert!(ash::types::same_type(initializer_body, binder_body));
+                    assert!(matches!(
+                        initializer_body.as_ref(),
+                        ash::types::Type::Function(_, _)
+                    ));
+                    local_relay = Some(binding.binder().id());
+                }
+            }
+            PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+                if let [
+                    ash::types::Type::Application(function, argument),
+                    ash::types::Type::Bool,
+                ] = application.arguments()
+                    && matches!(function.as_ref(), ash::types::Type::Nominal(_))
+                    && matches!(argument.as_ref(), ash::types::Type::Int)
+                {
+                    found_partial_pair = true;
+                }
+            }
+            _ => {}
+        }
+        for index in 0..node.kind.child_count() {
+            work.push(node.kind.child_at(index).expect("validated child"));
+        }
+    }
+
+    assert!(
+        local_relay.is_some(),
+        "the eligible local relay must be generalized"
+    );
+    assert!(
+        found_partial_pair,
+        "the local scheme should instantiate F with the partial Pair<Int> constructor"
+    );
+}
+
+#[test]
 fn parameterized_constructors_are_ordinary_polymorphic_values() {
     let observation = run(
         "type Option<A> =\nNone\n| Some(A)\n\napply : (A -> B, A) -> B\napply (function, value) = function value\n\nmain : Unit -> Option<Int>\nmain () = apply(Some, 42)\n",
@@ -199,6 +368,9 @@ fn parameterized_constructors_are_ordinary_polymorphic_values() {
 #[test]
 fn wide_nominal_application_remains_width_through_elaboration_and_core() {
     const WIDTH: usize = 256;
+    // Task-6 fixed-kind authentication preserves the predecessor boundary:
+    // 320_221 work before the final rewrite + 4_883 fused zonk cells + 512
+    // per-occurrence Omega/cache lookups = 325_616, 2_064 below L.
 
     std::thread::Builder::new()
         .name("wide-canonical-application-pipeline".to_owned())

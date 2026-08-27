@@ -558,6 +558,7 @@ where
     I: FnOnce(
         ResolvedModuleProgram,
         &mut InterfaceConstraintBudget,
+        &mut TypeWorkBudget,
     ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
     V: FnOnce(
         UnvalidatedProgram,
@@ -586,6 +587,7 @@ where
     I: FnOnce(
         ResolvedModuleProgram,
         &mut InterfaceConstraintBudget,
+        &mut TypeWorkBudget,
     ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
     V: FnOnce(
         UnvalidatedProgram,
@@ -690,10 +692,12 @@ where
     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
+    let mut linked_type_work = TypeWorkBudget::default();
     let (ty, type_display, unchecked): (IterativeTypeOwner, String, UnvalidatedProgram) = {
-        let validated_interfaces = interface_validator(linked, constraint_work)
-            .map_err(PipelineFailure::EvidenceValidation)
-            .map_err(FileFailure::Pipeline)?;
+        let validated_interfaces =
+            interface_validator(linked, constraint_work, &mut linked_type_work)
+                .map_err(PipelineFailure::EvidenceValidation)
+                .map_err(FileFailure::Pipeline)?;
         let registry = Arc::clone(validated_interfaces.registry());
         let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
             .map_err(TypeError::Internal)
@@ -1062,7 +1066,7 @@ mod tests {
 
         let failure = run_path_with_consumers(
             source.configuration(),
-            |mut linked, budget| {
+            |mut linked, budget, type_work| {
                 let module = linked
                     .groups()
                     .first()
@@ -1072,7 +1076,7 @@ mod tests {
                     module,
                     crate::interface::InterfaceId::new(module, u32::MAX),
                 ));
-                validate_interface_evidence_with_budget(linked, budget)
+                validate_interface_evidence_with_budget(linked, budget, type_work)
             },
             |_, _, _| {
                 core_validation_called.set(true);
@@ -1103,8 +1107,9 @@ mod tests {
 
         let observation = run_path_with_consumers(
             source.configuration(),
-            |linked, budget| {
-                let validated = validate_interface_evidence_with_budget(linked, budget)?;
+            |linked, budget, type_work| {
+                let validated =
+                    validate_interface_evidence_with_budget(linked, budget, type_work)?;
                 registry_lifetime
                     .borrow_mut()
                     .replace(Arc::downgrade(validated.registry()));
@@ -1154,9 +1159,9 @@ mod tests {
         let observation = run_path_with_consumers_and_constraint_budget(
             source.configuration(),
             &mut measured,
-            |linked, budget| {
+            |linked, budget, type_work| {
                 validation_prefix.set(budget.used());
-                validate_interface_evidence_with_budget(linked, budget)
+                validate_interface_evidence_with_budget(linked, budget, type_work)
             },
             validate_modules,
             evaluate,
@@ -1172,9 +1177,9 @@ mod tests {
         let failure = run_path_with_consumers_and_constraint_budget(
             source.configuration(),
             &mut one_short,
-            |linked, budget| {
+            |linked, budget, type_work| {
                 one_short_entered_validation.set(true);
-                validate_interface_evidence_with_budget(linked, budget)
+                validate_interface_evidence_with_budget(linked, budget, type_work)
             },
             validate_modules,
             evaluate,
@@ -1245,9 +1250,9 @@ mod tests {
                 let failure = run_path_with_consumers_and_constraint_budget(
                     source.configuration(),
                     &mut one_short,
-                    |linked, budget| {
+                    |linked, budget, type_work| {
                         validation_entered.set(true);
-                        validate_interface_evidence_with_budget(linked, budget)
+                        validate_interface_evidence_with_budget(linked, budget, type_work)
                     },
                     validate_modules,
                     evaluate,

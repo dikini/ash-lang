@@ -26,26 +26,27 @@ use crate::{
         RequirementId, implementation_heads_overlap, implementation_prerequisite_terminates,
         same_type_with_constraint_budget,
     },
+    kind::{KindEnvironments, KindFailure},
     pattern::{
         UsefulnessBudget, UsefulnessError, display_witness, missing_witness_for_types_with_budget,
         usefulness_with_budget,
     },
     resolved::{
-        AvailableImplementation, BinderId, CheckedDefinition, CheckedGlobalScheme,
-        CheckedImplementationBody, CheckedImplementationFact, CheckedImplementationMethodFact,
-        CheckedInterfaceFact, CheckedInterfaceMethodFact, CheckedModule, CheckedModuleParts,
-        ExportSummary, ResolvedBinding, ResolvedBlock, ResolvedBuildFailure,
-        ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
-        ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleGroup, ResolvedModuleProgram,
-        ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry,
-        ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        AvailableImplementation, BinderId, CanonicalNominalKind, CheckedDefinition,
+        CheckedGlobalScheme, CheckedImplementationBody, CheckedImplementationFact,
+        CheckedImplementationMethodFact, CheckedInterfaceFact, CheckedInterfaceMethodFact,
+        CheckedModule, CheckedModuleParts, ExportSummary, ResolvedBinding, ResolvedBlock,
+        ResolvedBuildFailure, ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr,
+        ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleGroup,
+        ResolvedModuleProgram, ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup,
+        ResolvedRegistry, ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
         clone_resolved_type_variable_with_budget,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
         InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
         charge_type_cells, clone_kind_with_budget, clone_kinded_type_parameters_with_budget,
-        discard_type_iteratively, replace_type_iteratively,
+        discard_type_iteratively, replace_type_iteratively, same_kind_with_budget,
         same_kinded_type_parameters_with_budget, same_type, substitute_type_variables_with,
     },
 };
@@ -1094,9 +1095,19 @@ impl InferenceSolutionMap {
         self.0.try_reserve(additional)
     }
 
-    fn insert(&mut self, variable: InferenceVariableId, ty: Type) {
-        if let Some(displaced) = self.0.insert(variable, ty) {
-            discard_type_iteratively(displaced);
+    fn insert_unique(&mut self, variable: InferenceVariableId, ty: Type) -> Result<(), Type> {
+        match self.0.entry(variable) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(ty);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(_) => Err(ty),
+        }
+    }
+
+    fn remove_and_discard(&mut self, variable: InferenceVariableId) {
+        if let Some((_, solution)) = self.0.remove_entry(&variable) {
+            discard_type_iteratively(solution);
         }
     }
 }
@@ -1112,6 +1123,177 @@ impl Drop for InferenceSolutionMap {
         for (_, ty) in self.0.drain() {
             discard_type_iteratively(ty);
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InferenceRegistryFailure {
+    Missing,
+    Duplicate,
+    Conflict,
+    Resource,
+}
+
+#[derive(Debug)]
+struct InferenceVariableFact {
+    origin: Span,
+    kind: Kind,
+}
+
+#[derive(Debug, Default)]
+struct InferenceVariableRegistry(Vec<InferenceVariableFact>);
+
+impl InferenceVariableRegistry {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.0.truncate(len);
+    }
+
+    fn insert(
+        &mut self,
+        identity: InferenceVariableId,
+        kind: &Kind,
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), InferenceRegistryFailure> {
+        budget
+            // The first unit authenticates the source-order Omega index.
+            .charge(1)
+            .map_err(|()| InferenceRegistryFailure::Resource)?;
+        let index =
+            usize::try_from(identity.value()).map_err(|_| InferenceRegistryFailure::Missing)?;
+        if let Some(existing) = self.0.get(index) {
+            let equal = same_kind_with_budget(&existing.kind, kind, budget)
+                .map_err(|()| InferenceRegistryFailure::Resource)?;
+            return Err(if equal {
+                InferenceRegistryFailure::Duplicate
+            } else {
+                InferenceRegistryFailure::Conflict
+            });
+        }
+        if index != self.0.len() {
+            return Err(InferenceRegistryFailure::Missing);
+        }
+        budget
+            // Retaining a fresh fact also preserves the predecessor causal
+            // origin beside the canonical fixed-kind record.
+            .charge(1)
+            .map_err(|()| InferenceRegistryFailure::Resource)?;
+        self.0
+            .try_reserve(1)
+            .map_err(|_| InferenceRegistryFailure::Resource)?;
+        let kind = clone_kind_with_budget(kind, budget)
+            .map_err(|()| InferenceRegistryFailure::Resource)?;
+        self.0.push(InferenceVariableFact { origin, kind });
+        Ok(())
+    }
+
+    fn fact(
+        &self,
+        identity: InferenceVariableId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<&InferenceVariableFact, InferenceRegistryFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| InferenceRegistryFailure::Resource)?;
+        let index =
+            usize::try_from(identity.value()).map_err(|_| InferenceRegistryFailure::Missing)?;
+        self.0.get(index).ok_or(InferenceRegistryFailure::Missing)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneratedTypeVariableRegistryFailure {
+    Missing,
+    Duplicate,
+    Conflict,
+    Resource,
+}
+
+#[derive(Debug)]
+struct GeneratedTypeVariableFact {
+    origin: Span,
+    kind: Kind,
+}
+
+/// Fixed kinds for compiler-generated abstraction binders, retained in their
+/// allocation order. Generated identities count down from `u32::MAX`, so the
+/// inverse offset is a stable, constant-time source-order index.
+#[derive(Debug, Default)]
+struct GeneratedTypeVariableRegistry(Vec<GeneratedTypeVariableFact>);
+
+impl GeneratedTypeVariableRegistry {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.0.truncate(len);
+    }
+
+    fn insert(
+        &mut self,
+        identity: TypeVariableId,
+        kind: &Kind,
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), GeneratedTypeVariableRegistryFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| GeneratedTypeVariableRegistryFailure::Resource)?;
+        let TypeVariableId::Generated(local) = identity else {
+            return Err(GeneratedTypeVariableRegistryFailure::Missing);
+        };
+        let index = usize::try_from(u32::MAX - local)
+            .map_err(|_| GeneratedTypeVariableRegistryFailure::Missing)?;
+        if let Some(existing) = self.0.get(index) {
+            let equal = same_kind_with_budget(&existing.kind, kind, budget)
+                .map_err(|()| GeneratedTypeVariableRegistryFailure::Resource)?;
+            return Err(if equal {
+                GeneratedTypeVariableRegistryFailure::Duplicate
+            } else {
+                GeneratedTypeVariableRegistryFailure::Conflict
+            });
+        }
+        if index != self.0.len() {
+            return Err(GeneratedTypeVariableRegistryFailure::Missing);
+        }
+        budget
+            .charge(1)
+            .map_err(|()| GeneratedTypeVariableRegistryFailure::Resource)?;
+        self.0
+            .try_reserve(1)
+            .map_err(|_| GeneratedTypeVariableRegistryFailure::Resource)?;
+        let kind = clone_kind_with_budget(kind, budget)
+            .map_err(|()| GeneratedTypeVariableRegistryFailure::Resource)?;
+        self.0.push(GeneratedTypeVariableFact { origin, kind });
+        Ok(())
+    }
+
+    fn fact(
+        &self,
+        identity: TypeVariableId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<&GeneratedTypeVariableFact, GeneratedTypeVariableRegistryFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| GeneratedTypeVariableRegistryFailure::Resource)?;
+        let TypeVariableId::Generated(local) = identity else {
+            return Err(GeneratedTypeVariableRegistryFailure::Missing);
+        };
+        let index = usize::try_from(u32::MAX - local)
+            .map_err(|_| GeneratedTypeVariableRegistryFailure::Missing)?;
+        self.0
+            .get(index)
+            .ok_or(GeneratedTypeVariableRegistryFailure::Missing)
     }
 }
 
@@ -1150,9 +1332,11 @@ pub struct Elaborator {
     state: ElaboratorState,
     final_root: Option<NodeId>,
     next_inference: u32,
-    inference_origins: Vec<Span>,
+    inference_variables: InferenceVariableRegistry,
     next_generated_type_variable: u32,
+    generated_type_variables: GeneratedTypeVariableRegistry,
     inference_solutions: InferenceSolutionMap,
+    authenticated_inference_solutions: HashSet<InferenceVariableId>,
     monomorphic_recursive: HashSet<BinderId>,
     method_binders: HashMap<MethodId, BinderId>,
     selection: Option<EvidenceSelector>,
@@ -1187,9 +1371,11 @@ impl Elaborator {
             state: ElaboratorState::Ready,
             final_root: None,
             next_inference: 0,
-            inference_origins: Vec::new(),
+            inference_variables: InferenceVariableRegistry::default(),
             next_generated_type_variable: u32::MAX,
+            generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             method_binders: HashMap::new(),
             selection: None,
@@ -1261,9 +1447,11 @@ impl Elaborator {
             state: ElaboratorState::Ready,
             final_root: None,
             next_inference: 0,
-            inference_origins: Vec::new(),
+            inference_variables: InferenceVariableRegistry::default(),
             next_generated_type_variable: u32::MAX,
+            generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             method_binders: HashMap::new(),
             selection: None,
@@ -1309,9 +1497,11 @@ impl Elaborator {
             state: ElaboratorState::Ready,
             final_root: None,
             next_inference: 0,
-            inference_origins: Vec::new(),
+            inference_variables: InferenceVariableRegistry::default(),
             next_generated_type_variable: u32::MAX,
+            generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             method_binders: HashMap::new(),
             selection: None,
@@ -1418,7 +1608,12 @@ impl Elaborator {
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for group in program.groups() {
             for checked in group.schemes() {
-                let scheme = self.lower_constrained_scheme(&checked.scheme, &lowering, false)?;
+                let scheme = self.lower_constrained_scheme(
+                    &checked.scheme,
+                    &lowering,
+                    false,
+                    checked.origin.primary_span(),
+                )?;
                 if lowering
                     .global_schemes
                     .insert(checked.binder, scheme)
@@ -1429,7 +1624,12 @@ impl Elaborator {
             }
             for implementation in group.implementation_facts() {
                 for method in &implementation.methods {
-                    let scheme = self.lower_constrained_scheme(&method.scheme, &lowering, true)?;
+                    let scheme = self.lower_constrained_scheme(
+                        &method.scheme,
+                        &lowering,
+                        true,
+                        method.span,
+                    )?;
                     let lowered = LoweredImplementationMethod {
                         binder: method.binder,
                         scheme,
@@ -1453,6 +1653,7 @@ impl Elaborator {
         scheme: &ConstrainedScheme,
         lowering: &EvidenceLowering,
         freshen_core_parameters: bool,
+        origin: Span,
     ) -> Result<LoweredScheme, TypeError> {
         self.type_work
             .charge(scheme.requirements.len())
@@ -1474,7 +1675,7 @@ impl Elaborator {
                 .try_reserve(original_type_parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             for (source, kind) in &original_type_parameters {
-                let core = self.fresh_type_variable()?;
+                let core = self.fresh_type_variable(kind, origin)?;
                 self.type_work
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -1608,9 +1809,11 @@ impl Elaborator {
             state: ElaboratorState::Ready,
             final_root: None,
             next_inference: 0,
-            inference_origins: Vec::new(),
+            inference_variables: InferenceVariableRegistry::default(),
             next_generated_type_variable: u32::MAX,
+            generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             method_binders: HashMap::new(),
             selection: None,
@@ -2152,13 +2355,29 @@ impl Elaborator {
         }
         if self.builder.requires_type_rewrite() {
             let solutions = &self.inference_solutions;
+            let inference_variables = &self.inference_variables;
+            let authenticated_solutions = &self.authenticated_inference_solutions;
             let type_work = &mut self.type_work;
             self.builder.rewrite_types(|ty| {
-                let (zonked, unresolved) = zonk_type_with_status(ty, solutions, |cells| {
-                    type_work
-                        .charge(cells)
-                        .map_err(|()| BuildError::TypeWorkExceeded)
-                })?;
+                let (zonked, unresolved) =
+                    zonk_type_with_status_and_inference(ty, solutions, |work| match work {
+                        ZonkWork::TypeCells(cells) => type_work
+                            .charge(cells)
+                            .map_err(|()| BuildError::TypeWorkExceeded),
+                        ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                            identity,
+                            inference_variables,
+                            solutions,
+                            authenticated_solutions,
+                            type_work,
+                        )
+                        .map_err(|failure| match failure {
+                            UnificationFailure::Resource => BuildError::TypeWorkExceeded,
+                            UnificationFailure::Mismatch
+                            | UnificationFailure::Infinite
+                            | UnificationFailure::Invariant => BuildError::InvalidPayload,
+                        }),
+                    })?;
                 if unresolved {
                     Err(BuildError::InvalidPayload)
                 } else {
@@ -2169,33 +2388,94 @@ impl Elaborator {
         self.builder.finish(root).map_err(Into::into)
     }
 
-    fn fresh_inference(&mut self, origin: Span) -> Result<Type, TypeError> {
-        self.type_work
-            .charge(1)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        self.inference_origins
-            .try_reserve(1)
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        self.fresh_inference_reserved(origin)
+    fn fresh_inference(&mut self, kind: &Kind, origin: Span) -> Result<Type, TypeError> {
+        self.fresh_inference_reserved(kind, origin)
     }
 
-    fn fresh_inference_reserved(&mut self, origin: Span) -> Result<Type, TypeError> {
-        let identity = InferenceVariableId::new(self.next_inference);
-        self.next_inference = self
-            .next_inference
-            .checked_add(1)
-            .ok_or_else(invalid_state)?;
-        self.inference_origins.push(origin);
-        Ok(Type::Inference(identity))
+    fn fresh_inference_reserved(&mut self, kind: &Kind, origin: Span) -> Result<Type, TypeError> {
+        allocate_inference_variable(
+            &mut self.next_inference,
+            &mut self.inference_variables,
+            &mut self.type_work,
+            kind,
+            origin,
+        )
     }
 
-    fn fresh_type_variable(&mut self) -> Result<TypeVariableId, TypeError> {
+    fn fresh_type_variable(
+        &mut self,
+        kind: &Kind,
+        origin: Span,
+    ) -> Result<TypeVariableId, TypeError> {
         let identity = TypeVariableId::generated(self.next_generated_type_variable);
-        self.next_generated_type_variable = self
+        let next = self
             .next_generated_type_variable
             .checked_sub(1)
             .ok_or_else(invalid_state)?;
+        self.generated_type_variables
+            .insert(identity, kind, origin, &mut self.type_work)
+            .map_err(generated_type_variable_registry_error)?;
+        self.next_generated_type_variable = next;
         Ok(identity)
+    }
+
+    fn generalize_inference_variables(
+        &mut self,
+        variables: &[InferenceVariableId],
+        initializer: &Type,
+    ) -> Result<(Vec<(TypeVariableId, Kind)>, Type), TypeError> {
+        self.type_work
+            .charge(variables.len().saturating_mul(3))
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut generalized = Vec::new();
+        generalized
+            .try_reserve(variables.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.inference_solutions
+            .try_reserve(variables.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.authenticated_inference_solutions
+            .try_reserve(variables.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let generated_marker = self.generated_type_variables.len();
+        let next_generated_type_variable = self.next_generated_type_variable;
+        let result = (|| {
+            for variable in variables {
+                let fact = self
+                    .inference_variables
+                    .fact(*variable, &mut self.type_work)
+                    .map_err(inference_registry_error)?;
+                let kind = clone_kind_with_budget(&fact.kind, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let origin = fact.origin;
+                let binder = self.fresh_type_variable(&kind, origin)?;
+                if let Err(replacement) = self
+                    .inference_solutions
+                    .insert_unique(*variable, Type::Variable(binder))
+                {
+                    discard_type_iteratively(replacement);
+                    return Err(invalid_state());
+                }
+                if !self.authenticated_inference_solutions.insert(*variable) {
+                    self.inference_solutions.remove_and_discard(*variable);
+                    return Err(invalid_state());
+                }
+                generalized.push((binder, kind));
+            }
+            self.zonk(initializer)
+        })();
+        match result {
+            Ok(zonked) => Ok((generalized, zonked)),
+            Err(error) => {
+                for variable in variables.iter().take(generalized.len()) {
+                    self.inference_solutions.remove_and_discard(*variable);
+                    self.authenticated_inference_solutions.remove(variable);
+                }
+                self.generated_type_variables.truncate(generated_marker);
+                self.next_generated_type_variable = next_generated_type_variable;
+                Err(error)
+            }
+        }
     }
 
     fn instantiate(
@@ -2213,7 +2493,7 @@ impl Elaborator {
         }
         let count = fact.quantified.len();
         self.type_work
-            .charge(count.saturating_mul(if rigid { 2 } else { 3 }))
+            .charge(count.saturating_mul(2))
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut replacements = HashMap::new();
         replacements
@@ -2223,25 +2503,29 @@ impl Elaborator {
         arguments
             .try_reserve(count)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        if !rigid {
-            self.inference_origins
-                .try_reserve(count)
-                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let inference_marker = self.inference_variables.len();
+        let next_inference = self.next_inference;
+        let result = (|| {
+            for (binder, kind) in &fact.quantified {
+                let argument = if rigid {
+                    Type::Variable(*binder)
+                } else {
+                    self.fresh_inference_reserved(kind, origin)?
+                };
+                replacements.insert(*binder, argument.clone());
+                arguments.push(argument);
+            }
+            let instantiated = substitute_type_variables_with(&fact.ty, &replacements, |cells| {
+                self.type_work.charge(cells)
+            })
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            Ok((instantiated, arguments))
+        })();
+        if result.is_err() && !rigid {
+            self.inference_variables.truncate(inference_marker);
+            self.next_inference = next_inference;
         }
-        for (binder, _) in &fact.quantified {
-            let argument = if rigid {
-                Type::Variable(*binder)
-            } else {
-                self.fresh_inference_reserved(origin)?
-            };
-            replacements.insert(*binder, argument.clone());
-            arguments.push(argument);
-        }
-        let instantiated = substitute_type_variables_with(&fact.ty, &replacements, |cells| {
-            self.type_work.charge(cells)
-        })
-        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        Ok((instantiated, arguments))
+        result
     }
 
     fn enter_global_evidence_scope(&mut self, binder: BinderId) -> Result<usize, TypeError> {
@@ -2300,15 +2584,32 @@ impl Elaborator {
         }
         let mut selector = self.selection.take().ok_or_else(invalid_state)?;
         let solutions = &self.inference_solutions;
+        let inference_variables = &self.inference_variables;
+        let authenticated_solutions = &self.authenticated_inference_solutions;
         let result = selector.close(
             marker,
             |argument, type_work| {
                 let zonked =
-                    zonk_type_with_status(&argument, solutions, |cells| type_work.charge(cells));
+                    zonk_type_with_status_and_inference(&argument, solutions, |work| match work {
+                        ZonkWork::TypeCells(cells) => type_work
+                            .charge(cells)
+                            .map_err(|()| SelectionFailure::TypeResource),
+                        ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                            identity,
+                            inference_variables,
+                            solutions,
+                            authenticated_solutions,
+                            type_work,
+                        )
+                        .map_err(|failure| match failure {
+                            UnificationFailure::Resource => SelectionFailure::TypeResource,
+                            UnificationFailure::Mismatch
+                            | UnificationFailure::Infinite
+                            | UnificationFailure::Invariant => SelectionFailure::InvalidState,
+                        }),
+                    });
                 discard_type_iteratively(argument);
-                zonked
-                    .map(|(ty, _)| ty)
-                    .map_err(|()| SelectionFailure::TypeResource)
+                zonked.map(|(ty, _)| ty)
             },
             &mut self.constraint_work,
             &mut self.type_work,
@@ -2828,6 +3129,7 @@ impl Elaborator {
                     ElaborationFailure::TypeResourceExhausted,
                 ));
             }
+            Err(UnificationFailure::Invariant) => return Err(invalid_state()),
         }
         let ty = IterativeTypeOwner::new(self.clone_type(codomain)?);
         let core_ty = self.clone_type(&ty)?;
@@ -3038,10 +3340,30 @@ impl Elaborator {
     }
 
     fn zonk_with_status(&mut self, ty: &Type) -> Result<(Type, bool), TypeError> {
-        zonk_type_with_status(ty, &self.inference_solutions, |cells| {
-            self.type_work.charge(cells)
+        let solutions = &self.inference_solutions;
+        let inference_variables = &self.inference_variables;
+        let authenticated_solutions = &self.authenticated_inference_solutions;
+        let type_work = &mut self.type_work;
+        zonk_type_with_status_and_inference(ty, solutions, |work| match work {
+            ZonkWork::TypeCells(cells) => type_work
+                .charge(cells)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted)),
+            ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                identity,
+                inference_variables,
+                solutions,
+                authenticated_solutions,
+                type_work,
+            )
+            .map_err(|failure| match failure {
+                UnificationFailure::Resource => {
+                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                }
+                UnificationFailure::Mismatch
+                | UnificationFailure::Infinite
+                | UnificationFailure::Invariant => invalid_state(),
+            }),
         })
-        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
     fn charge_type(&mut self, ty: &Type) -> Result<(), TypeError> {
@@ -3147,104 +3469,166 @@ impl Elaborator {
         );
         let right = clone_type_with_budget(right, &mut self.type_work)
             .map_err(|()| UnificationFailure::Resource)?;
-        let mut work = Work(vec![Task::Pair(left.into_inner(), right)]);
-        while let Some(task) = work.0.pop() {
-            let (left, right) = match task {
-                Task::Pair(left, right) => (left, right),
-                Task::Sequence(mut left_types, mut right_types) => {
-                    match (left_types.next(), right_types.next()) {
-                        (Some(left), Some(right)) => {
-                            work.0.push(Task::Sequence(left_types, right_types));
-                            work.0.push(Task::Pair(left, right));
-                            continue;
+        let mut inserted = Vec::new();
+        let result = (|| {
+            let mut work = Work(vec![Task::Pair(left.into_inner(), right)]);
+            while let Some(task) = work.0.pop() {
+                let (left, right) = match task {
+                    Task::Pair(left, right) => (left, right),
+                    Task::Sequence(mut left_types, mut right_types) => {
+                        match (left_types.next(), right_types.next()) {
+                            (Some(left), Some(right)) => {
+                                work.0.push(Task::Sequence(left_types, right_types));
+                                work.0.push(Task::Pair(left, right));
+                                continue;
+                            }
+                            (None, None) => continue,
+                            (left, right) => {
+                                if let Some(left) = left {
+                                    discard_type_iteratively(left);
+                                }
+                                if let Some(right) = right {
+                                    discard_type_iteratively(right);
+                                }
+                                for ty in left_types {
+                                    discard_type_iteratively(ty);
+                                }
+                                for ty in right_types {
+                                    discard_type_iteratively(ty);
+                                }
+                                return Err(UnificationFailure::Mismatch);
+                            }
                         }
-                        (None, None) => continue,
-                        (left, right) => {
-                            if let Some(left) = left {
-                                discard_type_iteratively(left);
+                    }
+                };
+                let zonked_left = self.zonk(&left);
+                discard_type_iteratively(left);
+                let left = match zonked_left {
+                    Ok(left) => left,
+                    Err(error) => {
+                        discard_type_iteratively(right);
+                        return Err(match error {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
+                                UnificationFailure::Resource
                             }
-                            if let Some(right) = right {
-                                discard_type_iteratively(right);
+                            TypeError::Source(_)
+                            | TypeError::Interface(_)
+                            | TypeError::Mismatch(_)
+                            | TypeError::Internal(_) => UnificationFailure::Invariant,
+                        });
+                    }
+                };
+                let zonked_right = self.zonk(&right);
+                discard_type_iteratively(right);
+                let right = match zonked_right {
+                    Ok(right) => right,
+                    Err(error) => {
+                        discard_type_iteratively(left);
+                        return Err(match error {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
+                                UnificationFailure::Resource
                             }
-                            for ty in left_types {
-                                discard_type_iteratively(ty);
-                            }
-                            for ty in right_types {
-                                discard_type_iteratively(ty);
-                            }
-                            return Err(UnificationFailure::Mismatch);
+                            TypeError::Source(_)
+                            | TypeError::Interface(_)
+                            | TypeError::Mismatch(_)
+                            | TypeError::Internal(_) => UnificationFailure::Invariant,
+                        });
+                    }
+                };
+                match (left, right) {
+                    (Type::Inference(left), Type::Inference(right)) if left == right => {
+                        self.inference_variables
+                            .fact(left, &mut self.type_work)
+                            .map_err(inference_registry_failure_for_unification)?;
+                    }
+                    (Type::Inference(variable), ty) | (ty, Type::Inference(variable)) => {
+                        let ty = IterativeTypeOwner::new(ty);
+                        authenticate_inference_solution_kind(
+                            variable,
+                            &ty,
+                            &self.registry,
+                            &self.generated_type_variables,
+                            &self.inference_variables,
+                            &mut self.type_work,
+                        )?;
+                        if self.charge_type(&ty).is_err() {
+                            return Err(UnificationFailure::Resource);
                         }
+                        if type_contains_inference(
+                            &ty,
+                            variable,
+                            &self.inference_solutions,
+                            &self.registry,
+                            &self.generated_type_variables,
+                            &self.inference_variables,
+                            &mut self.type_work,
+                        )? {
+                            return Err(UnificationFailure::Infinite);
+                        }
+                        if self.type_work.charge(3).is_err()
+                            || self.inference_solutions.try_reserve(1).is_err()
+                            || self
+                                .authenticated_inference_solutions
+                                .try_reserve(1)
+                                .is_err()
+                            || inserted.try_reserve(1).is_err()
+                        {
+                            return Err(UnificationFailure::Resource);
+                        }
+                        if let Err(ty) = self
+                            .inference_solutions
+                            .insert_unique(variable, ty.into_inner())
+                        {
+                            discard_type_iteratively(ty);
+                            return Err(UnificationFailure::Invariant);
+                        }
+                        if !self.authenticated_inference_solutions.insert(variable) {
+                            self.inference_solutions.remove_and_discard(variable);
+                            return Err(UnificationFailure::Invariant);
+                        }
+                        inserted.push(variable);
                     }
-                }
-            };
-            let zonked_left = self.zonk(&left);
-            discard_type_iteratively(left);
-            let left = match zonked_left {
-                Ok(left) => left,
-                Err(_) => {
-                    discard_type_iteratively(right);
-                    return Err(UnificationFailure::Resource);
-                }
-            };
-            let zonked_right = self.zonk(&right);
-            discard_type_iteratively(right);
-            let right = match zonked_right {
-                Ok(right) => right,
-                Err(_) => {
-                    discard_type_iteratively(left);
-                    return Err(UnificationFailure::Resource);
-                }
-            };
-            match (left, right) {
-                (Type::Inference(left), Type::Inference(right)) if left == right => {}
-                (Type::Inference(variable), ty) | (ty, Type::Inference(variable)) => {
-                    if self.charge_type(&ty).is_err() {
-                        discard_type_iteratively(ty);
-                        return Err(UnificationFailure::Resource);
+                    (Type::Int, Type::Int)
+                    | (Type::Bool, Type::Bool)
+                    | (Type::Unit, Type::Unit) => {}
+                    (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+                    (Type::Variable(left), Type::Variable(right)) if left == right => {}
+                    (
+                        Type::Application(left_function, left_argument),
+                        Type::Application(right_function, right_argument),
+                    ) => {
+                        work.0.push(Task::Pair(*left_argument, *right_argument));
+                        work.0.push(Task::Pair(*left_function, *right_function));
                     }
-                    if type_contains_inference(&ty, variable, &self.inference_solutions) {
-                        discard_type_iteratively(ty);
-                        return Err(UnificationFailure::Infinite);
+                    (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
+                        work.0.push(Task::Sequence(
+                            left.into_vec().into_iter(),
+                            right.into_vec().into_iter(),
+                        ));
                     }
-                    if self.type_work.charge(1).is_err()
-                        || self.inference_solutions.try_reserve(1).is_err()
-                    {
-                        discard_type_iteratively(ty);
-                        return Err(UnificationFailure::Resource);
+                    (
+                        Type::Function(left_domain, left_codomain),
+                        Type::Function(right_domain, right_codomain),
+                    ) => {
+                        work.0.push(Task::Pair(*left_codomain, *right_codomain));
+                        work.0.push(Task::Pair(*left_domain, *right_domain));
                     }
-                    self.inference_solutions.insert(variable, ty);
-                }
-                (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
-                (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-                (Type::Variable(left), Type::Variable(right)) if left == right => {}
-                (
-                    Type::Application(left_function, left_argument),
-                    Type::Application(right_function, right_argument),
-                ) => {
-                    work.0.push(Task::Pair(*left_argument, *right_argument));
-                    work.0.push(Task::Pair(*left_function, *right_function));
-                }
-                (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
-                    work.0.push(Task::Sequence(
-                        left.into_vec().into_iter(),
-                        right.into_vec().into_iter(),
-                    ));
-                }
-                (
-                    Type::Function(left_domain, left_codomain),
-                    Type::Function(right_domain, right_codomain),
-                ) => {
-                    work.0.push(Task::Pair(*left_codomain, *right_codomain));
-                    work.0.push(Task::Pair(*left_domain, *right_domain));
-                }
-                (left, right) => {
-                    discard_type_iteratively(left);
-                    discard_type_iteratively(right);
-                    return Err(UnificationFailure::Mismatch);
+                    (left, right) => {
+                        discard_type_iteratively(left);
+                        discard_type_iteratively(right);
+                        return Err(UnificationFailure::Mismatch);
+                    }
                 }
             }
+            Ok(())
+        })();
+        if result.is_err() {
+            for variable in inserted.drain(..).rev() {
+                self.inference_solutions.remove_and_discard(variable);
+                self.authenticated_inference_solutions.remove(&variable);
+            }
         }
-        Ok(())
+        result
     }
 
     fn expose_expected_function(
@@ -3273,8 +3657,8 @@ impl Elaborator {
                 self.type_work
                     .charge(3)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let domain = self.fresh_inference(span)?;
-                let codomain = self.fresh_inference(span)?;
+                let domain = self.fresh_inference(&Kind::Type, span)?;
+                let codomain = self.fresh_inference(&Kind::Type, span)?;
                 let exposed = Type::Function(Box::new(domain), Box::new(codomain));
                 self.unify(&expected_ty, &exposed)
                     .map_err(|failure| match failure {
@@ -3287,6 +3671,7 @@ impl Elaborator {
                         UnificationFailure::Resource => {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         }
+                        UnificationFailure::Invariant => invalid_state(),
                     })?;
                 let provenance = self.unknown_provenance(&exposed)?;
                 Ok(ProvenancedTypeOwner::new(ProvenancedType {
@@ -3328,6 +3713,7 @@ impl Elaborator {
             Err(UnificationFailure::Resource) => Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted,
             )),
+            Err(UnificationFailure::Invariant) => Err(invalid_state()),
         }
     }
 
@@ -3351,6 +3737,7 @@ impl Elaborator {
             Err(UnificationFailure::Resource) => Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted,
             )),
+            Err(UnificationFailure::Invariant) => Err(invalid_state()),
         }
     }
 
@@ -3678,13 +4065,32 @@ impl Elaborator {
         )?);
         if !core_type_replacements.is_empty() {
             let inference_solutions = &self.inference_solutions;
+            let inference_variables = &self.inference_variables;
+            let authenticated_solutions = &self.authenticated_inference_solutions;
             let type_work = &mut self.type_work;
             self.builder.rewrite_types_since(rewrite_checkpoint, |ty| {
-                let (zonked, _) = zonk_type_with_status(ty, inference_solutions, |cells| {
-                    type_work
-                        .charge(cells)
-                        .map_err(|()| BuildError::TypeWorkExceeded)
-                })?;
+                let (zonked, _) = zonk_type_with_status_and_inference(
+                    ty,
+                    inference_solutions,
+                    |work| match work {
+                        ZonkWork::TypeCells(cells) => type_work
+                            .charge(cells)
+                            .map_err(|()| BuildError::TypeWorkExceeded),
+                        ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                            identity,
+                            inference_variables,
+                            inference_solutions,
+                            authenticated_solutions,
+                            type_work,
+                        )
+                        .map_err(|failure| match failure {
+                            UnificationFailure::Resource => BuildError::TypeWorkExceeded,
+                            UnificationFailure::Mismatch
+                            | UnificationFailure::Infinite
+                            | UnificationFailure::Invariant => BuildError::InvalidPayload,
+                        }),
+                    },
+                )?;
                 let renamed = substitute_type_variables_with(
                     &zonked,
                     core_type_replacements.as_map(),
@@ -4178,12 +4584,11 @@ impl Elaborator {
                 .contains_key(&InferenceVariableId::new(*identity))
         });
         if let Some(identity) = ambiguous {
-            let index = usize::try_from(identity).map_err(|_| invalid_state())?;
             let origin = self
-                .inference_origins
-                .get(index)
-                .copied()
-                .ok_or_else(invalid_state)?;
+                .inference_variables
+                .fact(InferenceVariableId::new(identity), &mut self.type_work)
+                .map_err(inference_registry_error)?
+                .origin;
             return Err(inference_failure(
                 TypeReason::AmbiguousType,
                 origin,
@@ -4557,8 +4962,8 @@ impl Elaborator {
                         self.type_work.charge(3).map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?;
-                        let domain = self.fresh_inference(current.span)?;
-                        let codomain = self.fresh_inference(current.span)?;
+                        let domain = self.fresh_inference(&Kind::Type, current.span)?;
+                        let codomain = self.fresh_inference(&Kind::Type, current.span)?;
                         let expected_ty = Type::Function(Box::new(domain), Box::new(codomain));
                         let expected = ProvenancedType {
                             provenance: self.unknown_provenance(&expected_ty)?,
@@ -4690,6 +5095,7 @@ impl Elaborator {
                                 ElaborationFailure::TypeResourceExhausted,
                             ));
                         }
+                        Err(UnificationFailure::Invariant) => return Err(invalid_state()),
                     }
                     let TypedNode {
                         node,
@@ -4819,8 +5225,8 @@ impl Elaborator {
                         self.type_work.charge(3).map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?;
-                        let domain = self.fresh_inference(function_span)?;
-                        let codomain = self.fresh_inference(function_span)?;
+                        let domain = self.fresh_inference(&Kind::Type, function_span)?;
+                        let codomain = self.fresh_inference(&Kind::Type, function_span)?;
                         let exposed = Type::Function(Box::new(domain), Box::new(codomain));
                         self.unify(&function_ty, &exposed)
                             .map_err(|failure| match failure {
@@ -4838,6 +5244,7 @@ impl Elaborator {
                                 UnificationFailure::Resource => {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                                 }
+                                UnificationFailure::Invariant => invalid_state(),
                             })?;
                         let zonked = self.zonk(&exposed)?;
                         function_ty.replace(zonked);
@@ -5058,27 +5465,9 @@ impl Elaborator {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?;
                         variables.retain(|variable| !environment_variables.contains(variable));
-                        let generalized_count = variables.len();
-                        self.type_work
-                            .charge(generalized_count.saturating_mul(3))
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                        generalized.try_reserve(generalized_count).map_err(|_| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                        self.inference_solutions
-                            .try_reserve(generalized_count)
-                            .map_err(|_| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                        for variable in variables {
-                            let binder = self.fresh_type_variable()?;
-                            self.inference_solutions
-                                .insert(variable, Type::Variable(binder));
-                            generalized.push((binder, Kind::Type));
-                        }
-                        let zonked = self.zonk(&initializer.ty)?;
+                        let (retained, zonked) =
+                            self.generalize_inference_variables(&variables, &initializer.ty)?;
+                        generalized = retained;
                         initializer.replace_type(zonked);
                     }
                     let mut binding_type =
@@ -5692,7 +6081,7 @@ impl Elaborator {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
                     for _ in patterns {
-                        types.push(self.fresh_inference(pattern.span)?);
+                        types.push(self.fresh_inference(&Kind::Type, pattern.span)?);
                     }
                     let required = Type::Tuple(types.into_boxed_slice());
                     let refined =
@@ -5779,19 +6168,41 @@ impl Elaborator {
             self.type_work
                 .charge(parameter_count.saturating_add(1))
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let required = IterativeTypeOwner::new(if parameter_count == 0 {
-                Type::Nominal(info_owner)
-            } else {
-                let mut arguments = Vec::new();
-                arguments
-                    .try_reserve(parameter_count)
-                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                for _ in 0..parameter_count {
-                    arguments.push(self.fresh_inference(whole_pattern.span)?);
+            let inference_marker = self.inference_variables.len();
+            let next_inference = self.next_inference;
+            let refinement = (|| {
+                let required = IterativeTypeOwner::new(if parameter_count == 0 {
+                    Type::Nominal(info_owner)
+                } else {
+                    let mut arguments = Vec::new();
+                    arguments.try_reserve(parameter_count).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let parameters = self
+                        .registry
+                        .nominal_parameters(info_owner)
+                        .ok_or_else(invalid_state)?;
+                    for parameter in parameters {
+                        arguments.push(allocate_inference_variable(
+                            &mut self.next_inference,
+                            &mut self.inference_variables,
+                            &mut self.type_work,
+                            &parameter.kind,
+                            whole_pattern.span,
+                        )?);
+                    }
+                    Type::apply_arguments(Type::Nominal(info_owner), arguments)
+                });
+                self.refine_pattern_expected(&expected, &required, whole_pattern.span)
+            })();
+            let refined = match refinement {
+                Ok(refined) => refined,
+                Err(error) => {
+                    self.inference_variables.truncate(inference_marker);
+                    self.next_inference = next_inference;
+                    return Err(error);
                 }
-                Type::apply_arguments(Type::Nominal(info_owner), arguments)
-            });
-            let refined = self.refine_pattern_expected(&expected, &required, whole_pattern.span)?;
+            };
             expected.replace(refined);
             inference_changed = true;
         }
@@ -8990,6 +9401,242 @@ fn invalid_state() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
 }
 
+fn inference_registry_error(error: InferenceRegistryFailure) -> TypeError {
+    match error {
+        InferenceRegistryFailure::Resource => {
+            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+        }
+        InferenceRegistryFailure::Missing
+        | InferenceRegistryFailure::Duplicate
+        | InferenceRegistryFailure::Conflict => invalid_state(),
+    }
+}
+
+fn generated_type_variable_registry_error(
+    error: GeneratedTypeVariableRegistryFailure,
+) -> TypeError {
+    match error {
+        GeneratedTypeVariableRegistryFailure::Resource => {
+            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+        }
+        GeneratedTypeVariableRegistryFailure::Missing
+        | GeneratedTypeVariableRegistryFailure::Duplicate
+        | GeneratedTypeVariableRegistryFailure::Conflict => invalid_state(),
+    }
+}
+
+fn allocate_inference_variable(
+    next_inference: &mut u32,
+    variables: &mut InferenceVariableRegistry,
+    budget: &mut TypeWorkBudget,
+    kind: &Kind,
+    origin: Span,
+) -> Result<Type, TypeError> {
+    let identity = InferenceVariableId::new(*next_inference);
+    let next = next_inference.checked_add(1).ok_or_else(invalid_state)?;
+    variables
+        .insert(identity, kind, origin, budget)
+        .map_err(inference_registry_error)?;
+    *next_inference = next;
+    Ok(Type::Inference(identity))
+}
+
+fn kind_failure_for_unification(failure: KindFailure) -> UnificationFailure {
+    match failure {
+        KindFailure::Resource(_) => UnificationFailure::Resource,
+        KindFailure::Internal(_) | KindFailure::Source(_) => UnificationFailure::Invariant,
+    }
+}
+
+fn inference_registry_failure_for_unification(
+    failure: InferenceRegistryFailure,
+) -> UnificationFailure {
+    match failure {
+        InferenceRegistryFailure::Resource => UnificationFailure::Resource,
+        InferenceRegistryFailure::Missing
+        | InferenceRegistryFailure::Duplicate
+        | InferenceRegistryFailure::Conflict => UnificationFailure::Invariant,
+    }
+}
+
+fn generated_type_variable_registry_failure_for_unification(
+    failure: GeneratedTypeVariableRegistryFailure,
+) -> UnificationFailure {
+    match failure {
+        GeneratedTypeVariableRegistryFailure::Resource => UnificationFailure::Resource,
+        GeneratedTypeVariableRegistryFailure::Missing
+        | GeneratedTypeVariableRegistryFailure::Duplicate
+        | GeneratedTypeVariableRegistryFailure::Conflict => UnificationFailure::Invariant,
+    }
+}
+
+fn candidate_kind_environment<'a>(
+    candidate: &Type,
+    registry: &'a ResolvedRegistry,
+    generated_type_variables: &'a GeneratedTypeVariableRegistry,
+    inference_variables: &'a InferenceVariableRegistry,
+    span: Span,
+    budget: &mut TypeWorkBudget,
+) -> Result<KindEnvironments<'a>, UnificationFailure> {
+    let mut environments = KindEnvironments::new();
+    let mut work = Vec::new();
+
+    macro_rules! schedule {
+        ($ty:expr) => {{
+            // Each retained scan cell is in one-to-one correspondence with
+            // one reachable candidate Type cell.
+            budget
+                .charge(1)
+                .map_err(|()| UnificationFailure::Resource)?;
+            work.try_reserve(1)
+                .map_err(|_| UnificationFailure::Resource)?;
+            work.push($ty);
+        }};
+    }
+
+    schedule!(candidate);
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Int | Type::Bool | Type::Unit => {}
+            Type::Variable(identity) => {
+                budget
+                    .charge(1)
+                    .map_err(|()| UnificationFailure::Resource)?;
+                if environments.contains_declared(*identity) {
+                    continue;
+                }
+                match identity {
+                    TypeVariableId::Resolved { .. } => {
+                        budget
+                            .charge(1)
+                            .map_err(|()| UnificationFailure::Resource)?;
+                        let parameter = registry
+                            .type_variable(*identity)
+                            .ok_or(UnificationFailure::Invariant)?;
+                        environments
+                            .insert_declared(
+                                *identity,
+                                &parameter.kind,
+                                parameter.origin.primary_span(),
+                                budget,
+                            )
+                            .map_err(kind_failure_for_unification)?;
+                    }
+                    TypeVariableId::Generated(_) => {
+                        let fact = generated_type_variables
+                            .fact(*identity, budget)
+                            .map_err(generated_type_variable_registry_failure_for_unification)?;
+                        environments
+                            .insert_declared(*identity, &fact.kind, fact.origin, budget)
+                            .map_err(kind_failure_for_unification)?;
+                    }
+                }
+            }
+            Type::Inference(identity) => {
+                budget
+                    .charge(1)
+                    .map_err(|()| UnificationFailure::Resource)?;
+                if environments.contains_inference(*identity) {
+                    continue;
+                }
+                let fact = inference_variables
+                    .fact(*identity, budget)
+                    .map_err(inference_registry_failure_for_unification)?;
+                environments
+                    .insert_inference(*identity, &fact.kind, Some(fact.origin), budget, span)
+                    .map_err(kind_failure_for_unification)?;
+            }
+            Type::Nominal(identity) => {
+                budget
+                    .charge(1)
+                    .map_err(|()| UnificationFailure::Resource)?;
+                if environments.contains_nominal(*identity) {
+                    continue;
+                }
+                budget
+                    .charge(1)
+                    .map_err(|()| UnificationFailure::Resource)?;
+                match registry
+                    .nominal_kind(*identity)
+                    .ok_or(UnificationFailure::Invariant)?
+                {
+                    CanonicalNominalKind::Parameters { parameters, origin } => environments
+                        .insert_nominal(*identity, parameters, origin, budget)
+                        .map_err(kind_failure_for_unification)?,
+                    CanonicalNominalKind::Frozen { kind, origin } => environments
+                        .insert_frozen_nominal(*identity, kind, origin, budget)
+                        .map_err(kind_failure_for_unification)?,
+                }
+            }
+            Type::Tuple(elements) => {
+                for element in elements.iter().rev() {
+                    schedule!(element);
+                }
+            }
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                schedule!(argument);
+                schedule!(function);
+            }
+            Type::Forall(_, _) => return Err(UnificationFailure::Invariant),
+        }
+    }
+    Ok(environments)
+}
+
+fn authenticate_inference_solution_kind(
+    variable: InferenceVariableId,
+    candidate: &Type,
+    registry: &ResolvedRegistry,
+    generated_type_variables: &GeneratedTypeVariableRegistry,
+    inference_variables: &InferenceVariableRegistry,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), UnificationFailure> {
+    #[cfg(test)]
+    SOLUTION_KIND_AUTHENTICATIONS.with(|count| count.set(count.get().saturating_add(1)));
+    let variable_fact = inference_variables
+        .fact(variable, budget)
+        .map_err(inference_registry_failure_for_unification)?;
+    let environments = candidate_kind_environment(
+        candidate,
+        registry,
+        generated_type_variables,
+        inference_variables,
+        variable_fact.origin,
+        budget,
+    )?;
+    let candidate_kind = environments
+        .synthesize_body_free_kind(candidate, variable_fact.origin, budget)
+        .map_err(kind_failure_for_unification)?;
+    let equal = same_kind_with_budget(&variable_fact.kind, candidate_kind, budget)
+        .map_err(|()| UnificationFailure::Resource)?;
+    if equal {
+        Ok(())
+    } else {
+        Err(UnificationFailure::Mismatch)
+    }
+}
+
+fn authenticate_zonk_inference_occurrence(
+    identity: InferenceVariableId,
+    inference_variables: &InferenceVariableRegistry,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    authenticated_solutions: &HashSet<InferenceVariableId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), UnificationFailure> {
+    inference_variables
+        .fact(identity, budget)
+        .map_err(inference_registry_failure_for_unification)?;
+    if solutions.contains_key(&identity) {
+        budget
+            .charge(1)
+            .map_err(|()| UnificationFailure::Resource)?;
+        if !authenticated_solutions.contains(&identity) {
+            return Err(UnificationFailure::Invariant);
+        }
+    }
+    Ok(())
+}
+
 fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
     match error {
         ResolvedBuildFailure::InvalidState => invalid_state(),
@@ -9618,12 +10265,14 @@ enum UnificationFailure {
     Mismatch,
     Infinite,
     Resource,
+    Invariant,
 }
 
 #[cfg(test)]
 std::thread_local! {
     static ZONK_REBUILD_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static OCCURS_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SOLUTION_KIND_AUTHENTICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TEST_INITIAL_TYPED_NODES: std::cell::RefCell<Vec<TypedNode>> = const {
         std::cell::RefCell::new(Vec::new())
     };
@@ -9639,10 +10288,27 @@ fn record_occurs_pending(pending: usize) {
     OCCURS_PENDING_PEAK.with(|peak| peak.set(peak.get().max(pending)));
 }
 
+enum ZonkWork {
+    TypeCells(usize),
+    Inference(InferenceVariableId),
+}
+
+#[cfg(test)]
 fn zonk_type_with_status<E>(
     ty: &Type,
     solutions: &HashMap<InferenceVariableId, Type>,
     mut charge: impl FnMut(usize) -> Result<(), E>,
+) -> Result<(Type, bool), E> {
+    zonk_type_with_status_and_inference(ty, solutions, |work| match work {
+        ZonkWork::TypeCells(cells) => charge(cells),
+        ZonkWork::Inference(_) => Ok(()),
+    })
+}
+
+fn zonk_type_with_status_and_inference<E>(
+    ty: &Type,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    mut work_charge: impl FnMut(ZonkWork) -> Result<(), E>,
 ) -> Result<(Type, bool), E> {
     enum ChargeTask<'a> {
         Visit(&'a Type),
@@ -9653,30 +10319,36 @@ fn zonk_type_with_status<E>(
     let mut unresolved = false;
     while let Some(task) = work.pop() {
         match task {
-            ChargeTask::Visit(Type::Inference(identity)) if solutions.contains_key(identity) => {
-                work.push(ChargeTask::Visit(&solutions[identity]));
+            ChargeTask::Visit(Type::Inference(identity)) => {
+                work_charge(ZonkWork::Inference(*identity))?;
+                if let Some(solution) = solutions.get(identity) {
+                    work.push(ChargeTask::Visit(solution));
+                } else {
+                    work_charge(ZonkWork::TypeCells(1))?;
+                    unresolved = true;
+                }
             }
             ChargeTask::Visit(Type::Tuple(elements)) => {
-                charge(1)?;
+                work_charge(ZonkWork::TypeCells(1))?;
                 work.push(ChargeTask::Slice(elements.iter()));
             }
             ChargeTask::Visit(Type::Application(function, argument)) => {
-                charge(1)?;
+                work_charge(ZonkWork::TypeCells(1))?;
                 work.push(ChargeTask::Visit(argument));
                 work.push(ChargeTask::Visit(function));
             }
             ChargeTask::Visit(Type::Function(domain, codomain)) => {
-                charge(1)?;
+                work_charge(ZonkWork::TypeCells(1))?;
                 work.push(ChargeTask::Visit(codomain));
                 work.push(ChargeTask::Visit(domain));
             }
             ChargeTask::Visit(Type::Forall(parameters, body)) => {
-                charge(1)?;
+                work_charge(ZonkWork::TypeCells(1))?;
                 for (_, kind) in parameters {
-                    charge(1)?;
+                    work_charge(ZonkWork::TypeCells(1))?;
                     let mut kinds = vec![kind];
                     while let Some(kind) = kinds.pop() {
-                        charge(1)?;
+                        work_charge(ZonkWork::TypeCells(1))?;
                         if let Kind::Arrow(domain, codomain) = kind {
                             kinds.push(codomain);
                             kinds.push(domain);
@@ -9687,11 +10359,7 @@ fn zonk_type_with_status<E>(
             }
             ChargeTask::Visit(
                 Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_),
-            ) => charge(1)?,
-            ChargeTask::Visit(Type::Inference(_)) => {
-                charge(1)?;
-                unresolved = true;
-            }
+            ) => work_charge(ZonkWork::TypeCells(1))?,
             ChargeTask::Slice(mut remaining) => {
                 if let Some(element) = remaining.next() {
                     work.push(ChargeTask::Slice(remaining));
@@ -9780,55 +10448,89 @@ fn type_contains_inference(
     ty: &Type,
     needle: InferenceVariableId,
     solutions: &HashMap<InferenceVariableId, Type>,
-) -> bool {
+    registry: &ResolvedRegistry,
+    generated_type_variables: &GeneratedTypeVariableRegistry,
+    inference_variables: &InferenceVariableRegistry,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, UnificationFailure> {
     enum Task<'a> {
         Visit(&'a Type),
-        VisitSequence(std::slice::Iter<'a, Type>),
+        Sequence(std::slice::Iter<'a, Type>),
     }
 
-    let mut work = vec![Task::Visit(ty)];
+    let mut work = Vec::new();
     let mut visited = HashSet::new();
+
+    macro_rules! schedule {
+        ($task:expr) => {{
+            budget
+                .charge(1)
+                .map_err(|()| UnificationFailure::Resource)?;
+            work.try_reserve(1)
+                .map_err(|_| UnificationFailure::Resource)?;
+            work.push($task);
+        }};
+    }
+
+    schedule!(Task::Visit(ty));
     while let Some(task) = work.pop() {
         #[cfg(test)]
         record_occurs_pending(work.len().saturating_add(1));
-        let Task::Visit(ty) = task else {
-            let Task::VisitSequence(mut remaining) = task else {
-                unreachable!()
-            };
-            if let Some(element) = remaining.next() {
-                work.push(Task::VisitSequence(remaining));
-                work.push(Task::Visit(element));
+        let ty = match task {
+            Task::Visit(ty) => ty,
+            Task::Sequence(mut remaining) => {
+                if let Some(next) = remaining.next() {
+                    schedule!(Task::Sequence(remaining));
+                    schedule!(Task::Visit(next));
+                }
+                continue;
             }
-            continue;
         };
         match ty {
-            Type::Inference(identity) if *identity == needle => return true,
-            Type::Inference(identity) if visited.insert(*identity) => {
+            Type::Inference(identity) => {
+                inference_variables
+                    .fact(*identity, budget)
+                    .map_err(inference_registry_failure_for_unification)?;
+                if *identity == needle {
+                    return Ok(true);
+                }
+                budget
+                    .charge(1)
+                    .map_err(|()| UnificationFailure::Resource)?;
+                visited
+                    .try_reserve(1)
+                    .map_err(|_| UnificationFailure::Resource)?;
+                if !visited.insert(*identity) {
+                    continue;
+                }
                 if let Some(solution) = solutions.get(identity) {
-                    work.push(Task::Visit(solution));
+                    authenticate_inference_solution_kind(
+                        *identity,
+                        solution,
+                        registry,
+                        generated_type_variables,
+                        inference_variables,
+                        budget,
+                    )?;
+                    schedule!(Task::Visit(solution));
                 }
             }
             Type::Tuple(elements) => {
-                work.push(Task::VisitSequence(elements.iter()));
+                schedule!(Task::Sequence(elements.iter()));
             }
             Type::Application(function, argument) => {
-                work.push(Task::Visit(argument));
-                work.push(Task::Visit(function));
+                schedule!(Task::Visit(argument));
+                schedule!(Task::Visit(function));
             }
             Type::Function(domain, codomain) => {
-                work.push(Task::Visit(codomain));
-                work.push(Task::Visit(domain));
+                schedule!(Task::Visit(codomain));
+                schedule!(Task::Visit(domain));
             }
-            Type::Forall(_, body) => work.push(Task::Visit(body)),
-            Type::Int
-            | Type::Bool
-            | Type::Unit
-            | Type::Nominal(_)
-            | Type::Variable(_)
-            | Type::Inference(_) => {}
+            Type::Forall(_, _) => return Err(UnificationFailure::Invariant),
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
         }
     }
-    false
+    Ok(false)
 }
 
 fn collect_unsolved_inference(
@@ -10055,9 +10757,9 @@ mod tests {
         module::{ModuleId, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{
-            ImportedFacts, ResolvedExportCandidate, ResolvedInterfaceDeclaration,
-            ResolvedInterfaceMethod, ResolvedModuleParts, ResolvedNominalType,
-            ResolvedTypeVariable,
+            ImportedFacts, ImportedNominalFact, ImportedTypeAccess, ResolvedExportCandidate,
+            ResolvedInterfaceDeclaration, ResolvedInterfaceMethod, ResolvedModuleParts,
+            ResolvedNominalType, ResolvedTypeVariable,
         },
         source::{ByteRange, SourceFile},
     };
@@ -10973,17 +11675,39 @@ mod tests {
         let owner = crate::types::NominalTypeId::new(source.id(), 0);
         let needle = InferenceVariableId::new(0);
         let tuple = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        let generated_type_variables = GeneratedTypeVariableRegistry::default();
+        let inference_variables = InferenceVariableRegistry::default();
+        let mut budget = TypeWorkBudget::unbounded();
         OCCURS_PENDING_PEAK.with(|peak| peak.set(0));
-        assert!(!type_contains_inference(&tuple, needle, &HashMap::new()));
+        assert_eq!(
+            type_contains_inference(
+                &tuple,
+                needle,
+                &HashMap::new(),
+                &registry,
+                &generated_type_variables,
+                &inference_variables,
+                &mut budget,
+            ),
+            Ok(false)
+        );
         assert!(OCCURS_PENDING_PEAK.with(std::cell::Cell::get) <= 2);
 
         let application = Type::apply_arguments(Type::Nominal(owner), vec![Type::Int; WIDTH]);
         OCCURS_PENDING_PEAK.with(|peak| peak.set(0));
-        assert!(!type_contains_inference(
-            &application,
-            needle,
-            &HashMap::new(),
-        ));
+        assert_eq!(
+            type_contains_inference(
+                &application,
+                needle,
+                &HashMap::new(),
+                &registry,
+                &generated_type_variables,
+                &inference_variables,
+                &mut budget,
+            ),
+            Ok(false)
+        );
         assert_eq!(
             OCCURS_PENDING_PEAK.with(std::cell::Cell::get),
             WIDTH + 1,
@@ -10993,22 +11717,48 @@ mod tests {
 
     #[test]
     fn occurs_check_visits_both_application_children() {
+        let source =
+            SourceFile::new("occurs-children.ash", "()").expect("the fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("the range is ordered"))
+            .expect("the fixture span should fit");
         let needle = InferenceVariableId::new(0);
         let function_occurrence =
             Type::Application(Box::new(Type::Inference(needle)), Box::new(Type::Unit));
         let argument_occurrence =
             Type::Application(Box::new(Type::Int), Box::new(Type::Inference(needle)));
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        let generated_type_variables = GeneratedTypeVariableRegistry::default();
+        let mut inference_variables = InferenceVariableRegistry::default();
+        let mut budget = TypeWorkBudget::unbounded();
+        inference_variables
+            .insert(needle, &Kind::Type, span, &mut budget)
+            .expect("the fixed inference fact should register");
 
-        assert!(type_contains_inference(
-            &function_occurrence,
-            needle,
-            &HashMap::new(),
-        ));
-        assert!(type_contains_inference(
-            &argument_occurrence,
-            needle,
-            &HashMap::new(),
-        ));
+        assert_eq!(
+            type_contains_inference(
+                &function_occurrence,
+                needle,
+                &HashMap::new(),
+                &registry,
+                &generated_type_variables,
+                &inference_variables,
+                &mut budget,
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            type_contains_inference(
+                &argument_occurrence,
+                needle,
+                &HashMap::new(),
+                &registry,
+                &generated_type_variables,
+                &inference_variables,
+                &mut budget,
+            ),
+            Ok(true)
+        );
     }
 
     #[test]
@@ -11074,10 +11824,11 @@ mod tests {
     }
 
     #[test]
-    fn inferred_anonymous_function_type_precharges_three_cells_before_inference_origins() {
-        // The module view retains one fixed Type-kind binder (record plus kind node)
-        // before the existing 26-unit expression synthesis boundary.
-        const EXACT_WORK: usize = 28;
+    fn inferred_anonymous_function_type_precharges_fixed_inference_records() {
+        // Predecessor module/expression work (28), fixed Omega Kind retention
+        // added to two fresh variables (4), and fused authenticated
+        // transactional alias solving plus zonking (19).
+        const EXACT_WORK: usize = 28 + 4 + 19;
         let resolved = resolved_module_fixture(
             "inferred-anonymous-function-budget.ash",
             "",
@@ -11103,7 +11854,7 @@ mod tests {
             ))
         );
         assert_eq!(short.next_inference, 0);
-        assert!(short.inference_origins.is_empty());
+        assert!(short.inference_variables.is_empty());
 
         let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         exact
@@ -11482,8 +12233,8 @@ mod tests {
         let mut short = Elaborator::new();
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 8)
-            .expect("the fixture leaves one fewer unit than the metadata preflight");
+            .charge(crate::types::TYPE_WORK_LIMIT - 15)
+            .expect("the fixture leaves exactly the retained metadata cost");
         assert_eq!(
             short.instantiate(&fact, false, span),
             Err(TypeError::Internal(
@@ -11491,21 +12242,1056 @@ mod tests {
             ))
         );
         assert_eq!(short.next_inference, 0);
-        assert_eq!(short.inference_origins.len(), 0);
-        assert_eq!(short.inference_origins.capacity(), 0);
+        assert_eq!(short.inference_variables.len(), 0);
 
         let mut exact = Elaborator::new();
         exact
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 10)
+            .charge(crate::types::TYPE_WORK_LIMIT - 16)
             .expect("the fixture leaves metadata plus the substituted result");
         let (instantiated, arguments) = exact
             .instantiate(&fact, false, span)
             .expect("the exact retained allocation cost should fit");
         assert_eq!(instantiated, Type::Unit);
         assert_eq!(arguments.len(), 3);
-        assert_eq!(exact.inference_origins.len(), 3);
+        assert_eq!(exact.inference_variables.len(), 3);
         assert_eq!(exact.type_work.charge(1), Err(()));
+    }
+
+    #[test]
+    fn polymorphic_instantiation_registers_fixed_inference_kinds_transactionally() {
+        // Two causal-origin slots, two Omega records, four retained Kind nodes,
+        // four replacement/argument Type cells, and seven substituted cells.
+        const EXACT_WORK: usize = (2 + 2 + 4 + 4) + 7;
+        let source =
+            SourceFile::new("kinded-instantiate.ash", "()\n").expect("the fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("the range is ordered"))
+            .expect("the complete fixture should form a span");
+        let function = TypeVariableId::new(0);
+        let argument = TypeVariableId::new(1);
+        let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let application = Type::Application(
+            Box::new(Type::Variable(function)),
+            Box::new(Type::Variable(argument)),
+        );
+        let fact = TypeFact {
+            ty: Type::Function(Box::new(application.clone()), Box::new(application)),
+            provenance: TypeProvenance::atom(Some(span)),
+            quantified: vec![(function, function_kind.clone()), (argument, Kind::Type)]
+                .into_boxed_slice(),
+        };
+
+        let mut short = Elaborator::new();
+        short.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            short.instantiate(&fact, false, span),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert_eq!(short.next_inference, 0);
+        assert!(short.inference_variables.is_empty());
+
+        let mut exact = Elaborator::new();
+        exact.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        let (_, arguments) = exact
+            .instantiate(&fact, false, span)
+            .expect("the exact kinded instantiation budget should fit");
+        let [
+            Type::Inference(function_inference),
+            Type::Inference(argument_inference),
+        ] = arguments.as_slice()
+        else {
+            panic!("instantiation should publish two inference arguments");
+        };
+        assert_eq!(exact.type_work.used(), EXACT_WORK);
+        let mut lookup_budget = TypeWorkBudget::unbounded();
+        assert_eq!(
+            exact
+                .inference_variables
+                .fact(*function_inference, &mut lookup_budget)
+                .map(|fact| &fact.kind),
+            Ok(&function_kind),
+        );
+        assert_eq!(
+            exact
+                .inference_variables
+                .fact(*argument_inference, &mut lookup_budget)
+                .map(|fact| &fact.kind),
+            Ok(&Kind::Type),
+        );
+        assert_eq!(
+            exact
+                .inference_variables
+                .fact(*function_inference, &mut lookup_budget)
+                .map(|fact| fact.origin),
+            Ok(span),
+        );
+    }
+
+    #[test]
+    fn inference_kind_registry_rejects_missing_duplicate_and_conflicting_entries() {
+        let source = SourceFile::new("omega-invariants.ash", "()\n").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("ordered range"))
+            .expect("span should fit");
+        let identity = InferenceVariableId::new(0);
+        let missing = InferenceVariableId::new(1);
+        let mut registry = InferenceVariableRegistry::default();
+        let mut budget = TypeWorkBudget::unbounded();
+
+        assert_eq!(
+            registry.fact(missing, &mut budget).map(|fact| &fact.kind),
+            Err(InferenceRegistryFailure::Missing)
+        );
+        registry
+            .insert(identity, &Kind::Type, span, &mut budget)
+            .expect("the first fixed kind should register");
+        assert_eq!(
+            registry.insert(identity, &Kind::Type, span, &mut budget),
+            Err(InferenceRegistryFailure::Duplicate)
+        );
+        assert_eq!(
+            registry.insert(
+                identity,
+                &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                span,
+                &mut budget,
+            ),
+            Err(InferenceRegistryFailure::Conflict)
+        );
+        assert_eq!(
+            registry.fact(identity, &mut budget).map(|fact| &fact.kind),
+            Ok(&Kind::Type)
+        );
+        assert_eq!(
+            registry.fact(identity, &mut budget).map(|fact| fact.origin),
+            Ok(span)
+        );
+    }
+
+    #[test]
+    fn unification_authenticates_fixed_inference_kinds_before_solving() {
+        let source = SourceFile::new("unify-kinds.ash", "()\n").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("ordered range"))
+            .expect("span should fit");
+        let mut elaborator = Elaborator::new();
+        let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let function = elaborator
+            .fresh_inference(&function_kind, span)
+            .expect("the fixed inference fact should register");
+
+        assert_eq!(
+            elaborator.unify(&function, &Type::Int),
+            Err(UnificationFailure::Mismatch)
+        );
+        assert!(elaborator.inference_solutions.is_empty());
+
+        let mut missing_same_identity = Elaborator::new();
+        let missing = Type::Inference(InferenceVariableId::new(0));
+        assert_eq!(
+            missing_same_identity.unify(&missing, &missing),
+            Err(UnificationFailure::Invariant)
+        );
+
+        assert_eq!(
+            elaborator.unify(&Type::Inference(InferenceVariableId::new(1)), &Type::Int),
+            Err(UnificationFailure::Invariant)
+        );
+        assert!(elaborator.inference_solutions.is_empty());
+    }
+
+    #[test]
+    fn unification_cache_collision_preserves_preexisting_transaction_state() {
+        let source = SourceFile::new("unification-cache-state.ash", "()")
+            .expect("the fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("the range should be ordered"))
+            .expect("the fixture span should fit");
+        let mut elaborator = Elaborator::new();
+        let retained_binder = elaborator
+            .fresh_type_variable(&Kind::Type, span)
+            .expect("the preexisting generated binder should register");
+        let inference = elaborator
+            .fresh_inference(&Kind::Type, span)
+            .expect("the fixed inference should register");
+        let Type::Inference(identity) = inference else {
+            unreachable!()
+        };
+        assert!(
+            elaborator
+                .authenticated_inference_solutions
+                .insert(identity)
+        );
+        let generated_len = elaborator.generated_type_variables.len();
+        let next_generated = elaborator.next_generated_type_variable;
+
+        assert_eq!(
+            elaborator.unify(&inference, &Type::Int),
+            Err(UnificationFailure::Invariant)
+        );
+        assert!(elaborator.inference_solutions.is_empty());
+        assert!(
+            elaborator
+                .authenticated_inference_solutions
+                .contains(&identity)
+        );
+        assert_eq!(elaborator.generated_type_variables.len(), generated_len);
+        assert_eq!(elaborator.next_generated_type_variable, next_generated);
+        let mut lookup_budget = TypeWorkBudget::unbounded();
+        assert_eq!(
+            elaborator
+                .generated_type_variables
+                .fact(retained_binder, &mut lookup_budget)
+                .map(|fact| &fact.kind),
+            Ok(&Kind::Type)
+        );
+    }
+
+    #[test]
+    fn generated_local_solution_authenticates_from_its_fixed_binder_environment() {
+        let source = SourceFile::new("generated-delta.ash", "()\n").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("ordered range"))
+            .expect("span should fit");
+        let inference = InferenceVariableId::new(0);
+        let binder = TypeVariableId::generated(u32::MAX);
+        let mut inference_variables = InferenceVariableRegistry::default();
+        let mut generated_type_variables = GeneratedTypeVariableRegistry::default();
+        let mut budget = TypeWorkBudget::unbounded();
+        inference_variables
+            .insert(inference, &Kind::Type, span, &mut budget)
+            .expect("the inference kind should register");
+        generated_type_variables
+            .insert(binder, &Kind::Type, span, &mut budget)
+            .expect("the generated binder kind should register");
+
+        assert_eq!(
+            authenticate_inference_solution_kind(
+                inference,
+                &Type::Variable(binder),
+                &ResolvedRegistry::default(),
+                &generated_type_variables,
+                &inference_variables,
+                &mut budget,
+            ),
+            Ok(())
+        );
+    }
+
+    fn checker_view_with_abstract_nominal(
+        access: ImportedTypeAccess,
+        parameter_kinds: Vec<Kind>,
+        span: Span,
+    ) -> (ResolvedRegistry, crate::types::NominalTypeId) {
+        let module = ModuleId::new(match access {
+            ImportedTypeAccess::Hidden => 801,
+            ImportedTypeAccess::Opaque => 802,
+            ImportedTypeAccess::Transparent => 803,
+        });
+        let nominal = crate::types::NominalTypeId::new(module, 0);
+        let parameters = parameter_kinds
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| ResolvedTypeVariable {
+                id: TypeVariableId::resolved(
+                    module,
+                    u32::try_from(index).expect("the parameter index should fit"),
+                ),
+                spelling: format!("P{index}"),
+                kind,
+                origin: Origin::Source(span),
+            })
+            .collect::<Vec<_>>();
+        let mut imported = ImportedFacts::default();
+        imported
+            .merge_nominal(
+                ImportedNominalFact {
+                    id: nominal,
+                    parameter_count: parameters.len(),
+                    parameters: parameters.into_boxed_slice(),
+                    constructors: Box::new([]),
+                    access,
+                    display_spelling: Some("Abstract".to_owned()),
+                    display_is_private: false,
+                    origin: Origin::Source(span),
+                },
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the abstract nominal fixture should be unique");
+        let registry = ResolvedRegistry::default()
+            .checker_view(&imported, &mut TypeWorkBudget::unbounded())
+            .expect("the checker view should retain the abstract nominal Kind fact");
+        (registry, nominal)
+    }
+
+    #[test]
+    fn hidden_and_opaque_nominal_solutions_use_body_free_fixed_kinds() {
+        let source = SourceFile::new("abstract-solution.ash", "x")
+            .expect("the abstract nominal fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the occurrence range should be ordered"))
+            .expect("the occurrence range should belong to the fixture");
+
+        for access in [ImportedTypeAccess::Hidden, ImportedTypeAccess::Opaque] {
+            let (registry, nominal) = checker_view_with_abstract_nominal(access, Vec::new(), span);
+            let identity = InferenceVariableId::new(0);
+            let mut inference_variables = InferenceVariableRegistry::default();
+            let mut budget = TypeWorkBudget::unbounded();
+            inference_variables
+                .insert(identity, &Kind::Type, span, &mut budget)
+                .expect("the fixed Type inference should register");
+
+            assert_eq!(
+                authenticate_inference_solution_kind(
+                    identity,
+                    &Type::Nominal(nominal),
+                    &registry,
+                    &GeneratedTypeVariableRegistry::default(),
+                    &inference_variables,
+                    &mut budget,
+                ),
+                Ok(()),
+                "{access:?} nominal identities retain Kind without structural visibility",
+            );
+        }
+    }
+
+    #[test]
+    fn abstract_nominal_candidate_authentication_is_exact_and_atomic() {
+        // Omega lookup (1), candidate scan/membership/registry lookup (3),
+        // transient Xi record plus its Type Kind (2), synthesis task/result
+        // records around S(nominal)=1 (3), and final Kind comparison (1).
+        const EXACT_WORK: usize = 1 + 3 + 2 + 3 + 1;
+        let source = SourceFile::new("abstract-solution-budget.ash", "x")
+            .expect("the abstract nominal resource fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the occurrence range should be ordered"))
+            .expect("the occurrence range should belong to the fixture");
+        let (registry, nominal) =
+            checker_view_with_abstract_nominal(ImportedTypeAccess::Hidden, Vec::new(), span);
+        let identity = InferenceVariableId::new(0);
+        let mut inference_variables = InferenceVariableRegistry::default();
+        inference_variables
+            .insert(
+                identity,
+                &Kind::Type,
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the fixed Type inference should register");
+        let candidate = Type::Nominal(nominal);
+
+        let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            authenticate_inference_solution_kind(
+                identity,
+                &candidate,
+                &registry,
+                &GeneratedTypeVariableRegistry::default(),
+                &inference_variables,
+                &mut short,
+            ),
+            Err(UnificationFailure::Resource),
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            authenticate_inference_solution_kind(
+                identity,
+                &candidate,
+                &registry,
+                &GeneratedTypeVariableRegistry::default(),
+                &inference_variables,
+                &mut exact,
+            ),
+            Ok(()),
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(inference_variables.len(), 1);
+    }
+
+    #[test]
+    fn higher_kinded_abstract_nominal_accepts_a_partial_nominal_argument() {
+        let source = SourceFile::new("abstract-higher-kind.ash", "x")
+            .expect("the higher-kinded abstract fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the occurrence range should be ordered"))
+            .expect("the occurrence range should belong to the fixture");
+        let option_module = ModuleId::new(800);
+        let option = crate::types::NominalTypeId::new(option_module, 0);
+        let option_parameter = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(option_module, 0),
+            spelling: "A".to_owned(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let base = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: option,
+                spelling: "Option".to_owned(),
+                constructors: Box::new([]),
+                origin: Origin::Source(span),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(option, vec![option_parameter])]);
+        let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let abstract_module = ModuleId::new(804);
+        let abstract_nominal = crate::types::NominalTypeId::new(abstract_module, 0);
+        let mut imported = ImportedFacts::default();
+        imported
+            .merge_nominal(
+                ImportedNominalFact {
+                    id: abstract_nominal,
+                    parameter_count: 1,
+                    parameters: Box::new([ResolvedTypeVariable {
+                        id: TypeVariableId::resolved(abstract_module, 0),
+                        spelling: "F".to_owned(),
+                        kind: function_kind.clone(),
+                        origin: Origin::Source(span),
+                    }]),
+                    constructors: Box::new([]),
+                    access: ImportedTypeAccess::Hidden,
+                    display_spelling: Some("Higher".to_owned()),
+                    display_is_private: false,
+                    origin: Origin::Source(span),
+                },
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the higher-kinded abstract fact should be unique");
+        let registry = base
+            .checker_view(&imported, &mut TypeWorkBudget::unbounded())
+            .expect("the checker view should retain local and abstract Kind facts");
+        let identity = InferenceVariableId::new(0);
+        let mut inference_variables = InferenceVariableRegistry::default();
+        let mut budget = TypeWorkBudget::unbounded();
+        inference_variables
+            .insert(identity, &Kind::Type, span, &mut budget)
+            .expect("the result inference should register");
+        let candidate = Type::Application(
+            Box::new(Type::Nominal(abstract_nominal)),
+            Box::new(Type::Nominal(option)),
+        );
+
+        assert_eq!(
+            authenticate_inference_solution_kind(
+                identity,
+                &candidate,
+                &registry,
+                &GeneratedTypeVariableRegistry::default(),
+                &inference_variables,
+                &mut budget,
+            ),
+            Ok(()),
+        );
+
+        let wrong_domain = InferenceVariableId::new(1);
+        inference_variables
+            .insert(
+                wrong_domain,
+                &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                span,
+                &mut budget,
+            )
+            .expect("the incompatible function-kind inference should register");
+        assert_eq!(
+            authenticate_inference_solution_kind(
+                wrong_domain,
+                &Type::Nominal(abstract_nominal),
+                &registry,
+                &GeneratedTypeVariableRegistry::default(),
+                &inference_variables,
+                &mut budget,
+            ),
+            Err(UnificationFailure::Mismatch),
+            "a well-kinded constructor with the wrong function domain is a mismatch",
+        );
+    }
+
+    #[test]
+    fn generated_binder_registration_is_exact_atomic_and_canonical() {
+        // One source-order index lookup, one retained binder record, and the
+        // three nodes of `Type -> Type` make the exact insertion boundary five.
+        const EXACT_WORK: usize = 1 + 1 + 3;
+        let source =
+            SourceFile::new("generated-delta-budget.ash", "()\n").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("ordered range"))
+            .expect("span should fit");
+        let identity = TypeVariableId::generated(u32::MAX);
+        let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+
+        let mut short = GeneratedTypeVariableRegistry::default();
+        let mut short_budget = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            short.insert(identity, &function_kind, span, &mut short_budget),
+            Err(GeneratedTypeVariableRegistryFailure::Resource)
+        );
+        assert_eq!(short.len(), 0, "one-short insertion must not publish");
+
+        let mut exact = GeneratedTypeVariableRegistry::default();
+        let mut exact_budget = TypeWorkBudget::with_limit(EXACT_WORK);
+        exact
+            .insert(identity, &function_kind, span, &mut exact_budget)
+            .expect("the exact fixed-kind record should fit");
+        assert_eq!(exact_budget.used(), EXACT_WORK);
+        let mut lookup_budget = TypeWorkBudget::unbounded();
+        assert_eq!(
+            exact
+                .fact(identity, &mut lookup_budget)
+                .map(|fact| &fact.kind),
+            Ok(&function_kind)
+        );
+        assert_eq!(
+            exact.insert(identity, &Kind::Type, span, &mut lookup_budget),
+            Err(GeneratedTypeVariableRegistryFailure::Conflict)
+        );
+        assert_eq!(
+            exact.insert(identity, &function_kind, span, &mut lookup_budget),
+            Err(GeneratedTypeVariableRegistryFailure::Duplicate)
+        );
+        assert!(matches!(
+            exact.fact(TypeVariableId::generated(u32::MAX - 1), &mut lookup_budget),
+            Err(GeneratedTypeVariableRegistryFailure::Missing)
+        ));
+    }
+
+    #[test]
+    fn generated_binder_allocation_rolls_back_the_identity_on_one_short() {
+        // Type needs one lookup, one binder record, and one retained Kind node.
+        const EXACT_WORK: usize = 1 + 1 + 1;
+        let source =
+            SourceFile::new("generated-delta-allocation.ash", "()\n").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("ordered range"))
+            .expect("span should fit");
+
+        let mut short = Elaborator::new();
+        short.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            short.fresh_type_variable(&Kind::Type, span),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert_eq!(short.generated_type_variables.len(), 0);
+        assert_eq!(short.next_generated_type_variable, u32::MAX);
+
+        let mut exact = Elaborator::new();
+        exact.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            exact.fresh_type_variable(&Kind::Type, span),
+            Ok(TypeVariableId::generated(u32::MAX))
+        );
+        assert_eq!(exact.generated_type_variables.len(), 1);
+        assert_eq!(exact.next_generated_type_variable, u32::MAX - 1);
+        assert_eq!(exact.type_work.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn higher_kinded_generalization_batch_is_exact_and_atomic() {
+        // Two source-order batch records in each of three destinations (6),
+        // then for each binder an Omega lookup, a Kind copy, and generated
+        // Delta lookup/record/Kind retention: 3 + 2|K|, hence 9 + 5.
+        // Fused zonking visits the Function and two Application cells (3),
+        // then each of four inference occurrences performs an Omega lookup,
+        // authenticated-solution lookup, and one-cell solution copy (12).
+        const EXACT_WORK: usize = 6 + 9 + 5 + 3 + 12;
+        let source = SourceFile::new("generalization-batch-budget.ash", "()")
+            .expect("the fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("the range should be ordered"))
+            .expect("the fixture span should fit");
+        let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let make_initializer = |function, argument| {
+            let application = Type::Application(Box::new(function), Box::new(argument));
+            Type::Function(Box::new(application.clone()), Box::new(application))
+        };
+
+        let mut short = Elaborator::new();
+        let function = short
+            .fresh_inference(&function_kind, span)
+            .expect("the function-kinded inference should register");
+        let argument = short
+            .fresh_inference(&Kind::Type, span)
+            .expect("the Type-kinded inference should register");
+        let Type::Inference(function_id) = function else {
+            unreachable!()
+        };
+        let Type::Inference(argument_id) = argument else {
+            unreachable!()
+        };
+        let initializer = make_initializer(function, argument);
+        short.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            short.generalize_inference_variables(&[function_id, argument_id], &initializer),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert!(short.inference_solutions.is_empty());
+        assert!(short.authenticated_inference_solutions.is_empty());
+        assert_eq!(short.generated_type_variables.len(), 0);
+        assert_eq!(short.next_generated_type_variable, u32::MAX);
+
+        let mut exact = Elaborator::new();
+        let function = exact
+            .fresh_inference(&function_kind, span)
+            .expect("the function-kinded inference should register");
+        let argument = exact
+            .fresh_inference(&Kind::Type, span)
+            .expect("the Type-kinded inference should register");
+        let Type::Inference(function_id) = function else {
+            unreachable!()
+        };
+        let Type::Inference(argument_id) = argument else {
+            unreachable!()
+        };
+        exact.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        let (generalized, zonked) = exact
+            .generalize_inference_variables(
+                &[function_id, argument_id],
+                &make_initializer(function, argument),
+            )
+            .expect("the complete higher-kinded batch should fit exactly");
+        assert_eq!(exact.type_work.used(), EXACT_WORK);
+        assert_eq!(generalized.len(), 2);
+        assert_eq!(generalized[0].1, function_kind);
+        assert_eq!(generalized[1].1, Kind::Type);
+        assert!(matches!(zonked, Type::Function(_, _)));
+    }
+
+    #[test]
+    fn generalization_duplicate_solution_preserves_preexisting_transaction_state() {
+        let source = SourceFile::new("generalization-duplicate-state.ash", "()")
+            .expect("the fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("the range should be ordered"))
+            .expect("the fixture span should fit");
+        let mut elaborator = Elaborator::new();
+        let retained_binder = elaborator
+            .fresh_type_variable(&Kind::Type, span)
+            .expect("the preexisting generated binder should register");
+        let inference = elaborator
+            .fresh_inference(&Kind::Type, span)
+            .expect("the fixed inference should register");
+        let Type::Inference(identity) = inference else {
+            unreachable!()
+        };
+        elaborator
+            .inference_solutions
+            .insert_unique(identity, Type::Bool)
+            .expect("the preexisting solution should be unique");
+        assert!(
+            elaborator
+                .authenticated_inference_solutions
+                .insert(identity)
+        );
+        let generated_len = elaborator.generated_type_variables.len();
+        let next_generated = elaborator.next_generated_type_variable;
+
+        assert_eq!(
+            elaborator.generalize_inference_variables(&[identity], &Type::Unit),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+        assert_eq!(
+            elaborator.inference_solutions.get(&identity),
+            Some(&Type::Bool)
+        );
+        assert!(
+            elaborator
+                .authenticated_inference_solutions
+                .contains(&identity)
+        );
+        assert_eq!(elaborator.generated_type_variables.len(), generated_len);
+        assert_eq!(elaborator.next_generated_type_variable, next_generated);
+        let mut lookup_budget = TypeWorkBudget::unbounded();
+        assert_eq!(
+            elaborator
+                .generated_type_variables
+                .fact(retained_binder, &mut lookup_budget)
+                .map(|fact| &fact.kind),
+            Ok(&Kind::Type)
+        );
+    }
+
+    #[test]
+    fn generalization_cache_collision_rolls_back_only_its_published_prefix() {
+        let source = SourceFile::new("generalization-cache-state.ash", "()")
+            .expect("the fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("the range should be ordered"))
+            .expect("the fixture span should fit");
+        let mut elaborator = Elaborator::new();
+        let retained_binder = elaborator
+            .fresh_type_variable(&Kind::Type, span)
+            .expect("the preexisting generated binder should register");
+        let first = elaborator
+            .fresh_inference(&Kind::Type, span)
+            .expect("the first inference should register");
+        let collision = elaborator
+            .fresh_inference(&Kind::Type, span)
+            .expect("the collision inference should register");
+        let Type::Inference(first) = first else {
+            unreachable!()
+        };
+        let Type::Inference(collision) = collision else {
+            unreachable!()
+        };
+        assert!(
+            elaborator
+                .authenticated_inference_solutions
+                .insert(collision)
+        );
+        let generated_len = elaborator.generated_type_variables.len();
+        let next_generated = elaborator.next_generated_type_variable;
+
+        assert_eq!(
+            elaborator.generalize_inference_variables(&[first, collision], &Type::Unit),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+        assert!(elaborator.inference_solutions.is_empty());
+        assert!(
+            !elaborator
+                .authenticated_inference_solutions
+                .contains(&first)
+        );
+        assert!(
+            elaborator
+                .authenticated_inference_solutions
+                .contains(&collision)
+        );
+        assert_eq!(elaborator.generated_type_variables.len(), generated_len);
+        assert_eq!(elaborator.next_generated_type_variable, next_generated);
+        let mut lookup_budget = TypeWorkBudget::unbounded();
+        assert_eq!(
+            elaborator
+                .generated_type_variables
+                .fact(retained_binder, &mut lookup_budget)
+                .map(|fact| &fact.kind),
+            Ok(&Kind::Type)
+        );
+    }
+
+    #[test]
+    fn higher_kinded_unification_rolls_back_a_solution_before_a_late_mismatch() {
+        let resolved = resolved_module_fixture(
+            "higher-kinded-unification.ash",
+            "type Option<A> =\nNone\n| Some(A)\n",
+            "Unit",
+            "()",
+        );
+        let span = fixture_result(&resolved).span;
+        let option = resolved.registry().nominals()[0].id;
+        let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+
+        let mut rejected =
+            Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+        let function = rejected
+            .fresh_inference(&function_kind, span)
+            .expect("the higher-kinded inference should register");
+        let left = Type::Application(Box::new(function), Box::new(Type::Int));
+        let wrong = Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Bool));
+        assert_eq!(
+            rejected.unify(&left, &wrong),
+            Err(UnificationFailure::Mismatch)
+        );
+        assert!(
+            rejected.inference_solutions.is_empty(),
+            "a later argument mismatch must roll back the earlier constructor solution"
+        );
+
+        let mut accepted =
+            Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+        let function = accepted
+            .fresh_inference(&function_kind, span)
+            .expect("the higher-kinded inference should register");
+        let left = Type::Application(Box::new(function), Box::new(Type::Int));
+        let right = Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Int));
+        accepted
+            .unify(&left, &right)
+            .expect("a partial nominal constructor has the fixed function kind");
+        assert_eq!(
+            accepted
+                .inference_solutions
+                .get(&InferenceVariableId::new(0)),
+            Some(&Type::Nominal(option))
+        );
+
+        let mut late_invariant =
+            Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+        let function = late_invariant
+            .fresh_inference(&function_kind, span)
+            .expect("the higher-kinded inference should register");
+        let missing = Type::Inference(InferenceVariableId::new(1));
+        let left = Type::Application(Box::new(function), Box::new(missing));
+        let right = Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Int));
+        assert_eq!(
+            late_invariant.unify(&left, &right),
+            Err(UnificationFailure::Invariant)
+        );
+        assert!(late_invariant.inference_solutions.is_empty());
+    }
+
+    #[test]
+    fn first_order_unification_does_not_synthesize_a_type_lambda() {
+        let source =
+            SourceFile::new("no-type-lambda.ash", "()").expect("the fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("the range should be ordered"))
+            .expect("the fixture span should fit");
+        let mut elaborator = Elaborator::new();
+        let function = elaborator
+            .fresh_inference(
+                &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                span,
+            )
+            .expect("the fixed higher-kinded inference should register");
+        let applied = Type::Application(Box::new(function), Box::new(Type::Int));
+
+        assert_eq!(
+            elaborator.unify(&applied, &Type::Bool),
+            Err(UnificationFailure::Mismatch),
+        );
+        assert!(
+            elaborator.inference_solutions.is_empty(),
+            "first-order unification must not solve F by inventing a type lambda"
+        );
+        assert!(elaborator.authenticated_inference_solutions.is_empty());
+        assert_eq!(elaborator.next_inference, 1);
+    }
+
+    #[test]
+    fn zonking_authenticates_missing_and_conflicting_fixed_inference_kinds() {
+        let source = SourceFile::new("zonk-kinds.ash", "()\n").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("ordered range"))
+            .expect("span should fit");
+
+        let mut missing = Elaborator::new();
+        assert_eq!(
+            missing.zonk(&Type::Inference(InferenceVariableId::new(0))),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+
+        let mut conflicting = Elaborator::new();
+        let function_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        conflicting
+            .fresh_inference(&function_kind, span)
+            .expect("the function-kinded inference should register");
+        conflicting
+            .inference_solutions
+            .0
+            .insert(InferenceVariableId::new(0), Type::Int);
+        assert_eq!(
+            conflicting.zonk(&Type::Inference(InferenceVariableId::new(0))),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+    }
+
+    #[test]
+    fn fused_zonk_charges_repeated_inference_occurrences_once_and_atomically() {
+        // One Tuple cell plus, for each inference occurrence, one Omega lookup,
+        // one authenticated-solution lookup, and one retained solution Type.
+        const EXACT_WORK: usize = 1 + 2 * (1 + 1 + 1);
+        let source = SourceFile::new("repeated-zonk-auth.ash", "()\n").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("ordered range"))
+            .expect("span should fit");
+        let identity = InferenceVariableId::new(0);
+        let ty = Type::Tuple(
+            vec![Type::Inference(identity), Type::Inference(identity)].into_boxed_slice(),
+        );
+        let mut inference_variables = InferenceVariableRegistry::default();
+        let solutions = HashMap::from([(identity, Type::Int)]);
+        let authenticated_solutions = HashSet::from([identity]);
+        let mut setup_budget = TypeWorkBudget::unbounded();
+        inference_variables
+            .insert(identity, &Kind::Type, span, &mut setup_budget)
+            .expect("the fixed inference kind should register");
+        SOLUTION_KIND_AUTHENTICATIONS.with(|count| count.set(0));
+
+        let mut one_short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            zonk_type_with_status_and_inference(&ty, &solutions, |work| match work {
+                ZonkWork::TypeCells(cells) => one_short.charge(cells),
+                ZonkWork::Inference(identity) => {
+                    authenticate_zonk_inference_occurrence(
+                        identity,
+                        &inference_variables,
+                        &solutions,
+                        &authenticated_solutions,
+                        &mut one_short,
+                    )
+                    .map_err(|_| ())
+                }
+            },),
+            Err(())
+        );
+        assert_eq!(solutions.get(&identity), Some(&Type::Int));
+        assert!(authenticated_solutions.contains(&identity));
+
+        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+        let (zonked, unresolved) =
+            zonk_type_with_status_and_inference(&ty, &solutions, |work| match work {
+                ZonkWork::TypeCells(cells) => exact.charge(cells),
+                ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                    identity,
+                    &inference_variables,
+                    &solutions,
+                    &authenticated_solutions,
+                    &mut exact,
+                )
+                .map_err(|_| ()),
+            })
+            .expect("the exact fused zonk work should fit");
+
+        assert_eq!(
+            zonked,
+            Type::Tuple(vec![Type::Int, Type::Int].into_boxed_slice())
+        );
+        assert!(!unresolved);
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(SOLUTION_KIND_AUTHENTICATIONS.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn repeated_elaborator_zonks_reuse_authenticated_solution_kinds() {
+        let source =
+            SourceFile::new("repeated-elaborator-zonk.ash", "()\n").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("ordered range"))
+            .expect("span should fit");
+        let mut elaborator = Elaborator::new();
+        let inference = elaborator
+            .fresh_inference(&Kind::Type, span)
+            .expect("the fixed inference kind should register");
+        elaborator
+            .unify(&inference, &Type::Int)
+            .expect("solution publication should authenticate its fixed kind");
+        elaborator.type_work = TypeWorkBudget::unbounded();
+        SOLUTION_KIND_AUTHENTICATIONS.with(|count| count.set(0));
+
+        assert_eq!(elaborator.zonk(&inference), Ok(Type::Int));
+        assert_eq!(elaborator.zonk(&inference), Ok(Type::Int));
+        assert_eq!(SOLUTION_KIND_AUTHENTICATIONS.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn reachable_solution_cost_is_independent_of_unrelated_omega_width() {
+        const WIDTH: usize = 4_096;
+        let source = SourceFile::new("omega-width.ash", "()\n").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("ordered range"))
+            .expect("span should fit");
+
+        let mut baseline = Elaborator::new();
+        let baseline_target = baseline
+            .fresh_inference(&Kind::Type, span)
+            .expect("the baseline inference should register");
+        baseline.type_work = TypeWorkBudget::unbounded();
+        baseline
+            .unify(&baseline_target, &Type::Int)
+            .expect("the baseline Type solution should fit");
+        let baseline_work = baseline.type_work.used();
+
+        let mut wide = Elaborator::new();
+        let wide_target = wide
+            .fresh_inference(&Kind::Type, span)
+            .expect("the target inference should register first");
+        for _ in 1..WIDTH {
+            wide.fresh_inference(&Kind::Type, span)
+                .expect("the unrelated inference fact should register");
+        }
+        wide.type_work = TypeWorkBudget::unbounded();
+        wide.unify(&wide_target, &Type::Int)
+            .expect("unrelated Omega facts must not enter the solve environment");
+
+        assert_eq!(wide.type_work.used(), baseline_work);
+    }
+
+    #[test]
+    fn constructor_pattern_kind_batch_rolls_back_after_a_late_registration_failure() {
+        // Initial target zonk (3), constructor batch storage (3), complete
+        // function-kinded parameter registration (5), and two of the three
+        // Type-kinded registration units: the final Kind node is one short.
+        const ONE_SHORT: usize = 3 + 3 + 5 + 2;
+        let resolved = resolved_module_fixture(
+            "constructor-pattern-omega.ash",
+            concat!(
+                "type Option<A> =\nNone\n| Some(A)\n",
+                "type Higher<F : Type -> Type, A> = Higher\n\n",
+                "probe : Higher<Option, Int> -> Unit\n",
+                "probe Higher = ()\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let ResolvedDefinitionKind::Equational(probe) = &resolved.definitions()[0].kind else {
+            panic!("the probe should be equational");
+        };
+        let pattern = &probe.equations[0].patterns[0];
+        let span = pattern.span;
+        let mut elaborator =
+            Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+        let target = elaborator
+            .fresh_inference(&Kind::Type, span)
+            .expect("the expected-pattern inference should register");
+        elaborator.type_work = TypeWorkBudget::with_limit(ONE_SHORT);
+
+        assert!(matches!(
+            elaborator.check_core_pattern(
+                pattern,
+                &target,
+                &mut TypeContext::new(),
+                &mut Vec::new(),
+                GeneratedReason::BindingLowering,
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert_eq!(elaborator.next_inference, 1);
+        assert_eq!(elaborator.inference_variables.len(), 1);
+        assert!(elaborator.inference_solutions.is_empty());
+
+        let mut accepted =
+            Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+        let target = accepted
+            .fresh_inference(&Kind::Type, span)
+            .expect("the expected-pattern inference should register");
+        accepted.type_work = TypeWorkBudget::unbounded();
+        let checked = accepted
+            .check_core_pattern(
+                pattern,
+                &target,
+                &mut TypeContext::new(),
+                &mut Vec::new(),
+                GeneratedReason::BindingLowering,
+            )
+            .expect("the complete constructor pattern should refine");
+        checked.pattern.discard_iteratively();
+        let mut lookup_budget = TypeWorkBudget::unbounded();
+        assert!(matches!(
+            &accepted
+                .inference_variables
+                .fact(InferenceVariableId::new(1), &mut lookup_budget)
+                .expect("the first nominal argument should remain registered")
+                .kind,
+            Kind::Arrow(_, _)
+        ));
+        assert_eq!(
+            &accepted
+                .inference_variables
+                .fact(InferenceVariableId::new(2), &mut lookup_budget)
+                .expect("the second nominal argument should remain registered")
+                .kind,
+            &Kind::Type
+        );
     }
 
     #[test]
@@ -11545,7 +13331,7 @@ mod tests {
             Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         elaborator
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - (WIDTH * 3 - 1))
+            .charge(crate::types::TYPE_WORK_LIMIT - (WIDTH * 5 - 1))
             .expect("the fixture leaves one fewer unit than metadata ownership requires");
 
         assert_eq!(
@@ -11561,19 +13347,26 @@ mod tests {
             ))
         );
         assert_eq!(elaborator.next_inference, 0);
-        assert_eq!(elaborator.inference_origins.len(), 0);
-        assert_eq!(elaborator.inference_origins.capacity(), 0);
+        assert_eq!(elaborator.inference_variables.len(), 0);
     }
 
     #[test]
     fn unification_charges_operand_copies_and_solution_metadata_exactly() {
-        let inference = Type::Inference(InferenceVariableId::new(0));
+        // One-cell candidate: comparison/copies, one fused zonk pass,
+        // fixed-kind synthesis/comparison, occurs scheduling, plus the
+        // solution, rollback, and authenticated-solution cache records.
+        const EXACT_WORK: usize = 18;
+        let source =
+            SourceFile::new("scalar-unification.ash", "()").expect("the fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("the range is ordered"))
+            .expect("the fixture span should fit");
 
         let mut short = Elaborator::new();
-        short
-            .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 7)
-            .expect("the fixture leaves one fewer unit than one scalar solution requires");
+        let inference = short
+            .fresh_inference(&Kind::Type, span)
+            .expect("the fixed inference should register");
+        short.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
         assert_eq!(
             short.unify(&inference, &Type::Int),
             Err(UnificationFailure::Resource)
@@ -11581,48 +13374,42 @@ mod tests {
         assert!(short.inference_solutions.is_empty());
 
         let mut exact = Elaborator::new();
-        exact
-            .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 8)
-            .expect("the fixture leaves comparison, operand copies, zonks, and solution storage");
+        let inference = exact
+            .fresh_inference(&Kind::Type, span)
+            .expect("the fixed inference should register");
+        exact.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
         assert_eq!(exact.unify(&inference, &Type::Int), Ok(()));
         assert_eq!(
             exact.inference_solutions,
             HashMap::from([(InferenceVariableId::new(0), Type::Int)])
         );
-        assert_eq!(exact.type_work.charge(1), Err(()));
+        assert_eq!(exact.type_work.used(), EXACT_WORK);
     }
 
     #[test]
-    fn deep_unification_second_copy_and_solution_have_exact_stack_safe_budgets() {
+    fn deep_kind_authenticated_unification_has_an_exact_stack_safe_budget() {
         const DEPTH: usize = 32_768;
         const CELLS: usize = 2 * DEPTH + 1;
-        const EXACT: usize = 3 * CELLS + 5;
+        // Comparison/copies, fused zonking, local environment+synthesis,
+        // occurs work, and transactional solution/cache retention total
+        // 9C + D + 9. Fusion removes the duplicate C+1 authentication scan.
+        const EXACT: usize = 9 * CELLS + DEPTH + 9;
 
         std::thread::Builder::new()
             .name("deep-unification-budget".to_owned())
             .stack_size(256 * 1024)
             .spawn(|| {
-                let inference = Type::Inference(InferenceVariableId::new(0));
-                let deep = deep_application_type(DEPTH);
-
-                let mut second_copy_short = Elaborator::new();
-                second_copy_short.type_work = TypeWorkBudget::with_limit(CELLS);
-                assert_eq!(
-                    second_copy_short.unify(&inference, &deep),
-                    Err(UnificationFailure::Resource)
-                );
-                assert!(second_copy_short.inference_solutions.is_empty());
-
-                let mut requested_prefix = Elaborator::new();
-                requested_prefix.type_work = TypeWorkBudget::with_limit(CELLS + 2);
-                assert_eq!(
-                    requested_prefix.unify(&inference, &deep),
-                    Err(UnificationFailure::Resource)
-                );
-                assert!(requested_prefix.inference_solutions.is_empty());
+                let source = SourceFile::new("deep-unification.ash", "()")
+                    .expect("the fixture source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 2).expect("the range is ordered"))
+                    .expect("the fixture span should fit");
+                let deep = IterativeTypeOwner::new(nested_function_type(DEPTH));
 
                 let mut one_short = Elaborator::new();
+                let inference = one_short
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the fixed inference should register");
                 one_short.type_work = TypeWorkBudget::with_limit(EXACT - 1);
                 assert_eq!(
                     one_short.unify(&inference, &deep),
@@ -11631,20 +13418,60 @@ mod tests {
                 assert!(one_short.inference_solutions.is_empty());
 
                 let mut exact = Elaborator::new();
+                let inference = exact
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the fixed inference should register");
                 exact.type_work = TypeWorkBudget::with_limit(EXACT);
                 assert_eq!(exact.unify(&inference, &deep), Ok(()));
                 assert!(matches!(
                     exact.inference_solutions.get(&InferenceVariableId::new(0)),
-                    Some(Type::Application(_, _))
+                    Some(Type::Function(_, _))
                 ));
-                assert_eq!(exact.type_work.charge(1), Err(()));
-
-                discard_type_iteratively(deep);
+                assert_eq!(exact.type_work.used(), EXACT);
                 drop(exact);
             })
             .expect("the deep-unification thread should start")
             .join()
             .expect("all deep unification paths must dismantle owned copies iteratively");
+    }
+
+    #[test]
+    fn late_occurs_resource_failure_owns_the_deep_candidate_iteratively() {
+        const DEPTH: usize = 32_768;
+        const CELLS: usize = 2 * DEPTH + 1;
+        // Full solution publication costs 9C + D + 9. Three final units retain
+        // the solution, rollback entry, and authenticated-solution entry, so
+        // `EXACT - 4` exhausts one unit before the occurs traversal completes.
+        const EXACT: usize = 9 * CELLS + DEPTH + 9;
+        const LATE_OCCURS_FAILURE: usize = EXACT - 4;
+
+        std::thread::Builder::new()
+            .name("late-occurs-candidate-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("late-occurs-candidate-owner.ash", "()")
+                    .expect("the fixture source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 2).expect("the range is ordered"))
+                    .expect("the fixture span should fit");
+                let candidate = IterativeTypeOwner::new(nested_function_type(DEPTH));
+                let mut elaborator = Elaborator::new();
+                let inference = elaborator
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the fixed inference should register");
+                elaborator.type_work = TypeWorkBudget::with_limit(LATE_OCCURS_FAILURE);
+
+                assert_eq!(
+                    elaborator.unify(&inference, &candidate),
+                    Err(UnificationFailure::Resource)
+                );
+                assert!(elaborator.inference_solutions.is_empty());
+                assert!(elaborator.authenticated_inference_solutions.is_empty());
+                assert_eq!(elaborator.type_work.used(), LATE_OCCURS_FAILURE);
+            })
+            .expect("the late-occurs worker should start")
+            .join()
+            .expect("a late occurs failure must dismantle the candidate iteratively");
     }
 
     #[test]
@@ -12400,10 +14227,17 @@ mod tests {
             .name("successful-inference-solution-disposal".to_owned())
             .stack_size(256 * 1024)
             .spawn(|| {
-                let inference = Type::Inference(InferenceVariableId::new(0));
-                let deep = deep_application_type(DEPTH);
+                let source = SourceFile::new("solution-disposal.ash", "()")
+                    .expect("the fixture source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 2).expect("the range is ordered"))
+                    .expect("the fixture span should fit");
+                let deep = IterativeTypeOwner::new(nested_function_type(DEPTH));
                 let mut elaborator = Elaborator::new();
                 elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                let inference = elaborator
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the fixed inference should register");
 
                 assert_eq!(elaborator.unify(&inference, &deep), Ok(()));
                 assert!(
@@ -12411,8 +14245,6 @@ mod tests {
                         .inference_solutions
                         .contains_key(&InferenceVariableId::new(0))
                 );
-
-                discard_type_iteratively(deep);
                 drop(elaborator);
             })
             .expect("the inference-solution thread should start")
@@ -12932,7 +14764,10 @@ mod tests {
                     provenance: TypeProvenance::unknown(&codomain_ty),
                     ty: codomain_ty,
                 };
-                elaborator.next_inference = 1;
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                elaborator
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the test inference fact should register");
                 elaborator.type_work = TypeWorkBudget::with_limit(ONE_DEEP_TYPE);
 
                 assert!(matches!(
@@ -13302,9 +15137,10 @@ mod tests {
                 );
                 let mut elaborator = Elaborator::for_resolved_expression(&resolved, &expression)
                     .expect("the standalone binder reservation should fit");
-                elaborator.next_inference = 1;
-                elaborator.inference_origins.push(span);
                 elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                elaborator
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the test inference fact should register");
 
                 assert!(matches!(
                     elaborator.elaborate_result(&expression, &mut context),
@@ -13361,8 +15197,10 @@ mod tests {
                 let calibration_domain = make_domain();
                 let mut calibration =
                     Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
-                calibration.next_inference = 1;
                 calibration.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                calibration
+                    .fresh_inference(&Kind::Type, expression.span)
+                    .expect("the calibration inference fact should register");
                 let mut calibration_binders = Vec::new();
                 let checked = calibration
                     .check_core_pattern(
@@ -13386,7 +15224,10 @@ mod tests {
                 let function_ty = Type::Function(Box::new(make_domain()), Box::new(Type::Unit));
                 let mut elaborator =
                     Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
-                elaborator.next_inference = 1;
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                elaborator
+                    .fresh_inference(&Kind::Type, expression.span)
+                    .expect("the test inference fact should register");
                 elaborator.type_work = TypeWorkBudget::with_limit(exact_check_work);
 
                 assert!(matches!(

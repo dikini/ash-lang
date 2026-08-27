@@ -548,11 +548,14 @@ git -c commit.gpgsign=false commit -m "feat: establish kinded Core validation"
 - Modify: `src/types.rs`
 - Modify: `src/kind.rs`
 - Modify: `src/interface.rs`
+- Modify: `src/resolved.rs`
 - Modify: `src/elaborate.rs`
+- Modify: `src/evidence_validation.rs`
 - Modify: `src/driver.rs`
 - Modify: `tests/kinds.rs`
 - Modify: `tests/polymorphism.rs`
 - Modify: `tests/bindings.rs`
+- Modify: `tests/architecture.rs`
 
 ### Step 1: Write the fixed-`OMEGA` RED witness
 
@@ -565,8 +568,13 @@ keep value = value
 
 with a local nominal constructor. Assert the instantiation allocates `F` at
 `Type -> Type`, may solve it with a nominal constructor or partial application,
-and evaluates unchanged. Add unit probes for registration before use and a
-missing or conflicting `OMEGA` entry.
+and evaluates unchanged. This source program is eventual positive conformance
+coverage. Task 5 rejects it earlier at linked value-scheme saturation; after
+Step 3 removes that predecessor boundary, structural unification may evaluate
+it without retaining the required fixed kind. The genuine RED evidence is a
+unit boundary that observes the exact `OMEGA` entries immediately after
+instantiation, plus registration-before-use and missing, duplicate, or
+conflicting entry probes.
 
 Run:
 
@@ -574,9 +582,13 @@ Run:
 cargo test --locked --test polymorphism higher_kinded_instantiation_preserves_fixed_kinds -- --exact
 ```
 
-Expected RED: scheme binders already retain fixed kinds, but instantiation does
-not copy them into a registered `OMEGA` entry and missing/conflicting transient
-entries have no owned rejection path.
+Expected RED: the public source case stops earlier at linked saturation and
+therefore does not establish the inference boundary. At the direct unit
+boundary, scheme binders already retain fixed kinds, but instantiation does not
+copy them into a registered `OMEGA` entry and missing, duplicate, or conflicting
+transient entries have no owned rejection path. After Step 3 the public case
+may pass structurally and still must not be reported as the RED-to-GREEN
+transition.
 
 ### Step 2: Implement kinded instantiation and first-order solving
 
@@ -587,14 +599,48 @@ applications and consult fixed kinds before solving. Reject missing or
 conflicting entries and same-shape mismatches; never synthesize a type lambda or
 change a variable kind.
 
-### Step 3: Write and implement higher-kinded local generalization
+During module checking, retain one private, non-materialized nominal Kind fact
+for each authenticated hidden or opaque import. Derive it from the imported
+fact's ordered parameter kinds and keep its causal span. Candidate
+authentication uses one canonical lookup for local, transparent, hidden, and
+opaque nominal identities. This checker-view sidecar must not populate the
+structural nominal, constructor, or parameter APIs and must not enter checked
+summaries. Charge one sidecar record plus every derived Kind node to the
+cumulative type-work ledger, with exact, one-short, and deep small-stack
+evidence.
+
+### Step 3: Remove predecessor saturation from linked value-type validation
+
+The public witness crosses linked interface-evidence validation before Core.
+Preserve that validator's structural identity, scope, tuple, inference, and
+scheme-exclusion checks, but replace its predecessor exact-saturation rule with
+the existing total kind-synthesis engine under canonical resolved binder and
+nominal kinds and an empty `OMEGA`. Require each linked scheme value type to
+synthesize `Type`. Do not duplicate the application-kind rules.
+
+Build one linked-program kind environment rather than one environment per
+type. Charge traversal and Kind comparison to the graph-wide constraint ledger.
+Charge canonical owner lookup and retained `DELTA` records, plus retained `XI`
+records and Kind construction, to a cumulative type-work ledger. Add exact,
+one-short, atomic, and deep small-stack evidence. Malformed checked facts remain
+internal `evidence.validation.*` failures; source `kind.*` ownership does not
+move. Task 7 still owns higher-kinded matching and selection, and Task 8 still
+owns exhaustive summary, hidden-closure, evidence, route, and linked-fact
+authentication.
+
+### Step 4: Write and implement higher-kinded local generalization
 
 Add RED/GREEN cases showing an eligible anonymous-function local generalizes
 eligible inference variables of fixed function kind into the outer scheme.
 Assert no `forall` appears below a term-function arrow, recursive or ineligible
 locals remain monomorphic, and method-local source parameters remain rejected.
+Use a local relay around a higher-kinded instantiation as eventual positive
+conformance. Task 5 rejects the relay earlier at linked saturation; after Step 3
+it may evaluate without proving the generalized binder kind. Direct
+generated-`DELTA` and exact generalization probes own the RED evidence for the
+predecessor's hard-coded `Type` binder.
 
-### Step 4: Prove complete zonking and resource behavior
+### Step 5: Prove complete zonking and resource behavior
 
 Test structural injectivity, both application children in occurs checking,
 same-kind partial solutions, a case that would require a type lambda, exact and
@@ -611,10 +657,10 @@ cargo test --locked --lib -- elaborate
 cargo check --locked --all-targets
 ```
 
-### Step 5: Review and commit inference
+### Step 6: Review and commit inference
 
 ```text
-git add src/types.rs src/kind.rs src/interface.rs src/elaborate.rs src/driver.rs tests/kinds.rs tests/polymorphism.rs tests/bindings.rs
+git add src/types.rs src/kind.rs src/interface.rs src/resolved.rs src/elaborate.rs src/evidence_validation.rs src/driver.rs tests/kinds.rs tests/polymorphism.rs tests/bindings.rs tests/architecture.rs
 git -c commit.gpgsign=false commit -m "feat: preserve kinds through type inference"
 ```
 

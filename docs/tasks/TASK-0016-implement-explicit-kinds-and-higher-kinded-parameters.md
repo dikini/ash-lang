@@ -184,6 +184,64 @@ permanent language principle.
   parent-clone failure after child extraction, and a missing arm-body remap.
   Repeat resource and Rust review approves the correction with no unresolved
   finding.
+- Task 6 gives every fresh inference identity one fixed `OMEGA` entry before
+  publishing the identity in a type. Ordinary fresh variables receive `Type`,
+  scheme instantiation copies each binder's declared kind, and constructor
+  pattern variables copy the corresponding nominal parameter kinds. Missing,
+  duplicate, and conflicting entries are internal invariant failures. Eligible
+  local generalization copies the same fixed kind into an elaborator-owned
+  generated `DELTA`; it does not add inferred or polymorphic kinds.
+- First-order unification authenticates candidate kinds through the existing
+  total Kind engine before publishing a solution. It accepts same-kind nominal
+  constructors and partial applications, traverses both application children
+  for unification and occurs checking, and does not synthesize type lambdas.
+  Fused zonking authenticates reachable solved variables without a separate
+  pre-scan. Solution, authentication-cache, generated-binder, and identity
+  updates are transactional. Invariant, mismatch, infinite-type, and resource
+  failures roll back only records published by the failing operation and
+  preserve pre-existing state.
+- The full workspace gate exposed imported hidden and opaque nominal identities
+  as one missing candidate-kind source. Their authenticated body-free facts now
+  produce a private checker-view `XI` sidecar containing only the frozen Kind
+  and causal span. One canonical lookup serves materialized and non-materialized
+  nominals during solution authentication. Hidden and opaque identities remain
+  absent from nominal declarations, constructors, structural parameter
+  lookups, checked summaries, and linked registries.
+- An eligible anonymous-function local now generalizes a function-kinded and a
+  `Type`-kinded inference variable into one ordered outer scheme. The retained
+  Core abstraction and both outer `Forall` carriers agree on those kinds, a
+  later occurrence instantiates them with `Pair<Int>` and `Bool`, and no scheme
+  appears below a term-function arrow. Recursive and otherwise ineligible
+  locals remain monomorphic.
+- The public higher-kinded relay exposed a necessary predecessor boundary in
+  linked value-scheme validation. Task 6 replaces exact nominal saturation at
+  that boundary with one predecessor-owned structural pass followed by the
+  canonical total Kind judgment for global, interface-method, and
+  implementation-method value types. One graph-lifetime `XI` and owner-specific
+  `DELTA` are reused across those facts; `OMEGA` is empty. Malformed retained
+  facts remain `evidence.validation.*` failures. Higher-kinded evidence
+  matching and exhaustive linked-fact authentication remain assigned to Tasks
+  7 and 8.
+- Task 6 resource evidence fixes scalar solution work at 18 units and deep
+  solution work at `9C + D + 9`, where `C` is the candidate's type-cell count
+  and `D` is its function depth. Generalizing `n` variables costs
+  `3n + sum(3 + 2|K_i|) + Z(T)`. Linked validation separates 18 structural
+  units, 33 Kind-judgment units, and four owner-`DELTA` type units for the
+  higher-kinded `keep` scheme. Its deep Kind judgment costs `10D + 4`, and
+  graph-lifetime nominal retention costs
+  `sum_nominal [2 + sum_parameter(|K| + 1)]`. The checker-view sidecar uses the
+  same per-nominal formula, `2 + sum_parameter(|K| + 1)`: one record, one final
+  `Type`, and each parameter Kind plus its `Arrow`. Exact, one-short, atomic,
+  32,768-deep 256 KiB-stack, and unrelated-`OMEGA` witnesses cover each boundary
+  without increasing a production limit or predecessor fixture.
+- Independent Task 6 review found a deep candidate crossing a fallible
+  occurs-check without an iterative owner, transaction logs that could remove
+  pre-existing state on invariant failure, a duplicate linked structural pass,
+  and resolution-only metadata for the shared Kind engine. The corrections add
+  deep and tampered-state regressions, retain one structural pass, and enforce
+  phase-neutral engine ownership plus live transient-site anchors. Repeat
+  semantic and Rust/resource review approves the production and evidence
+  boundaries with no unresolved important finding.
 
 ## Verification
 
@@ -237,6 +295,39 @@ The type-bearing site map and additive resource formulas are implementation
 inputs, not retrospective documentation. The architecture guard and exact
 budget probes therefore precede summary and Core expansion.
 
+After the linked value-scheme prerequisite moved, the Task 6 public
+instantiation program could evaluate through the predecessor's structural
+unifier, so it did not prove fixed inference kinds. The genuine `OMEGA` RED
+evidence observes registration and exact copied kinds at the inference boundary
+and separately rejects missing, duplicate, and conflicting entries.
+
+A detached Task 5 version of the local relay stopped earlier at predecessor
+linked value-scheme saturation. That product-level RED proves that the complete
+Task 6 path was absent, but it does not isolate predecessor generalization's
+hard-coded `Type` binder. Direct generated-`DELTA` and exact generalization
+witnesses own that narrower evidence.
+
+The unchanged wide elaboration fixture could not afford both a separate
+solution-authentication scan and final zonking. Fusing authentication into the
+single iterative zonk retains reachability-local work: 4,096 unrelated
+`OMEGA` entries do not change the cost of solving one variable. The unchanged
+width witness consumes 325,616 of 327,680 type-work units.
+
+Linked value-scheme saturation was not a Task 7 evidence-selection concern.
+It was an earlier structural admission rule that rejected the Task 6 public
+witness before inference or Core. Replacing only that rule with canonical
+kinding is therefore a Task 6 prerequisite; matching, selection, prerequisites,
+goals, routes, hidden closure, and exhaustive linked authentication do not move.
+
+The full workspace gate, rather than the focused Task 6 suites, exposed the
+imported abstract-nominal gap. Fixed-kind solution authentication correctly
+rejected an unknown nominal Kind, but the checker view had retained only the
+hidden or opaque identity's display name. The authenticated imported fact
+already owned its ordered parameter kinds. Freezing only the derived Kind in a
+checker-only sidecar supplies that evidence without making the nominal or its
+constructors structurally visible. Task 8 still owns exhaustive summary,
+hidden-closure, route, and linked-fact authentication.
+
 ## Deviations
 
 Task 3 refines the predecessor Rust API so `Observation` can dismantle a
@@ -256,6 +347,16 @@ Task 5 extends the planned carrier scope into `src/types.rs`, `src/interface.rs`
 kinded scheme and the private selected-interface kind needed to construct it;
 the fourth proves that retention. This boundary does not implement linked
 evidence authentication or inference integration assigned to later tasks.
+
+Task 6 extends its planned implementation scope into `src/resolved.rs`,
+`src/evidence_validation.rs`, `src/driver.rs`, and `tests/architecture.rs` for
+the private checker-view nominal Kind sidecar, the narrow linked value-scheme
+prerequisite, its independent resource ledger, and the closed multi-context
+Kind inventory. The sidecar consumes already-authenticated direct import facts;
+it does not advance Task 8's exhaustive authentication scope. The execution
+plan records those files and added boundaries. Task 6 does not change `spec/`:
+Task 12 remains the planned point where implemented behavior and retained
+evidence update normative language truth.
 
 The malformed-Core resource fixture grows from width 700 to width 1,000 so its
 expanded work remains above the accepted validator-local `3 * TYPE_WORK_LIMIT`
