@@ -670,14 +670,17 @@ git -c commit.gpgsign=false commit -m "feat: preserve kinds through type inferen
 
 - Modify: `src/interface.rs`
 - Modify: `src/evidence.rs`
-- Modify: `src/evidence_audit.rs`
+- Modify: `src/evidence_validation.rs`
 - Modify: `src/elaborate.rs`
-- Modify: `src/pattern.rs`
+- Modify: `src/kind.rs`
+- Modify: `src/resolved.rs`
+- Modify: `tests/architecture.rs`
 - Modify: `tests/interfaces.rs`
 - Modify: `tests/implementations.rs`
 - Modify: `tests/interface_selection.rs`
-- Modify: `tests/interface_diagnostics.rs`
-- Modify: `tests/interface_resources.rs`
+- Modify: `tests/kinds.rs`
+- Modify: `docs/tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md`
+- Modify: `docs/plans/2026-08-26-explicit-kinds-and-higher-kinded-parameters.md`
 
 ### Step 1: Write the higher-kinded interface RED program
 
@@ -704,6 +707,22 @@ goal to contain no inference variable before selection and never refine goal
 variables. Preserve full-head overlap, deterministic selection, prerequisite
 cycles, and exact method membership.
 
+Use the canonical defining binder records as Kind authority. Matching remains
+candidate-only, rigid, first-order, and independently freshens the two sides of
+overlap. It traverses both children of canonical applications but does not add
+type lambdas, higher-order unification, or goal refinement. Build one canonical
+environment for each complete goal and preserve abstract, exact-current, then
+concrete candidate priority.
+
+The checker view authenticates imported interface and implementation binder
+Kind mirrors as body-free facts. Linked validation authenticates each selected
+root and every retained substitution, including exact-current evidence, against
+the canonical interface or implementation binder Kind. A declaration
+prerequisite has one structural admission and one owner/canonical Kind judgment.
+Pending prerequisite evidence uses the authenticated declaration prerequisite
+plus exact same-Kind first-order substitution; it does not resynthesize the
+derived goal.
+
 ### Step 3: Prove termination, overlap, and orphan ownership
 
 Add cases where both function and argument children determine strict-subterm
@@ -719,6 +738,26 @@ ordinary matching or selection. Charge every comparison through the graph-wide
 constraint budget and every retained type/kind clone through the appropriate
 type-work budget. Add exact, one-short, atomic, and small-stack probes.
 
+Record the additive boundaries. An imported checker-view binder set costs
+`sum_i (1 + |Kind_i|)` type-work units. A width-`W` match costs `18W + 8`
+constraint units and `W` type-work units; its final-substitution precharge
+prefix is `15W + 8`. Cloning `N` selected substitution arguments costs
+`N + sum_i |Type_i|` type-work units. The scalar higher-kinded match and
+overlap fixtures cost 24/5 and 42/5 constraint/type units. Complete selection
+costs 156/20. Declaration head-plus-prerequisite authentication costs 12/4.
+The selected-root fixture costs 73 constraint units, decomposed as
+59 predecessor units, 9 root units, 4 substitution units, and one pending-goal
+proof unit; exact-current evidence costs 107 as `87 + 15 + 4 + 1`.
+
+For a Kind with `K = 2D + 1` nodes, deep matching and overlap cost `2K + 18`
+and `2K + 22` constraint units. The shared Kind engine admits a valid deep
+linked value in `6D + 3` units and rejects its residual mismatch in `6D - 1`.
+The full public linked-validation path costs `9D + 60`: registry 7; references
+`3D + 20`; pre-schemes `3D + 27`; wrapper and binder 2; judgment `6D + 3`;
+remaining scheme work 10; post-schemes `9D + 42`; and occurrences 18. At
+`D = 32,768`, the final 294,972-unit cost fits the production default on a
+256 KiB stack.
+
 Run:
 
 ```text
@@ -727,12 +766,19 @@ cargo test --locked --test implementations
 cargo test --locked --test interface_selection
 cargo test --locked --test interface_diagnostics
 cargo test --locked --test interface_resources
+cargo test --locked --test kinds
+cargo test --locked --test architecture
+cargo test --locked --lib -- interface::
+cargo test --locked --lib -- evidence::
+cargo test --locked --lib -- evidence_validation::
+cargo test --locked --lib -- kind::
+cargo test --locked --lib -- checker_view_
 ```
 
 ### Step 5: Review and commit interface evidence
 
 ```text
-git add src/interface.rs src/evidence.rs src/evidence_audit.rs src/elaborate.rs src/pattern.rs tests/interfaces.rs tests/implementations.rs tests/interface_selection.rs tests/interface_diagnostics.rs tests/interface_resources.rs
+git add src/interface.rs src/evidence.rs src/evidence_validation.rs src/elaborate.rs src/kind.rs src/resolved.rs tests/architecture.rs tests/interfaces.rs tests/implementations.rs tests/interface_selection.rs tests/kinds.rs docs/tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md docs/plans/2026-08-26-explicit-kinds-and-higher-kinded-parameters.md
 git -c commit.gpgsign=false commit -m "feat: select higher-kinded interface evidence"
 ```
 
@@ -765,36 +811,44 @@ Run:
 cargo test --locked --test kind_modules body_free_summary_preserves_defining_kinds -- --exact
 ```
 
-Expected RED: Task 4's direct nominal, interface, and scheme kind records exist,
-but complete hidden/evidence closure, non-direct route retention, exhaustive
-import authentication, and linked kind validation do not.
+Expected RED: Task 4's direct nominal, interface, and scheme Kind records exist,
+and Task 7 closes direct declaration, selected-goal, retained-substitution, and
+pending-goal preservation seams. Complete body-free hidden/evidence closure,
+non-direct route retention, exhaustive imported-summary tampering, and
+independently retained post-body fields remain absent.
 
 ### Step 2: Complete the canonical kind closure
 
-Extend the direct kind records by carrying ordered kinded binders through public schemes, data constructors,
-interfaces, implementation heads and prerequisites, selected evidence, and the
-hidden identity closure they require. Preserve defining identities through
-complete, qualified, targeted, implementation-only, facade, transitive, and
-diamond routes. Opacity hides constructors and spellings, not a nominal
-identity's derived kind.
+Extend the direct kind records through public schemes, data constructors, the
+remaining body-free and evidence carriers, and the hidden identity closure they
+require. Preserve defining identities through complete, qualified, targeted,
+implementation-only, facade, transitive, and diamond routes. Opacity hides
+constructors and spellings, not a nominal identity's derived kind. Task 7
+authenticates the direct selected/declaration seams; this task closes body-free
+and hidden closure, non-direct routes, and independently retained post-body
+fields.
 
 ### Step 3: Exhaustively authenticate summaries before local checking
 
 Import admission rederives nominal kinds and rejects duplicate or mismatched
 binder kinds, invalid parameter order or derivation, unbound variables,
 kind-invalid public or hidden types, and invalid implementation facts as
-dependency-summary internal failures. It cannot use dependency bodies or
-recompute a defining kind from an alias.
+dependency-summary internal failures. Exhaustive mutation covers imported
+summaries and every remaining carrier. Admission cannot use dependency bodies
+or recompute a defining kind from an alias.
 
 Add private mutation tests for every new public and hidden kind field in
 `src/resolve/module_tests.rs` or `src/resolved.rs` unit tests.
 
 ### Step 4: Authenticate linked evidence before Core
 
-Validate kinded schemes, implementation heads, substitutions, prerequisites,
-selected method types, and authorization relationships before Core synthesis.
-Mutate each independently checkable field and prove the owning linked boundary
-rejects it without reselection or evaluation.
+Complete linked authentication for non-direct routes, hidden closure, evidence
+carrier copies, selected method types, authorization relationships, and every
+new independently retained post-body field before Core synthesis. Mutate each
+remaining independently checkable field and prove the owning linked boundary
+rejects it without reselection or evaluation. Task 7 already covers selected
+roots, declaration heads and prerequisites, and retained substitutions at the
+direct linked boundary.
 
 ### Step 5: Prove routes, resources, and body disposal
 

@@ -343,6 +343,49 @@ fn constrained_method_selects_its_exact_abstract_requirement_before_a_matching_i
 }
 
 #[test]
+fn higher_kinded_abstract_requirement_wins_before_a_matching_concrete_candidate() {
+    let checked = check(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "interface Construct<F : Type -> Type> {\n",
+        "construct : Int -> F<Int>\n",
+        "}\n\n",
+        "impl Construct<Option> {\n",
+        "construct value = Some(value)\n",
+        "}\n\n",
+        "relay : Option<Int> -> Option<Int> where Construct<Option>\n",
+        "relay value = construct 42\n",
+    ))
+    .expect("the higher-kinded abstract requirement should satisfy the method occurrence");
+
+    let scheme = checked
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "relay")
+        .expect("the constrained relay scheme should remain checked");
+    let [requirement] = scheme.scheme.requirements.as_ref() else {
+        panic!("the relay scheme should retain its higher-kinded requirement");
+    };
+    let method = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let occurrences = occurrence_selections(
+        checked_definition(&checked, "relay"),
+        ResolvedTermName::Method(method),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("the relay body should retain exactly one Construct.construct occurrence");
+    };
+    assert!(
+        !checked.available_implementations().is_empty(),
+        "the concrete Construct<Option> candidate must be available"
+    );
+    assert_abstract_selection(
+        occurrence,
+        requirement.id,
+        &[method],
+        requirement.argument(),
+    );
+}
+
+#[test]
 fn constrained_global_occurrence_retains_one_abstract_selection_per_requirement_in_source_order() {
     let checked = check(concat!(
         "interface Left<A> {\nleft : A -> A\n}\n\n",
@@ -503,6 +546,107 @@ fn concrete_candidate_retains_impl_substitution_prerequisite_and_ordered_method_
     assert_eq!(
         show_methods,
         &[ImplMethodId::new(ImplId::new(checked.module(), 1), show)]
+    );
+}
+
+#[test]
+fn higher_kinded_concrete_candidate_retains_ordered_substitution_and_evidence() {
+    let checked = check(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "type Wrapped<F : Type -> Type, A> = Wrapped(F<A>)\n\n",
+        "interface Construct<F : Type -> Type> {\n",
+        "construct : Int -> F<Int>\n",
+        "}\n\n",
+        "interface Show<A> {\nshow : A -> Int\n}\n\n",
+        "interface Extract<A> {\nextract : A -> Int\nretain : A -> A\n}\n\n",
+        "impl Construct<Option> {\nconstruct value = Some(value)\n}\n\n",
+        "impl Show<Int> {\nshow value = value\n}\n\n",
+        "impl<F : Type -> Type, A : Type> Extract<Wrapped<F, A>> ",
+        "where Construct<F>, Show<A> {\n",
+        "extract value = 0\n",
+        "retain value = value\n",
+        "}\n\n",
+        "probe : Wrapped<Option, Int> -> Int\n",
+        "probe value = extract value\n",
+    ))
+    .expect("the higher-kinded concrete candidate should satisfy the occurrence");
+
+    let construct_interface = InterfaceId::new(checked.module(), 0);
+    let show_interface = InterfaceId::new(checked.module(), 1);
+    let extract_interface = InterfaceId::new(checked.module(), 2);
+    let construct = MethodId::new(construct_interface, 0);
+    let show = MethodId::new(show_interface, 0);
+    let extract = MethodId::new(extract_interface, 0);
+    let retain = MethodId::new(extract_interface, 1);
+    let construct_implementation = ImplId::new(checked.module(), 0);
+    let show_implementation = ImplId::new(checked.module(), 1);
+    let extract_implementation = ImplId::new(checked.module(), 2);
+    let [function_parameter, argument_parameter] =
+        checked.implementation_facts()[2].head_parameters.as_ref()
+    else {
+        panic!("the generic implementation should retain F then A");
+    };
+    let occurrences = occurrence_selections(
+        checked_definition(&checked, "probe"),
+        ResolvedTermName::Method(extract),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("the probe should retain exactly one Extract.extract occurrence");
+    };
+    let selection = selection_for_occurrence(occurrence);
+    assert_eq!(selection.node_count(), 3);
+    let EvidenceNode::Implementation {
+        implementation,
+        substitution,
+        prerequisites,
+        methods,
+    } = selection
+        .node(selection.root())
+        .expect("the concrete selection should retain its root")
+    else {
+        panic!("the higher-kinded occurrence should select an implementation");
+    };
+
+    assert_eq!(implementation, extract_implementation);
+    let [function_substitution, argument_substitution] = substitution else {
+        panic!("the generic implementation should retain F then A substitutions");
+    };
+    assert_eq!(function_substitution.parameter(), function_parameter.id);
+    assert_eq!(
+        function_substitution.argument(),
+        checked.implementation_facts()[0].argument(),
+        "F should match the bare Option constructor"
+    );
+    assert_eq!(argument_substitution.parameter(), argument_parameter.id);
+    assert_eq!(argument_substitution.argument(), &Type::Int);
+    assert_eq!(
+        methods,
+        &[
+            ImplMethodId::new(extract_implementation, extract),
+            ImplMethodId::new(extract_implementation, retain),
+        ]
+    );
+
+    let [construct_prerequisite, show_prerequisite] = prerequisites else {
+        panic!("the selected implementation should retain Construct then Show evidence");
+    };
+    assert_eq!(
+        selection.node(*construct_prerequisite),
+        Some(EvidenceNode::Implementation {
+            implementation: construct_implementation,
+            substitution: &[],
+            prerequisites: &[],
+            methods: &[ImplMethodId::new(construct_implementation, construct)],
+        })
+    );
+    assert_eq!(
+        selection.node(*show_prerequisite),
+        Some(EvidenceNode::Implementation {
+            implementation: show_implementation,
+            substitution: &[],
+            prerequisites: &[],
+            methods: &[ImplMethodId::new(show_implementation, show)],
+        })
     );
 }
 
@@ -682,6 +826,39 @@ fn undetermined_obligation_reports_constraint_ambiguous_without_type_guessing() 
     .expect_err("an undetermined local obligation should not choose an implementation by guessing");
 
     assert_eq!(interface_reason(error), "constraint.ambiguous");
+}
+
+#[test]
+fn ordinary_candidate_search_does_not_refine_a_rigid_higher_kinded_goal() {
+    let error = check(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "type Wrapped<F : Type -> Type> = Wrapped(F<Int>)\n\n",
+        "interface Construct<F : Type -> Type> {\nconstruct : Int -> F<Int>\n}\n\n",
+        "impl Construct<Option> {\nconstruct value = Some(value)\n}\n\n",
+        "interface Use<A> {\nuse : A -> A\n}\n\n",
+        "impl<F : Type -> Type> Use<Wrapped<F>> {\n",
+        "use value = Wrapped(construct 42)\n",
+        "}\n",
+    ))
+    .expect_err("Construct<Option> must not refine the rigid implementation parameter F");
+
+    assert_eq!(interface_reason(error), "constraint.unsatisfied");
+}
+
+#[test]
+fn higher_kinded_prerequisite_cycle_is_preserved_through_a_method_occurrence() {
+    let error = check(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "interface Construct<F : Type -> Type> {\nconstruct : Int -> F<Int>\n}\n\n",
+        "impl Construct<Option> where Construct<Option> {\n",
+        "construct value = Some(value)\n",
+        "}\n\n",
+        "probe : Unit -> Option<Int>\n",
+        "probe () = construct 42\n",
+    ))
+    .expect_err("the selected higher-kinded prerequisite must re-enter the active goal");
+
+    assert_eq!(interface_reason(error), "constraint.cycle");
 }
 
 #[test]

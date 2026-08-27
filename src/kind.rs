@@ -10,9 +10,9 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     interface::InterfaceId,
     resolved::{
-        ResolvedConstructor, ResolvedDefinition, ResolvedDefinitionKind, ResolvedExpr,
-        ResolvedExprKind, ResolvedImplementation, ResolvedInterfaceDeclaration,
-        ResolvedLocalDeclaration, ResolvedModuleParts, ResolvedRecursiveMember,
+        CanonicalNominalKind, ResolvedConstructor, ResolvedDefinition, ResolvedDefinitionKind,
+        ResolvedExpr, ResolvedExprKind, ResolvedImplementation, ResolvedInterfaceDeclaration,
+        ResolvedLocalDeclaration, ResolvedModuleParts, ResolvedRecursiveMember, ResolvedRegistry,
         ResolvedRequirement, ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
     },
     source::Span,
@@ -433,6 +433,35 @@ impl<'a> KindEnvironments<'a> {
             .map(|fact| fact.kind)
     }
 
+    /// Checks one inference-free monotype against an exact canonical kind,
+    /// charging synthesis and comparison to the operation that owns the
+    /// semantic comparison.
+    pub(crate) fn expect_body_free_exact_kind_with_ledger(
+        &self,
+        ty: &Type,
+        expected: &Kind,
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(ty, None, span, &mut ledger)?;
+        let equal =
+            same_kind_with_charge(expected, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free exact-kind authentication exceeded its owning work budget",
+                )
+            })?;
+        if equal {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "a checked body-free monotype has the wrong canonical kind",
+            ))
+        }
+    }
+
     /// Checks a body-free linked value monotype with traversal and Kind
     /// comparison charged to the caller's owning ledger.
     pub(crate) fn expect_body_free_value_type_with_ledger(
@@ -684,27 +713,35 @@ impl<'a> KindEnvironments<'a> {
         ))
     }
 
-    fn expect_body_free_interface_argument(
+    pub(crate) fn expect_body_free_interface_argument_with_ledger(
         &self,
         interface: InterfaceId,
         ty: &Type,
         span: Span,
-        budget: &mut TypeWorkBudget,
+        budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
         let Some(expected) = self.iota.get(&interface) else {
-            charge_lookup_attempt(span, budget)?;
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free interface-kind lookup exceeded its owning work budget",
+                )
+            })?;
             return Err(KindFailure::internal(
                 span,
                 "a body-free interface occurrence has no canonical parameter kind",
             ));
         };
-        let found = self.synthesize(ty, None, span, budget)?;
-        let equal = same_kind_with_budget(expected.kind, found.kind, budget).map_err(|()| {
-            KindFailure::resource(
-                span,
-                "body-free interface kind authentication exceeded its type-work budget",
-            )
-        })?;
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(ty, None, span, &mut ledger)?;
+        let equal = same_kind_with_charge(expected.kind, found.kind, || ledger.charge(1)).map_err(
+            |()| {
+                KindFailure::resource(
+                    span,
+                    "body-free interface kind authentication exceeded its owning work budget",
+                )
+            },
+        )?;
         if equal {
             Ok(())
         } else {
@@ -713,6 +750,16 @@ impl<'a> KindEnvironments<'a> {
                 "a checked body-free interface argument has the wrong kind",
             ))
         }
+    }
+
+    fn expect_body_free_interface_argument(
+        &self,
+        interface: InterfaceId,
+        ty: &Type,
+        span: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        self.expect_body_free_interface_argument_with_ledger(interface, ty, span, budget)
     }
 
     fn synthesize<'environment>(
@@ -739,86 +786,67 @@ impl<'a> KindEnvironments<'a> {
     where
         'a: 'environment,
     {
-        enum Task<'t> {
+        enum State<'t, 'kind> {
             Visit(&'t Type, Option<usize>),
-            Sequence {
-                types: std::slice::Iter<'t, Type>,
-                roots: Option<std::slice::Iter<'t, usize>>,
-            },
-            Tuple {
-                count: usize,
-                span: Span,
-            },
-            Application {
+            Complete(KindFact<'kind>),
+        }
+
+        enum Continuation<'t, 'kind> {
+            ApplicationFunction {
+                argument: &'t Type,
+                argument_root: Option<usize>,
                 span: Span,
                 argument_span: Span,
             },
-            Function(Span),
+            ApplicationArgument {
+                function: KindFact<'kind>,
+                span: Span,
+                argument_span: Span,
+            },
+            Tuple {
+                remaining: std::slice::Iter<'t, Type>,
+                roots: Option<std::slice::Iter<'t, usize>>,
+                span: Span,
+            },
+            FunctionDomain {
+                codomain: &'t Type,
+                codomain_root: Option<usize>,
+                span: Span,
+            },
+            FunctionCodomain {
+                span: Span,
+            },
         }
 
-        macro_rules! push_work {
+        macro_rules! push_continuation {
             ($work:expr, $task:expr, $span:expr) => {{
                 budget.charge(1).map_err(|()| {
                     KindFailure::resource(
                         $span,
-                        "kind-synthesis task retention exceeded its type-work budget",
+                        "kind-synthesis continuation retention exceeded its owning work budget",
                     )
                 })?;
                 $work.try_reserve(1).map_err(|_| {
                     KindFailure::resource(
                         $span,
-                        "kind-synthesis task retention could not reserve storage",
+                        "kind-synthesis continuation retention could not reserve storage",
                     )
                 })?;
                 $work.push($task);
             }};
         }
 
-        macro_rules! push_completed {
-            ($completed:expr, $fact:expr, $span:expr) => {{
-                budget.charge(1).map_err(|()| {
-                    KindFailure::resource(
-                        $span,
-                        "kind-synthesis result retention exceeded its type-work budget",
-                    )
-                })?;
-                $completed.try_reserve(1).map_err(|_| {
-                    KindFailure::resource(
-                        $span,
-                        "kind-synthesis result retention could not reserve storage",
-                    )
-                })?;
-                $completed.push($fact);
-            }};
-        }
-
-        let mut work = Vec::new();
-        push_work!(
-            work,
-            Task::Visit(ty, provenance.map(ResolvedTypeProvenance::root)),
-            fallback_span
-        );
-        let mut completed = Vec::<KindFact<'environment>>::new();
-        while let Some(task) = work.pop() {
-            match task {
-                Task::Sequence {
-                    mut types,
-                    mut roots,
-                } => {
-                    if let Some(ty) = types.next() {
-                        let root = roots.as_mut().and_then(|roots| roots.next().copied());
-                        if provenance.is_some() && root.is_none() {
-                            charge_lookup_attempt(fallback_span, budget)?;
-                            return Err(KindFailure::internal(
-                                fallback_span,
-                                "a resolved type has incomplete child provenance",
-                            ));
-                        }
-                        push_work!(work, Task::Sequence { types, roots }, fallback_span);
-                        push_work!(work, Task::Visit(ty, root), fallback_span);
-                    }
-                }
-                Task::Visit(ty, root) => {
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(
+                fallback_span,
+                "kind-synthesis current-state retention exceeded its owning work budget",
+            )
+        })?;
+        let mut current = State::Visit(ty, provenance.map(ResolvedTypeProvenance::root));
+        let mut work = Vec::<Continuation<'_, 'environment>>::new();
+        loop {
+            current = match current {
+                State::Visit(ty, root) => {
                     let node = match (provenance, root) {
                         (Some(provenance), Some(root)) => {
                             let Some(node) = provenance.nodes().get(root) else {
@@ -844,15 +872,11 @@ impl<'a> KindEnvironments<'a> {
                         Type::Int | Type::Bool | Type::Unit => {
                             charge_synthesis_cell(span, budget)?;
                             require_fact_node(node, span, budget)?;
-                            push_completed!(
-                                completed,
-                                KindFact {
-                                    kind: &TYPE_KIND,
-                                    origin: None,
-                                    occurrence: span,
-                                },
-                                span
-                            );
+                            State::Complete(KindFact {
+                                kind: &TYPE_KIND,
+                                origin: None,
+                                occurrence: span,
+                            })
                         }
                         Type::Variable(identity) => {
                             require_fact_node(node, span, budget)?;
@@ -872,7 +896,7 @@ impl<'a> KindEnvironments<'a> {
                                 },
                             )?;
                             fact.occurrence = span;
-                            push_completed!(completed, fact, span);
+                            State::Complete(fact)
                         }
                         Type::Inference(identity) => {
                             require_fact_node(node, span, budget)?;
@@ -892,7 +916,7 @@ impl<'a> KindEnvironments<'a> {
                                 },
                             )?;
                             fact.occurrence = span;
-                            push_completed!(completed, fact, span);
+                            State::Complete(fact)
                         }
                         Type::Nominal(identity) => {
                             require_fact_node(node, span, budget)?;
@@ -908,21 +932,17 @@ impl<'a> KindEnvironments<'a> {
                                     )
                                 },
                             )?;
-                            push_completed!(
-                                completed,
-                                KindFact {
-                                    kind: &fact.kind,
-                                    origin: Some(fact.origin),
-                                    occurrence: span,
-                                },
-                                span
-                            );
+                            State::Complete(KindFact {
+                                kind: &fact.kind,
+                                origin: Some(fact.origin),
+                                occurrence: span,
+                            })
                         }
                         Type::Tuple(elements) => {
                             charge_synthesis_cell(span, budget)?;
-                            let element_roots = match node {
+                            let roots = match node {
                                 Some(ResolvedTypeProvenanceNode::Tuple { elements, .. }) => {
-                                    Some(elements.as_ref())
+                                    Some(elements.iter())
                                 }
                                 Some(_) => {
                                     return Err(KindFailure::internal(
@@ -932,28 +952,43 @@ impl<'a> KindEnvironments<'a> {
                                 }
                                 None => None,
                             };
-                            if element_roots.is_some_and(|roots| elements.len() != roots.len()) {
+                            if roots
+                                .as_ref()
+                                .is_some_and(|roots| elements.len() != roots.len())
+                            {
                                 return Err(KindFailure::internal(
                                     span,
                                     "a resolved tuple has incomplete provenance",
                                 ));
                             }
-                            push_work!(
-                                work,
-                                Task::Tuple {
-                                    count: elements.len(),
-                                    span,
-                                },
-                                span
-                            );
-                            push_work!(
-                                work,
-                                Task::Sequence {
-                                    types: elements.iter(),
-                                    roots: element_roots.map(<[usize]>::iter),
-                                },
-                                span
-                            );
+                            let mut remaining = elements.iter();
+                            let mut roots = roots;
+                            if let Some(first) = remaining.next() {
+                                let first_root = roots.as_mut().and_then(Iterator::next).copied();
+                                if provenance.is_some() && first_root.is_none() {
+                                    charge_lookup_attempt(span, budget)?;
+                                    return Err(KindFailure::internal(
+                                        span,
+                                        "a resolved tuple has incomplete child provenance",
+                                    ));
+                                }
+                                push_continuation!(
+                                    work,
+                                    Continuation::Tuple {
+                                        remaining,
+                                        roots,
+                                        span,
+                                    },
+                                    span
+                                );
+                                State::Visit(first, first_root)
+                            } else {
+                                State::Complete(KindFact {
+                                    kind: &TYPE_KIND,
+                                    origin: None,
+                                    occurrence: span,
+                                })
+                            }
                         }
                         Type::Application(function, argument) => {
                             charge_synthesis_cell(span, budget)?;
@@ -972,16 +1007,17 @@ impl<'a> KindEnvironments<'a> {
                                 }
                                 None => (None, None, span),
                             };
-                            push_work!(
+                            push_continuation!(
                                 work,
-                                Task::Application {
+                                Continuation::ApplicationFunction {
+                                    argument,
+                                    argument_root,
                                     span,
                                     argument_span,
                                 },
                                 span
                             );
-                            push_work!(work, Task::Visit(argument, argument_root), span);
-                            push_work!(work, Task::Visit(function, function_root), span);
+                            State::Visit(function, function_root)
                         }
                         Type::Function(domain, codomain) => {
                             charge_synthesis_cell(span, budget)?;
@@ -999,9 +1035,16 @@ impl<'a> KindEnvironments<'a> {
                                 }
                                 None => (None, None),
                             };
-                            push_work!(work, Task::Function(span), span);
-                            push_work!(work, Task::Visit(codomain, codomain_root), span);
-                            push_work!(work, Task::Visit(domain, domain_root), span);
+                            push_continuation!(
+                                work,
+                                Continuation::FunctionDomain {
+                                    codomain,
+                                    codomain_root,
+                                    span,
+                                },
+                                span
+                            );
+                            State::Visit(domain, domain_root)
                         }
                         Type::Forall(_, _) => {
                             charge_synthesis_cell(span, budget)?;
@@ -1012,189 +1055,373 @@ impl<'a> KindEnvironments<'a> {
                         }
                     }
                 }
-                Task::Tuple { count, span } => {
-                    let split = completed.len().checked_sub(count).ok_or_else(|| {
-                        KindFailure::internal(span, "resolved tuple kind synthesis lost an element")
-                    })?;
-                    for found in &completed[split..] {
-                        let equal =
-                            same_kind_with_charge(&TYPE_KIND, found.kind, || budget.charge(1))
-                                .map_err(|()| {
-                                    KindFailure::resource(
-                                        found.occurrence,
-                                        "tuple kind checking exceeded its type-work budget",
-                                    )
-                                })?;
-                        if !equal {
-                            if provenance.is_none() {
-                                return Err(KindFailure::internal(
-                                    found.occurrence,
-                                    "a checked body-free tuple element has the wrong kind",
-                                ));
-                            }
-                            let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
-                            return Err(KindFailure::Source(Box::new(structured_error(
-                                KindReason::ExpectedType,
-                                found.occurrence,
-                                "a tuple element must have kind Type",
-                                &TYPE_KIND,
-                                found.kind,
-                                found.origin.map(|origin| {
-                                    (origin, "the found kind is fixed by this declaration")
-                                }),
-                                diagnostic_budget,
-                            )?)));
-                        }
-                    }
-                    completed.truncate(split);
-                    push_completed!(
-                        completed,
-                        KindFact {
-                            kind: &TYPE_KIND,
-                            origin: None,
-                            occurrence: span,
-                        },
-                        span
-                    );
-                }
-                Task::Application {
-                    span,
-                    argument_span,
-                } => {
-                    let argument = completed.pop().ok_or_else(|| {
-                        KindFailure::internal(span, "resolved kind synthesis lost an argument")
-                    })?;
-                    let function = completed.pop().ok_or_else(|| {
-                        KindFailure::internal(span, "resolved kind synthesis lost a function")
-                    })?;
-                    let Kind::Arrow(domain, codomain) = function.kind else {
-                        if provenance.is_none() {
-                            return Err(KindFailure::internal(
-                                span,
-                                "a checked body-free type applies a non-function kind",
-                            ));
-                        }
-                        let diagnostic_budget = budget.resolved_budget(span)?;
-                        return Err(KindFailure::Source(Box::new(not_applicable_error(
-                            KindReason::NotApplicable,
-                            span,
-                            "this type does not have a function kind",
-                            argument.kind,
-                            function.kind,
-                            function.origin.map(|origin| {
-                                (
-                                    origin,
-                                    "the applied type's kind is fixed by this declaration",
-                                )
-                            }),
-                            diagnostic_budget,
-                        )?)));
+                State::Complete(found) => {
+                    let Some(continuation) = work.pop() else {
+                        return Ok(found);
                     };
-                    let equal = same_kind_with_charge(domain, argument.kind, || budget.charge(1))
-                        .map_err(|()| {
-                        KindFailure::resource(
-                            argument_span,
-                            "type-application kind checking exceeded its type-work budget",
-                        )
-                    })?;
-                    if !equal {
-                        if provenance.is_none() {
-                            return Err(KindFailure::internal(
-                                argument_span,
-                                "a checked body-free type application has the wrong argument kind",
-                            ));
-                        }
-                        let diagnostic_budget = budget.resolved_budget(argument_span)?;
-                        return Err(KindFailure::Source(Box::new(structured_error(
-                            KindReason::Argument,
-                            argument_span,
-                            "this type argument has the wrong kind",
-                            domain,
-                            argument.kind,
-                            function.origin.map(|origin| {
-                                (origin, "the applied type's parameter kind is declared here")
-                            }),
-                            diagnostic_budget,
-                        )?)));
-                    }
-                    push_completed!(
-                        completed,
-                        KindFact {
-                            kind: codomain,
-                            origin: function.origin,
-                            occurrence: span,
-                        },
-                        span
-                    );
-                }
-                Task::Function(span) => {
-                    let codomain = completed.pop().ok_or_else(|| {
-                        KindFailure::internal(
+                    match continuation {
+                        Continuation::Tuple {
+                            mut remaining,
+                            mut roots,
                             span,
-                            "resolved kind synthesis lost a function codomain",
-                        )
-                    })?;
-                    let domain = completed.pop().ok_or_else(|| {
-                        KindFailure::internal(
-                            span,
-                            "resolved kind synthesis lost a function domain",
-                        )
-                    })?;
-                    for (found, label) in
-                        [(domain, "function domain"), (codomain, "function codomain")]
-                    {
-                        let equal =
-                            same_kind_with_charge(&TYPE_KIND, found.kind, || budget.charge(1))
-                                .map_err(|()| {
-                                    KindFailure::resource(
+                        } => {
+                            let equal =
+                                same_kind_with_charge(&TYPE_KIND, found.kind, || budget.charge(1))
+                                    .map_err(|()| {
+                                        KindFailure::resource(
+                                            found.occurrence,
+                                            "tuple kind checking exceeded its type-work budget",
+                                        )
+                                    })?;
+                            if !equal {
+                                if provenance.is_none() {
+                                    return Err(KindFailure::internal(
                                         found.occurrence,
-                                        "function kind checking exceeded its type-work budget",
-                                    )
-                                })?;
-                        if !equal {
-                            if provenance.is_none() {
-                                return Err(KindFailure::internal(
+                                        "a checked body-free tuple element has the wrong kind",
+                                    ));
+                                }
+                                let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
+                                return Err(KindFailure::Source(Box::new(structured_error(
+                                    KindReason::ExpectedType,
                                     found.occurrence,
-                                    "a checked body-free function component has the wrong kind",
-                                ));
+                                    "a tuple element must have kind Type",
+                                    &TYPE_KIND,
+                                    found.kind,
+                                    found.origin.map(|origin| {
+                                        (origin, "the found kind is fixed by this declaration")
+                                    }),
+                                    diagnostic_budget,
+                                )?)));
                             }
-                            let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
-                            return Err(KindFailure::Source(Box::new(structured_error(
-                                KindReason::ExpectedType,
-                                found.occurrence,
-                                format!("this {label} must have kind Type"),
-                                &TYPE_KIND,
-                                found.kind,
-                                found.origin.map(|origin| {
-                                    (origin, "the found kind is fixed by this declaration")
-                                }),
-                                diagnostic_budget,
-                            )?)));
+                            if let Some(next) = remaining.next() {
+                                let root = roots.as_mut().and_then(Iterator::next).copied();
+                                if provenance.is_some() && root.is_none() {
+                                    charge_lookup_attempt(span, budget)?;
+                                    return Err(KindFailure::internal(
+                                        span,
+                                        "a resolved tuple has incomplete child provenance",
+                                    ));
+                                }
+                                work.push(Continuation::Tuple {
+                                    remaining,
+                                    roots,
+                                    span,
+                                });
+                                State::Visit(next, root)
+                            } else {
+                                State::Complete(KindFact {
+                                    kind: &TYPE_KIND,
+                                    origin: None,
+                                    occurrence: span,
+                                })
+                            }
+                        }
+                        Continuation::ApplicationFunction {
+                            argument,
+                            argument_root,
+                            span,
+                            argument_span,
+                        } => {
+                            work.push(Continuation::ApplicationArgument {
+                                function: found,
+                                span,
+                                argument_span,
+                            });
+                            State::Visit(argument, argument_root)
+                        }
+                        Continuation::ApplicationArgument {
+                            function,
+                            span,
+                            argument_span,
+                        } => {
+                            let Kind::Arrow(domain, codomain) = function.kind else {
+                                if provenance.is_none() {
+                                    return Err(KindFailure::internal(
+                                        span,
+                                        "a checked body-free type applies a non-function kind",
+                                    ));
+                                }
+                                let diagnostic_budget = budget.resolved_budget(span)?;
+                                return Err(KindFailure::Source(Box::new(not_applicable_error(
+                                    KindReason::NotApplicable,
+                                    span,
+                                    "this type does not have a function kind",
+                                    found.kind,
+                                    function.kind,
+                                    function.origin.map(|origin| {
+                                        (
+                                            origin,
+                                            "the applied type's kind is fixed by this declaration",
+                                        )
+                                    }),
+                                    diagnostic_budget,
+                                )?)));
+                            };
+                            let equal = same_kind_with_charge(domain, found.kind, || {
+                                budget.charge(1)
+                            })
+                            .map_err(|()| {
+                                KindFailure::resource(
+                                    argument_span,
+                                    "type-application kind checking exceeded its type-work budget",
+                                )
+                            })?;
+                            if !equal {
+                                if provenance.is_none() {
+                                    return Err(KindFailure::internal(
+                                        argument_span,
+                                        "a checked body-free type application has the wrong argument kind",
+                                    ));
+                                }
+                                let diagnostic_budget = budget.resolved_budget(argument_span)?;
+                                return Err(KindFailure::Source(Box::new(structured_error(
+                                    KindReason::Argument,
+                                    argument_span,
+                                    "this type argument has the wrong kind",
+                                    domain,
+                                    found.kind,
+                                    function.origin.map(|origin| {
+                                        (
+                                            origin,
+                                            "the applied type's parameter kind is declared here",
+                                        )
+                                    }),
+                                    diagnostic_budget,
+                                )?)));
+                            }
+                            State::Complete(KindFact {
+                                kind: codomain,
+                                origin: function.origin,
+                                occurrence: span,
+                            })
+                        }
+                        Continuation::FunctionDomain {
+                            codomain,
+                            codomain_root,
+                            span,
+                        } => {
+                            let equal =
+                                same_kind_with_charge(&TYPE_KIND, found.kind, || budget.charge(1))
+                                    .map_err(|()| {
+                                        KindFailure::resource(
+                                            found.occurrence,
+                                            "function kind checking exceeded its type-work budget",
+                                        )
+                                    })?;
+                            if !equal {
+                                if provenance.is_none() {
+                                    return Err(KindFailure::internal(
+                                        found.occurrence,
+                                        "a checked body-free function component has the wrong kind",
+                                    ));
+                                }
+                                let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
+                                return Err(KindFailure::Source(Box::new(structured_error(
+                                    KindReason::ExpectedType,
+                                    found.occurrence,
+                                    "this function domain must have kind Type",
+                                    &TYPE_KIND,
+                                    found.kind,
+                                    found.origin.map(|origin| {
+                                        (origin, "the found kind is fixed by this declaration")
+                                    }),
+                                    diagnostic_budget,
+                                )?)));
+                            }
+                            work.push(Continuation::FunctionCodomain { span });
+                            State::Visit(codomain, codomain_root)
+                        }
+                        Continuation::FunctionCodomain { span } => {
+                            let equal =
+                                same_kind_with_charge(&TYPE_KIND, found.kind, || budget.charge(1))
+                                    .map_err(|()| {
+                                        KindFailure::resource(
+                                            found.occurrence,
+                                            "function kind checking exceeded its type-work budget",
+                                        )
+                                    })?;
+                            if !equal {
+                                if provenance.is_none() {
+                                    return Err(KindFailure::internal(
+                                        found.occurrence,
+                                        "a checked body-free function component has the wrong kind",
+                                    ));
+                                }
+                                let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
+                                return Err(KindFailure::Source(Box::new(structured_error(
+                                    KindReason::ExpectedType,
+                                    found.occurrence,
+                                    "this function codomain must have kind Type",
+                                    &TYPE_KIND,
+                                    found.kind,
+                                    found.origin.map(|origin| {
+                                        (origin, "the found kind is fixed by this declaration")
+                                    }),
+                                    diagnostic_budget,
+                                )?)));
+                            }
+                            State::Complete(KindFact {
+                                kind: &TYPE_KIND,
+                                origin: None,
+                                occurrence: span,
+                            })
                         }
                     }
-                    push_completed!(
-                        completed,
-                        KindFact {
-                            kind: &TYPE_KIND,
-                            origin: None,
-                            occurrence: span,
-                        },
-                        span
-                    );
+                }
+            };
+        }
+    }
+}
+
+/// Builds the smallest canonical body-free kind environment needed by one
+/// interface operation. Discovery follows the supplied roots and is therefore
+/// independent of unrelated registry width.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CanonicalEnvironmentFailure {
+    ConstraintResource,
+    TypeResource,
+    InvalidState,
+}
+
+pub(crate) fn canonical_body_free_environments<'a>(
+    registry: &'a ResolvedRegistry,
+    owner_parameters: &[TypeVariableId],
+    roots: &[&Type],
+    _span: Span,
+    discovery_budget: &mut impl KindWorkLedger,
+    retention_budget: &mut TypeWorkBudget,
+) -> Result<KindEnvironments<'a>, CanonicalEnvironmentFailure> {
+    let mut environments = KindEnvironments::new();
+    for identity in owner_parameters {
+        discovery_budget
+            .charge(1)
+            .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+        let parameter = registry
+            .type_variable(*identity)
+            .ok_or(CanonicalEnvironmentFailure::InvalidState)?;
+        environments
+            .insert_declared(
+                *identity,
+                &parameter.kind,
+                parameter.origin.primary_span(),
+                retention_budget,
+            )
+            .map_err(map_canonical_environment_retention_failure)?;
+    }
+
+    let mut pending = Vec::new();
+    discovery_budget
+        .charge(roots.len())
+        .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+    pending
+        .try_reserve(roots.len())
+        .map_err(|_| CanonicalEnvironmentFailure::ConstraintResource)?;
+    pending.extend(roots.iter().rev().copied());
+
+    while let Some(ty) = pending.pop() {
+        discovery_budget
+            .charge(1)
+            .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+        match ty {
+            Type::Int | Type::Bool | Type::Unit => {}
+            Type::Variable(identity) => {
+                discovery_budget
+                    .charge(1)
+                    .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                if environments.contains_declared(*identity) {
+                    continue;
+                }
+                discovery_budget
+                    .charge(1)
+                    .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                let parameter = registry
+                    .type_variable(*identity)
+                    .ok_or(CanonicalEnvironmentFailure::InvalidState)?;
+                environments
+                    .insert_declared(
+                        *identity,
+                        &parameter.kind,
+                        parameter.origin.primary_span(),
+                        retention_budget,
+                    )
+                    .map_err(map_canonical_environment_retention_failure)?;
+            }
+            Type::Nominal(identity) => {
+                discovery_budget
+                    .charge(1)
+                    .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                if environments.contains_nominal(*identity) {
+                    continue;
+                }
+                discovery_budget
+                    .charge(1)
+                    .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                match registry
+                    .nominal_kind(*identity)
+                    .ok_or(CanonicalEnvironmentFailure::InvalidState)?
+                {
+                    CanonicalNominalKind::Parameters { parameters, origin } => environments
+                        .insert_nominal(*identity, parameters, origin, retention_budget)
+                        .map_err(map_canonical_environment_retention_failure)?,
+                    CanonicalNominalKind::Frozen { kind, origin } => environments
+                        .insert_frozen_nominal(*identity, kind, origin, retention_budget)
+                        .map_err(map_canonical_environment_retention_failure)?,
                 }
             }
+            Type::Tuple(elements) => {
+                discovery_budget
+                    .charge(elements.len())
+                    .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(elements.len())
+                    .map_err(|_| CanonicalEnvironmentFailure::ConstraintResource)?;
+                pending.extend(elements.iter().rev());
+            }
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                discovery_budget
+                    .charge(2)
+                    .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| CanonicalEnvironmentFailure::ConstraintResource)?;
+                pending.push(argument);
+                pending.push(function);
+            }
+            Type::Inference(_) | Type::Forall(_, _) => {
+                return Err(CanonicalEnvironmentFailure::InvalidState);
+            }
         }
-
-        if completed.len() != 1 {
-            return Err(KindFailure::internal(
-                fallback_span,
-                "resolved kind synthesis retained incomplete work",
-            ));
-        }
-        completed.pop().ok_or_else(|| {
-            KindFailure::internal(fallback_span, "resolved kind synthesis produced no kind")
-        })
     }
+    Ok(environments)
+}
+
+fn map_canonical_environment_retention_failure(
+    failure: KindFailure,
+) -> CanonicalEnvironmentFailure {
+    match failure {
+        KindFailure::Resource(_) => CanonicalEnvironmentFailure::TypeResource,
+        KindFailure::Internal(_) | KindFailure::Source(_) => {
+            CanonicalEnvironmentFailure::InvalidState
+        }
+    }
+}
+
+pub(crate) fn canonical_type_variable_kind<'a>(
+    registry: &'a ResolvedRegistry,
+    identity: TypeVariableId,
+    span: Span,
+    budget: &mut impl KindWorkLedger,
+) -> Result<&'a Kind, KindFailure> {
+    budget.charge(1).map_err(|()| {
+        KindFailure::resource(
+            span,
+            "canonical type-binder kind lookup exceeded its owning work budget",
+        )
+    })?;
+    registry
+        .type_variable(identity)
+        .map(|parameter| &parameter.kind)
+        .ok_or_else(|| KindFailure::internal(span, "a canonical type-binder kind is missing"))
 }
 
 /// Checks every resolved type boundary before a resolved module is published.
@@ -2414,8 +2641,8 @@ mod tests {
                 Type::Nominal(_) => 3,
                 _ => 3,
             };
-            // W(atomic) is one Visit task plus one retained result.
-            let exact_work = kind_nodes + 2;
+            // W(atomic) reuses one current-state slot for the Visit and result.
+            let exact_work = kind_nodes + 1;
             let mut exact = TypeWorkBudget::with_limit(exact_work);
             assert!(environments.synthesize(&ty, None, span, &mut exact).is_ok());
             assert_eq!(exact.used(), exact_work);
@@ -2492,6 +2719,18 @@ mod tests {
             environments.synthesize(&application, None, span, &mut TypeWorkBudget::unbounded(),),
             Err(KindFailure::Internal(_))
         ));
+
+        let empty_tuple_argument =
+            Type::Application(Box::new(Type::Int), Box::new(Type::Tuple(Box::new([]))));
+        assert!(matches!(
+            environments.synthesize(
+                &empty_tuple_argument,
+                None,
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            ),
+            Err(KindFailure::Internal(_))
+        ));
     }
 
     #[test]
@@ -2509,8 +2748,9 @@ mod tests {
                 environments
                     .insert_declared(identity, &kind, span, &mut TypeWorkBudget::unbounded())
                     .expect("the deep DELTA entry should install");
-                // S(variable)=|DELTA(v)| and W(variable)=Visit+result=2.
-                let exact_work = nodes + 2;
+                // S(variable)=|DELTA(v)| and one current-state slot is reused
+                // for the Visit and result.
+                let exact_work = nodes + 1;
                 let mut exact = TypeWorkBudget::with_limit(exact_work);
                 assert!(
                     environments
@@ -2557,9 +2797,10 @@ mod tests {
                     application = Type::Application(Box::new(application), Box::new(Type::Int));
                 }
                 // S=5D+1: the 2D+1-node XI result, D argument nodes, D
-                // application nodes, and D domain comparisons. W retains 1+3D task
-                // cells and 1+2D result cells. Total: 10D+3.
-                const APPLICATION_WORK: usize = 10 * DEPTH + 3;
+                // application nodes, and D domain comparisons. W retains one
+                // reusable current-state slot plus D application continuations.
+                // Total: 6D+2.
+                const APPLICATION_WORK: usize = 6 * DEPTH + 2;
                 let mut short = TypeWorkBudget::with_limit(APPLICATION_WORK - 1);
                 assert!(matches!(
                     environments.synthesize(&application, None, span, &mut short),
@@ -2574,8 +2815,9 @@ mod tests {
                 assert_eq!(exact.used(), APPLICATION_WORK);
 
                 let tuple = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
-                // S=1+N, P=N, scheduled tasks=3+2N, retained results=1+N.
-                const TUPLE_WORK: usize = 5 * WIDTH + 5;
+                // S=1+N and P=N. W retains one reusable current-state slot and
+                // one tuple continuation: total 2N+3.
+                const TUPLE_WORK: usize = 2 * WIDTH + 3;
                 let mut short = TypeWorkBudget::with_limit(TUPLE_WORK - 1);
                 assert!(matches!(
                     environments.synthesize(&tuple, None, span, &mut short),
@@ -2602,8 +2844,8 @@ mod tests {
         let environments = KindEnvironments::new();
         let function = Type::Function(Box::new(Type::Int), Box::new(Type::Bool));
         // S(function)=1 + S(Int)+P(Type,Type) + S(Bool)+P(Type,Type)=5.
-        // W retains four scheduled tasks and three completed results: 5+4+3=12.
-        const FUNCTION_WORK: usize = 12;
+        // W retains one reusable current-state slot and one continuation: 7.
+        const FUNCTION_WORK: usize = 7;
         let mut short = TypeWorkBudget::with_limit(FUNCTION_WORK - 1);
         assert!(matches!(
             environments.synthesize(&function, None, span, &mut short),
@@ -2635,10 +2877,10 @@ mod tests {
             .expect("the diagnostic nominal kind should install");
         let provenance =
             ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(span)], 0);
-        // S(nominal)=3 and W(atomic)=2; the failed Type comparison is 1.
+        // S(nominal)=3 and W(atomic)=1; the failed Type comparison is 1.
         // The diagnostic then clones 1+3 Kind nodes and renders 1+3 nodes:
-        // 3 + 2 + 1 + 4 + 4 = 14.
-        const DIAGNOSTIC_WORK: usize = 14;
+        // 3 + 1 + 1 + 4 + 4 = 13.
+        const DIAGNOSTIC_WORK: usize = 13;
         let mut short = TypeWorkBudget::with_limit(DIAGNOSTIC_WORK - 1);
         assert!(matches!(
             environments.expect_value_type_parts(

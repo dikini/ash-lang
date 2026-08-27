@@ -7,8 +7,12 @@ use std::{
 };
 
 use crate::{
+    kind::{
+        CanonicalEnvironmentFailure, KindEnvironments, KindFailure, KindWorkLedger,
+        canonical_body_free_environments, canonical_type_variable_kind,
+    },
     module::ModuleId,
-    resolved::BinderId,
+    resolved::{BinderId, ResolvedRegistry},
     source::{Origin, Span, discard_origin_iteratively},
     types::{
         Kind, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
@@ -16,6 +20,12 @@ use crate::{
         same_kinded_type_parameters_with_charge, same_type,
     },
 };
+
+impl KindWorkLedger for InterfaceConstraintBudget {
+    fn charge(&mut self, work: usize) -> Result<(), ()> {
+        InterfaceConstraintBudget::charge(self, work)
+    }
+}
 
 /// Maximum cumulative interface and constraint work across one module graph.
 pub const INTERFACE_CONSTRAINT_WORK_LIMIT: usize = 327_680;
@@ -287,6 +297,7 @@ pub(crate) fn same_type_with_constraint_budget(
 pub(crate) enum OverlapFailure {
     InvalidState,
     Resource,
+    TypeResource,
 }
 
 /// Failure while matching one checked implementation head against an obligation.
@@ -300,11 +311,116 @@ pub(crate) enum HeadMatchFailure {
     TypeResource,
 }
 
-/// Matches one implementation head against one already determined obligation.
+/// Source location and ledgers shared by one matching or overlap operation.
+pub(crate) struct InterfaceOperationWork<'work> {
+    span: Span,
+    constraint_budget: &'work mut InterfaceConstraintBudget,
+    type_budget: &'work mut TypeWorkBudget,
+}
+
+impl<'work> InterfaceOperationWork<'work> {
+    pub(crate) const fn new(
+        span: Span,
+        constraint_budget: &'work mut InterfaceConstraintBudget,
+        type_budget: &'work mut TypeWorkBudget,
+    ) -> Self {
+        Self {
+            span,
+            constraint_budget,
+            type_budget,
+        }
+    }
+}
+
+/// Matches one implementation head against one already checked obligation.
 ///
-/// Only `candidate_parameters` bind. Goal variables remain rigid, and inference
-/// variables or rank-1 schemes on either side are invalid checked state.
-pub(crate) fn match_implementation_head<I>(
+/// The caller has already authenticated both complete heads at their source or
+/// import boundary. This operation authenticates only each newly created
+/// substitution against its defining binder kind. Only `candidate_parameters`
+/// bind. Goal variables remain rigid, and inference variables or rank-1 schemes
+/// on either side are invalid checked state.
+#[cfg(test)]
+pub(crate) fn match_implementation_head(
+    registry: &ResolvedRegistry,
+    candidate_parameters: &[TypeVariableId],
+    candidate: &Type,
+    goal: &Type,
+    span: Span,
+    constraint_budget: &mut InterfaceConstraintBudget,
+    type_budget: &mut TypeWorkBudget,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    let goal_environments = canonical_body_free_environments(
+        registry,
+        &[],
+        &[goal],
+        span,
+        constraint_budget,
+        type_budget,
+    )
+    .map_err(map_match_environment_failure)?;
+    match_implementation_head_in_environment(
+        registry,
+        InterfaceOperationWork::new(span, constraint_budget, type_budget),
+        &goal_environments,
+        candidate_parameters,
+        candidate,
+        goal,
+    )
+}
+
+/// Matches with a caller-owned environment for the complete rigid goal.
+///
+/// Evidence selection builds this once per obligation and reuses it across all
+/// candidate inspections. The complete candidate and goal kinds remain a
+/// checked-boundary precondition; only retained substitutions are synthesized.
+pub(crate) fn match_implementation_head_in_environment(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    goal_environments: &KindEnvironments<'_>,
+    candidate_parameters: &[TypeVariableId],
+    candidate: &Type,
+    goal: &Type,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    let InterfaceOperationWork {
+        span,
+        constraint_budget,
+        type_budget,
+    } = operation;
+    match_implementation_head_with(
+        candidate_parameters.iter().copied(),
+        candidate,
+        goal,
+        constraint_budget,
+        type_budget,
+        |parameter, binding, constraint_budget, _type_budget| {
+            let expected =
+                canonical_type_variable_kind(registry, parameter, span, constraint_budget)
+                    .map_err(map_match_kind_failure)?;
+            goal_environments
+                .expect_body_free_exact_kind_with_ledger(binding, expected, span, constraint_budget)
+                .map_err(map_match_kind_failure)
+        },
+    )
+}
+
+#[cfg(test)]
+fn map_match_environment_failure(failure: CanonicalEnvironmentFailure) -> HeadMatchFailure {
+    match failure {
+        CanonicalEnvironmentFailure::ConstraintResource => HeadMatchFailure::ConstraintResource,
+        CanonicalEnvironmentFailure::TypeResource => HeadMatchFailure::TypeResource,
+        CanonicalEnvironmentFailure::InvalidState => HeadMatchFailure::InvalidState,
+    }
+}
+
+fn map_match_kind_failure(failure: KindFailure) -> HeadMatchFailure {
+    match failure {
+        KindFailure::Resource(_) => HeadMatchFailure::ConstraintResource,
+        KindFailure::Internal(_) | KindFailure::Source(_) => HeadMatchFailure::InvalidState,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn match_implementation_head_structurally<I>(
     candidate_parameters: I,
     candidate: &Type,
     goal: &Type,
@@ -313,6 +429,33 @@ pub(crate) fn match_implementation_head<I>(
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure>
 where
     I: ExactSizeIterator<Item = TypeVariableId>,
+{
+    match_implementation_head_with(
+        candidate_parameters,
+        candidate,
+        goal,
+        constraint_budget,
+        type_budget,
+        |_, _, _, _| Ok(()),
+    )
+}
+
+fn match_implementation_head_with<I, F>(
+    candidate_parameters: I,
+    candidate: &Type,
+    goal: &Type,
+    constraint_budget: &mut InterfaceConstraintBudget,
+    type_budget: &mut TypeWorkBudget,
+    mut authenticate_binding: F,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure>
+where
+    I: ExactSizeIterator<Item = TypeVariableId>,
+    F: FnMut(
+        TypeVariableId,
+        &Type,
+        &mut InterfaceConstraintBudget,
+        &mut TypeWorkBudget,
+    ) -> Result<(), HeadMatchFailure>,
 {
     let parameter_count = candidate_parameters.len();
     constraint_budget
@@ -348,6 +491,9 @@ where
         .map_err(|_| HeadMatchFailure::ConstraintResource)?;
     pending.push((candidate, goal));
     let mut bindings = Vec::new();
+    constraint_budget
+        .charge(parameter_count)
+        .map_err(|()| HeadMatchFailure::ConstraintResource)?;
     bindings
         .try_reserve(parameter_count)
         .map_err(|_| HeadMatchFailure::ConstraintResource)?;
@@ -366,6 +512,7 @@ where
                     return Ok(None);
                 }
             } else {
+                authenticate_binding(*variable, goal, constraint_budget, type_budget)?;
                 bindings[position] = Some(goal);
             }
             continue;
@@ -414,14 +561,14 @@ where
     }
 
     let mut substitution = Vec::new();
+    constraint_budget
+        .charge(parameter_count)
+        .map_err(|()| HeadMatchFailure::ConstraintResource)?;
     substitution
         .try_reserve(parameter_count)
         .map_err(|_| HeadMatchFailure::ConstraintResource)?;
     for (parameter, binding) in parameters.into_iter().zip(bindings) {
         let binding = binding.ok_or(HeadMatchFailure::InvalidState)?;
-        constraint_budget
-            .charge(1)
-            .map_err(|()| HeadMatchFailure::ConstraintResource)?;
         constraint_budget
             .charge_type(binding)
             .map_err(|()| HeadMatchFailure::ConstraintResource)?;
@@ -589,7 +736,75 @@ struct FreshOverlapVariable {
     parameter: usize,
 }
 
-pub(crate) fn implementation_heads_overlap<L, R>(
+/// Determines first-order overlap between two already checked heads.
+///
+/// Source/import validation authenticated the complete heads. This operation
+/// independently freshens their binders and kind-authenticates only each new
+/// unification solution before caching it.
+pub(crate) fn implementation_heads_overlap(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    left_parameters: &[TypeVariableId],
+    left: &Type,
+    right_parameters: &[TypeVariableId],
+    right: &Type,
+) -> Result<bool, OverlapFailure> {
+    let InterfaceOperationWork {
+        span,
+        constraint_budget,
+        type_budget,
+    } = operation;
+    let environments = canonical_body_free_environments(
+        registry,
+        &[],
+        &[left, right],
+        span,
+        constraint_budget,
+        type_budget,
+    )
+    .map_err(map_overlap_environment_failure)?;
+
+    implementation_heads_overlap_with(
+        left_parameters.iter().copied(),
+        left,
+        right_parameters.iter().copied(),
+        right,
+        constraint_budget,
+        |variable, value, budget| {
+            let parameters = match variable.side {
+                OverlapSide::Left => left_parameters,
+                OverlapSide::Right => right_parameters,
+            };
+            let parameter = parameters
+                .get(variable.parameter)
+                .copied()
+                .ok_or(OverlapFailure::InvalidState)?;
+            let expected = canonical_type_variable_kind(registry, parameter, span, budget)
+                .map_err(map_overlap_kind_failure)?;
+            environments
+                .expect_body_free_exact_kind_with_ledger(value.ty, expected, span, budget)
+                .map_err(map_overlap_kind_failure)
+        },
+    )
+}
+
+fn map_overlap_environment_failure(failure: CanonicalEnvironmentFailure) -> OverlapFailure {
+    match failure {
+        CanonicalEnvironmentFailure::ConstraintResource => OverlapFailure::Resource,
+        CanonicalEnvironmentFailure::TypeResource => OverlapFailure::TypeResource,
+        CanonicalEnvironmentFailure::InvalidState => OverlapFailure::InvalidState,
+    }
+}
+
+fn map_overlap_kind_failure(failure: KindFailure) -> OverlapFailure {
+    match failure {
+        KindFailure::Resource(_) => OverlapFailure::Resource,
+        KindFailure::Internal(_) | KindFailure::Source(_) => OverlapFailure::InvalidState,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn implementation_heads_overlap_structurally<L, R>(
     left_parameters: L,
     left: &Type,
     right_parameters: R,
@@ -599,6 +814,33 @@ pub(crate) fn implementation_heads_overlap<L, R>(
 where
     L: ExactSizeIterator<Item = TypeVariableId>,
     R: ExactSizeIterator<Item = TypeVariableId>,
+{
+    implementation_heads_overlap_with(
+        left_parameters,
+        left,
+        right_parameters,
+        right,
+        budget,
+        |_, _, _| Ok(()),
+    )
+}
+
+fn implementation_heads_overlap_with<L, R, F>(
+    left_parameters: L,
+    left: &Type,
+    right_parameters: R,
+    right: &Type,
+    budget: &mut InterfaceConstraintBudget,
+    mut authenticate_solution: F,
+) -> Result<bool, OverlapFailure>
+where
+    L: ExactSizeIterator<Item = TypeVariableId>,
+    R: ExactSizeIterator<Item = TypeVariableId>,
+    F: FnMut(
+        FreshOverlapVariable,
+        OverlapHead<'_>,
+        &mut InterfaceConstraintBudget,
+    ) -> Result<(), OverlapFailure>,
 {
     let left_positions = overlap_parameter_positions(left_parameters, budget)?;
     let right_positions = overlap_parameter_positions(right_parameters, budget)?;
@@ -645,6 +887,7 @@ where
             )? {
                 return Ok(false);
             }
+            authenticate_solution(variable, value, budget)?;
             budget.charge(1).map_err(|()| OverlapFailure::Resource)?;
             solutions
                 .try_reserve(1)
@@ -1653,8 +1896,9 @@ mod tests {
     use super::*;
     use crate::{
         module::ModuleId,
-        resolved::BinderId,
-        types::{Kind, TypeVariableId},
+        resolved::{BinderId, ResolvedNominalType, ResolvedRegistry, ResolvedTypeVariable},
+        source::{ByteRange, Origin, SourceFile},
+        types::{IterativeTypeOwner, Kind, NominalTypeId, TypeVariableId},
     };
 
     #[test]
@@ -1918,7 +2162,7 @@ mod tests {
         let mut constraints = InterfaceConstraintBudget::default();
         let mut types = TypeWorkBudget::default();
 
-        let substitutions = match_implementation_head(
+        let substitutions = match_implementation_head_structurally(
             [first, second].into_iter(),
             &candidate,
             &goal,
@@ -1936,6 +2180,355 @@ mod tests {
     }
 
     #[test]
+    fn one_way_head_matcher_rejects_a_wrong_kinded_goal_before_binding() {
+        let module = ModuleId::new(60);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let candidate_parameter = TypeVariableId::resolved(module, 1);
+        let source = SourceFile::new("higher-kinded-head-match.ash", "F")
+            .expect("the matcher fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the matcher fixture range should be ordered"))
+            .expect("the matcher fixture span should fit");
+        let constructor_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables([
+                ResolvedTypeVariable {
+                    id: interface_parameter,
+                    spelling: "I".into(),
+                    kind: constructor_kind.clone(),
+                    origin: Origin::Source(span),
+                },
+                ResolvedTypeVariable {
+                    id: candidate_parameter,
+                    spelling: "F".into(),
+                    kind: constructor_kind,
+                    origin: Origin::Source(span),
+                },
+            ]);
+
+        assert_eq!(
+            match_implementation_head(
+                &registry,
+                &[candidate_parameter],
+                &Type::Variable(candidate_parameter),
+                &Type::Int,
+                span,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(HeadMatchFailure::InvalidState),
+            "a Type-kinded goal must fail before a higher-kinded binding is retained"
+        );
+    }
+
+    #[test]
+    fn kind_preserving_head_match_has_exact_independent_resource_boundaries() {
+        // Constraint work: 4 cells discover the rigid goal environment, 12
+        // cells perform structural matching (including the retained binding
+        // slot), and 8 cells authenticate the first binding (one canonical
+        // binder lookup plus seven nominal Kind synthesis/comparison cells).
+        const CONSTRAINT_WORK: usize = 4 + 12 + 8;
+        // Type work: one XI record plus its three derived Kind nodes, and one
+        // cloned nominal substitution argument.
+        const TYPE_WORK: usize = 4 + 1;
+
+        let module = ModuleId::new(62);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let candidate_parameter = TypeVariableId::resolved(module, 1);
+        let nominal_parameter = TypeVariableId::resolved(module, 2);
+        let option = NominalTypeId::new(module, 0);
+        let source = SourceFile::new("kind-preserving-head-match.ash", "Option")
+            .expect("the matcher fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 6).expect("the matcher fixture range should be ordered"))
+            .expect("the matcher fixture span should fit");
+        let constructor_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: option,
+                spelling: "Option".into(),
+                constructors: Box::new([]),
+                origin: Origin::Source(span),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(
+            option,
+            vec![ResolvedTypeVariable {
+                id: nominal_parameter,
+                spelling: "A".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            }],
+        )])
+        .with_additional_type_variables([
+            ResolvedTypeVariable {
+                id: interface_parameter,
+                spelling: "I".into(),
+                kind: constructor_kind.clone(),
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: candidate_parameter,
+                spelling: "F".into(),
+                kind: constructor_kind,
+                origin: Origin::Source(span),
+            },
+        ]);
+        let candidate = Type::Variable(candidate_parameter);
+        let goal = Type::Nominal(option);
+
+        let mut measured_constraints = InterfaceConstraintBudget::default();
+        let mut measured_types = TypeWorkBudget::default();
+        let substitution = match_implementation_head(
+            &registry,
+            &[candidate_parameter],
+            &candidate,
+            &goal,
+            span,
+            &mut measured_constraints,
+            &mut measured_types,
+        )
+        .expect("the measured matcher should fit")
+        .expect("the constructor-kinded head should match");
+        assert_eq!(measured_constraints.used(), CONSTRAINT_WORK);
+        assert_eq!(measured_types.used(), TYPE_WORK);
+        assert_eq!(substitution[0].argument(), &goal);
+
+        let mut authentication_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 3);
+        assert_eq!(
+            match_implementation_head(
+                &registry,
+                &[candidate_parameter],
+                &candidate,
+                &goal,
+                span,
+                &mut authentication_short,
+                &mut TypeWorkBudget::with_limit(TYPE_WORK),
+            ),
+            Err(HeadMatchFailure::ConstraintResource),
+            "one missing first-binding authentication unit must not publish a substitution"
+        );
+        assert_eq!(authentication_short.used(), CONSTRAINT_WORK - 3);
+
+        assert_eq!(
+            match_implementation_head(
+                &registry,
+                &[candidate_parameter],
+                &candidate,
+                &goal,
+                span,
+                &mut InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1),
+                &mut TypeWorkBudget::with_limit(TYPE_WORK),
+            ),
+            Err(HeadMatchFailure::ConstraintResource)
+        );
+        assert_eq!(
+            match_implementation_head(
+                &registry,
+                &[candidate_parameter],
+                &candidate,
+                &goal,
+                span,
+                &mut InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(TYPE_WORK - 1),
+            ),
+            Err(HeadMatchFailure::TypeResource)
+        );
+        let exact = match_implementation_head(
+            &registry,
+            &[candidate_parameter],
+            &candidate,
+            &goal,
+            span,
+            &mut InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK),
+            &mut TypeWorkBudget::with_limit(TYPE_WORK),
+        )
+        .expect("the exact matcher budgets should fit")
+        .expect("the exact matcher should publish one substitution");
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].argument(), &goal);
+    }
+
+    #[test]
+    fn late_second_binding_kind_failure_dismantles_deep_borrowed_state_on_a_small_stack() {
+        const DEPTH: usize = 4_096;
+
+        std::thread::Builder::new()
+            .name("late-second-head-binding".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(63);
+                let first = TypeVariableId::resolved(module, 0);
+                let second = TypeVariableId::resolved(module, 1);
+                let wrong = TypeVariableId::resolved(module, 2);
+                let source = SourceFile::new("late-binding.ash", "F")
+                    .expect("the late-binding source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the late-binding range is ordered"))
+                    .expect("the late-binding span should fit");
+                let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+                    .with_additional_type_variables([
+                        ResolvedTypeVariable {
+                            id: first,
+                            spelling: "A".into(),
+                            kind: Kind::Type,
+                            origin: Origin::Source(span),
+                        },
+                        ResolvedTypeVariable {
+                            id: second,
+                            spelling: "F".into(),
+                            kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                            origin: Origin::Source(span),
+                        },
+                        ResolvedTypeVariable {
+                            id: wrong,
+                            spelling: "Wrong".into(),
+                            kind: Kind::Type,
+                            origin: Origin::Source(span),
+                        },
+                    ]);
+                let candidate = Type::Tuple(
+                    vec![
+                        Type::Variable(first),
+                        Type::Application(Box::new(Type::Variable(second)), Box::new(Type::Int)),
+                    ]
+                    .into_boxed_slice(),
+                );
+                let mut deep = Type::Unit;
+                for _ in 0..DEPTH {
+                    deep = Type::Function(Box::new(Type::Unit), Box::new(deep));
+                }
+                let goal = IterativeTypeOwner::new(Type::Tuple(
+                    vec![
+                        deep,
+                        Type::Application(Box::new(Type::Variable(wrong)), Box::new(Type::Int)),
+                    ]
+                    .into_boxed_slice(),
+                ));
+
+                assert_eq!(
+                    match_implementation_head(
+                        &registry,
+                        &[first, second],
+                        &candidate,
+                        &goal,
+                        span,
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default(),
+                    ),
+                    Err(HeadMatchFailure::InvalidState),
+                    "the second binding must fail before the authenticated first binding is cloned"
+                );
+            })
+            .expect("the late-binding worker should spawn")
+            .join()
+            .expect("late binding failure and deep borrowed teardown should remain iterative");
+    }
+
+    #[test]
+    fn wide_binding_slots_fit_default_work_and_fail_atomically_one_unit_short() {
+        const WIDTH: usize = 16_384;
+
+        std::thread::Builder::new()
+            .name("wide-head-match".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(67);
+                let source = SourceFile::new("wide-head-match.ash", "F")
+                    .expect("the wide matcher source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the wide matcher range is ordered"))
+                    .expect("the wide matcher span should fit");
+                let parameters = (0..WIDTH)
+                    .map(|index| TypeVariableId::resolved(module, index as u32))
+                    .collect::<Vec<_>>();
+                let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+                    .with_additional_type_variables(parameters.iter().map(|parameter| {
+                        ResolvedTypeVariable {
+                            id: *parameter,
+                            spelling: "A".into(),
+                            kind: Kind::Type,
+                            origin: Origin::Source(span),
+                        }
+                    }));
+                let candidate = Type::Tuple(
+                    parameters
+                        .iter()
+                        .copied()
+                        .map(Type::Variable)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                );
+                let goal = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+                let mut measured_constraints = InterfaceConstraintBudget::default();
+                let mut measured_types = TypeWorkBudget::default();
+                let substitutions = match_implementation_head(
+                    &registry,
+                    &parameters,
+                    &candidate,
+                    &goal,
+                    span,
+                    &mut measured_constraints,
+                    &mut measured_types,
+                )
+                .expect("the default budgets should admit the wide binding set")
+                .expect("the wide checked heads should match");
+                assert_eq!(substitutions.len(), WIDTH);
+                let constraint_work = measured_constraints.used();
+                let type_work = measured_types.used();
+                assert_eq!(constraint_work, 18 * WIDTH + 8);
+                assert_eq!(type_work, WIDTH);
+                assert!(constraint_work < INTERFACE_CONSTRAINT_WORK_LIMIT);
+
+                const PREFIX_BEFORE_SUBSTITUTION_RECORDS_PER_BINDING: usize = 15;
+                const FIXED_PREFIX: usize = 8;
+                let prefix_before_substitution_records =
+                    PREFIX_BEFORE_SUBSTITUTION_RECORDS_PER_BINDING * WIDTH + FIXED_PREFIX;
+                let mut record_short = InterfaceConstraintBudget::with_limit(
+                    prefix_before_substitution_records + WIDTH - 1,
+                );
+                let mut record_short_types = TypeWorkBudget::with_limit(type_work);
+                assert_eq!(
+                    match_implementation_head(
+                        &registry,
+                        &parameters,
+                        &candidate,
+                        &goal,
+                        span,
+                        &mut record_short,
+                        &mut record_short_types,
+                    ),
+                    Err(HeadMatchFailure::ConstraintResource),
+                    "the binding-record charge must fail atomically before substitution allocation"
+                );
+                assert_eq!(record_short.used(), prefix_before_substitution_records);
+                assert_eq!(record_short_types.used(), 0);
+
+                let mut short = InterfaceConstraintBudget::with_limit(constraint_work - 1);
+                let mut short_types = TypeWorkBudget::with_limit(type_work);
+                assert_eq!(
+                    match_implementation_head(
+                        &registry,
+                        &parameters,
+                        &candidate,
+                        &goal,
+                        span,
+                        &mut short,
+                        &mut short_types,
+                    ),
+                    Err(HeadMatchFailure::ConstraintResource),
+                    "one short wide run must not return a partial substitution"
+                );
+                assert_eq!(short.used(), constraint_work - 1);
+                assert_eq!(short_types.used(), type_work - 1);
+            })
+            .expect("the wide matcher worker should spawn")
+            .join()
+            .expect("wide matcher success and failure should tear down on a small stack");
+    }
+
+    #[test]
     fn one_way_head_matching_visits_application_function_and_argument_separately() {
         let function_parameter = TypeVariableId::new(0);
         let argument_parameter = TypeVariableId::new(1);
@@ -1945,7 +2538,7 @@ mod tests {
         );
         let goal = Type::Application(Box::new(Type::Int), Box::new(Type::Bool));
 
-        let function_substitution = match_implementation_head(
+        let function_substitution = match_implementation_head_structurally(
             std::iter::once(function_parameter),
             &function_candidate,
             &goal,
@@ -1962,7 +2555,7 @@ mod tests {
             Box::new(Type::Int),
             Box::new(Type::Variable(argument_parameter)),
         );
-        let argument_substitution = match_implementation_head(
+        let argument_substitution = match_implementation_head_structurally(
             std::iter::once(argument_parameter),
             &argument_candidate,
             &goal,
@@ -1977,6 +2570,129 @@ mod tests {
     }
 
     #[test]
+    fn canonical_application_matching_uses_both_children_without_refining_the_rigid_goal() {
+        let module = ModuleId::new(69);
+        let function_parameter = TypeVariableId::resolved(module, 0);
+        let argument_parameter = TypeVariableId::resolved(module, 1);
+        let rigid_goal = TypeVariableId::resolved(module, 2);
+        let option_parameter = TypeVariableId::resolved(module, 3);
+        let other_parameter = TypeVariableId::resolved(module, 4);
+        let option = NominalTypeId::new(module, 0);
+        let other = NominalTypeId::new(module, 1);
+        let source = SourceFile::new("canonical-application-match.ash", "Option Other")
+            .expect("the canonical matcher source should fit");
+        let span = source
+            .span(ByteRange::new(0, 6).expect("the canonical matcher range is ordered"))
+            .expect("the canonical matcher span should fit");
+        let nominal = |id, spelling| ResolvedNominalType {
+            id,
+            spelling,
+            constructors: Box::new([]),
+            origin: Origin::Source(span),
+        };
+        let nominal_parameter = |id| ResolvedTypeVariable {
+            id,
+            spelling: "A".into(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let registry = ResolvedRegistry::new(
+            vec![
+                nominal(option, "Option".into()),
+                nominal(other, "Other".into()),
+            ],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![
+            (option, vec![nominal_parameter(option_parameter)]),
+            (other, vec![nominal_parameter(other_parameter)]),
+        ])
+        .with_additional_type_variables([
+            ResolvedTypeVariable {
+                id: function_parameter,
+                spelling: "F".into(),
+                kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: argument_parameter,
+                spelling: "A".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: rigid_goal,
+                spelling: "R".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+        ]);
+        let application =
+            |function, argument| Type::Application(Box::new(function), Box::new(argument));
+
+        let function_substitution = match_implementation_head(
+            &registry,
+            &[function_parameter],
+            &application(Type::Variable(function_parameter), Type::Int),
+            &application(Type::Nominal(option), Type::Int),
+            span,
+            &mut InterfaceConstraintBudget::default(),
+            &mut TypeWorkBudget::default(),
+        )
+        .expect("the canonical function-child heads should be valid")
+        .expect("the function child should determine the constructor binding");
+        assert_eq!(function_substitution[0].argument(), &Type::Nominal(option));
+
+        let rigid_application = application(Type::Nominal(option), Type::Variable(rigid_goal));
+        let argument_substitution = match_implementation_head(
+            &registry,
+            &[argument_parameter],
+            &application(Type::Nominal(option), Type::Variable(argument_parameter)),
+            &rigid_application,
+            span,
+            &mut InterfaceConstraintBudget::default(),
+            &mut TypeWorkBudget::default(),
+        )
+        .expect("the canonical argument-child heads should be valid")
+        .expect("the argument child should bind to the rigid goal variable");
+        assert_eq!(
+            argument_substitution[0].argument(),
+            &Type::Variable(rigid_goal)
+        );
+        assert_eq!(
+            rigid_application,
+            application(Type::Nominal(option), Type::Variable(rigid_goal))
+        );
+
+        assert_eq!(
+            match_implementation_head(
+                &registry,
+                &[argument_parameter],
+                &application(Type::Nominal(option), Type::Variable(argument_parameter)),
+                &application(Type::Nominal(other), Type::Variable(rigid_goal)),
+                span,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Ok(None),
+            "distinct canonical function children must fail before argument binding"
+        );
+        assert_eq!(
+            match_implementation_head(
+                &registry,
+                &[],
+                &application(Type::Nominal(option), Type::Int),
+                &application(Type::Nominal(option), Type::Bool),
+                span,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Ok(None),
+            "distinct canonical argument children must fail independently"
+        );
+    }
+
+    #[test]
     fn one_way_head_matcher_preserves_repeated_candidate_variables() {
         let parameter = TypeVariableId::new(0);
         let candidate = Type::Tuple(
@@ -1986,7 +2702,7 @@ mod tests {
         let conflicting = Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice());
 
         assert!(
-            match_implementation_head(
+            match_implementation_head_structurally(
                 std::iter::once(parameter),
                 &candidate,
                 &matching,
@@ -1997,7 +2713,7 @@ mod tests {
             .is_some()
         );
         assert_eq!(
-            match_implementation_head(
+            match_implementation_head_structurally(
                 std::iter::once(parameter),
                 &candidate,
                 &conflicting,
@@ -2023,7 +2739,7 @@ mod tests {
             (Type::Variable(TypeVariableId::new(1)), Type::Int),
         ] {
             assert_eq!(
-                match_implementation_head(
+                match_implementation_head_structurally(
                     std::iter::once(parameter),
                     &candidate,
                     &goal,
@@ -2042,30 +2758,30 @@ mod tests {
         let goal = Type::Function(Box::new(Type::Int), Box::new(Type::Bool));
 
         assert_eq!(
-            match_implementation_head(
+            match_implementation_head_structurally(
                 std::iter::once(parameter),
                 &candidate,
                 &goal,
-                &mut InterfaceConstraintBudget::with_limit(18),
+                &mut InterfaceConstraintBudget::with_limit(19),
                 &mut TypeWorkBudget::with_limit(3),
             ),
             Err(HeadMatchFailure::ConstraintResource)
         );
         assert_eq!(
-            match_implementation_head(
+            match_implementation_head_structurally(
                 std::iter::once(parameter),
                 &candidate,
                 &goal,
-                &mut InterfaceConstraintBudget::with_limit(19),
+                &mut InterfaceConstraintBudget::with_limit(20),
                 &mut TypeWorkBudget::with_limit(2),
             ),
             Err(HeadMatchFailure::TypeResource)
         );
-        let substitutions = match_implementation_head(
+        let substitutions = match_implementation_head_structurally(
             std::iter::once(parameter),
             &candidate,
             &goal,
-            &mut InterfaceConstraintBudget::with_limit(19),
+            &mut InterfaceConstraintBudget::with_limit(20),
             &mut TypeWorkBudget::with_limit(3),
         )
         .expect("both exact budgets should fit")
@@ -2120,7 +2836,7 @@ mod tests {
                         )
                         .expect("the flat node should fit");
                 }
-                let substitutions = match_implementation_head(
+                let substitutions = match_implementation_head_structurally(
                     std::iter::once(parameter),
                     &Type::Variable(parameter),
                     &deep_type,
@@ -2197,7 +2913,7 @@ mod tests {
 
         let mut short = InterfaceConstraintBudget::with_limit(9);
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::once(parameter),
                 &variable,
                 std::iter::empty(),
@@ -2209,7 +2925,7 @@ mod tests {
 
         let mut exact = InterfaceConstraintBudget::with_limit(10);
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::once(parameter),
                 &variable,
                 std::iter::empty(),
@@ -2222,6 +2938,346 @@ mod tests {
     }
 
     #[test]
+    fn canonical_higher_kinded_overlap_is_first_order_and_exactly_bounded() {
+        // Constraint work: 16 cells discover one environment spanning both
+        // checked heads, and 26 cells perform first-order unification plus one
+        // authenticated/cached F -> Option solution. Complete heads are not
+        // redundantly synthesized here.
+        const CONSTRAINT_WORK: usize = 16 + 26;
+        // Type work: one left DELTA record and one right XI record retaining
+        // the three nodes of Option's derived Type -> Type Kind.
+        const TYPE_WORK: usize = 1 + 4;
+
+        let module = ModuleId::new(64);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let left_parameter = TypeVariableId::resolved(module, 1);
+        let nominal_parameter = TypeVariableId::resolved(module, 2);
+        let option = NominalTypeId::new(module, 0);
+        let source = SourceFile::new("higher-kinded-overlap.ash", "Option")
+            .expect("the overlap fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 6).expect("the overlap fixture range should be ordered"))
+            .expect("the overlap fixture span should fit");
+        let constructor_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: option,
+                spelling: "Option".into(),
+                constructors: Box::new([]),
+                origin: Origin::Source(span),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(
+            option,
+            vec![ResolvedTypeVariable {
+                id: nominal_parameter,
+                spelling: "A".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            }],
+        )])
+        .with_additional_type_variables([
+            ResolvedTypeVariable {
+                id: interface_parameter,
+                spelling: "I".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: left_parameter,
+                spelling: "F".into(),
+                kind: constructor_kind,
+                origin: Origin::Source(span),
+            },
+        ]);
+        let left = Type::Application(
+            Box::new(Type::Variable(left_parameter)),
+            Box::new(Type::Int),
+        );
+        let overlapping = Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Int));
+        let higher_order_only =
+            Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Bool));
+
+        let mut measured_constraints = InterfaceConstraintBudget::default();
+        let mut measured_types = TypeWorkBudget::default();
+        assert_eq!(
+            implementation_heads_overlap(
+                &registry,
+                InterfaceOperationWork::new(span, &mut measured_constraints, &mut measured_types,),
+                &[left_parameter],
+                &left,
+                &[],
+                &overlapping,
+            ),
+            Ok(true)
+        );
+        assert_eq!(measured_constraints.used(), CONSTRAINT_WORK);
+        assert_eq!(measured_types.used(), TYPE_WORK);
+
+        let mut authentication_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 2);
+        assert_eq!(
+            implementation_heads_overlap(
+                &registry,
+                InterfaceOperationWork::new(
+                    span,
+                    &mut authentication_short,
+                    &mut TypeWorkBudget::with_limit(TYPE_WORK),
+                ),
+                &[left_parameter],
+                &left,
+                &[],
+                &overlapping,
+            ),
+            Err(OverlapFailure::Resource),
+            "one missing solution-authentication unit must not cache a partial solution"
+        );
+        assert_eq!(authentication_short.used(), CONSTRAINT_WORK - 2);
+
+        assert_eq!(
+            implementation_heads_overlap(
+                &registry,
+                InterfaceOperationWork::new(
+                    span,
+                    &mut InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1),
+                    &mut TypeWorkBudget::with_limit(TYPE_WORK),
+                ),
+                &[left_parameter],
+                &left,
+                &[],
+                &overlapping,
+            ),
+            Err(OverlapFailure::Resource)
+        );
+        assert_eq!(
+            implementation_heads_overlap(
+                &registry,
+                InterfaceOperationWork::new(
+                    span,
+                    &mut InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK),
+                    &mut TypeWorkBudget::with_limit(TYPE_WORK - 1),
+                ),
+                &[left_parameter],
+                &left,
+                &[],
+                &overlapping,
+            ),
+            Err(OverlapFailure::TypeResource)
+        );
+        assert_eq!(
+            implementation_heads_overlap(
+                &registry,
+                InterfaceOperationWork::new(
+                    span,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut TypeWorkBudget::default(),
+                ),
+                &[left_parameter],
+                &left,
+                &[],
+                &higher_order_only,
+            ),
+            Ok(false),
+            "overlap remains first-order and does not invent a type lambda"
+        );
+    }
+
+    #[test]
+    fn deep_higher_kinded_head_match_accepts_and_rejects_with_default_work_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("deep-higher-kinded-head-match".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let deep_kind = |extra_result_arrow| {
+                    let mut kind = if extra_result_arrow {
+                        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+                    } else {
+                        Kind::Type
+                    };
+                    for _ in 0..DEPTH {
+                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+                    }
+                    kind
+                };
+                let module = ModuleId::new(65);
+                let candidate_parameter = TypeVariableId::resolved(module, 0);
+                let accepted_goal = TypeVariableId::resolved(module, 1);
+                let rejected_goal = TypeVariableId::resolved(module, 2);
+                let source = SourceFile::new("deep-head-match.ash", "F")
+                    .expect("the deep matcher source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the deep matcher range is ordered"))
+                    .expect("the deep matcher span should fit");
+                let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+                    .with_additional_type_variables([
+                        ResolvedTypeVariable {
+                            id: candidate_parameter,
+                            spelling: "F".into(),
+                            kind: deep_kind(false),
+                            origin: Origin::Source(span),
+                        },
+                        ResolvedTypeVariable {
+                            id: accepted_goal,
+                            spelling: "G".into(),
+                            kind: deep_kind(false),
+                            origin: Origin::Source(span),
+                        },
+                        ResolvedTypeVariable {
+                            id: rejected_goal,
+                            spelling: "H".into(),
+                            kind: deep_kind(true),
+                            origin: Origin::Source(span),
+                        },
+                    ]);
+                let candidate = Type::Variable(candidate_parameter);
+                let accepted = Type::Variable(accepted_goal);
+                let rejected = Type::Variable(rejected_goal);
+
+                let mut constraint_work = InterfaceConstraintBudget::default();
+                let mut type_work = TypeWorkBudget::default();
+                let substitutions = match_implementation_head(
+                    &registry,
+                    &[candidate_parameter],
+                    &candidate,
+                    &accepted,
+                    span,
+                    &mut constraint_work,
+                    &mut type_work,
+                )
+                .expect("the default matcher budgets should admit the deep Kind")
+                .expect("equal deep binder kinds should match");
+                assert_eq!(substitutions.len(), 1);
+                assert_eq!(substitutions[0].parameter(), candidate_parameter);
+                assert_eq!(substitutions[0].argument(), &accepted);
+                let kind_nodes = 2 * DEPTH + 1;
+                // Two complete deep-Kind traversals authenticate the binding;
+                // the constant covers canonical lookup, environment discovery,
+                // structural preflight/matching, binding-slot retention, and
+                // substitution retention.
+                assert_eq!(constraint_work.used(), 2 * kind_nodes + 18);
+                assert_eq!(type_work.used(), 2);
+                assert!(constraint_work.used() < INTERFACE_CONSTRAINT_WORK_LIMIT);
+                assert!(type_work.used() < crate::types::TYPE_WORK_LIMIT);
+
+                assert_eq!(
+                    match_implementation_head(
+                        &registry,
+                        &[candidate_parameter],
+                        &candidate,
+                        &rejected,
+                        span,
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default(),
+                    ),
+                    Err(HeadMatchFailure::InvalidState),
+                    "a mismatch at the deep Kind result must fail before substitution publication"
+                );
+            })
+            .expect("the small-stack matcher worker should spawn")
+            .join()
+            .expect("deep matching, failure, and teardown should remain iterative");
+    }
+
+    #[test]
+    fn deep_higher_kinded_overlap_accepts_and_rejects_with_default_work_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("deep-higher-kinded-overlap".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let deep_kind = |extra_result_arrow| {
+                    let mut kind = if extra_result_arrow {
+                        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+                    } else {
+                        Kind::Type
+                    };
+                    for _ in 0..DEPTH {
+                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+                    }
+                    kind
+                };
+                let module = ModuleId::new(66);
+                let left_parameter = TypeVariableId::resolved(module, 0);
+                let accepted_right = TypeVariableId::resolved(module, 1);
+                let rejected_right = TypeVariableId::resolved(module, 2);
+                let source = SourceFile::new("deep-overlap.ash", "F")
+                    .expect("the deep overlap source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("the deep overlap range is ordered"))
+                    .expect("the deep overlap span should fit");
+                let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+                    .with_additional_type_variables([
+                        ResolvedTypeVariable {
+                            id: left_parameter,
+                            spelling: "F".into(),
+                            kind: deep_kind(false),
+                            origin: Origin::Source(span),
+                        },
+                        ResolvedTypeVariable {
+                            id: accepted_right,
+                            spelling: "G".into(),
+                            kind: deep_kind(false),
+                            origin: Origin::Source(span),
+                        },
+                        ResolvedTypeVariable {
+                            id: rejected_right,
+                            spelling: "H".into(),
+                            kind: deep_kind(true),
+                            origin: Origin::Source(span),
+                        },
+                    ]);
+                let left = Type::Variable(left_parameter);
+                let accepted = Type::Variable(accepted_right);
+                let rejected = Type::Variable(rejected_right);
+
+                let mut constraint_work = InterfaceConstraintBudget::default();
+                let mut type_work = TypeWorkBudget::default();
+                assert_eq!(
+                    implementation_heads_overlap(
+                        &registry,
+                        InterfaceOperationWork::new(span, &mut constraint_work, &mut type_work,),
+                        &[left_parameter],
+                        &left,
+                        &[accepted_right],
+                        &accepted,
+                    ),
+                    Ok(true),
+                    "equal deep binder kinds should admit the cached solution"
+                );
+                let kind_nodes = 2 * DEPTH + 1;
+                // Two complete deep-Kind traversals authenticate the solution;
+                // the constant covers both parameter maps, shared environment
+                // discovery, unification/occurs work, and cached-solution storage.
+                assert_eq!(constraint_work.used(), 2 * kind_nodes + 22);
+                assert_eq!(type_work.used(), 2);
+                assert!(constraint_work.used() < INTERFACE_CONSTRAINT_WORK_LIMIT);
+                assert!(type_work.used() < crate::types::TYPE_WORK_LIMIT);
+                assert_eq!(
+                    implementation_heads_overlap(
+                        &registry,
+                        InterfaceOperationWork::new(
+                            span,
+                            &mut InterfaceConstraintBudget::default(),
+                            &mut TypeWorkBudget::default(),
+                        ),
+                        &[left_parameter],
+                        &left,
+                        &[rejected_right],
+                        &rejected,
+                    ),
+                    Err(OverlapFailure::InvalidState),
+                    "a mismatch at the deep Kind result must fail before solution caching"
+                );
+            })
+            .expect("the small-stack overlap worker should spawn")
+            .join()
+            .expect("deep overlap, failure, and teardown should remain iterative");
+    }
+
+    #[test]
     fn overlap_freshens_equal_raw_parameter_identities_per_side() {
         let parameter = TypeVariableId::new(0);
         let left = Type::Tuple(vec![Type::Variable(parameter), Type::Int].into_boxed_slice());
@@ -2229,7 +3285,7 @@ mod tests {
 
         let mut short = InterfaceConstraintBudget::with_limit(23);
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::once(parameter),
                 &left,
                 std::iter::once(parameter),
@@ -2241,7 +3297,7 @@ mod tests {
 
         let mut exact = InterfaceConstraintBudget::with_limit(24);
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::once(parameter),
                 &left,
                 std::iter::once(parameter),
@@ -2255,6 +3311,79 @@ mod tests {
     }
 
     #[test]
+    fn late_second_overlap_solution_kind_failure_does_not_publish_partial_state() {
+        let module = ModuleId::new(68);
+        let left_first = TypeVariableId::resolved(module, 0);
+        let left_second = TypeVariableId::resolved(module, 1);
+        let right_first = TypeVariableId::resolved(module, 2);
+        let right_second = TypeVariableId::resolved(module, 3);
+        let source = SourceFile::new("late-overlap-solution.ash", "F")
+            .expect("the late overlap source should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the late overlap range is ordered"))
+            .expect("the late overlap span should fit");
+        let constructor_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables([
+                ResolvedTypeVariable {
+                    id: left_first,
+                    spelling: "A".into(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+                ResolvedTypeVariable {
+                    id: left_second,
+                    spelling: "F".into(),
+                    kind: constructor_kind,
+                    origin: Origin::Source(span),
+                },
+                ResolvedTypeVariable {
+                    id: right_first,
+                    spelling: "B".into(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+                ResolvedTypeVariable {
+                    id: right_second,
+                    spelling: "Wrong".into(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+            ]);
+        let left = Type::Tuple(
+            vec![
+                Type::Variable(left_first),
+                Type::Application(Box::new(Type::Variable(left_second)), Box::new(Type::Int)),
+            ]
+            .into_boxed_slice(),
+        );
+        let right = Type::Tuple(
+            vec![
+                Type::Variable(right_first),
+                Type::Application(Box::new(Type::Variable(right_second)), Box::new(Type::Int)),
+            ]
+            .into_boxed_slice(),
+        );
+
+        assert_eq!(
+            implementation_heads_overlap(
+                &registry,
+                InterfaceOperationWork::new(
+                    span,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut TypeWorkBudget::default(),
+                ),
+                &[left_first, left_second],
+                &left,
+                &[right_first, right_second],
+                &right,
+            ),
+            Err(OverlapFailure::InvalidState),
+            "the second solution mismatch must discard the first authenticated cache entry"
+        );
+    }
+
+    #[test]
     fn overlap_preserves_repeated_variables_within_one_head() {
         let parameter = TypeVariableId::new(0);
         let left = Type::Tuple(
@@ -2263,7 +3392,7 @@ mod tests {
         let right = Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice());
 
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::once(parameter),
                 &left,
                 std::iter::empty(),
@@ -2284,7 +3413,7 @@ mod tests {
         let concrete = Type::Application(Box::new(Type::Int), Box::new(Type::Bool));
 
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::once(left_function),
                 &function_variable_head,
                 std::iter::empty(),
@@ -2300,7 +3429,7 @@ mod tests {
             Box::new(Type::Variable(right_argument)),
         );
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::empty(),
                 &concrete,
                 std::iter::once(right_argument),
@@ -2312,7 +3441,7 @@ mod tests {
 
         let rigid_function_mismatch = Type::Application(Box::new(Type::Bool), Box::new(Type::Bool));
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::empty(),
                 &rigid_function_mismatch,
                 std::iter::once(right_argument),
@@ -2323,7 +3452,7 @@ mod tests {
         );
         let rigid_argument_mismatch = Type::Application(Box::new(Type::Int), Box::new(Type::Int));
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::once(left_function),
                 &function_variable_head,
                 std::iter::empty(),
@@ -2336,10 +3465,17 @@ mod tests {
 
     #[test]
     fn strict_subterm_termination_visits_application_function_and_argument() {
+        const FUNCTION_SUCCESS_WORK: usize = 14;
+        const ARGUMENT_SUCCESS_WORK: usize = 14;
+        const LATE_FAILURE_WORK: usize = 14;
+
+        let module = ModuleId::new(70);
+        let constructor = NominalTypeId::new(module, 0);
         let function_variable = TypeVariableId::new(0);
         let argument_variable = TypeVariableId::new(1);
+        let absent_variable = TypeVariableId::new(2);
         let function_subterm = Type::Application(
-            Box::new(Type::Int),
+            Box::new(Type::Nominal(constructor)),
             Box::new(Type::Variable(function_variable)),
         );
         let argument_subterm = Type::Variable(argument_variable);
@@ -2348,30 +3484,109 @@ mod tests {
             Box::new(argument_subterm.clone()),
         );
 
+        let mut function_work = InterfaceConstraintBudget::default();
+        assert_eq!(
+            implementation_prerequisite_terminates(&function_subterm, &head, &mut function_work,),
+            Ok(true)
+        );
+        assert_eq!(function_work.used(), FUNCTION_SUCCESS_WORK);
         assert_eq!(
             implementation_prerequisite_terminates(
                 &function_subterm,
                 &head,
-                &mut InterfaceConstraintBudget::default(),
+                &mut InterfaceConstraintBudget::with_limit(FUNCTION_SUCCESS_WORK - 1),
+            ),
+            Err(())
+        );
+        assert_eq!(
+            implementation_prerequisite_terminates(
+                &function_subterm,
+                &head,
+                &mut InterfaceConstraintBudget::with_limit(FUNCTION_SUCCESS_WORK),
             ),
             Ok(true)
+        );
+
+        let mut argument_work = InterfaceConstraintBudget::default();
+        assert_eq!(
+            implementation_prerequisite_terminates(&argument_subterm, &head, &mut argument_work,),
+            Ok(true)
+        );
+        assert_eq!(argument_work.used(), ARGUMENT_SUCCESS_WORK);
+        assert_eq!(
+            implementation_prerequisite_terminates(
+                &argument_subterm,
+                &head,
+                &mut InterfaceConstraintBudget::with_limit(ARGUMENT_SUCCESS_WORK - 1),
+            ),
+            Err(())
         );
         assert_eq!(
             implementation_prerequisite_terminates(
                 &argument_subterm,
                 &head,
-                &mut InterfaceConstraintBudget::default(),
+                &mut InterfaceConstraintBudget::with_limit(ARGUMENT_SUCCESS_WORK),
             ),
             Ok(true)
         );
+
+        let mut late_failure_work = InterfaceConstraintBudget::default();
         assert_eq!(
             implementation_prerequisite_terminates(
+                &Type::Variable(absent_variable),
                 &head,
-                &head,
-                &mut InterfaceConstraintBudget::default(),
+                &mut late_failure_work,
             ),
             Ok(false)
         );
+        assert_eq!(late_failure_work.used(), LATE_FAILURE_WORK);
+        assert_eq!(
+            implementation_prerequisite_terminates(
+                &Type::Variable(absent_variable),
+                &head,
+                &mut InterfaceConstraintBudget::with_limit(LATE_FAILURE_WORK - 1),
+            ),
+            Err(())
+        );
+        assert_eq!(
+            implementation_prerequisite_terminates(
+                &Type::Variable(absent_variable),
+                &head,
+                &mut InterfaceConstraintBudget::with_limit(LATE_FAILURE_WORK),
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn strict_subterm_termination_handles_a_deep_canonical_application_spine_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("deep-canonical-termination".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(71);
+                let constructor = NominalTypeId::new(module, 0);
+                let variable = TypeVariableId::resolved(module, 0);
+                let mut head = Type::Nominal(constructor);
+                for _ in 0..DEPTH {
+                    head = Type::Application(Box::new(head), Box::new(Type::Variable(variable)));
+                }
+                let head = IterativeTypeOwner::new(head);
+                let Type::Application(function_child, _) = &*head else {
+                    panic!("the deep canonical head should be an application");
+                };
+                let mut work = InterfaceConstraintBudget::default();
+                assert_eq!(
+                    implementation_prerequisite_terminates(function_child, &head, &mut work),
+                    Ok(true)
+                );
+                assert!(work.used() < INTERFACE_CONSTRAINT_WORK_LIMIT);
+            })
+            .expect("the deep termination worker should spawn")
+            .join()
+            .expect("deep termination traversal and teardown should remain iterative");
     }
 
     #[test]
@@ -2379,7 +3594,7 @@ mod tests {
         let variable = Type::Variable(TypeVariableId::new(0));
 
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::empty(),
                 &variable,
                 std::iter::empty(),
@@ -2410,7 +3625,7 @@ mod tests {
         );
 
         assert_eq!(
-            implementation_heads_overlap(
+            implementation_heads_overlap_structurally(
                 std::iter::once(left_parameter),
                 &left,
                 std::iter::once(right_parameter),
@@ -2428,7 +3643,7 @@ mod tests {
             Type::Forall(Box::new([]), Box::new(Type::Int)),
         ] {
             assert_eq!(
-                implementation_heads_overlap(
+                implementation_heads_overlap_structurally(
                     std::iter::empty(),
                     &invalid,
                     std::iter::empty(),
@@ -2455,7 +3670,7 @@ mod tests {
                 let left = nested();
                 let right = nested();
                 assert_eq!(
-                    implementation_heads_overlap(
+                    implementation_heads_overlap_structurally(
                         std::iter::empty(),
                         &left,
                         std::iter::empty(),

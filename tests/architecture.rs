@@ -122,6 +122,8 @@ enum DisposalOwner {
     CoreTreeAndTransientWork,
     EvidenceTreeAndTransientWork,
     ResolvedTreeAndTransientWork,
+    ResolvedTreeAndCheckedTree,
+    TypeTreeAndKindTree,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -208,14 +210,16 @@ define_kind_site_profiles! {
     FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, CoreTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeKindTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, KindTree),
-    FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, RegistryTree),
+    FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeResolvedTreeAndCheckedTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, EvidenceSelection, EvidenceType, ResolvedTreeAndCheckedTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, EvidenceValidation, EvidenceType, TypeTree),
+    FieldBorrowedTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTypeTree => (Field, Borrowed, Transient, InterfaceArgument, InterfaceParameter, EvidenceSelection, EvidenceType, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, InterfaceValidation, InterfaceType, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, SummaryTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, SurfaceTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, PatternCoverage, PatternCoverage, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageCoreTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, PatternCoverage, PatternCoverage, CoreTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Type, TypeTree),
+    FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeRegistryTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Type, RegistryTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Kind, KindTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, KindTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, ResolvedTree),
@@ -300,8 +304,8 @@ define_kind_site_profiles! {
     TransientTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork => (Transient, Owned, Transient, CarrierRetention, PreservedCarrier, EvidenceSelection, EvidenceType, TransientWork),
     TransientTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork => (Transient, Owned, Transient, CarrierRetention, PreservedCarrier, Resolution, ResolutionType, TransientWork),
     TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree => (Transient, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Kind, KindTree),
+    TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTreeAndKindTree => (Transient, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Type, TypeTreeAndKindTree),
     TransientBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree => (Transient, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, ResolvedTree),
-    TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree => (Transient, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Type, TypeTree),
     TransientTransientCarrierRetentionPreservedCarrierTypeOperationKindTransientWork => (Transient, Owned, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Kind, TransientWork),
 }
 
@@ -347,8 +351,16 @@ const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent on
 #[rustfmt::skip]
 const KIND_SITES: &[KindSite] = &[
     kind_site!("src/driver.rs::PipelineFailure.Kind.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
-    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Task.Sequence.types", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/evidence_validation.rs::$fn_same_linked_value_type_charged::Continuation.Pair.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTypeTree),
+    kind_site!("src/evidence_validation.rs::$fn_same_linked_value_type_charged::Continuation.Pair.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTypeTree),
+    kind_site!("src/evidence_validation.rs::$fn_same_linked_value_type_charged::Continuation.Sequence.checked", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTypeTree),
+    kind_site!("src/evidence_validation.rs::$fn_same_linked_value_type_charged::Continuation.Sequence.source", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTypeTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Continuation.ApplicationArgument.function", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Continuation.ApplicationFunction.argument", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Continuation.FunctionDomain.codomain", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Continuation.Tuple.remaining", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::State.Complete.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::State.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/kind.rs::BodyWork.Declaration.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/kind.rs::BodyWork.Expression.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/kind.rs::BodyWork.RecursiveMember.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
@@ -667,6 +679,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/evidence.rs::EvidenceSelector.pending", FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTreeAndTransientWork),
     kind_site!("src/evidence.rs::EvidenceSelector.schemes", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::Goal.argument", FieldTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/evidence.rs::ImplementationCandidateAuthentication.argument", FieldBorrowedTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTypeTree),
+    kind_site!("src/evidence.rs::ImplementationCandidateAuthentication.parameter_records", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeResolvedTreeAndCheckedTree),
     kind_site!("src/evidence.rs::ImplementationEntry.argument", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::ImplementationEntry.prerequisites", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::InterfaceEntry.parameter_kind", FieldEvidenceDeclaredKindDeclaredEvidenceSelectionEvidenceTypeEvidenceTree),
@@ -770,8 +784,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_type_with_inference::Task.ApplicationSpine.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_type_with_inference::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/resolved.rs::AuthorizedImplementationFact.fact", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
-    kind_site!("src/resolved.rs::CanonicalNominalKind.Frozen.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeKindTree),
-    kind_site!("src/resolved.rs::CanonicalNominalKind.Parameters.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree),
+    kind_site!("src/resolved.rs::CanonicalNominalKind.Frozen.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/resolved.rs::CanonicalNominalKind.Parameters.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeRegistryTree),
     kind_site!("src/resolved.rs::CheckedDefinition.source", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
     kind_site!("src/resolved.rs::CheckedGlobalScheme.scheme", FieldCheckedSchemeSchemeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationBody.source", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
@@ -1017,8 +1031,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/types.rs::$local.hash_kind_with_budget.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::$local.same_kind_with_charge.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::$local.write_kind.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
-    kind_site!("src/kind.rs::$local.KindEnvironments.synthesize.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/kind.rs::$local.KindEnvironments.synthesize.completed", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/kind.rs::$local.KindEnvironments.synthesize.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTreeAndKindTree),
     kind_site!("src/kind.rs::$local.check_expression_work.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site_for!("src/kind.rs::$kind.resolution_delta", "src/kind.rs::KindEnvironments.delta", KindSiteBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site_for!("src/kind.rs::$kind.elaboration_delta", "src/kind.rs::KindEnvironments.delta", KindSiteBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeKindTree),
@@ -1233,10 +1246,6 @@ const TRANSIENT_SITE_SOURCE_ANCHORS: &[(&str, &str)] = &[
         "synthesize_with_ledger",
     ),
     (
-        "src/kind.rs::$local.KindEnvironments.synthesize.completed",
-        "synthesize_with_ledger",
-    ),
-    (
         "src/kind.rs::$local.check_expression_work.work",
         "check_expression_work",
     ),
@@ -1287,12 +1296,15 @@ const TRANSIENT_SITE_SOURCE_ANCHORS: &[(&str, &str)] = &[
 
 #[rustfmt::skip]
 const EXPECTED_SHARED_KIND_ENGINE_SITES: &[KindSite] = &[
-    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Task.Sequence.types", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Continuation.ApplicationArgument.function", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Continuation.ApplicationFunction.argument", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Continuation.FunctionDomain.codomain", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::Continuation.Tuple.remaining", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::State.Complete.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_with_ledger::State.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/kind.rs::KindFact.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::NominalKindFact.kind", FieldTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
-    kind_site!("src/kind.rs::$local.KindEnvironments.synthesize.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/kind.rs::$local.KindEnvironments.synthesize.completed", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/kind.rs::$local.KindEnvironments.synthesize.work", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTreeAndKindTree),
 ];
 
 #[test]
@@ -1323,18 +1335,36 @@ fn canonical_nominal_kind_views_follow_ultimate_referents() {
             KindEnvironmentOwner::Transient,
             KindRule::CarrierRetention,
             RequiredKindResult::PreservedCarrier,
-            FailureOwner::Elaboration,
-            BudgetOwner::InferenceType,
+            FailureOwner::TypeOperation,
+            BudgetOwner::Type,
             DisposalOwner::RegistryTree,
         ),
-        "the borrowed parameter slice ultimately refers to registry-owned binder records",
+        "the shared borrowed parameter view is a phase-neutral type operation over registry-owned binder records",
     );
 
     let frozen = site("src/resolved.rs::CanonicalNominalKind.Frozen.kind");
     assert_eq!(
-        frozen.disposal_owner,
-        DisposalOwner::KindTree,
-        "the frozen sidecar borrows a standalone semantic Kind tree",
+        (
+            frozen.scope,
+            frozen.retention,
+            frozen.environment,
+            frozen.rule,
+            frozen.required_result,
+            frozen.failure_owner,
+            frozen.budget,
+            frozen.disposal_owner,
+        ),
+        (
+            InventoryScope::Field,
+            RetentionMode::Borrowed,
+            KindEnvironmentOwner::Transient,
+            KindRule::CarrierRetention,
+            RequiredKindResult::PreservedCarrier,
+            FailureOwner::TypeOperation,
+            BudgetOwner::Kind,
+            DisposalOwner::KindTree,
+        ),
+        "the shared frozen view is a phase-neutral Kind operation borrowing its standalone Kind tree",
     );
 }
 

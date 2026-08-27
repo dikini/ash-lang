@@ -222,12 +222,14 @@ permanent language principle.
   facts remain `evidence.validation.*` failures. Higher-kinded evidence
   matching and exhaustive linked-fact authentication remain assigned to Tasks
   7 and 8.
-- Task 6 resource evidence fixes scalar solution work at 18 units and deep
-  solution work at `9C + D + 9`, where `C` is the candidate's type-cell count
-  and `D` is its function depth. Generalizing `n` variables costs
+- Task 6 resource evidence, refined by Task 7's shared Kind state machine, fixes
+  scalar solution work at 17 units and deep solution work at
+  `9C - 3D + 8`, where `C` is the candidate's type-cell count and `D` is its
+  function depth. Generalizing `n` variables costs
   `3n + sum(3 + 2|K_i|) + Z(T)`. Linked validation separates 18 structural
-  units, 33 Kind-judgment units, and four owner-`DELTA` type units for the
-  higher-kinded `keep` scheme. Its deep Kind judgment costs `10D + 4`, and
+  units, 31 Kind-judgment units, and four owner-`DELTA` type units for the
+  higher-kinded `keep` scheme. After Task 7's shared-worklist refinement, its
+  deep Kind judgment costs `6D + 3`, and
   graph-lifetime nominal retention costs
   `sum_nominal [2 + sum_parameter(|K| + 1)]`. The checker-view sidecar uses the
   same per-nominal formula, `2 + sum_parameter(|K| + 1)`: one record, one final
@@ -242,6 +244,46 @@ permanent language principle.
   phase-neutral engine ownership plus live transient-site anchors. Repeat
   semantic and Rust/resource review approves the production and evidence
   boundaries with no unresolved important finding.
+- Task 7 makes implementation matching candidate-only, rigid, first-order, and
+  kind-preserving. Canonical defining binder records supply fixed Kinds;
+  matching authenticates each newly created substitution without refining a
+  goal variable. Overlap independently freshens both candidate heads, and both
+  operations traverse the function and argument children of canonical
+  applications. They do not add type lambdas or higher-order unification.
+- Selection builds one canonical environment for each complete inference-free
+  goal and preserves abstract, exact-current, then concrete candidate priority.
+  Candidate ingress authenticates identities, canonical binder ownership,
+  scope, methods, and prerequisites before atomic publication. The checker view
+  carries authenticated body-free Kind mirrors for imported interface and
+  implementation binders without duplicating Kind snapshots in evidence
+  substitutions.
+- Linked validation now checks each selected root and every retained
+  substitution, including exact-current evidence, against canonical interface
+  and implementation binder Kinds. Declaration prerequisites receive one
+  structural admission and one owner/canonical Kind judgment. A pending goal
+  uses a one-unit proof derived from its already authenticated prerequisite and
+  exact same-Kind first-order substitutions instead of resynthesizing the goal.
+  Task 8 retains body-free and hidden closure, non-direct routes, exhaustive
+  imported-summary and evidence-carrier tampering, and newly independent
+  post-body fields. Task 9 retains linked Core authentication.
+- Exact Task 7 resource evidence records imported checker-view binders at
+  `sum_i (1 + |Kind_i|)` type-work units, a width-`W` match at `18W + 8`
+  constraint and `W` type-work units, and the final-substitution precharge
+  prefix at `15W + 8`. Cloning `N` substitution arguments costs
+  `N + sum_i |Type_i|` type-work units. Scalar match, overlap, and selection
+  fixtures cost 24/5, 42/5, and 156/20 constraint/type units. Declaration
+  head-plus-prerequisite authentication costs 12/4. Selected-root evidence
+  costs 73 constraint units as `59 + 9 + 4 + 1`; exact-current evidence costs
+  107 as `87 + 15 + 4 + 1`.
+- Deep matching and overlap over `K = 2D + 1` Kind nodes cost `2K + 18` and
+  `2K + 22` constraint units. The shared Kind engine costs `6D + 3` for a valid
+  deep linked value and `6D - 1` for the residual mismatch. The complete public
+  linked-validation path costs `9D + 60`: registry 7; references `3D + 20`;
+  pre-schemes `3D + 27`; wrapper and binder 2; judgment `6D + 3`; remaining
+  scheme work 10; post-schemes `9D + 42`; and occurrences 18. At `D = 32,768`,
+  294,972 units fit the production default on a 256 KiB stack. Exact and
+  one-short failures publish no partial selection, substitution, candidate, or
+  linked capability.
 
 ## Verification
 
@@ -328,6 +370,21 @@ checker-only sidecar supplies that evidence without making the nominal or its
 constructors structurally visible. Task 8 still owns exhaustive summary,
 hidden-closure, route, and linked-fact authentication.
 
+Task 7's first deep public linked witness exceeded the production default by
+four units in the private Kind judgment and by much more when repeated public
+passes were counted. A continuation machine now reuses the current result and
+one continuation per composite node. Fusing checked-value structural admission
+with exact resolved-value comparison removes a duplicate traversal without
+skipping scope, identity, nominal, inference, scheme, tuple, or application
+checks. The resulting private `6D + 3` and public `9D + 60` formulas fit at
+depth 32,768 without changing a limit or witness depth.
+
+Kind-aware matching does not reauthenticate complete heads that the resolved
+kind gate already admitted. Its semantic responsibility begins at a new
+candidate binding or overlap solution: synthesize the argument Kind, compare it
+with the defining binder Kind, then retain the type. This avoids repeated deep
+passes while keeping goals rigid and substitutions authenticated.
+
 ## Deviations
 
 Task 3 refines the predecessor Rust API so `Observation` can dismantle a
@@ -357,6 +414,15 @@ it does not advance Task 8's exhaustive authentication scope. The execution
 plan records those files and added boundaries. Task 6 does not change `spec/`:
 Task 12 remains the planned point where implemented behavior and retained
 evidence update normative language truth.
+
+Task 7 extends its original file scope into `src/kind.rs`, `src/resolved.rs`,
+`src/evidence_validation.rs`, `tests/architecture.rs`, and `tests/kinds.rs`.
+These files own the shared stack-safe Kind worklist, canonical checker-view
+authority, the direct linked selected/declaration seams, and their closed
+carrier inventory. The task does not modify `spec/`. It does not advance Task
+8's body-free or hidden closure, non-direct route coverage, exhaustive imported
+summary and evidence-carrier tampering, or remaining linked fields. It does not
+advance Task 9's linked Core boundary.
 
 The malformed-Core resource fixture grows from width 700 to width 1,000 so its
 expanded work remains above the accepted validator-local `3 * TYPE_WORK_LIMIT`

@@ -22,9 +22,9 @@ use crate::{
     interface::{
         CheckedImplMethod, CheckedImplementation, CheckedInterface, CheckedRequirement,
         ConstrainedScheme, EvidenceNode, EvidenceSelection, ImplId, ImplMethodId,
-        InterfaceConstraintBudget, InterfaceId, InterfaceReason, MethodId, OverlapFailure,
-        RequirementId, implementation_heads_overlap, implementation_prerequisite_terminates,
-        same_type_with_constraint_budget,
+        InterfaceConstraintBudget, InterfaceId, InterfaceOperationWork, InterfaceReason, MethodId,
+        OverlapFailure, RequirementId, implementation_heads_overlap,
+        implementation_prerequisite_terminates, same_type_with_constraint_budget,
     },
     kind::{KindEnvironments, KindFailure},
     pattern::{
@@ -1398,6 +1398,7 @@ impl Elaborator {
         Ok(elaborator)
     }
 
+    #[cfg(test)]
     fn for_module_with_work(
         module: &ResolvedModule,
         mut type_work: TypeWorkBudget,
@@ -1409,6 +1410,15 @@ impl Elaborator {
                 .checker_view(module.imported_facts(), &mut type_work)
                 .map_err(resolved_build_error)?,
         );
+        Self::for_module_with_registry(module, registry, type_work, coverage_work)
+    }
+
+    fn for_module_with_registry(
+        module: &ResolvedModule,
+        registry: Arc<ResolvedRegistry>,
+        mut type_work: TypeWorkBudget,
+        coverage_work: UsefulnessBudget,
+    ) -> Result<Self, TypeError> {
         let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
         builder
             .reserve_resolved_binders(resolved_module_binders(module))
@@ -2586,7 +2596,8 @@ impl Elaborator {
         let solutions = &self.inference_solutions;
         let inference_variables = &self.inference_variables;
         let authenticated_solutions = &self.authenticated_inference_solutions;
-        let result = selector.close(
+        let result = selector.close_with_registry(
+            &self.registry,
             marker,
             |argument, type_work| {
                 let zonked =
@@ -7116,12 +7127,14 @@ fn check_global_requirements(
 fn check_implementation_headers_and_membership(
     module: &ResolvedModule,
     checked_interfaces: &[CheckedInterface],
+    registry: &ResolvedRegistry,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<Box<[CheckedImplementation]>, TypeError> {
     for implementation in module.implementations() {
         check_implementation_header(module, checked_interfaces, implementation, budget)?;
     }
-    check_effective_implementation_overlap(module, budget)?;
+    check_effective_implementation_overlap(module, registry, budget, type_work)?;
 
     budget
         .charge(module.implementations().len())
@@ -7219,7 +7232,9 @@ fn retain_overlap_label(
 
 fn check_effective_implementation_overlap(
     module: &ResolvedModule,
+    registry: &ResolvedRegistry,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), TypeError> {
     let imported_count = module.imported_facts().implementations().count();
     budget
@@ -7246,12 +7261,14 @@ fn check_effective_implementation_overlap(
             .map(ImplementationHeadRef::Local),
     );
 
-    check_effective_implementation_heads(&effective, budget)
+    check_effective_implementation_heads(registry, &effective, budget, type_work)
 }
 
 fn check_effective_implementation_heads(
+    registry: &ResolvedRegistry,
     effective: &[ImplementationHeadRef<'_>],
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), TypeError> {
     for (index, implementation) in effective.iter().copied().enumerate() {
         budget.charge(1).map_err(|()| constraint_resource())?;
@@ -7262,22 +7279,50 @@ fn check_effective_implementation_heads(
             {
                 continue;
             }
-            let overlaps = implementation_heads_overlap(
+            let mut previous_parameters = Vec::new();
+            let mut implementation_parameters = Vec::new();
+            let combined_parameter_count = previous
+                .head_parameters()
+                .len()
+                .checked_add(implementation.head_parameters().len())
+                .ok_or_else(constraint_resource)?;
+            budget
+                .charge(combined_parameter_count)
+                .map_err(|()| constraint_resource())?;
+            previous_parameters
+                .try_reserve(previous.head_parameters().len())
+                .map_err(|_| constraint_resource())?;
+            implementation_parameters
+                .try_reserve(implementation.head_parameters().len())
+                .map_err(|_| constraint_resource())?;
+            previous_parameters.extend(
                 previous
                     .head_parameters()
                     .iter()
                     .map(|parameter| parameter.id),
-                previous.argument(),
+            );
+            implementation_parameters.extend(
                 implementation
                     .head_parameters()
                     .iter()
                     .map(|parameter| parameter.id),
+            );
+            let overlaps = implementation_heads_overlap(
+                registry,
+                InterfaceOperationWork::new(implementation.primary_span(), budget, type_work),
+                &previous_parameters,
+                previous.argument(),
+                &implementation_parameters,
                 implementation.argument(),
-                budget,
             );
             let overlaps = match overlaps {
                 Ok(overlaps) => overlaps,
                 Err(OverlapFailure::Resource) => return Err(constraint_resource()),
+                Err(OverlapFailure::TypeResource) => {
+                    return Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ));
+                }
                 Err(OverlapFailure::InvalidState) => return Err(invalid_state()),
             };
             if overlaps {
@@ -7883,13 +7928,25 @@ pub(crate) fn check_module_with_budget(
 ) -> Result<CheckedModule, TypeError> {
     let checked_interfaces = check_interface_declarations(&resolved, constraint_work)?;
     check_global_requirements(&resolved, &checked_interfaces, constraint_work)?;
+    let registry = Arc::new(
+        resolved
+            .registry()
+            .checker_view(resolved.imported_facts(), type_work)
+            .map_err(resolved_build_error)?,
+    );
     let checked_implementations = check_implementation_headers_and_membership(
         &resolved,
         &checked_interfaces,
+        &registry,
         constraint_work,
+        type_work,
     )?;
-    let mut elaborator =
-        Elaborator::for_module_with_work(&resolved, type_work.clone(), coverage_work.clone())?;
+    let mut elaborator = Elaborator::for_module_with_registry(
+        &resolved,
+        registry,
+        type_work.clone(),
+        coverage_work.clone(),
+    )?;
     let result: Result<_, TypeError> = (|| {
         let interface_facts = checked_interface_facts(
             &resolved,
@@ -7900,6 +7957,7 @@ pub(crate) fn check_module_with_budget(
         let schemes = elaborator.checked_module_schemes(resolved.definitions())?;
         elaborator.selection = Some(build_evidence_selector(
             &resolved,
+            &elaborator.registry,
             &schemes,
             &interface_facts,
             &checked_implementations,
@@ -8015,6 +8073,7 @@ pub(crate) fn check_module_with_budget(
 
 fn build_evidence_selector(
     resolved: &ResolvedModule,
+    registry: &ResolvedRegistry,
     schemes: &[CheckedGlobalScheme],
     interface_facts: &[CheckedInterfaceFact],
     checked_implementations: &[CheckedImplementation],
@@ -8024,12 +8083,12 @@ fn build_evidence_selector(
     let mut selector = EvidenceSelector::new();
     for imported in resolved.imported_facts().interface_imports() {
         selector
-            .add_imported_interface_fact(&imported.fact, constraint_work, type_work)
+            .add_imported_interface_fact(registry, &imported.fact, constraint_work, type_work)
             .map_err(|failure| selection_failure(failure, None))?;
     }
     for interface in interface_facts {
         selector
-            .add_interface_fact(interface, constraint_work, type_work)
+            .add_interface_fact(registry, interface, constraint_work, type_work)
             .map_err(|failure| selection_failure(failure, None))?;
     }
     for scheme in resolved.imported_facts().globals() {
@@ -8044,7 +8103,7 @@ fn build_evidence_selector(
     }
     for imported in resolved.imported_facts().implementations() {
         selector
-            .add_implementation_fact(imported, constraint_work, type_work)
+            .add_implementation_fact(registry, imported, constraint_work, type_work)
             .map_err(|failure| selection_failure(failure, None))?;
     }
     for checked in checked_implementations {
@@ -8053,7 +8112,13 @@ fn build_evidence_selector(
             .get(checked.source_index)
             .ok_or_else(invalid_state)?;
         selector
-            .add_local_implementation(implementation, checked, constraint_work, type_work)
+            .add_local_implementation(
+                registry,
+                implementation,
+                checked,
+                constraint_work,
+                type_work,
+            )
             .map_err(|failure| selection_failure(failure, None))?;
     }
     Ok(selector)
@@ -10762,6 +10827,7 @@ mod tests {
             ResolvedNominalType, ResolvedTypeVariable,
         },
         source::{ByteRange, SourceFile},
+        types::NominalTypeId,
     };
 
     static MODULE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
@@ -11259,7 +11325,7 @@ mod tests {
         let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(36);
+        let mut short = InterfaceConstraintBudget::with_limit(38);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -11268,11 +11334,11 @@ mod tests {
             failure,
             TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
         );
-        assert_eq!(short.used(), 36);
+        assert_eq!(short.used(), 38);
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut constraint_work = InterfaceConstraintBudget::with_limit(37);
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(39);
 
         check_module_with_budget(
             first,
@@ -11281,7 +11347,7 @@ mod tests {
             &mut constraint_work,
         )
         .expect("one interface should fit the exact constraint budget");
-        assert_eq!(constraint_work.used(), 37);
+        assert_eq!(constraint_work.used(), 39);
         assert_eq!(constraint_work.charge(1), Err(()));
         let failure = check_module_with_budget(
             second,
@@ -11367,7 +11433,7 @@ mod tests {
             resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(76);
+        let mut short = InterfaceConstraintBudget::with_limit(82);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -11379,11 +11445,11 @@ mod tests {
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut exact = InterfaceConstraintBudget::with_limit(77);
+        let mut exact = InterfaceConstraintBudget::with_limit(83);
         check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
             .expect("the exact budget should admit one implementation method");
 
-        assert_eq!(exact.used(), 77);
+        assert_eq!(exact.used(), 83);
         assert_eq!(exact.charge(1), Err(()));
     }
 
@@ -11500,7 +11566,20 @@ mod tests {
         let second_definition = span(9, 11);
         let second_route = span(12, 14);
         let second_route_suffix = span(15, 17);
-        let interface = crate::interface::InterfaceId::new(ModuleId::new(40), 0);
+        let module = resolved_module_fixture(
+            "overlap-authority.ash",
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n",
+            "Unit",
+            "()",
+        );
+        let _checked_interfaces =
+            check_interface_declarations(&module, &mut InterfaceConstraintBudget::default())
+                .expect("the overlap authority interface should check");
+        let interface = module.interfaces()[0].id;
+        let registry = module
+            .registry()
+            .checker_view(module.imported_facts(), &mut TypeWorkBudget::default())
+            .expect("the overlap authority registry should build");
         let first = crate::resolved::ImportedImplementationFact {
             fact: CheckedImplementationFact {
                 id: crate::interface::ImplId::new(ModuleId::new(90), 0),
@@ -11556,18 +11635,38 @@ mod tests {
             ImplementationHeadRef::Imported(&second),
         ];
 
-        let mut short = InterfaceConstraintBudget::with_limit(11);
+        // Two head visits plus one pair visit, two body-free Int environment
+        // visits, four structural overlap cells, and five retained route labels.
+        const HEAD_AND_PAIR_WORK: usize = 3;
+        const ENVIRONMENT_WORK: usize = 4;
+        const OVERLAP_WORK: usize = 4;
+        const ROUTE_LABEL_WORK: usize = 5;
+        const EXACT_CONSTRAINT_WORK: usize =
+            HEAD_AND_PAIR_WORK + ENVIRONMENT_WORK + OVERLAP_WORK + ROUTE_LABEL_WORK;
+        const EXACT_TYPE_WORK: usize = 0;
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1);
         assert_eq!(
-            check_effective_implementation_heads(&effective, &mut short),
+            check_effective_implementation_heads(
+                &registry,
+                &effective,
+                &mut short,
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+            ),
             Err(TypeError::Internal(
                 ElaborationFailure::ConstraintResourceExhausted
             ))
         );
-        assert_eq!(short.used(), 11);
+        assert_eq!(short.used(), EXACT_CONSTRAINT_WORK - 1);
 
-        let mut exact = InterfaceConstraintBudget::with_limit(12);
-        let error = check_effective_implementation_heads(&effective, &mut exact)
-            .expect_err("the later retained route should expose the overlap");
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let error = check_effective_implementation_heads(
+            &registry,
+            &effective,
+            &mut exact,
+            &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+        )
+        .expect_err("the later retained route should expose the overlap");
         let TypeError::Interface(diagnostic) = error else {
             panic!("the overlap should use an interface diagnostic");
         };
@@ -11605,8 +11704,158 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(exact.used(), 12);
+        assert_eq!(exact.used(), EXACT_CONSTRAINT_WORK);
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn higher_kinded_overlap_caller_preserves_exact_type_resource_classification() {
+        // The caller charges two head visits, one pair visit, and one copied
+        // head-parameter ID. The overlap seam then owns 16 canonical
+        // environment discovery cells and 26 unification/authentication
+        // cells. One retained diagnostic label completes the exact boundary.
+        const HEAD_COLLECTION_AND_PAIR_WORK: usize = 4;
+        const CANONICAL_ENVIRONMENT_WORK: usize = 16;
+        const OVERLAP_UNIFICATION_WORK: usize = 26;
+        const DIAGNOSTIC_RETENTION_WORK: usize = 1;
+        const EXACT_CONSTRAINT_WORK: usize = HEAD_COLLECTION_AND_PAIR_WORK
+            + CANONICAL_ENVIRONMENT_WORK
+            + OVERLAP_UNIFICATION_WORK
+            + DIAGNOSTIC_RETENTION_WORK;
+        // One declared-binder DELTA record plus Option's XI record, retained
+        // result Kind, parameter Kind, and derived Arrow Kind.
+        const DECLARED_ENVIRONMENT_TYPE_WORK: usize = 1;
+        const NOMINAL_ENVIRONMENT_TYPE_WORK: usize = 4;
+        const EXACT_TYPE_WORK: usize =
+            DECLARED_ENVIRONMENT_TYPE_WORK + NOMINAL_ENVIRONMENT_TYPE_WORK;
+
+        let source = SourceFile::new("higher-kinded-overlap-caller.ash", "overlap")
+            .expect("the overlap caller source should fit");
+        let span = source
+            .span(ByteRange::new(0, 7).expect("the overlap caller range is ordered"))
+            .expect("the overlap caller span should fit");
+        let module = ModuleId::new(95);
+        let interface = InterfaceId::new(module, 0);
+        let function = TypeVariableId::resolved(module, 0);
+        let nominal_parameter = TypeVariableId::resolved(module, 1);
+        let option = NominalTypeId::new(module, 0);
+        let first_id = ImplId::new(module, 0);
+        let second_id = ImplId::new(module, 1);
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: option,
+                spelling: "Option".into(),
+                constructors: Box::new([]),
+                origin: Origin::Source(span),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(
+            option,
+            vec![ResolvedTypeVariable {
+                id: nominal_parameter,
+                spelling: "A".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            }],
+        )])
+        .with_additional_type_variables([ResolvedTypeVariable {
+            id: function,
+            spelling: "F".into(),
+            kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+            origin: Origin::Source(span),
+        }]);
+        let first_argument =
+            Type::Application(Box::new(Type::Variable(function)), Box::new(Type::Int));
+        let second_argument =
+            Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Int));
+        let first = crate::resolved::ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: first_id,
+                interface,
+                head_parameters: vec![ResolvedTypeVariable {
+                    id: function,
+                    spelling: "F".into(),
+                    kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                    origin: Origin::Source(span),
+                }]
+                .into_boxed_slice(),
+                argument: first_argument,
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(span),
+                span,
+            },
+            authorization: crate::resolved::ImplementationAuthorization::from_hops(Vec::new()),
+            public_authorization: None,
+        };
+        let second = crate::resolved::ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: second_id,
+                interface,
+                head_parameters: Box::new([]),
+                argument: second_argument,
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(span),
+                span,
+            },
+            authorization: crate::resolved::ImplementationAuthorization::from_hops(Vec::new()),
+            public_authorization: None,
+        };
+        let effective = [
+            ImplementationHeadRef::Imported(&first),
+            ImplementationHeadRef::Imported(&second),
+        ];
+
+        assert_eq!(
+            check_effective_implementation_heads(
+                &registry,
+                &effective,
+                &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1),
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+            "the overlap caller must preserve TypeWork ownership"
+        );
+        assert_eq!(
+            first.fact.argument(),
+            &Type::Application(Box::new(Type::Variable(function)), Box::new(Type::Int),)
+        );
+        assert_eq!(
+            second.fact.argument(),
+            &Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Int),)
+        );
+
+        assert_eq!(
+            check_effective_implementation_heads(
+                &registry,
+                &effective,
+                &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1),
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+
+        let mut exact_constraints = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let mut exact_types = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        let error = check_effective_implementation_heads(
+            &registry,
+            &effective,
+            &mut exact_constraints,
+            &mut exact_types,
+        )
+        .expect_err("the exact budgets should reach the overlap diagnostic");
+        assert!(matches!(
+            error,
+            TypeError::Interface(diagnostic) if diagnostic.reason == InterfaceReason::ImplOverlap
+        ));
+        assert_eq!(exact_constraints.used(), EXACT_CONSTRAINT_WORK);
+        assert_eq!(exact_types.used(), EXACT_TYPE_WORK);
     }
 
     #[test]
@@ -11837,9 +12086,10 @@ mod tests {
         );
 
         let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
+        let short_setup_work = short.type_work.used();
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 2)
+            .charge(crate::types::TYPE_WORK_LIMIT - short_setup_work - 2)
             .expect("the fixture leaves less than one inferred function type");
         assert_eq!(
             short.elaborate_expression_with_context(
@@ -12563,8 +12813,8 @@ mod tests {
     fn abstract_nominal_candidate_authentication_is_exact_and_atomic() {
         // Omega lookup (1), candidate scan/membership/registry lookup (3),
         // transient Xi record plus its Type Kind (2), synthesis task/result
-        // records around S(nominal)=1 (3), and final Kind comparison (1).
-        const EXACT_WORK: usize = 1 + 3 + 2 + 3 + 1;
+        // records around S(nominal)=1 (2), and final Kind comparison (1).
+        const EXACT_WORK: usize = 1 + 3 + 2 + 2 + 1;
         let source = SourceFile::new("abstract-solution-budget.ash", "x")
             .expect("the abstract nominal resource fixture should fit");
         let span = source
@@ -13355,7 +13605,7 @@ mod tests {
         // One-cell candidate: comparison/copies, one fused zonk pass,
         // fixed-kind synthesis/comparison, occurs scheduling, plus the
         // solution, rollback, and authenticated-solution cache records.
-        const EXACT_WORK: usize = 18;
+        const EXACT_WORK: usize = 17;
         let source =
             SourceFile::new("scalar-unification.ash", "()").expect("the fixture source should fit");
         let span = source
@@ -13392,8 +13642,9 @@ mod tests {
         const CELLS: usize = 2 * DEPTH + 1;
         // Comparison/copies, fused zonking, local environment+synthesis,
         // occurs work, and transactional solution/cache retention total
-        // 9C + D + 9. Fusion removes the duplicate C+1 authentication scan.
-        const EXACT: usize = 9 * CELLS + DEPTH + 9;
+        // 9C - 3D + 8. Fusion removes the duplicate C+1 authentication scan,
+        // and the shared Kind engine reuses four per-function work cells.
+        const EXACT: usize = 9 * CELLS - 3 * DEPTH + 8;
 
         std::thread::Builder::new()
             .name("deep-unification-budget".to_owned())
@@ -13439,10 +13690,10 @@ mod tests {
     fn late_occurs_resource_failure_owns_the_deep_candidate_iteratively() {
         const DEPTH: usize = 32_768;
         const CELLS: usize = 2 * DEPTH + 1;
-        // Full solution publication costs 9C + D + 9. Three final units retain
+        // Full solution publication costs 9C - 3D + 8. Three final units retain
         // the solution, rollback entry, and authenticated-solution entry, so
         // `EXACT - 4` exhausts one unit before the occurs traversal completes.
-        const EXACT: usize = 9 * CELLS + DEPTH + 9;
+        const EXACT: usize = 9 * CELLS - 3 * DEPTH + 8;
         const LATE_OCCURS_FAILURE: usize = EXACT - 4;
 
         std::thread::Builder::new()

@@ -1125,6 +1125,73 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
+    pub(crate) fn replace_first_global_kind_boundary_for_test(
+        &mut self,
+        module: ModuleId,
+        parameter_kinds: (ResolvedTypeVariable, Kind, Kind),
+        value_types: (Type, Type),
+    ) -> bool {
+        let (canonical_parameter, checked_kind, source_kind) = parameter_kinds;
+        let parameter = canonical_parameter.id;
+        let Some(group_index) = self.groups.iter().position(|group| group.module == module) else {
+            return false;
+        };
+        let Some(checked_parameter_index) =
+            self.groups[group_index]
+                .schemes
+                .first()
+                .and_then(|checked| {
+                    checked
+                        .scheme
+                        .type_parameters
+                        .iter()
+                        .position(|(candidate, _)| *candidate == parameter)
+                })
+        else {
+            return false;
+        };
+        let Some(source_parameter_index) = self.groups[group_index]
+            .definitions
+            .first()
+            .and_then(|definition| definition.source.as_ref())
+            .and_then(|definition| match &definition.kind {
+                ResolvedDefinitionKind::Equational(global) => global
+                    .interface
+                    .type_parameters
+                    .iter()
+                    .position(|candidate| candidate.id == parameter),
+                ResolvedDefinitionKind::InlineOperational(_) => None,
+            })
+        else {
+            return false;
+        };
+        let Some(registry) = Arc::get_mut(&mut self.registry) else {
+            return false;
+        };
+        if !registry.type_variables.contains_key(&parameter) {
+            return false;
+        }
+        registry.insert_type_variable(canonical_parameter);
+
+        let checked = &mut self.groups[group_index].schemes[0].scheme;
+        checked.type_parameters[checked_parameter_index].1 = checked_kind;
+        discard_type_iteratively(std::mem::replace(&mut checked.value_type, value_types.0));
+
+        let Some(definition) = self.groups[group_index].definitions[0].source.as_mut() else {
+            return false;
+        };
+        let ResolvedDefinitionKind::Equational(global) = &mut definition.kind else {
+            return false;
+        };
+        global.interface.type_parameters[source_parameter_index].kind = source_kind;
+        discard_type_iteratively(std::mem::replace(
+            &mut global.interface.annotation.ty,
+            value_types.1,
+        ));
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn replace_available_authorization_hops_for_test(
         &mut self,
         module: ModuleId,
@@ -4370,11 +4437,15 @@ impl ResolvedRegistry {
         }
         let mut parameters = Vec::new();
         parameters
-            .try_reserve(self.nominal_parameters.len())
+            .try_reserve(self.nominals.len())
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        for (owner, owner_parameters) in &self.nominal_parameters {
+        for nominal in &self.nominals {
+            let owner_parameters = self
+                .nominal_parameters
+                .get(&nominal.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
             parameters.push((
-                *owner,
+                nominal.id,
                 clone_resolved_type_variables_with_budget(owner_parameters, budget)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?,
             ));
@@ -4471,21 +4542,86 @@ impl ResolvedRegistry {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
-        let mut additional_type_variables = Vec::new();
-        additional_type_variables
-            .try_reserve(self.type_variables.len())
-            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        for parameter in self.type_variables.values() {
-            additional_type_variables.push(
-                clone_resolved_type_variable_with_budget(parameter, budget)
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-            );
+        let mut local_nominal_parameter_ids = HashSet::new();
+        for nominal in &self.nominals {
+            let parameters = self
+                .nominal_parameters
+                .get(&nominal.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            for parameter in parameters {
+                budget
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                local_nominal_parameter_ids
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                if !local_nominal_parameter_ids.insert(parameter.id) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
         }
-        Ok(Self::new(nominals, constructors.into_vec())
+        let mut registry = Self::new(nominals, constructors.into_vec())
             .with_type_parameters_with_budget(parameters, budget)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
-            .with_additional_type_variables(additional_type_variables)
-            .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds))
+            .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds);
+        for nominal in &self.nominals {
+            let parameters = self
+                .nominal_parameters
+                .get(&nominal.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            for parameter in parameters {
+                budget
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                let mirror = self
+                    .type_variables
+                    .get(&parameter.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let canonical = registry
+                    .type_variables
+                    .get(&parameter.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let matches = same_checker_type_variable_with_budget(canonical, mirror, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                if !matches {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+        }
+        let remaining_count = self
+            .type_variables
+            .len()
+            .checked_sub(local_nominal_parameter_ids.len())
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+        budget
+            .charge(remaining_count)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut remaining = Vec::new();
+        remaining
+            .try_reserve(remaining_count)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        remaining.extend(
+            self.type_variables
+                .values()
+                .filter(|parameter| !local_nominal_parameter_ids.contains(&parameter.id)),
+        );
+        if remaining.len() != remaining_count {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        remaining.sort_unstable_by_key(|parameter| parameter.id);
+        for parameter in remaining {
+            registry.try_insert_checker_type_variable(parameter, budget)?;
+        }
+        for imported_interface in imported.interface_imports() {
+            registry
+                .try_insert_checker_type_variable(&imported_interface.fact.parameter, budget)?;
+        }
+        for imported_implementation in imported.implementations() {
+            for parameter in &imported_implementation.fact.head_parameters {
+                registry.try_insert_checker_type_variable(parameter, budget)?;
+            }
+        }
+        Ok(registry)
     }
 
     /// Combines complete defining registries by canonical semantic identity.
@@ -4626,6 +4762,36 @@ impl ResolvedRegistry {
         if let Some(replaced) = self.type_variables.insert(parameter.id, parameter) {
             discard_resolved_type_variable(replaced);
         }
+    }
+
+    /// Installs one checker-view binder from immutable canonical authority.
+    /// The retained record is charged and every destination is reserved before
+    /// cloning Kind or provenance. Duplicate identities never replace authority.
+    fn try_insert_checker_type_variable(
+        &mut self,
+        parameter: &ResolvedTypeVariable,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        if self.type_variables.contains_key(&parameter.id) {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        self.type_variables
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        let kind = clone_kind_with_budget(&parameter.kind, budget)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let retained = ResolvedTypeVariable {
+            id: parameter.id,
+            spelling: parameter.spelling.clone(),
+            kind,
+            origin: parameter.origin.clone(),
+        };
+        let displaced = self.type_variables.insert(parameter.id, retained);
+        debug_assert!(displaced.is_none());
+        Ok(())
     }
 
     /// Returns nominal declarations in source order.
@@ -4904,6 +5070,66 @@ pub(crate) fn same_resolved_type_variables_with_budget(
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, ()> {
     same_resolved_type_variables_with_charge(left, right, |work| budget.charge(work))
+}
+
+/// Authenticates one checker-view mirror without recursive Origin comparison.
+fn same_checker_type_variable_with_budget(
+    left: &ResolvedTypeVariable,
+    right: &ResolvedTypeVariable,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    budget.charge(1)?;
+    if left.id != right.id || left.spelling != right.spelling {
+        return Ok(false);
+    }
+    if !same_origin_with_budget(&left.origin, &right.origin, budget)? {
+        return Ok(false);
+    }
+    same_kind_with_charge(&left.kind, &right.kind, || budget.charge(1))
+}
+
+fn same_origin_with_budget(
+    mut left: &Origin,
+    mut right: &Origin,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    loop {
+        budget.charge(1)?;
+        match (left, right) {
+            (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
+            (
+                Origin::Generated {
+                    cause: left_cause,
+                    reason: left_reason,
+                },
+                Origin::Generated {
+                    cause: right_cause,
+                    reason: right_reason,
+                },
+            ) if left_reason == right_reason => {
+                left = left_cause;
+                right = right_cause;
+            }
+            (
+                Origin::Related {
+                    primary: left_primary,
+                    related: left_related,
+                },
+                Origin::Related {
+                    primary: right_primary,
+                    related: right_related,
+                },
+            ) if left_related.len() == right_related.len() => {
+                budget.charge(left_related.len())?;
+                if left_related != right_related {
+                    return Ok(false);
+                }
+                left = left_primary;
+                right = right_primary;
+            }
+            _ => return Ok(false),
+        }
+    }
 }
 
 fn clone_resolved_type_variables_with_budget(
@@ -6332,6 +6558,512 @@ mod tests {
             .expect("the deep sidecar thread should start")
             .join()
             .expect("deep sidecar failure, success, and teardown must be stack-safe");
+    }
+
+    #[test]
+    fn checker_view_interface_binder_has_an_exact_atomic_budget_and_preserves_source() {
+        // One retained binder record and the three nodes of Type -> Type.
+        const EXACT_WORK: usize = 1 + 3;
+
+        let source = SourceFile::new("checker-interface-binder.ash", "Interface")
+            .expect("the checker binder fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 9).expect("the checker binder range is ordered"))
+            .expect("the checker binder span should fit");
+        let module = ModuleId::new(813);
+        let interface = InterfaceId::new(module, 0);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let mut imported = ImportedFacts::default();
+        imported
+            .reserve_interface()
+            .expect("the imported interface slot should reserve");
+        imported.insert_interface(
+            CheckedInterfaceFact {
+                id: interface,
+                spelling: "Interface".into(),
+                parameter: ResolvedTypeVariable {
+                    id: parameter,
+                    spelling: "F".into(),
+                    kind: kind.clone(),
+                    origin: Origin::Source(span),
+                },
+                methods: Box::new([]),
+                origin: Origin::Source(span),
+                span,
+            },
+            module,
+            span,
+            true,
+        );
+
+        let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            ResolvedRegistry::default().checker_view(&imported, &mut short),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(
+            imported
+                .interface(interface)
+                .map(|fact| (&fact.parameter.kind, fact.parameter.id)),
+            Some((&kind, parameter)),
+            "failed checker-view construction must not mutate imported authority"
+        );
+
+        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+        let view = ResolvedRegistry::default()
+            .checker_view(&imported, &mut exact)
+            .expect("the exact imported binder budget should fit");
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(
+            view.type_variable(parameter).map(|fact| &fact.kind),
+            Some(&kind)
+        );
+    }
+
+    #[test]
+    fn checker_view_implementation_head_binders_have_an_exact_atomic_budget() {
+        const ORIGIN_DEPTH: usize = 32_768;
+        // Each imported implementation-head binder costs one retained record
+        // plus every copied Kind node: Σ(1 + |Kind_i|) = (1 + 3) + (1 + 5).
+        const FIRST_KIND_NODES: usize = 3;
+        const SECOND_KIND_NODES: usize = 5;
+        const EXACT_WORK: usize = (1 + FIRST_KIND_NODES) + (1 + SECOND_KIND_NODES);
+
+        std::thread::Builder::new()
+            .name("checker-implementation-head-binders".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("checker-implementation-head.ash", "implementation F G")
+                        .expect("the implementation-head fixture should fit");
+                let implementation_span = source
+                    .span(
+                        ByteRange::new(0, 14).expect("the implementation range should be ordered"),
+                    )
+                    .expect("the implementation span should fit");
+                let second_span = source
+                    .span(ByteRange::new(17, 18).expect("the second binder range is ordered"))
+                    .expect("the second binder span should fit");
+                let module = ModuleId::new(818);
+                let implementation = ImplId::new(module, 0);
+                let interface = InterfaceId::new(module, 0);
+                let first = TypeVariableId::resolved(module, 0);
+                let second = TypeVariableId::resolved(module, 1);
+                let first_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+                let second_kind = Kind::Arrow(
+                    Box::new(Kind::Type),
+                    Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))),
+                );
+                let first_origin = generated_origin(&source, ORIGIN_DEPTH);
+                let first_origin_span = first_origin.primary_span();
+                let mut imported = ImportedFacts::default();
+                imported
+                    .reserve_implementation()
+                    .expect("one implementation slot should reserve");
+                imported.insert_implementation(
+                    CheckedImplementationFact {
+                        id: implementation,
+                        interface,
+                        head_parameters: Box::new([
+                            ResolvedTypeVariable {
+                                id: first,
+                                spelling: "F".into(),
+                                kind: first_kind.clone(),
+                                origin: first_origin,
+                            },
+                            ResolvedTypeVariable {
+                                id: second,
+                                spelling: "G".into(),
+                                kind: second_kind.clone(),
+                                origin: Origin::Source(second_span),
+                            },
+                        ]),
+                        argument: Type::Variable(first),
+                        prerequisites: Box::new([]),
+                        methods: Box::new([]),
+                        origin: Origin::Source(implementation_span),
+                        span: implementation_span,
+                    },
+                    ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+                        from: ModuleId::new(1),
+                        to: module,
+                        import_span: implementation_span,
+                    }]),
+                    None,
+                );
+
+                let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+                assert_eq!(
+                    ResolvedRegistry::default().checker_view(&imported, &mut short),
+                    Err(ResolvedBuildFailure::TypeResource)
+                );
+                assert_eq!(short.used(), EXACT_WORK - 1);
+                let source_head = &imported
+                    .implementation(implementation)
+                    .expect("the source implementation should remain present")
+                    .head_parameters;
+                assert_eq!(
+                    source_head
+                        .iter()
+                        .map(|parameter| (parameter.id, &parameter.kind))
+                        .collect::<Vec<_>>(),
+                    vec![(first, &first_kind), (second, &second_kind)],
+                    "late checker-view failure must not mutate imported authority"
+                );
+                assert_eq!(source_head[0].origin.primary_span(), first_origin_span);
+
+                let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+                let view = ResolvedRegistry::default()
+                    .checker_view(&imported, &mut exact)
+                    .expect("the exact implementation-head binder budget should fit");
+                assert_eq!(exact.used(), EXACT_WORK);
+                assert_eq!(exact.charge(1), Err(()));
+                assert_eq!(
+                    view.type_variable(first).map(|parameter| &parameter.kind),
+                    Some(&first_kind)
+                );
+                assert_eq!(
+                    view.type_variable(second).map(|parameter| &parameter.kind),
+                    Some(&second_kind)
+                );
+                assert_eq!(
+                    imported
+                        .implementation(implementation)
+                        .expect("the source implementation should remain present")
+                        .head_parameters[0]
+                        .origin
+                        .primary_span(),
+                    first_origin_span,
+                    "successful checker-view construction must borrow immutable authority"
+                );
+            })
+            .expect("the implementation-head checker worker should spawn")
+            .join()
+            .expect("late failure and implementation-head teardown must remain iterative");
+    }
+
+    #[test]
+    fn checker_view_skips_only_the_authenticated_local_nominal_binder() {
+        // The canonical nominal parameter is cloned into the retained owner
+        // list (record + Kind), cloned once into the lookup map, recorded in
+        // the nominal-ID set, routed once, and compared against the source map
+        // mirror (record + Source Origin + Kind). It is not cloned a third time.
+        const EXACT_WORK: usize = (1 + 3) + (1 + 3) + 1 + 1 + (1 + 1 + 3);
+
+        let source = SourceFile::new("checker-local-nominal.ash", "Local")
+            .expect("the local nominal fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the local nominal range is ordered"))
+            .expect("the local nominal span should fit");
+        let module = ModuleId::new(814);
+        let nominal = NominalTypeId::new(module, 0);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Local".into(),
+                constructors: Box::new([]),
+                origin: Origin::Source(span),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![ResolvedTypeVariable {
+                id: parameter,
+                spelling: "F".into(),
+                kind: kind.clone(),
+                origin: Origin::Source(span),
+            }],
+        )]);
+
+        let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            registry.checker_view(&ImportedFacts::default(), &mut short),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+        let view = registry
+            .checker_view(&ImportedFacts::default(), &mut exact)
+            .expect("the exact local nominal authority budget should fit");
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(
+            view.type_variable(parameter).map(|fact| &fact.kind),
+            Some(&kind)
+        );
+    }
+
+    #[test]
+    fn checker_view_rejects_a_forged_local_nominal_binder_mirror() {
+        let source = SourceFile::new("checker-forged-nominal.ash", "Local")
+            .expect("the forged nominal fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the forged nominal range is ordered"))
+            .expect("the forged nominal span should fit");
+        let module = ModuleId::new(817);
+        let nominal = NominalTypeId::new(module, 0);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Local".into(),
+                constructors: Box::new([]),
+                origin: Origin::Source(span),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            }],
+        )])
+        .with_additional_type_variables([ResolvedTypeVariable {
+            id: parameter,
+            spelling: "Forged".into(),
+            kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+            origin: Origin::Source(span),
+        }]);
+
+        assert_eq!(
+            registry.checker_view(&ImportedFacts::default(), &mut TypeWorkBudget::default(),),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
+        assert_eq!(
+            registry
+                .nominal_parameters(nominal)
+                .and_then(|parameters| parameters.first())
+                .map(|canonical| (canonical.spelling.as_str(), &canonical.kind)),
+            Some(("A", &Kind::Type))
+        );
+        assert_eq!(
+            registry
+                .type_variable(parameter)
+                .map(|mirror| mirror.spelling.as_str()),
+            Some("Forged"),
+            "failed checker-view construction must leave source authority unchanged"
+        );
+    }
+
+    #[test]
+    fn checker_view_nominal_mirror_invalidity_precedes_later_type_resource_deterministically() {
+        const INVALID_PRECEDENCE_WORK: usize = 7;
+        let source = SourceFile::new("checker-order.ash", "Local extra")
+            .expect("the checker-order fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the nominal range is ordered"))
+            .expect("the nominal span should fit");
+        let module = ModuleId::new(819);
+        let nominal = NominalTypeId::new(module, 0);
+        let nominal_parameter = TypeVariableId::resolved(module, 0);
+        let later_parameter = TypeVariableId::resolved(module, 1);
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: nominal,
+                spelling: "Local".into(),
+                constructors: Box::new([]),
+                origin: Origin::Source(span),
+            }],
+            Vec::new(),
+        )
+        .with_type_parameters(vec![(
+            nominal,
+            vec![ResolvedTypeVariable {
+                id: nominal_parameter,
+                spelling: "A".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            }],
+        )])
+        .with_additional_type_variables([
+            ResolvedTypeVariable {
+                id: nominal_parameter,
+                spelling: "Forged".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: later_parameter,
+                spelling: "F".into(),
+                kind: Kind::Arrow(
+                    Box::new(Kind::Type),
+                    Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))),
+                ),
+                origin: Origin::Source(span),
+            },
+        ]);
+
+        for _ in 0..32 {
+            let mut budget = TypeWorkBudget::with_limit(INVALID_PRECEDENCE_WORK);
+            assert_eq!(
+                registry.checker_view(&ImportedFacts::default(), &mut budget),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert_eq!(budget.used(), INVALID_PRECEDENCE_WORK);
+        }
+        assert_eq!(
+            registry
+                .type_variable(later_parameter)
+                .map(|parameter| parameter.spelling.as_str()),
+            Some("F"),
+            "repeated failures must leave source authority immutable",
+        );
+    }
+
+    #[test]
+    fn checker_view_rejects_cross_owner_binder_collision_without_mutating_imports() {
+        let source = SourceFile::new("checker-binder-collision.ash", "Interface impl")
+            .expect("the checker collision fixture should fit");
+        let interface_span = source
+            .span(ByteRange::new(0, 9).expect("the interface range is ordered"))
+            .expect("the interface span should fit");
+        let implementation_span = source
+            .span(ByteRange::new(10, 14).expect("the implementation range is ordered"))
+            .expect("the implementation span should fit");
+        let module = ModuleId::new(815);
+        let interface = InterfaceId::new(module, 0);
+        let implementation = ImplId::new(module, 0);
+        let collision = TypeVariableId::resolved(module, 0);
+        let mut imported = ImportedFacts::default();
+        imported.reserve_interface().expect("one interface slot");
+        imported.insert_interface(
+            CheckedInterfaceFact {
+                id: interface,
+                spelling: "Interface".into(),
+                parameter: ResolvedTypeVariable {
+                    id: collision,
+                    spelling: "A".into(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(interface_span),
+                },
+                methods: Box::new([]),
+                origin: Origin::Source(interface_span),
+                span: interface_span,
+            },
+            module,
+            interface_span,
+            true,
+        );
+        imported
+            .reserve_implementation()
+            .expect("one implementation slot");
+        imported.insert_implementation(
+            CheckedImplementationFact {
+                id: implementation,
+                interface,
+                head_parameters: Box::new([ResolvedTypeVariable {
+                    id: collision,
+                    spelling: "B".into(),
+                    kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                    origin: Origin::Source(implementation_span),
+                }]),
+                argument: Type::Variable(collision),
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(implementation_span),
+                span: implementation_span,
+            },
+            ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+                from: ModuleId::new(1),
+                to: module,
+                import_span: implementation_span,
+            }]),
+            None,
+        );
+
+        assert_eq!(
+            ResolvedRegistry::default().checker_view(&imported, &mut TypeWorkBudget::default()),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
+        assert_eq!(
+            imported
+                .interface(interface)
+                .map(|fact| fact.parameter.spelling.as_str()),
+            Some("A")
+        );
+        assert_eq!(
+            imported
+                .implementation(implementation)
+                .and_then(|fact| fact.head_parameters.first())
+                .map(|parameter| (parameter.id, parameter.spelling.as_str())),
+            Some((collision, "B"))
+        );
+    }
+
+    #[test]
+    fn checker_view_late_binder_failure_discards_retained_deep_origin_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+        // The first Type-kinded binder consumes one record plus one Kind node.
+        const FIRST_BINDER_WORK: usize = 2;
+
+        std::thread::Builder::new()
+            .name("checker-deep-binder-failure".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("checker-deep-origin.ash", "First Second")
+                    .expect("the deep checker fixture should fit");
+                let first_span = source
+                    .span(ByteRange::new(0, 5).expect("the first range is ordered"))
+                    .expect("the first span should fit");
+                let second_span = source
+                    .span(ByteRange::new(6, 12).expect("the second range is ordered"))
+                    .expect("the second span should fit");
+                let deep_origin_span = source
+                    .span(ByteRange::new(0, 1).expect("the deep origin range is ordered"))
+                    .expect("the deep origin span should fit");
+                let module = ModuleId::new(816);
+                let mut imported = ImportedFacts::default();
+                for (declaration, spelling, span, origin) in [
+                    (0, "First", first_span, generated_origin(&source, DEPTH)),
+                    (1, "Second", second_span, Origin::Source(second_span)),
+                ] {
+                    let interface = InterfaceId::new(module, declaration);
+                    imported.reserve_interface().expect("one interface slot");
+                    imported.insert_interface(
+                        CheckedInterfaceFact {
+                            id: interface,
+                            spelling: spelling.into(),
+                            parameter: ResolvedTypeVariable {
+                                id: TypeVariableId::resolved(module, declaration),
+                                spelling: "A".into(),
+                                kind: Kind::Type,
+                                origin,
+                            },
+                            methods: Box::new([]),
+                            origin: Origin::Source(span),
+                            span,
+                        },
+                        module,
+                        span,
+                        true,
+                    );
+                }
+
+                let mut budget = TypeWorkBudget::with_limit(FIRST_BINDER_WORK);
+                assert_eq!(
+                    ResolvedRegistry::default().checker_view(&imported, &mut budget),
+                    Err(ResolvedBuildFailure::TypeResource)
+                );
+                assert_eq!(budget.used(), FIRST_BINDER_WORK);
+                assert_eq!(
+                    imported
+                        .interface(InterfaceId::new(module, 0))
+                        .map(|fact| fact.parameter.origin.primary_span()),
+                    Some(deep_origin_span),
+                    "late failure must leave source authority immutable"
+                );
+            })
+            .expect("the deep checker failure worker should spawn")
+            .join()
+            .expect("late checker-view failure and teardown should remain iterative");
     }
 
     #[test]

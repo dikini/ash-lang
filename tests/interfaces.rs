@@ -915,6 +915,57 @@ fn module_check_method_occurrence_retains_the_interface_function_kind() {
 }
 
 #[test]
+fn higher_kinded_interface_evidence_evaluates() {
+    observe_source(
+        concat!(
+            "type Option<A> =\nNone\n| Some(A)\n\n",
+            "type Wrapped<F : Type -> Type, A> = Wrapped(F<A>)\n\n",
+            "interface IntFunctor<F : Type -> Type> {\n",
+            "fromInt : Int -> F<Int>\n",
+            "}\n\n",
+            "interface Extract<A> {\nextract : A -> Int\n}\n\n",
+            "impl IntFunctor<Option> {\n",
+            "fromInt value = Some(value)\n",
+            "}\n\n",
+            "impl<F : Type -> Type, A> Extract<Wrapped<F, A>> where IntFunctor<F> {\n",
+            "extract (Wrapped(value)) = {\n",
+            "let witness : F<Int> = fromInt 0\n",
+            "42\n",
+            "}\n",
+            "}\n\n",
+            "main : Unit -> Int\n",
+            "main () = extract(Wrapped(Some(0)))\n",
+        ),
+        "42",
+        Type::Int,
+    );
+}
+
+#[test]
+fn higher_kinded_abstract_interface_evidence_evaluates() {
+    observe_source(
+        concat!(
+            "type Option<A> =\nNone\n| Some(A)\n\n",
+            "interface IntFunctor<F : Type -> Type> {\n",
+            "fromInt : Int -> F<Int>\n",
+            "}\n\n",
+            "relay : Option<Int> -> Int where IntFunctor<Option>\n",
+            "relay value = {\n",
+            "let witness : Option<Int> = fromInt 42\n",
+            "42\n",
+            "}\n\n",
+            "impl IntFunctor<Option> {\n",
+            "fromInt value = Some(value)\n",
+            "}\n\n",
+            "main : Unit -> Int\n",
+            "main () = relay(Some(0))\n",
+        ),
+        "42",
+        Type::Int,
+    );
+}
+
+#[test]
 fn generic_current_impl_does_not_freshly_instantiate_its_rigid_head() {
     let error = check_error(concat!(
         "type Option<A> =\nNone\n| Some(A)\n\n",

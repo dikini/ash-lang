@@ -273,6 +273,53 @@ fn application_domain_mismatch_reports_argument_kind_and_declaration() {
 }
 
 #[test]
+fn implementation_head_kind_argument_precedes_overlap_and_membership() {
+    let fixture = KindFixture::new(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "interface Build<Constructor : Type -> Type> {\n",
+        "build : Constructor<Int> -> Int\n",
+        "}\n\n",
+        "impl Build<Option<Int>> {\n}\n",
+        "impl Build<Option<Int>> {\n}\n",
+    ));
+    let error = kind_error(&fixture);
+
+    assert_eq!(error.reason, KindReason::Argument);
+    assert_eq!(error.expected_kind(), Some(&arrow(Kind::Type, Kind::Type)));
+    assert_eq!(error.found_kind(), Some(&Kind::Type));
+    assert_primary(&error, fixture.span_of("Option<Int>", 0));
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(
+        error.related[0].span().range(),
+        fixture.span_of("Constructor", 0).range()
+    );
+}
+
+#[test]
+fn implementation_prerequisite_kind_argument_precedes_termination_and_membership() {
+    let fixture = KindFixture::new(concat!(
+        "type Triple<First, Second, Third> = Triple(First, Second, Third)\n\n",
+        "interface Build<Constructor : Type -> Type> {\n",
+        "build : Constructor<Int> -> Int\n",
+        "}\n\n",
+        "impl<First : Type, Second : Type> Build<Triple<First, Second>> ",
+        "where Build<Triple<Second, First, Int>> {\n",
+        "}\n",
+    ));
+    let error = kind_error(&fixture);
+
+    assert_eq!(error.reason, KindReason::Argument);
+    assert_eq!(error.expected_kind(), Some(&arrow(Kind::Type, Kind::Type)));
+    assert_eq!(error.found_kind(), Some(&Kind::Type));
+    assert_primary(&error, fixture.span_of("Triple<Second, First, Int>", 0));
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(
+        error.related[0].span().range(),
+        fixture.span_of("Constructor", 0).range()
+    );
+}
+
+#[test]
 fn nested_tuple_and_function_failures_use_the_causal_child_occurrence() {
     for text in [
         concat!(

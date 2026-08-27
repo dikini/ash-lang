@@ -13,7 +13,7 @@ use crate::{
         EvidenceSubstitution, ImplId, ImplMethodId, InterfaceConstraintBudget, InterfaceId,
         MethodId, RequirementId, RequirementOwner, implementation_prerequisite_terminates,
     },
-    kind::{KindEnvironments, KindFailure, KindWorkLedger},
+    kind::{KindEnvironments, KindFailure, canonical_type_variable_kind},
     module::ModuleId,
     resolved::{
         AvailableImplementation, BinderId, CheckedImplementationFact, CheckedInterfaceFact,
@@ -89,12 +89,6 @@ impl fmt::Display for EvidenceValidationFailure {
 
 impl Error for EvidenceValidationFailure {}
 
-impl KindWorkLedger for InterfaceConstraintBudget {
-    fn charge(&mut self, work: usize) -> Result<(), ()> {
-        InterfaceConstraintBudget::charge(self, work)
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 struct FactLocation {
     group: usize,
@@ -140,9 +134,25 @@ struct LinkedInterfaceRegistry {
 }
 
 impl LinkedInterfaceRegistry {
+    #[cfg(test)]
     fn build(
         program: &ResolvedModuleProgram,
         budget: &mut InterfaceConstraintBudget,
+    ) -> Result<Self, EvidenceValidationFailure> {
+        let mut type_work = TypeWorkBudget::default();
+        let mut kind_environments = build_linked_kind_environments(
+            program.registry(),
+            &mut type_work,
+            program.result().span,
+        )?;
+        Self::build_with_kinds(program, &mut kind_environments, budget, &mut type_work)
+    }
+
+    fn build_with_kinds<'a>(
+        program: &'a ResolvedModuleProgram,
+        kind_environments: &mut KindEnvironments<'a>,
+        budget: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
     ) -> Result<Self, EvidenceValidationFailure> {
         let mut registry = Self {
             modules: HashMap::new(),
@@ -356,16 +366,18 @@ impl LinkedInterfaceRegistry {
                 }
             }
         }
-        registry.validate_references(program, budget)?;
+        registry.validate_references(program, kind_environments, budget, type_work)?;
         registry.authenticate_public_implementations(program, budget)?;
         registry.authenticate_available_implementations(program, budget)?;
         Ok(registry)
     }
 
-    fn validate_references(
+    fn validate_references<'a>(
         &self,
-        program: &ResolvedModuleProgram,
+        program: &'a ResolvedModuleProgram,
+        kind_environments: &mut KindEnvironments<'a>,
         budget: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
     ) -> Result<(), EvidenceValidationFailure> {
         for group_index in 0..program.groups().len() {
             let provisional_span = program
@@ -377,7 +389,7 @@ impl LinkedInterfaceRegistry {
                 .groups()
                 .get(group_index)
                 .ok_or_else(|| unknown(provisional_span))?;
-            validate_group_consistency(program, self, group, budget)?;
+            validate_group_consistency(program, self, group, kind_environments, budget, type_work)?;
             for fact_index in 0..group.interface_facts().len() {
                 charge(budget, 1, group.span())?;
                 let fact = group
@@ -431,7 +443,7 @@ impl LinkedInterfaceRegistry {
                     .try_reserve(fact.head_parameters.len())
                     .map_err(|_| resource(fact.span))?;
                 head_variables.extend(fact.head_parameters.iter().map(|parameter| parameter.id));
-                validate_linked_type(
+                validate_linked_type_with_policy(
                     &fact.argument,
                     program.registry(),
                     &head_variables,
@@ -813,11 +825,13 @@ impl LinkedInterfaceRegistry {
     }
 }
 
-fn validate_group_consistency(
-    program: &ResolvedModuleProgram,
+fn validate_group_consistency<'a>(
+    program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     group: &ResolvedModuleGroup,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     let span = group.span();
     charge(budget, 1, span)?;
@@ -874,6 +888,14 @@ fn validate_group_consistency(
         )? {
             return Err(unknown(source.span));
         }
+        kind_environments
+            .insert_interface(
+                fact.id,
+                &canonical_parameter.kind,
+                canonical_parameter.origin.primary_span(),
+                type_work,
+            )
+            .map_err(|failure| map_kind_type_failure(failure, source.span))?;
         for method_index in 0..fact.methods.len() {
             charge(budget, 1, fact.span)?;
             let source_method = source
@@ -914,7 +936,14 @@ fn validate_group_consistency(
             .get(index)
             .ok_or_else(|| unknown(span))?;
         let checked = group.schemes().get(index).ok_or_else(|| unknown(span))?;
-        validate_global_scheme(program, definition, checked, budget)?;
+        validate_global_scheme(
+            program,
+            definition,
+            checked,
+            kind_environments,
+            budget,
+            type_work,
+        )?;
     }
 
     for index in 0..group.implementation_facts().len() {
@@ -931,16 +960,27 @@ fn validate_group_consistency(
             .implementation_facts()
             .get(index)
             .ok_or_else(|| unknown(span))?;
-        validate_implementation_consistency(program, registry, body, token, fact, budget)?;
+        validate_implementation_consistency(
+            program,
+            registry,
+            body,
+            token,
+            fact,
+            kind_environments,
+            budget,
+            type_work,
+        )?;
     }
     Ok(())
 }
 
-fn validate_global_scheme(
-    program: &ResolvedModuleProgram,
+fn validate_global_scheme<'a>(
+    program: &'a ResolvedModuleProgram,
     definition: &crate::resolved::CheckedDefinition,
     checked: &crate::resolved::CheckedGlobalScheme,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     let span = definition.span();
     let (name, parameters, requirements) = match definition.kind() {
@@ -965,6 +1005,18 @@ fn validate_global_scheme(
     )?;
     let checked_parameters =
         copy_kinded_parameter_ids(&checked.scheme.type_parameters, budget, span)?;
+    for requirement in &checked.scheme.requirements {
+        authenticate_linked_interface_argument_kind(
+            &requirement.argument,
+            requirement.interface,
+            program.registry(),
+            &checked_parameters,
+            kind_environments,
+            budget,
+            type_work,
+            requirement.span,
+        )?;
+    }
     if checked.binder != name.id
         || checked.spelling != name.spelling
         || checked.origin != name.origin
@@ -985,21 +1037,23 @@ fn validate_global_scheme(
     {
         return Err(unknown(span));
     }
-    validate_linked_value_structure(
-        &checked.scheme.value_type,
-        program.registry(),
-        &checked_parameters,
-        budget,
-        span,
-    )?;
     let value_matches = match definition.kind() {
-        ResolvedDefinitionKind::Equational(global) => same_type_charged(
+        ResolvedDefinitionKind::Equational(global) => same_linked_value_type_charged(
             &checked.scheme.value_type,
             &global.interface.annotation.ty,
+            program.registry(),
+            &checked_parameters,
             budget,
             span,
         )?,
         ResolvedDefinitionKind::InlineOperational(global) => {
+            validate_linked_value_structure(
+                &checked.scheme.value_type,
+                program.registry(),
+                &checked_parameters,
+                budget,
+                span,
+            )?;
             let Type::Function(domain, codomain) = &checked.scheme.value_type else {
                 return Err(unknown(span));
             };
@@ -1060,7 +1114,7 @@ fn requirements_match(
     }
     for (checked, source) in checked.iter().zip(source) {
         charge(budget, 1, span)?;
-        validate_linked_type(
+        validate_linked_type_with_policy(
             &checked.argument,
             program.registry(),
             variables,
@@ -1079,13 +1133,16 @@ fn requirements_match(
     Ok(true)
 }
 
-fn validate_implementation_consistency(
-    program: &ResolvedModuleProgram,
+#[allow(clippy::too_many_arguments)]
+fn validate_implementation_consistency<'a>(
+    program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     body: &crate::resolved::CheckedImplementationBody,
     token: &crate::interface::CheckedImplementation,
     fact: &CheckedImplementationFact,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     let source = body.source();
     let span = source.span;
@@ -1127,7 +1184,28 @@ fn validate_implementation_consistency(
         .try_reserve(fact.head_parameters.len())
         .map_err(|_| resource(span))?;
     variables.extend(fact.head_parameters.iter().map(|parameter| parameter.id));
-    validate_linked_type(&fact.argument, program.registry(), &variables, budget, span)?;
+    validate_linked_interface_argument(
+        &fact.argument,
+        fact.interface,
+        program.registry(),
+        &variables,
+        kind_environments,
+        budget,
+        type_work,
+        span,
+    )?;
+    for prerequisite in &fact.prerequisites {
+        authenticate_linked_interface_argument_kind(
+            &prerequisite.argument,
+            prerequisite.interface,
+            program.registry(),
+            &variables,
+            kind_environments,
+            budget,
+            type_work,
+            prerequisite.span,
+        )?;
+    }
     if !same_type_charged(&fact.argument, &source.argument.ty, budget, span)?
         || !requirements_match(
             &fact.prerequisites,
@@ -1240,14 +1318,14 @@ fn implementation_method_origin_matches(
         && first.is_none_or(|equation| related.last() == Some(&equation.body.span))
 }
 
-fn validate_linked_type(
+fn validate_linked_type_with_policy(
     ty: &Type,
     registry: &ResolvedRegistry,
     variables: &[TypeVariableId],
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
-    match validate_type(ty, registry, variables, budget, span) {
+    match validate_type_with_application_policy(ty, registry, variables, budget, span) {
         Ok(()) => Ok(()),
         Err(failure)
             if failure.reason() == EvidenceValidationReason::ConstraintResourceExhausted =>
@@ -1258,6 +1336,49 @@ fn validate_linked_type(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn validate_linked_interface_argument<'a>(
+    ty: &Type,
+    interface: InterfaceId,
+    registry: &'a ResolvedRegistry,
+    variables: &[TypeVariableId],
+    environments: &mut KindEnvironments<'a>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    validate_linked_type_with_policy(ty, registry, variables, constraint_work, span)?;
+    authenticate_linked_interface_argument_kind(
+        ty,
+        interface,
+        registry,
+        variables,
+        environments,
+        constraint_work,
+        type_work,
+        span,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_linked_interface_argument_kind<'a>(
+    ty: &Type,
+    interface: InterfaceId,
+    registry: &'a ResolvedRegistry,
+    variables: &[TypeVariableId],
+    environments: &mut KindEnvironments<'a>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    environments
+        .install_canonical_owner_ids(registry, variables, type_work, span)
+        .map_err(|failure| map_kind_type_failure(failure, span))?;
+    environments
+        .expect_body_free_interface_argument_with_ledger(interface, ty, span, constraint_work)
+        .map_err(|failure| map_kind_constraint_failure(failure, span))
+}
+
 fn validate_linked_value_structure(
     ty: &Type,
     registry: &ResolvedRegistry,
@@ -1265,14 +1386,7 @@ fn validate_linked_value_structure(
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
-    match validate_type_with_application_policy(
-        ty,
-        registry,
-        variables,
-        ApplicationPolicy::KindedValue,
-        budget,
-        span,
-    ) {
+    match validate_type_with_application_policy(ty, registry, variables, budget, span) {
         Ok(()) => Ok(()),
         Err(failure)
             if failure.reason() == EvidenceValidationReason::ConstraintResourceExhausted =>
@@ -1430,6 +1544,76 @@ fn map_kind_constraint_failure(failure: KindFailure, span: Span) -> EvidenceVali
     }
 }
 
+fn authenticate_selected_goal_kind(
+    interface: InterfaceId,
+    argument: &Type,
+    environments: &KindEnvironments<'_>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    environments
+        .expect_body_free_interface_argument_with_ledger(interface, argument, span, constraint_work)
+        .map_err(|failure| map_selected_kind_constraint_failure(failure, span))
+}
+
+fn authenticate_pending_goal_kind_from_prerequisite(
+    constraint_work: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    // Pending arguments are rebuilt here from a prerequisite authenticated by
+    // the declaration pass and a substitution whose every binding was checked
+    // against its canonical binder Kind. First-order substitution preserves
+    // that judgment, so one edge unit records the proof without re-traversing
+    // successively nested rebuilt types.
+    charge(constraint_work, 1, span)
+}
+
+fn authenticate_selected_substitution_kinds<'a>(
+    fact: &CheckedImplementationFact,
+    substitution: &[EvidenceSubstitution],
+    registry: &'a ResolvedRegistry,
+    environments: &KindEnvironments<'a>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    if fact.head_parameters.len() != substitution.len() {
+        return Err(invalid_root(span));
+    }
+    for (parameter, binding) in fact.head_parameters.iter().zip(substitution) {
+        if binding.parameter() != parameter.id {
+            return Err(invalid_root(span));
+        }
+        let expected = canonical_type_variable_kind(registry, parameter.id, span, constraint_work)
+            .map_err(|failure| map_selected_kind_constraint_failure(failure, span))?;
+        environments
+            .expect_body_free_exact_kind_with_ledger(
+                binding.argument(),
+                expected,
+                span,
+                constraint_work,
+            )
+            .map_err(|failure| map_selected_kind_constraint_failure(failure, span))?;
+    }
+    Ok(())
+}
+
+fn map_selected_kind_type_failure(failure: KindFailure, span: Span) -> EvidenceValidationFailure {
+    match failure {
+        KindFailure::Resource(_) => type_resource(span),
+        KindFailure::Internal(_) | KindFailure::Source(_) => invalid_root(span),
+    }
+}
+
+fn map_selected_kind_constraint_failure(
+    failure: KindFailure,
+    span: Span,
+) -> EvidenceValidationFailure {
+    match failure {
+        KindFailure::Resource(_) => resource(span),
+        KindFailure::Internal(_) | KindFailure::Source(_) => invalid_root(span),
+    }
+}
+
 fn copy_kinded_parameter_ids(
     parameters: &[(TypeVariableId, Kind)],
     budget: &mut InterfaceConstraintBudget,
@@ -1545,19 +1729,32 @@ pub(crate) fn validate_interface_evidence_with_budget(
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure> {
-    let linked_interfaces = LinkedInterfaceRegistry::build(&program, constraint_work)?;
     let mut kind_environments =
         build_linked_kind_environments(program.registry(), type_work, program.result().span)?;
+    let linked_interfaces = LinkedInterfaceRegistry::build_with_kinds(
+        &program,
+        &mut kind_environments,
+        constraint_work,
+        type_work,
+    )?;
     validate_linked_value_schemes(&program, &mut kind_environments, constraint_work, type_work)?;
-    validate_occurrences(&program, &linked_interfaces, constraint_work)?;
+    validate_occurrences(
+        &program,
+        &linked_interfaces,
+        &mut kind_environments,
+        constraint_work,
+        type_work,
+    )?;
     drop(kind_environments);
     Ok(ValidatedInterfaceProgram { source: program })
 }
 
-fn validate_occurrences(
-    program: &ResolvedModuleProgram,
+fn validate_occurrences<'a>(
+    program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     for group_index in 0..program.groups().len() {
         let group_span = program
@@ -1586,7 +1783,15 @@ fn validate_occurrences(
                         .definitions()
                         .get(definition_index)
                         .ok_or_else(|| unknown(group.span()))?;
-                    validate_definition(program, registry, group, definition, budget)?;
+                    validate_definition(
+                        program,
+                        registry,
+                        group,
+                        definition,
+                        kind_environments,
+                        budget,
+                        type_work,
+                    )?;
                     next_definition = next_definition
                         .checked_add(1)
                         .ok_or_else(|| resource(group.span()))?;
@@ -1598,7 +1803,15 @@ fn validate_occurrences(
                         .implementations()
                         .get(implementation_index)
                         .ok_or_else(|| unknown(group.span()))?;
-                    validate_implementation(program, registry, group, implementation, budget)?;
+                    validate_implementation(
+                        program,
+                        registry,
+                        group,
+                        implementation,
+                        kind_environments,
+                        budget,
+                        type_work,
+                    )?;
                     next_implementation = next_implementation
                         .checked_add(1)
                         .ok_or_else(|| resource(group.span()))?;
@@ -1634,16 +1847,20 @@ fn validate_occurrences(
         entry,
         EvidenceScope::NONE,
         program.result(),
+        kind_environments,
         budget,
+        type_work,
     )
 }
 
-fn validate_definition(
-    program: &ResolvedModuleProgram,
+fn validate_definition<'a>(
+    program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     group: &ResolvedModuleGroup,
     definition: &crate::resolved::CheckedDefinition,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     let binder = match definition.kind() {
         ResolvedDefinitionKind::Equational(global) => global.interface.name.id,
@@ -1665,24 +1882,44 @@ fn validate_definition(
                     .equations
                     .get(equation_index)
                     .ok_or_else(|| unknown(definition.span()))?;
-                validate_expression(program, registry, group, scope, &equation.body, budget)?;
+                validate_expression(
+                    program,
+                    registry,
+                    group,
+                    scope,
+                    &equation.body,
+                    kind_environments,
+                    budget,
+                    type_work,
+                )?;
             }
         }
         ResolvedDefinitionKind::InlineOperational(global) => {
             let mut pending = Vec::new();
             schedule_block(&mut pending, &global.body, budget)?;
-            validate_pending_expressions(program, registry, group, scope, &mut pending, budget)?;
+            validate_pending_expressions(
+                program,
+                registry,
+                group,
+                scope,
+                &mut pending,
+                kind_environments,
+                budget,
+                type_work,
+            )?;
         }
     }
     Ok(())
 }
 
-fn validate_implementation(
-    program: &ResolvedModuleProgram,
+fn validate_implementation<'a>(
+    program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     group: &ResolvedModuleGroup,
     implementation: &crate::resolved::CheckedImplementationBody,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     let fact = registry
         .implementation(program, implementation.id())
@@ -1709,39 +1946,72 @@ fn validate_implementation(
                 .equations
                 .get(equation_index)
                 .ok_or_else(|| unknown(method.span))?;
-            validate_expression(program, registry, group, scope, &equation.body, budget)?;
+            validate_expression(
+                program,
+                registry,
+                group,
+                scope,
+                &equation.body,
+                kind_environments,
+                budget,
+                type_work,
+            )?;
         }
     }
     Ok(())
 }
 
-fn validate_expression(
-    program: &ResolvedModuleProgram,
+#[allow(clippy::too_many_arguments)]
+fn validate_expression<'a>(
+    program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     group: &ResolvedModuleGroup,
     scope: EvidenceScope<'_>,
     root: &ResolvedExpr,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     let mut pending = Vec::new();
     reserve_expressions(&mut pending, 1, budget, root.span)?;
     pending.push(root);
-    validate_pending_expressions(program, registry, group, scope, &mut pending, budget)
+    validate_pending_expressions(
+        program,
+        registry,
+        group,
+        scope,
+        &mut pending,
+        kind_environments,
+        budget,
+        type_work,
+    )
 }
 
-fn validate_pending_expressions(
-    program: &ResolvedModuleProgram,
+#[allow(clippy::too_many_arguments)]
+fn validate_pending_expressions<'a>(
+    program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     group: &ResolvedModuleGroup,
     scope: EvidenceScope<'_>,
     pending: &mut Vec<&ResolvedExpr>,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     while let Some(expression) = pending.pop() {
         charge(budget, 1, expression.span)?;
         match &expression.kind {
             ResolvedExprKind::Occurrence(occurrence) => {
-                validate_occurrence(program, registry, group, scope, occurrence, budget)?;
+                validate_occurrence(
+                    program,
+                    registry,
+                    group,
+                    scope,
+                    occurrence,
+                    kind_environments,
+                    budget,
+                    type_work,
+                )?;
             }
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
@@ -1782,13 +2052,16 @@ fn validate_pending_expressions(
     Ok(())
 }
 
-fn validate_occurrence(
-    program: &ResolvedModuleProgram,
+#[allow(clippy::too_many_arguments)]
+fn validate_occurrence<'a>(
+    program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     group: &ResolvedModuleGroup,
     scope: EvidenceScope<'_>,
     occurrence: &ResolvedOccurrence,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     let span = occurrence.origin.primary_span();
     charge(budget, 1, span)?;
@@ -1812,7 +2085,9 @@ fn validate_occurrence(
                     requirement.interface,
                     checked_argument,
                     scope,
+                    kind_environments,
                     budget,
+                    type_work,
                     span,
                 )?;
             }
@@ -1833,7 +2108,9 @@ fn validate_occurrence(
                 method.id.interface(),
                 checked_argument,
                 scope,
+                kind_environments,
                 budget,
+                type_work,
                 span,
             )?;
         }
@@ -1888,6 +2165,25 @@ fn validate_selection_in_scope(
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
+    let mut type_work = TypeWorkBudget::default();
+    let mut kind_environments =
+        build_linked_kind_environments(program.registry(), &mut type_work, span)?;
+    for linked_group in program.groups() {
+        for interface in linked_group.interface_facts() {
+            let parameter = program
+                .registry()
+                .type_variable(interface.parameter.id)
+                .ok_or_else(|| unknown(span))?;
+            kind_environments
+                .insert_interface(
+                    interface.id,
+                    &parameter.kind,
+                    parameter.origin.primary_span(),
+                    &mut type_work,
+                )
+                .map_err(|failure| map_kind_type_failure(failure, span))?;
+        }
+    }
     validate_checked_selection_in_scope(
         program,
         registry,
@@ -1896,25 +2192,29 @@ fn validate_selection_in_scope(
         expected_interface,
         selection.argument(),
         scope,
+        &mut kind_environments,
         budget,
+        &mut type_work,
         span,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_checked_selection_in_scope(
-    program: &ResolvedModuleProgram,
+fn validate_checked_selection_in_scope<'a>(
+    program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     group: &ResolvedModuleGroup,
     selection: &EvidenceSelection,
     expected_interface: InterfaceId,
     expected_argument: &Type,
     scope: EvidenceScope<'_>,
+    kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
     charge(budget, 2, span)?;
-    validate_type(
+    validate_type_with_application_policy(
         expected_argument,
         program.registry(),
         scope.variables,
@@ -1930,6 +2230,16 @@ fn validate_checked_selection_in_scope(
     if !same_type_charged(selection.argument(), expected_argument, budget, span)? {
         return Err(invalid_root(span));
     }
+    kind_environments
+        .install_canonical_owner_ids(program.registry(), scope.variables, type_work, span)
+        .map_err(|failure| map_selected_kind_type_failure(failure, span))?;
+    authenticate_selected_goal_kind(
+        expected_interface,
+        expected_argument,
+        kind_environments,
+        budget,
+        span,
+    )?;
     charge(budget, selection.node_count(), span)?;
     let mut visited = HashSet::new();
     visited
@@ -1946,12 +2256,14 @@ fn validate_checked_selection_in_scope(
         expected_argument,
         None,
         scope,
+        kind_environments,
         &mut visited,
         &mut pending,
         budget,
         span,
     )?;
     while let Some(goal) = pending.pop() {
+        authenticate_pending_goal_kind_from_prerequisite(budget, span)?;
         validate_evidence_node(
             program,
             registry,
@@ -1962,6 +2274,7 @@ fn validate_checked_selection_in_scope(
             goal.argument(),
             goal.mandated_requirement,
             scope,
+            kind_environments,
             &mut visited,
             &mut pending,
             budget,
@@ -1986,6 +2299,7 @@ fn validate_evidence_node(
     expected_argument: &Type,
     mandated_requirement: Option<RequirementId>,
     scope: EvidenceScope<'_>,
+    kind_environments: &KindEnvironments<'_>,
     visited: &mut HashSet<EvidenceNodeId>,
     pending: &mut PendingGoals,
     budget: &mut InterfaceConstraintBudget,
@@ -2111,6 +2425,14 @@ fn validate_evidence_node(
             {
                 return Err(invalid_root(span));
             }
+            authenticate_selected_substitution_kinds(
+                fact,
+                substitution,
+                program.registry(),
+                kind_environments,
+                budget,
+                span,
+            )?;
             if exact_current {
                 if !current_identity_substitution_matches(
                     fact,
@@ -2210,7 +2532,7 @@ fn current_identity_substitution_matches(
     {
         return Ok(false);
     }
-    validate_type(&fact.argument, registry, scope_variables, budget, span)?;
+    validate_type_with_application_policy(&fact.argument, registry, scope_variables, budget, span)?;
     for ((parameter, scope_variable), binding) in fact
         .head_parameters
         .iter()
@@ -2311,10 +2633,16 @@ fn implementation_head_matches(
         .try_reserve(fact.head_parameters.len())
         .map_err(|_| resource(span))?;
     head_variables.extend(fact.head_parameters.iter().map(|parameter| parameter.id));
-    validate_type(&fact.argument, registry, &head_variables, budget, span)?;
+    validate_type_with_application_policy(&fact.argument, registry, &head_variables, budget, span)?;
     for (parameter, binding) in fact.head_parameters.iter().zip(substitution) {
         charge(budget, 1, span)?;
-        validate_type(binding.argument(), registry, goal_variables, budget, span)?;
+        validate_type_with_application_policy(
+            binding.argument(),
+            registry,
+            goal_variables,
+            budget,
+            span,
+        )?;
         if binding.parameter() != parameter.id {
             return Ok(false);
         }
@@ -2379,39 +2707,15 @@ fn find_evidence_binding<'a>(
     Ok(None)
 }
 
-fn validate_type(
-    root: &Type,
-    registry: &ResolvedRegistry,
-    variables: &[TypeVariableId],
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    validate_type_with_application_policy(
-        root,
-        registry,
-        variables,
-        ApplicationPolicy::PredecessorSaturated,
-        budget,
-        span,
-    )
-}
-
-#[derive(Clone, Copy)]
-enum ApplicationPolicy {
-    PredecessorSaturated,
-    KindedValue,
-}
-
 fn validate_type_with_application_policy(
     root: &Type,
     registry: &ResolvedRegistry,
     variables: &[TypeVariableId],
-    application_policy: ApplicationPolicy,
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
     enum Task<'a> {
-        Visit(&'a Type, usize),
+        Visit(&'a Type),
         Sequence(std::slice::Iter<'a, Type>),
     }
 
@@ -2434,64 +2738,41 @@ fn validate_type_with_application_policy(
     let mut pending = Vec::new();
     charge(budget, 1, span)?;
     pending.try_reserve(1).map_err(|_| resource(span))?;
-    pending.push(Task::Visit(root, 0));
+    pending.push(Task::Visit(root));
     while let Some(task) = pending.pop() {
         match task {
-            Task::Visit(ty, applied_arguments) => {
+            Task::Visit(ty) => {
                 charge(budget, 1, span)?;
                 match ty {
-                    Type::Int | Type::Bool | Type::Unit
-                        if applied_arguments == 0
-                            || matches!(application_policy, ApplicationPolicy::KindedValue) => {}
-                    Type::Int | Type::Bool | Type::Unit => return Err(invalid_root(span)),
+                    Type::Int | Type::Bool | Type::Unit => {}
                     Type::Nominal(id) => {
-                        if registry.nominal_parameters(*id).is_none_or(|parameters| {
-                            matches!(application_policy, ApplicationPolicy::PredecessorSaturated)
-                                && parameters.len() != applied_arguments
-                        }) {
+                        if registry.nominal_parameters(*id).is_none() {
                             return Err(invalid_root(span));
                         }
                     }
                     Type::Inference(_) | Type::Forall(_, _) => {
                         return Err(invalid_root(span));
                     }
-                    Type::Variable(variable)
-                        if unique.contains(variable)
-                            && (applied_arguments == 0
-                                || matches!(
-                                    application_policy,
-                                    ApplicationPolicy::KindedValue
-                                )) => {}
+                    Type::Variable(variable) if unique.contains(variable) => {}
                     Type::Variable(_) => return Err(invalid_root(span)),
                     Type::Application(function, argument) => {
                         charge(budget, 2, span)?;
                         pending.try_reserve(2).map_err(|_| resource(span))?;
-                        pending.push(Task::Visit(argument, 0));
-                        pending.push(Task::Visit(function, applied_arguments.saturating_add(1)));
+                        pending.push(Task::Visit(argument));
+                        pending.push(Task::Visit(function));
                     }
-                    Type::Tuple(elements)
-                        if elements.len() >= 2
-                            && (applied_arguments == 0
-                                || matches!(
-                                    application_policy,
-                                    ApplicationPolicy::KindedValue
-                                )) =>
-                    {
+                    Type::Tuple(elements) if elements.len() >= 2 => {
                         charge(budget, 1, span)?;
                         pending.try_reserve(1).map_err(|_| resource(span))?;
                         pending.push(Task::Sequence(elements.iter()));
                     }
                     Type::Tuple(_) => return Err(invalid_root(span)),
-                    Type::Function(domain, codomain)
-                        if applied_arguments == 0
-                            || matches!(application_policy, ApplicationPolicy::KindedValue) =>
-                    {
+                    Type::Function(domain, codomain) => {
                         charge(budget, 2, span)?;
                         pending.try_reserve(2).map_err(|_| resource(span))?;
-                        pending.push(Task::Visit(codomain, 0));
-                        pending.push(Task::Visit(domain, 0));
+                        pending.push(Task::Visit(codomain));
+                        pending.push(Task::Visit(domain));
                     }
-                    Type::Function(_, _) => return Err(invalid_root(span)),
                 }
             }
             Task::Sequence(mut remaining) => {
@@ -2499,7 +2780,7 @@ fn validate_type_with_application_policy(
                     charge(budget, 2, span)?;
                     pending.try_reserve(2).map_err(|_| resource(span))?;
                     pending.push(Task::Sequence(remaining));
-                    pending.push(Task::Visit(next, 0));
+                    pending.push(Task::Visit(next));
                 }
             }
         }
@@ -2546,6 +2827,113 @@ fn same_type_charged(
         }
     }
     Ok(true)
+}
+
+fn same_linked_value_type_charged(
+    checked: &Type,
+    source: &Type,
+    registry: &ResolvedRegistry,
+    variables: &[TypeVariableId],
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<bool, EvidenceValidationFailure> {
+    enum Continuation<'a> {
+        Pair(&'a Type, &'a Type),
+        Sequence {
+            checked: std::slice::Iter<'a, Type>,
+            source: std::slice::Iter<'a, Type>,
+        },
+    }
+
+    let mut unique = HashSet::new();
+    charge(budget, variables.len(), span)?;
+    unique
+        .try_reserve(variables.len())
+        .map_err(|_| resource(span))?;
+    for variable in variables {
+        charge(budget, 1, span)?;
+        if !unique.insert(*variable)
+            || registry
+                .type_variable(*variable)
+                .is_none_or(|known| known.id != *variable)
+        {
+            return Err(invalid_root(span));
+        }
+    }
+
+    charge(budget, 1, span)?;
+    let mut current = (checked, source);
+    let mut pending = Vec::new();
+    loop {
+        charge(budget, 1, span)?;
+        match current {
+            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Nominal(left), Type::Nominal(right))
+                if left == right && registry.nominal_parameters(*left).is_some() => {}
+            (Type::Variable(left), Type::Variable(right))
+                if left == right && unique.contains(left) => {}
+            (
+                Type::Application(left_function, left_argument),
+                Type::Application(right_function, right_argument),
+            ) => {
+                charge(budget, 1, span)?;
+                pending.try_reserve(1).map_err(|_| resource(span))?;
+                pending.push(Continuation::Pair(left_argument, right_argument));
+                current = (left_function, right_function);
+                continue;
+            }
+            (
+                Type::Function(left_domain, left_codomain),
+                Type::Function(right_domain, right_codomain),
+            ) => {
+                charge(budget, 1, span)?;
+                pending.try_reserve(1).map_err(|_| resource(span))?;
+                pending.push(Continuation::Pair(left_codomain, right_codomain));
+                current = (left_domain, right_domain);
+                continue;
+            }
+            (Type::Tuple(left), Type::Tuple(right))
+                if left.len() >= 2 && left.len() == right.len() =>
+            {
+                let mut checked = left.iter();
+                let mut source = right.iter();
+                let first = (
+                    checked.next().ok_or_else(|| invalid_root(span))?,
+                    source.next().ok_or_else(|| invalid_root(span))?,
+                );
+                charge(budget, 1, span)?;
+                pending.try_reserve(1).map_err(|_| resource(span))?;
+                pending.push(Continuation::Sequence { checked, source });
+                current = first;
+                continue;
+            }
+            _ => return Ok(false),
+        }
+
+        loop {
+            let Some(continuation) = pending.pop() else {
+                return Ok(true);
+            };
+            match continuation {
+                Continuation::Pair(left, right) => {
+                    current = (left, right);
+                    break;
+                }
+                Continuation::Sequence {
+                    mut checked,
+                    mut source,
+                } => match (checked.next(), source.next()) {
+                    (Some(left), Some(right)) => {
+                        pending.push(Continuation::Sequence { checked, source });
+                        current = (left, right);
+                        break;
+                    }
+                    (None, None) => {}
+                    _ => return Ok(false),
+                },
+            }
+        }
+    }
 }
 
 fn same_binders_charged(
@@ -2860,7 +3248,7 @@ fn validate_requirement(
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     charge(budget, 1, requirement.span)?;
-    validate_linked_type(
+    validate_linked_type_with_policy(
         &requirement.argument,
         program.registry(),
         variables,
@@ -2963,7 +3351,7 @@ mod tests {
     use super::*;
     use crate::{
         elaborate::{check_module, link_modules, link_modules_with_budget},
-        interface::{EvidenceSelectionBuilder, match_implementation_head},
+        interface::{EvidenceSelectionBuilder, match_implementation_head_structurally},
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{
@@ -3038,6 +3426,95 @@ mod tests {
             Ok(false),
         );
         assert_eq!(mismatch.used(), 2);
+    }
+
+    #[test]
+    fn declaration_head_and_prerequisite_kind_authentication_has_exact_dual_limits() {
+        // The head Wrap<A> consumes nine constraint units and the prerequisite
+        // A consumes three. Each occurrence installs one canonical binder
+        // lookup plus one retained DELTA record: 9 + 3 and 2 + 2.
+        const CONSTRAINT_WORK: usize = 12;
+        const TYPE_WORK: usize = 4;
+        let program = generic_program();
+        let group = &program.groups()[0];
+        let fact = &group.implementation_facts()[1];
+        let interface = &group.interface_facts()[0];
+        let variables = fact
+            .head_parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<Vec<_>>();
+        let interface_parameter = program
+            .registry()
+            .type_variable(interface.parameter.id)
+            .expect("the interface parameter should be canonical");
+        let prerequisite = &fact.prerequisites[0];
+        let authenticate = |constraint_limit, type_limit| {
+            let mut environments = build_linked_kind_environments(
+                program.registry(),
+                &mut TypeWorkBudget::default(),
+                fact.span,
+            )
+            .expect("the nominal environment should fit outside the measured operation");
+            environments
+                .insert_interface(
+                    interface.id,
+                    &interface_parameter.kind,
+                    interface_parameter.origin.primary_span(),
+                    &mut TypeWorkBudget::default(),
+                )
+                .expect("the interface environment should fit outside the measured operation");
+            let mut constraint_work = InterfaceConstraintBudget::with_limit(constraint_limit);
+            let mut type_work = TypeWorkBudget::with_limit(type_limit);
+            let result = (|| {
+                authenticate_linked_interface_argument_kind(
+                    &fact.argument,
+                    fact.interface,
+                    program.registry(),
+                    &variables,
+                    &mut environments,
+                    &mut constraint_work,
+                    &mut type_work,
+                    fact.span,
+                )?;
+                authenticate_linked_interface_argument_kind(
+                    &prerequisite.argument,
+                    prerequisite.interface,
+                    program.registry(),
+                    &variables,
+                    &mut environments,
+                    &mut constraint_work,
+                    &mut type_work,
+                    prerequisite.span,
+                )
+            })();
+            (result, constraint_work.used(), type_work.used())
+        };
+
+        let (failure, constraint_used, type_used) = authenticate(CONSTRAINT_WORK - 1, TYPE_WORK);
+        assert_eq!(
+            failure
+                .expect_err("one-short constraint work must prevent authentication")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(constraint_used, CONSTRAINT_WORK - 1);
+        assert_eq!(type_used, TYPE_WORK);
+
+        let (failure, constraint_used, type_used) = authenticate(CONSTRAINT_WORK, TYPE_WORK - 1);
+        assert_eq!(
+            failure
+                .expect_err("one-short TypeWork must prevent authentication")
+                .reason(),
+            EvidenceValidationReason::TypeResourceExhausted,
+        );
+        assert_eq!(constraint_used, 9);
+        assert_eq!(type_used, TYPE_WORK - 1);
+
+        let (result, constraint_used, type_used) = authenticate(CONSTRAINT_WORK, TYPE_WORK);
+        result.expect("the exact declaration Kind budgets should fit");
+        assert_eq!(constraint_used, CONSTRAINT_WORK);
+        assert_eq!(type_used, TYPE_WORK);
     }
 
     #[test]
@@ -3160,11 +3637,11 @@ mod tests {
     #[test]
     fn linked_value_kind_validation_has_exact_dual_limits() {
         // Predecessor linked-fact authentication owns exactly 18 structural
-        // cells. The later pass therefore charges only 32 total-synthesis
-        // task/result/Kind cells + 1 root-Type comparison = 33. Type work is
+        // cells. The later pass therefore charges only eighteen synthesis and
+        // comparison cells plus one root-Type comparison = 20. Type work is
         // two owner binders * (1 canonical lookup + 1 retained DELTA record) = 4.
         const STRUCTURAL_WORK: usize = 18;
-        const CONSTRAINT_WORK: usize = 33;
+        const CONSTRAINT_WORK: usize = 20;
         const TYPE_WORK: usize = 4;
         let program = entry_program(concat!(
             "keep<F : Type -> Type, A> : F<A> -> F<A>\n",
@@ -3332,13 +3809,13 @@ mod tests {
     fn deep_linked_value_kinding_is_exact_and_stack_safe() {
         const DEPTH: usize = 32_768;
         // Predecessor linked-fact authentication owns structural admission.
-        // Total kind synthesis is 10D + 4:
-        // one retained root task, four cells per Application, 2D + 2 for the
-        // deep variable Kind lookup/result, two per primitive argument, two
-        // per application result, and one root-Type comparison. Leaving one
-        // argument unapplied removes eight synthesis cells.
-        const VALID_WORK: usize = 10 * DEPTH + 4;
-        const RESIDUAL_WORK: usize = 10 * DEPTH - 4;
+        // Total Kind authentication is 6D + 3: one reusable current-state
+        // slot, one continuation plus one visited Application per layer,
+        // 2D + 1 for the deep variable Kind lookup, one primitive visit and
+        // one domain comparison per layer, and one root-Type comparison.
+        // Leaving one argument unapplied removes four synthesis cells.
+        const VALID_WORK: usize = 6 * DEPTH + 3;
+        const RESIDUAL_WORK: usize = 6 * DEPTH - 1;
         const TYPE_WORK: usize = 2;
 
         thread::Builder::new()
@@ -3371,6 +3848,24 @@ mod tests {
 
                 let (registry, valid, identity, span) = fixture(DEPTH);
                 let valid = IterativeTypeOwner::new(valid);
+                let mut type_work = TypeWorkBudget::with_limit(TYPE_WORK);
+                let mut environments =
+                    build_linked_kind_environments(&registry, &mut type_work, span)
+                        .expect("the empty XI should fit");
+                let mut default = InterfaceConstraintBudget::default();
+                validate_linked_value_type(
+                    &valid,
+                    &registry,
+                    &[identity],
+                    &mut environments,
+                    &mut default,
+                    &mut type_work,
+                    span,
+                )
+                .expect("the admitted deep linked value must fit the production budget");
+                assert_eq!(default.used(), VALID_WORK);
+
+                drop(environments);
                 let mut type_work = TypeWorkBudget::with_limit(TYPE_WORK);
                 let mut environments =
                     build_linked_kind_environments(&registry, &mut type_work, span)
@@ -3438,6 +3933,85 @@ mod tests {
             .expect("the small-stack kinding worker should spawn")
             .join()
             .expect("deep linked kinding and teardown should remain iterative");
+    }
+
+    #[test]
+    fn deep_public_linked_value_kinding_fits_the_default_budget_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+        const EXACT_WORK: usize = 9 * DEPTH + 60;
+
+        thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                fn deep_kind() -> Kind {
+                    let mut kind = Kind::Type;
+                    for _ in 0..DEPTH {
+                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+                    }
+                    kind
+                }
+
+                fn deep_value_type(parameter: TypeVariableId) -> Type {
+                    let mut ty = Type::Variable(parameter);
+                    for _ in 0..DEPTH {
+                        ty = Type::Application(Box::new(ty), Box::new(Type::Int));
+                    }
+                    ty
+                }
+
+                fn fixture() -> ResolvedModuleProgram {
+                    let mut program = entry_program(concat!(
+                        "identity<A> : A -> A\n",
+                        "identity value = value\n\n",
+                        "main : Unit -> Unit\n",
+                        "main () = ()\n",
+                    ));
+                    let module = program.groups()[0].module();
+                    let parameter = program.groups()[0].schemes()[0].scheme.type_parameters[0].0;
+                    let canonical = program
+                        .registry()
+                        .type_variable(parameter)
+                        .expect("the source binder should be canonical");
+                    let canonical_parameter = ResolvedTypeVariable {
+                        id: parameter,
+                        spelling: canonical.spelling.clone(),
+                        kind: deep_kind(),
+                        origin: canonical.origin.clone(),
+                    };
+                    assert!(program.replace_first_global_kind_boundary_for_test(
+                        module,
+                        (canonical_parameter, deep_kind(), deep_kind()),
+                        (deep_value_type(parameter), deep_value_type(parameter)),
+                    ));
+                    program
+                }
+
+                let mut one_short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+                let failure = validate_interface_evidence_with_budget(
+                    fixture(),
+                    &mut one_short,
+                    &mut TypeWorkBudget::default(),
+                )
+                .expect_err("one-short public work must not publish a validated program");
+                assert_eq!(
+                    failure.reason(),
+                    EvidenceValidationReason::ConstraintResourceExhausted,
+                );
+                assert_eq!(one_short.used(), EXACT_WORK - 1);
+
+                let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+                let mut type_work = TypeWorkBudget::default();
+                validate_interface_evidence_with_budget(fixture(), &mut exact, &mut type_work)
+                    .expect("the exact public linked Kind budget should validate");
+                assert_eq!(exact.used(), EXACT_WORK);
+                assert_eq!(type_work.used(), 2);
+
+                validate_interface_evidence(fixture())
+                    .expect("the admitted deep linked program must fit the production budget");
+            })
+            .expect("the public linked-kinding worker should spawn")
+            .join()
+            .expect("public linked kinding and teardown should remain iterative");
     }
 
     struct ValidationFixture(PathBuf);
@@ -3628,11 +4202,24 @@ mod tests {
         ))
     }
 
+    fn higher_kinded_generic_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "type Wrapped<F : Type -> Type, A> = Wrapped(F<A>)\n\n",
+            "interface Extract<A> {\nextract : A -> A\n}\n\n",
+            "impl<F : Type -> Type, A> Extract<Wrapped<F, A>> {\n",
+            "extract value = value\n",
+            "}\n\n",
+            "relay<G : Type -> Type> : G<Int> -> G<Int>\n",
+            "relay value = value\n\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ))
+    }
+
     fn single_substitution(
         parameter: crate::types::TypeVariableId,
         argument: &Type,
     ) -> Box<[crate::interface::EvidenceSubstitution]> {
-        match_implementation_head(
+        match_implementation_head_structurally(
             [parameter].into_iter(),
             &Type::Variable(parameter),
             argument,
@@ -3921,6 +4508,239 @@ mod tests {
     }
 
     #[test]
+    fn rejects_kind_invalid_selected_goal_and_matching_higher_kinded_substitution() {
+        let program = higher_kinded_generic_program();
+        let group = &program.groups()[0];
+        let [wrapped] = program.registry().nominals() else {
+            panic!("the fixture should retain exactly one nominal constructor");
+        };
+        let [fact] = group.implementation_facts() else {
+            panic!("the fixture should retain exactly one generic implementation");
+        };
+        let malformed_goal =
+            Type::apply_arguments(Type::Nominal(wrapped.id), [Type::Int, Type::Int]);
+        let substitution = match_implementation_head_structurally(
+            fact.head_parameters.iter().map(|parameter| parameter.id),
+            &fact.argument,
+            &malformed_goal,
+            &mut InterfaceConstraintBudget::default(),
+            &mut TypeWorkBudget::default(),
+        )
+        .expect("the malformed goal should remain structurally matchable")
+        .expect("the forged substitution should reconstruct the malformed goal");
+        let mut builder = EvidenceSelectionBuilder::new();
+        let root = builder
+            .push_implementation(
+                fact.id,
+                substitution,
+                &[],
+                &fact
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the forged evidence node should fit");
+        let selection = builder
+            .finish(root, fact.interface, malformed_goal)
+            .expect("the forged root should remain structurally representable");
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the canonical linked registry should authenticate");
+
+        assert_eq!(
+            validate_selection(
+                &program,
+                &registry,
+                group,
+                &selection,
+                fact.interface,
+                &mut InterfaceConstraintBudget::default(),
+                fact.span,
+            )
+            .expect_err("a selected goal must satisfy canonical K-Interface-Argument")
+            .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
+    fn selected_substitution_authentication_has_exact_kind_limits() {
+        // F -> G authenticates one canonical binder lookup, a function-kinded
+        // variable synthesis (four cells), and a three-node Kind comparison.
+        // A -> Int authenticates one lookup, two synthesis cells, and one
+        // comparison cell: 8 + 4 = 12 constraint units. Installing lexical G
+        // costs one canonical lookup plus one retained DELTA record.
+        const SUBSTITUTION_CONSTRAINT_WORK: usize = 12;
+        const LEXICAL_TYPE_WORK: usize = 2;
+        let program = higher_kinded_generic_program();
+        let group = &program.groups()[0];
+        let [wrapped] = program.registry().nominals() else {
+            panic!("the fixture should retain exactly one nominal constructor");
+        };
+        let [fact] = group.implementation_facts() else {
+            panic!("the fixture should retain exactly one generic implementation");
+        };
+        let relay = group
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.spelling == "relay")
+            .expect("the fixture should retain relay's checked scheme");
+        let [(rigid_function, _)] = relay.scheme.type_parameters.as_ref() else {
+            panic!("relay should retain its one higher-kinded binder");
+        };
+        let goal = Type::apply_arguments(
+            Type::Nominal(wrapped.id),
+            [Type::Variable(*rigid_function), Type::Int],
+        );
+        let substitution = match_implementation_head_structurally(
+            fact.head_parameters.iter().map(|parameter| parameter.id),
+            &fact.argument,
+            &goal,
+            &mut InterfaceConstraintBudget::default(),
+            &mut TypeWorkBudget::default(),
+        )
+        .expect("the rigid goal should remain structurally matchable")
+        .expect("the valid substitution should be retained");
+        let span = fact.span;
+
+        let mut type_exact = TypeWorkBudget::with_limit(LEXICAL_TYPE_WORK);
+        let mut environments = build_linked_kind_environments(
+            program.registry(),
+            &mut TypeWorkBudget::default(),
+            span,
+        )
+        .expect("the nominal environment should fit outside the measured operation");
+        environments
+            .install_canonical_owner_ids(
+                program.registry(),
+                &[*rigid_function],
+                &mut type_exact,
+                span,
+            )
+            .expect("the exact lexical DELTA should fit");
+        assert_eq!(type_exact.used(), LEXICAL_TYPE_WORK);
+
+        let mut one_short = InterfaceConstraintBudget::with_limit(SUBSTITUTION_CONSTRAINT_WORK - 1);
+        assert_eq!(
+            authenticate_selected_substitution_kinds(
+                fact,
+                &substitution,
+                program.registry(),
+                &environments,
+                &mut one_short,
+                span,
+            )
+            .expect_err("one-short substitution Kind work must prevent publication")
+            .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(one_short.used(), SUBSTITUTION_CONSTRAINT_WORK - 1);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(SUBSTITUTION_CONSTRAINT_WORK);
+        authenticate_selected_substitution_kinds(
+            fact,
+            &substitution,
+            program.registry(),
+            &environments,
+            &mut exact,
+            span,
+        )
+        .expect("the exact substitution Kind budget should fit");
+        assert_eq!(exact.used(), SUBSTITUTION_CONSTRAINT_WORK);
+
+        let mut builder = EvidenceSelectionBuilder::new();
+        let root = builder
+            .push_implementation(
+                fact.id,
+                substitution,
+                &[],
+                &fact
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the valid higher-kinded node should fit");
+        let selection = builder
+            .finish(root, fact.interface, goal.clone())
+            .expect("the valid higher-kinded selection should fit");
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the canonical linked registry should authenticate");
+        let mut selected_environments = build_linked_kind_environments(
+            program.registry(),
+            &mut TypeWorkBudget::default(),
+            span,
+        )
+        .expect("the nominal environment should fit outside the measured operation");
+        for interface in group.interface_facts() {
+            let parameter = program
+                .registry()
+                .type_variable(interface.parameter.id)
+                .expect("the interface parameter should be canonical");
+            selected_environments
+                .insert_interface(
+                    interface.id,
+                    &parameter.kind,
+                    parameter.origin.primary_span(),
+                    &mut TypeWorkBudget::default(),
+                )
+                .expect("the interface environment should fit outside the measured operation");
+        }
+        let mut type_one_short = TypeWorkBudget::with_limit(LEXICAL_TYPE_WORK - 1);
+        assert_eq!(
+            validate_checked_selection_in_scope(
+                &program,
+                &registry,
+                group,
+                &selection,
+                fact.interface,
+                &goal,
+                EvidenceScope {
+                    owner: None,
+                    variables: &[*rigid_function],
+                },
+                &mut selected_environments,
+                &mut InterfaceConstraintBudget::default(),
+                &mut type_one_short,
+                span,
+            )
+            .expect_err("one-short lexical TypeWork must prevent selected evidence publication")
+            .reason(),
+            EvidenceValidationReason::TypeResourceExhausted,
+        );
+        assert_eq!(type_one_short.used(), LEXICAL_TYPE_WORK - 1);
+
+        let malformed_goal =
+            Type::apply_arguments(Type::Nominal(wrapped.id), [Type::Int, Type::Int]);
+        let malformed = match_implementation_head_structurally(
+            fact.head_parameters.iter().map(|parameter| parameter.id),
+            &fact.argument,
+            &malformed_goal,
+            &mut InterfaceConstraintBudget::default(),
+            &mut TypeWorkBudget::default(),
+        )
+        .expect("the malformed goal should remain structurally matchable")
+        .expect("the malformed substitution should retain both parameters");
+        assert_eq!(
+            authenticate_selected_substitution_kinds(
+                fact,
+                &malformed,
+                program.registry(),
+                &environments,
+                &mut InterfaceConstraintBudget::default(),
+                span,
+            )
+            .expect_err("F -> Int violates F's canonical function kind")
+            .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
     fn rejects_wrong_generic_substitution_and_prerequisite_argument() {
         let program = generic_program();
         let group = &program.groups()[0];
@@ -3956,6 +4776,84 @@ mod tests {
     }
 
     #[test]
+    fn selected_root_and_prerequisite_kind_checks_have_exact_constraint_limit() {
+        // Predecessor selection authentication costs 59 units. Canonical Kind
+        // authentication adds nine for the Wrap<Int> root, four for A -> Int,
+        // and one for the kind-preserving prerequisite edge: 59 + 9 + 4 + 1.
+        const EXACT_WORK: usize = 73;
+        let program = generic_program();
+        let span = program.result().span;
+        let mut proof_one_short = InterfaceConstraintBudget::with_limit(0);
+        assert_eq!(
+            authenticate_pending_goal_kind_from_prerequisite(&mut proof_one_short, span)
+                .expect_err("one-short pending Kind proof work must prevent authentication")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(proof_one_short.used(), 0);
+        let mut proof_exact = InterfaceConstraintBudget::with_limit(1);
+        authenticate_pending_goal_kind_from_prerequisite(&mut proof_exact, span)
+            .expect("one unit should authenticate the kind-preserving pending edge");
+        assert_eq!(proof_exact.used(), 1);
+
+        let group = &program.groups()[0];
+        let generic = &group.implementation_facts()[1];
+        let owner = generic
+            .argument
+            .outer_nominal()
+            .expect("the generic fixture head should be a nominal application");
+        let selection = nested_generic_selection(
+            &program,
+            &Type::Int,
+            Type::apply_arguments(Type::Nominal(owner), [Type::Int]),
+        );
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the valid linked registry should authenticate");
+        let mut measured = InterfaceConstraintBudget::default();
+        validate_selection(
+            &program,
+            &registry,
+            group,
+            &selection,
+            generic.interface,
+            &mut measured,
+            group.span(),
+        )
+        .expect("the selected goal should fit the measured budget");
+        assert_eq!(measured.used(), EXACT_WORK);
+        let mut one_short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            validate_selection(
+                &program,
+                &registry,
+                group,
+                &selection,
+                generic.interface,
+                &mut one_short,
+                group.span(),
+            )
+            .expect_err("one-short selected-goal work must prevent publication")
+            .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(one_short.used(), EXACT_WORK - 1);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        validate_selection(
+            &program,
+            &registry,
+            group,
+            &selection,
+            generic.interface,
+            &mut exact,
+            group.span(),
+        )
+        .expect("the exact selected-goal work should fit");
+        assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
     fn rejects_reordered_two_parameter_substitution() {
         let program = two_parameter_program();
         let group = &program.groups()[0];
@@ -3964,7 +4862,7 @@ mod tests {
             panic!("the fixture should retain two head parameters");
         };
         let goal = Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice());
-        let reordered = match_implementation_head(
+        let reordered = match_implementation_head_structurally(
             [second.id, first.id].into_iter(),
             &fact.argument,
             &goal,
@@ -4598,6 +5496,11 @@ mod tests {
 
     #[test]
     fn exact_current_implementation_authentication_has_an_exact_constraint_limit() {
+        // Predecessor exact-current authentication costs 87 units. Canonical
+        // Kind authentication adds 15 for the Nest<Wrap<A>> root, four for the
+        // retained A -> A substitution, and one for the kind-preserving pending
+        // prerequisite edge.
+        const EXACT_WORK: usize = 87 + 15 + 4 + 1;
         let program = current_authenticity_program();
         let group = &program.groups()[0];
         let current = &group.implementation_facts()[1];
@@ -4666,8 +5569,8 @@ mod tests {
         .expect("exact current authentication should fit the default budget");
         let exact = measured.used();
         assert_eq!(
-            exact, 87,
-            "exact-current relationships and the mandated abstract prerequisite are charged"
+            exact, EXACT_WORK,
+            "exact-current relationships and every retained Kind judgment are charged"
         );
 
         assert_eq!(
@@ -5509,6 +6412,11 @@ mod tests {
 
     #[test]
     fn linked_registry_entries_have_an_exact_constraint_limit() {
+        const PREDECESSOR_RELATION_WORK: usize = 97;
+        // The one retained implementation head is additionally authenticated
+        // against canonical IOTA: two total-synthesis cells for `Int` and
+        // one `Type`/`Type` Kind comparison cell.
+        const IMPLEMENTATION_HEAD_KIND_WORK: usize = 3;
         let program = local_program();
         let mut measured = InterfaceConstraintBudget::default();
         drop(
@@ -5517,8 +6425,9 @@ mod tests {
         );
         let limit = measured.used();
         assert_eq!(
-            limit, 104,
-            "every retained registry relationship, binder record, and Kind pair is charged"
+            limit,
+            PREDECESSOR_RELATION_WORK + IMPLEMENTATION_HEAD_KIND_WORK,
+            "every retained registry relationship, binder record, total-synthesis cell, and Kind pair is charged"
         );
 
         assert_eq!(
@@ -5662,6 +6571,9 @@ mod tests {
 
     #[test]
     fn evidence_node_validation_has_an_exact_constraint_limit() {
+        // The predecessor node proof costs sixteen units; K-Interface-Argument
+        // for the selected Int goal adds two synthesis cells and one Kind cell.
+        const EXACT_WORK: usize = 16 + 3;
         let program = local_program();
         let group = &program.groups()[0];
         let fact = &group.implementation_facts()[0];
@@ -5687,8 +6599,8 @@ mod tests {
         .expect("the valid selected node should authenticate");
         let limit = measured.used();
         assert_eq!(
-            limit, 16,
-            "root goal, type, node, exact head, method slot, and availability are charged"
+            limit, EXACT_WORK,
+            "root goal, Kind, node, exact head, method slot, and availability are charged"
         );
 
         assert_eq!(

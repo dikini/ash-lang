@@ -139,6 +139,13 @@ fn check_valid(text: &str) {
     drop(checked_valid(text));
 }
 
+fn check_valid_with_dependencies(text: &str, dependencies: &[(&str, &str)]) {
+    let fixture = ImplementationFixture::create(text, dependencies);
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the implementation fixture should load");
+    drop(check_graph(&graph).expect("the implementation fixture should check"));
+}
+
 fn reason(error: &TypeError) -> String {
     let TypeError::Interface(diagnostic) = error else {
         panic!("expected an interface diagnostic, found {error:?}");
@@ -242,12 +249,129 @@ fn accepts_impl_for_local_outer_nominal() {
 }
 
 #[test]
+fn foreign_interface_accepts_a_bare_local_nominal_owner() {
+    check_valid_with_dependencies(
+        concat!(
+            "import owners (Owner, owner)\n",
+            "type Local<Left, Right> = Local(Left, Right)\n\n",
+            "impl Owner<Local> {\nowner value = 0\n}\n",
+        ),
+        &[(
+            "owners.ash",
+            concat!(
+                "pub interface Owner<F : Type -> Type -> Type> {\n",
+                "owner : F<Int, Bool> -> Int\n",
+                "}\n",
+            ),
+        )],
+    );
+}
+
+#[test]
+fn foreign_interface_accepts_a_partial_local_nominal_owner() {
+    check_valid_with_dependencies(
+        concat!(
+            "import owners (Owner, owner)\n",
+            "type Local<Left, Right> = Local(Left, Right)\n\n",
+            "impl Owner<Local<Int>> {\nowner value = 0\n}\n",
+        ),
+        &[(
+            "owners.ash",
+            concat!(
+                "pub interface Owner<F : Type -> Type> {\n",
+                "owner : F<Int> -> Int\n",
+                "}\n",
+            ),
+        )],
+    );
+}
+
+#[test]
+fn foreign_interface_accepts_a_saturated_local_nominal_owner() {
+    check_valid_with_dependencies(
+        concat!(
+            "import owners (Owner, owner)\n",
+            "type Local<Left, Right> = Local(Left, Right)\n\n",
+            "impl Owner<Local<Int, Bool>> {\nowner value = 0\n}\n",
+        ),
+        &[(
+            "owners.ash",
+            "pub interface Owner<A> {\nowner : A -> Int\n}\n",
+        )],
+    );
+}
+
+#[test]
+fn foreign_interface_rejects_local_nominal_outside_the_function_spine() {
+    const OWNERS: &str = concat!(
+        "pub type Foreign<A> = Foreign(A)\n",
+        "pub interface Owner<A> {\nowner : A -> Int\n}\n",
+    );
+    for head in ["Foreign<Local>", "(Local, Int)", "Local -> Int"] {
+        let source = format!(
+            concat!(
+                "import owners (Foreign, Owner, owner)\n",
+                "type Local = Local\n\n",
+                "impl Owner<{head}> {{\nowner value = 0\n}}\n",
+            ),
+            head = head,
+        );
+        let error = check_error_with_dependencies(&source, &[("owners.ash", OWNERS)]);
+
+        assert_eq!(reason(&error), "impl.orphan", "unexpected owner for {head}");
+    }
+}
+
+#[test]
 fn accepts_strict_subterm_prerequisite() {
     check_valid(concat!(
         "type Option<A> =\nNone\n| Some(A)\n",
         "interface Equal<A> {\nequal : A -> A\n}\n\n",
         "impl Equal<Option<A>> where Equal<A> {\nequal value = value\n}\n",
     ));
+}
+
+#[test]
+fn accepts_application_function_child_as_a_strict_subterm_prerequisite() {
+    check_valid(concat!(
+        "type Pair<Left, Right> = Pair(Left, Right)\n",
+        "interface Construct<F : Type -> Type> {\nconstruct : F<Int> -> Bool\n}\n",
+        "interface Inspect<A> {\ninspect : A -> Bool\n}\n\n",
+        "impl<Left : Type, Right : Type> Inspect<Pair<Left, Right>> ",
+        "where Construct<Pair<Left>> {\n",
+        "inspect value = true\n",
+        "}\n",
+    ));
+}
+
+#[test]
+fn rejects_a_different_partial_constructor_as_a_function_child_subterm() {
+    let error = check_error(concat!(
+        "type Pair<Left, Right> = Pair(Left, Right)\n",
+        "interface Construct<F : Type -> Type> {\nconstruct : F<Int> -> Bool\n}\n",
+        "interface Inspect<A> {\ninspect : A -> Bool\n}\n\n",
+        "impl<Left : Type, Right : Type> Inspect<Pair<Left, Right>> ",
+        "where Construct<Pair<Right>> {\n",
+        "inspect value = true\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.prerequisite-not-decreasing");
+}
+
+#[test]
+fn rejects_an_expansion_of_the_application_argument_subterm() {
+    let error = check_error(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n",
+        "type Pair<Left, Right> = Pair(Left, Right)\n",
+        "interface Inspect<A> {\ninspect : A -> Bool\n}\n\n",
+        "impl<Left : Type, Right : Type> Inspect<Pair<Left, Right>> ",
+        "where Inspect<Option<Right>> {\n",
+        "inspect value = true\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.prerequisite-not-decreasing");
 }
 
 #[test]
@@ -468,6 +592,42 @@ fn rejects_generic_local_overlap_after_pair_local_freshening() {
     ));
 
     assert_eq!(reason(&error), "impl.overlap");
+}
+
+#[test]
+fn rejects_overlapping_higher_kinded_partial_heads() {
+    let error = check_error(concat!(
+        "type Pair<Left, Right> = Pair(Left, Right)\n",
+        "interface Construct<F : Type -> Type> {\nconstruct : F<Int> -> Bool\n}\n\n",
+        "impl<Left : Type> Construct<Pair<Left>> {\nconstruct value = true\n}\n",
+        "impl<Right : Type> Construct<Pair<Right>> {\nconstruct value = true\n}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.overlap");
+}
+
+#[test]
+fn allows_distinct_higher_kinded_partial_heads() {
+    check_valid(concat!(
+        "type First<Left, Right> = First(Left, Right)\n",
+        "type Second<Left, Right> = Second(Left, Right)\n",
+        "interface Construct<F : Type -> Type> {\nconstruct : F<Int> -> Bool\n}\n\n",
+        "impl<Left : Type> Construct<First<Left>> {\nconstruct value = true\n}\n",
+        "impl<Right : Type> Construct<Second<Right>> {\nconstruct value = true\n}\n",
+    ));
+}
+
+#[test]
+fn allows_heads_that_overlap_only_with_higher_order_matching() {
+    check_valid(concat!(
+        "type Box<A> = Box(A)\n",
+        "type Option<A> =\nNone\n| Some(A)\n",
+        "interface Mark<A> {\nmark : A -> Bool\n}\n\n",
+        "impl<F : Type -> Type> Mark<Box<F<Int>>> {\nmark value = true\n}\n",
+        "impl Mark<Box<Option<Bool>>> {\nmark value = true\n}\n",
+        "main : Unit -> Bool\n",
+        "main () = mark(Box(Some(true)))\n",
+    ));
 }
 
 #[test]
