@@ -263,16 +263,19 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .collect::<Vec<_>>();
     let original = ash::core::validate_modules(unchecked, &sources, &module_sources)
         .expect("linked higher-kinded Core should independently validate");
+    let original_registry = Arc::clone(original.registry());
     assert_higher_kinded_linked_core(&original, option, relay, relay_parameter);
     let identity = identity_traversal(&original).expect("the identity transform should rebuild");
     let identity = ash::core::validate_modules(identity, &sources, &module_sources)
         .expect("the identity transform should independently revalidate");
+    assert!(Arc::ptr_eq(identity.registry(), &original_registry));
     assert_higher_kinded_linked_core(&identity, option, relay, relay_parameter);
     assert_integer_evaluation(&identity, "42");
     let folded =
         fold_literal_primitives(&original).expect("literal folding should independently rebuild");
     let folded = ash::core::validate_modules(folded, &sources, &module_sources)
         .expect("literal folding should independently revalidate");
+    assert!(Arc::ptr_eq(folded.registry(), &original_registry));
     assert_higher_kinded_linked_core(&folded, option, relay, relay_parameter);
     assert_integer_evaluation(&folded, "42");
 }

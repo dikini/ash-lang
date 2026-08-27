@@ -625,10 +625,187 @@ fn node_index(id: NodeId) -> Result<usize, TransformError> {
 mod tests {
     use super::*;
     use crate::{
-        resolved::BinderId,
+        elaborate::{Elaborator, check_module, link_modules},
+        module::{ModuleGraph, ModuleRoots, load_module_graph},
+        resolve::{DependencyExports, resolve_module},
+        resolved::{BinderId, CheckedModule, ResolvedRegistry},
         source::{ByteRange, SourceFile},
         types::{ConstructorId, Kind, NominalTypeId, TYPE_WORK_LIMIT, Type, TypeVariableId},
+        validate_linked_facts_for_test,
     };
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static LINKED_TRANSFORM_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+    struct LinkedTransformDirectory(PathBuf);
+
+    impl LinkedTransformDirectory {
+        fn create() -> Self {
+            loop {
+                let id = LINKED_TRANSFORM_TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+                let directory = std::env::temp_dir().join(format!(
+                    "ash-linked-core-transform-{}-{id}",
+                    std::process::id(),
+                ));
+                match fs::create_dir(&directory) {
+                    Ok(()) => return Self(directory),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("linked transform fixture should be creatable: {error}"),
+                }
+            }
+        }
+
+        fn write(&self, name: &str, source: &str) -> PathBuf {
+            let path = self.0.join(name);
+            fs::write(&path, source).expect("linked transform fixture should be writable");
+            path
+        }
+    }
+
+    impl Drop for LinkedTransformDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct LinkedTransformFixture {
+        _directory: LinkedTransformDirectory,
+        graph: ModuleGraph,
+        program: ValidatedProgram,
+        module_sources: Vec<(crate::module::ModuleId, crate::source::SourceId)>,
+    }
+
+    impl LinkedTransformFixture {
+        fn sources(&self) -> Vec<&SourceFile> {
+            self.graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect()
+        }
+    }
+
+    fn checked_linked_transform_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
+        let mut checked = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let dependency = checked
+                        .iter()
+                        .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                        .expect("dependency order should check the target first");
+                    DependencyExports::new(edge, dependency.exports())
+                        .expect("linked transform dependency exports should authenticate")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies)
+                .expect("the linked transform module should resolve");
+            checked.push(
+                check_module(resolved).expect("the linked transform module should type-check"),
+            );
+        }
+        checked
+    }
+
+    fn linked_row_bearing_fold_fixture() -> LinkedTransformFixture {
+        let directory = LinkedTransformDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            concat!(
+                "pub fold<F : Type -> Type> : F<Int> -> Int\n",
+                "fold value = 1 + 2\n\n",
+                "main : Unit -> Int\n",
+                "main () = 0\n",
+            ),
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty())
+            .expect("the linked transform graph should load");
+        let checked = checked_linked_transform_graph(&graph);
+        let linked = link_modules(checked, graph.entry())
+            .expect("the checked linked transform graph should link");
+        let linked = validate_linked_facts_for_test(linked)
+            .expect("the linked transform facts should authenticate");
+        let mut elaborator = Elaborator::for_module_program(&linked)
+            .expect("the linked transform binder namespace should fit");
+        let typed = elaborator
+            .synthesize_module_program(&linked)
+            .expect("the linked transform program should lower to Core");
+        let unchecked = elaborator
+            .finish(typed.node)
+            .expect("the linked transform Core root should finish");
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let module_sources = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let program =
+            super::super::validate::validate_modules(unchecked, &sources, &module_sources)
+                .expect("the linked row-bearing transform Core should validate");
+        LinkedTransformFixture {
+            _directory: directory,
+            graph,
+            program,
+            module_sources,
+        }
+    }
+
+    type GlobalRowShape = (BinderId, Vec<TypeVariableId>);
+
+    fn global_row_shape(registry: &ResolvedRegistry) -> Vec<GlobalRowShape> {
+        registry
+            .global_parameter_rows()
+            .iter()
+            .map(|row| (row.owner(), row.parameters().to_vec()))
+            .collect()
+    }
+
+    fn has_constant_folded_literal(program: &UnvalidatedProgram) -> bool {
+        program.nodes.iter().any(|node| {
+            matches!(node.kind, PureExprKind::Value(PureValue::Integer(_)))
+                && node.origin.as_ref().is_some_and(|origin| {
+                    origin.generated_reason() == Some(GeneratedReason::ConstantFolding)
+                })
+        })
+    }
+
+    fn deep_origin(source: &SourceFile, depth: usize) -> Origin {
+        let mut origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 1).expect("the deep origin range should be ordered"))
+                .expect("the deep origin span should fit"),
+        );
+        for _ in 0..depth {
+            origin = Origin::Generated {
+                cause: Box::new(origin),
+                reason: GeneratedReason::TypeChecking,
+            };
+        }
+        origin
+    }
+
+    fn origin_depth(root: &Origin) -> usize {
+        let mut depth = 0;
+        let mut current = root;
+        loop {
+            match current {
+                Origin::Source(_) => return depth,
+                Origin::Generated { cause, .. } => current = cause,
+                Origin::Related { primary, .. } => current = primary,
+            }
+            depth += 1;
+        }
+    }
 
     fn application_type(depth: usize) -> Type {
         let mut result = Type::Unit;
@@ -636,6 +813,213 @@ mod tests {
             result = Type::Application(Box::new(result), Box::new(Type::Unit));
         }
         result
+    }
+
+    #[test]
+    fn unchecked_transforms_share_the_exact_nonempty_global_row_registry() {
+        let fixture = linked_row_bearing_fold_fixture();
+        let registry = Arc::clone(fixture.program.registry());
+        let rows = global_row_shape(&registry);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.len(), 1);
+        assert!(registry.type_variable(rows[0].1[0]).is_some());
+
+        let identity = identity_traversal(&fixture.program)
+            .expect("the row-bearing identity traversal should rebuild");
+        let folded = fold_literal_primitives(&fixture.program)
+            .expect("the row-bearing literal fold should rebuild independently");
+        assert!(Arc::ptr_eq(&identity.registry, &registry));
+        assert!(Arc::ptr_eq(&folded.registry, &registry));
+        assert_eq!(global_row_shape(&identity.registry), rows);
+        assert_eq!(global_row_shape(&folded.registry), rows);
+        assert!(!has_constant_folded_literal(&identity));
+        assert!(has_constant_folded_literal(&folded));
+
+        let sources = fixture.sources();
+        let identity =
+            super::super::validate::validate_modules(identity, &sources, &fixture.module_sources)
+                .expect("the row-bearing identity traversal should independently revalidate");
+        let folded =
+            super::super::validate::validate_modules(folded, &sources, &fixture.module_sources)
+                .expect("the row-bearing literal fold should independently revalidate");
+        assert!(Arc::ptr_eq(identity.registry(), &registry));
+        assert!(Arc::ptr_eq(folded.registry(), &registry));
+        assert_eq!(global_row_shape(identity.registry()), rows);
+        assert_eq!(global_row_shape(folded.registry()), rows);
+    }
+
+    #[test]
+    fn folded_higher_kinded_transform_has_exact_independent_type_work() {
+        std::thread::Builder::new()
+            .name("exact-row-bearing-fold-transform".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                // Folded Int result: one clone + one admission = 2.
+                // Function: Unit binder clone/admission 2 + result clone/admission 6 = 8.
+                // Outer Forall(F : Type -> Type). (Unit -> Int): 8 + 8 = 16.
+                // Abstraction parameter: one record + three Arrow Kind nodes = 4.
+                // Recursive owner: scheme binder clone/admission 16 + result Unit 2 = 18.
+                // Recursive body Unit: one clone + one admission = 2.
+                // The shared registry Arc and its nonempty resolved-global row add 0.
+                const EXACT_WORK: usize = 2 + 8 + 16 + 4 + 18 + 2;
+                let fixture = linked_row_bearing_fold_fixture();
+                let registry = Arc::clone(fixture.program.registry());
+                let rows = global_row_shape(&registry);
+                let [(owner, parameters)] = rows.as_slice() else {
+                    panic!("the exact fold fixture should retain one global row");
+                };
+                let [parameter] = parameters.as_slice() else {
+                    panic!("the exact fold row should retain one parameter");
+                };
+                assert!(owner.module().is_some());
+                let canonical = registry
+                    .type_variable(*parameter)
+                    .expect("the retained row parameter should have one canonical record");
+                assert!(matches!(canonical.kind, Kind::Arrow(_, _)));
+                let source = fixture
+                    .graph
+                    .modules()
+                    .first()
+                    .expect("the exact fold fixture should retain its entry module")
+                    .source();
+                let origin = deep_origin(source, super::super::CORE_PAYLOAD_DEPTH_LIMIT - 1);
+                assert_eq!(
+                    origin_depth(&origin),
+                    super::super::CORE_PAYLOAD_DEPTH_LIMIT - 1,
+                );
+                let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+                builder
+                    .reserve_resolved_binders([*owner])
+                    .expect("the authentic global owner should reserve once");
+                let left = builder
+                    .integer(
+                        crate::integer::Integer::parse_decimal("1")
+                            .expect("the left literal should parse"),
+                        Type::Int,
+                        origin.clone(),
+                    )
+                    .expect("the left literal should fit");
+                let right = builder
+                    .integer(
+                        crate::integer::Integer::parse_decimal("2")
+                            .expect("the right literal should parse"),
+                        Type::Int,
+                        origin.clone(),
+                    )
+                    .expect("the right literal should fit");
+                let body = builder
+                    .primitive(Primitive::Add, left, right, Type::Int, origin.clone())
+                    .expect("the foldable primitive should fit");
+                let parameter_binder = builder
+                    .binder(Type::Unit, origin.clone())
+                    .expect("the fold function parameter should fit");
+                let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+                let function = builder
+                    .function(
+                        parameter_binder,
+                        body,
+                        function_type.clone(),
+                        origin.clone(),
+                    )
+                    .expect("the fold function should fit");
+                let scheme = Type::Forall(
+                    Box::new([(*parameter, canonical.kind.clone())]),
+                    Box::new(function_type),
+                );
+                let abstraction = builder
+                    .type_abstraction(
+                        vec![(*parameter, canonical.kind.clone())],
+                        function,
+                        scheme.clone(),
+                        origin.clone(),
+                    )
+                    .expect("the higher-kinded fold abstraction should fit");
+                let global = builder
+                    .resolved_binder(*owner, scheme, origin.clone())
+                    .expect("the authentic global owner should materialize once");
+                let group_body = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the recursive group body should fit");
+                let root = builder
+                    .recursive_binding(vec![(global, abstraction)], group_body, Type::Unit, origin)
+                    .expect("the authentic recursive owner should fit");
+                let sources = fixture.sources();
+                let program = super::super::validate::validate_modules(
+                    builder
+                        .finish(root)
+                        .expect("the fold fixture should finish"),
+                    &sources,
+                    &fixture.module_sources,
+                )
+                .expect("the row-bearing higher-kinded fold fixture should validate");
+                assert!(Arc::ptr_eq(program.registry(), &registry));
+                assert!(matches!(
+                    program
+                        .node(body)
+                        .expect("the exact fold body should exist")
+                        .kind,
+                    PureExprKind::Computation(PureComputation::Primitive(_)),
+                ));
+
+                let registry_owners_before = Arc::strong_count(&registry);
+                let short = rebuild_with_initial_type_work(
+                    &program,
+                    true,
+                    TYPE_WORK_LIMIT - (EXACT_WORK - 1),
+                )
+                .expect_err("one-short folding must reject without publishing output");
+                assert_eq!(short, TransformError::Build(BuildError::TypeWorkExceeded));
+                assert_eq!(Arc::strong_count(&registry), registry_owners_before);
+
+                let transformed =
+                    rebuild_with_initial_type_work(&program, true, TYPE_WORK_LIMIT - EXACT_WORK)
+                        .expect("the exact independent folding allowance should succeed on retry");
+                assert!(Arc::ptr_eq(&transformed.registry, &registry));
+                assert_eq!(global_row_shape(&transformed.registry), rows);
+                assert_eq!(transformed.nodes.len(), 5);
+                assert!(has_constant_folded_literal(&transformed));
+                let (folded_value, folded_origin) = transformed
+                    .nodes
+                    .iter()
+                    .find_map(|node| {
+                        let PureExprKind::Value(PureValue::Integer(integer)) = &node.kind else {
+                            return None;
+                        };
+                        let origin = node.origin.as_ref()?;
+                        (origin.generated_reason() == Some(GeneratedReason::ConstantFolding))
+                            .then_some((integer.value(), origin))
+                    })
+                    .expect("the exact transform should publish its folded literal");
+                assert_eq!(folded_value.to_string(), "3");
+                assert_eq!(
+                    origin_depth(folded_origin),
+                    super::super::CORE_PAYLOAD_DEPTH_LIMIT,
+                );
+                let transformed = super::super::validate::validate_modules(
+                    transformed,
+                    &sources,
+                    &fixture.module_sources,
+                )
+                .expect("the exact folded result should independently validate");
+                assert!(Arc::ptr_eq(transformed.registry(), &registry));
+                assert_eq!(global_row_shape(transformed.registry()), rows);
+                assert_eq!(
+                    crate::eval::evaluate(&transformed)
+                        .expect("the exact folded result should evaluate")
+                        .value
+                        .to_string(),
+                    "()",
+                );
+
+                drop(transformed);
+                drop(program);
+                drop(sources);
+                drop(fixture);
+                drop(registry);
+            })
+            .expect("the small-stack exact fold worker should start")
+            .join()
+            .expect("accepted and rejected fold states should dismantle on the small stack");
     }
 
     #[test]
