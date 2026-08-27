@@ -3096,7 +3096,10 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
 mod tests {
     use super::*;
     use crate::{
-        core::{CoreBuilder, PureValue, type_ops::TypeAbstractionNode},
+        core::{
+            CoreBuilder, PureValue,
+            type_ops::{TypeAbstractionNode, TypeApplicationNode},
+        },
         elaborate::{Elaborator, check_module, link_modules},
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
@@ -3292,6 +3295,35 @@ mod tests {
             "a polymorphic linked global should own a type abstraction",
         );
         abstraction
+    }
+
+    fn linked_global_type_application(program: &UnvalidatedProgram, global: BinderId) -> NodeId {
+        let mut result = None;
+        for (index, node) in program.nodes.iter().enumerate() {
+            let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+                &node.kind
+            else {
+                continue;
+            };
+            let function = &program.nodes[application
+                .function()
+                .index()
+                .expect("the linked type-application function index should fit")];
+            if matches!(
+                function.kind,
+                PureExprKind::Variable(variable) if variable.binder() == global
+            ) {
+                let id = NodeId::new(
+                    program.arena,
+                    u32::try_from(index).expect("the linked type-application index should fit"),
+                );
+                assert!(
+                    result.replace(id).is_none(),
+                    "the selected global should have one linked type application",
+                );
+            }
+        }
+        result.expect("the selected linked global should be type-applied")
     }
 
     fn swap_type_variable_identity(
@@ -4418,6 +4450,1145 @@ mod tests {
             .expect_err("a resolved abstraction cannot claim another module's source");
         assert_eq!(error.reason(), ValidationReason::Registry);
         assert_eq!(error.node(), Some(abstraction));
+    }
+
+    #[test]
+    fn linked_type_application_rejects_argument_order_and_simultaneous_result_mutations() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            ArgumentOrder,
+            SimultaneousResult,
+        }
+
+        for mutation in [Mutation::ArgumentOrder, Mutation::SimultaneousResult] {
+            let mut fixture = LinkedCoreValidationFixture::compile(
+                concat!(
+                    "pub choose<A : Type, B : Type> : A -> B -> A\n",
+                    "choose left right = left\n",
+                ),
+                concat!(
+                    "import dependency (choose)\n",
+                    "main : Unit -> Int\n",
+                    "main () = choose(1)(true)\n",
+                ),
+                &["choose"],
+            );
+            let (choose, _) = fixture.global("choose");
+            let application = linked_global_type_application(&fixture.program, choose);
+            let application_index = application
+                .index()
+                .expect("the linked type-application index should fit");
+            let registry = Arc::clone(&fixture.program.registry);
+            let rows_before = global_row_shape(&registry);
+            let module_sources_before = fixture.module_sources.clone();
+            let root_before = fixture.program.root;
+            let node_count_before = fixture.program.nodes.len();
+            let origin_before = fixture.program.nodes[application_index].origin.clone();
+            let result_before = fixture.program.nodes[application_index].ty.clone();
+            let PureExprKind::Computation(PureComputation::TypeApplication(operation)) =
+                &fixture.program.nodes[application_index].kind
+            else {
+                unreachable!("the selected linked node is a type application")
+            };
+            assert_eq!(operation.arguments(), &[Type::Int, Type::Bool]);
+            let function = operation.function();
+
+            match mutation {
+                Mutation::ArgumentOrder => {
+                    fixture.program.nodes[application_index].kind =
+                        PureExprKind::Computation(PureComputation::TypeApplication(
+                            TypeApplicationNode::new(function, vec![Type::Bool, Type::Int]),
+                        ));
+                    let PureExprKind::Computation(PureComputation::TypeApplication(operation)) =
+                        &fixture.program.nodes[application_index].kind
+                    else {
+                        unreachable!("the reordered carrier remains a type application")
+                    };
+                    assert_eq!(operation.arguments(), &[Type::Bool, Type::Int]);
+                    let mut result_budget =
+                        crate::types::TypeWorkBudget::with_limit(TYPE_WORK_LIMIT);
+                    assert!(
+                        same_type_with_budget(
+                            &fixture.program.nodes[application_index].ty,
+                            &result_before,
+                            &mut result_budget,
+                        )
+                        .expect("the preserved result comparison should fit"),
+                    );
+                }
+                Mutation::SimultaneousResult => {
+                    fixture.program.nodes[application_index].ty = Type::Bool;
+                    let PureExprKind::Computation(PureComputation::TypeApplication(operation)) =
+                        &fixture.program.nodes[application_index].kind
+                    else {
+                        unreachable!("the result target remains a type application")
+                    };
+                    assert_eq!(operation.arguments(), &[Type::Int, Type::Bool]);
+                    assert_eq!(fixture.program.nodes[application_index].ty, Type::Bool);
+                }
+            }
+
+            assert!(Arc::ptr_eq(&registry, &fixture.program.registry));
+            assert_eq!(global_row_shape(&fixture.program.registry), rows_before);
+            assert_eq!(fixture.module_sources, module_sources_before);
+            assert_eq!(fixture.program.root, root_before);
+            assert_eq!(fixture.program.nodes.len(), node_count_before);
+            assert_eq!(
+                fixture.program.nodes[application_index].origin,
+                origin_before
+            );
+
+            let error = fixture
+                .validate()
+                .expect_err("each type-application mutation should stop at Core validation");
+            assert_eq!(
+                error.reason(),
+                ValidationReason::TypeOperation,
+                "{mutation:?}"
+            );
+            assert_eq!(error.node(), Some(application), "{mutation:?}");
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct LinkedGeneratedAbstractions {
+        outer: NodeId,
+        inner: NodeId,
+        later: NodeId,
+    }
+
+    fn linked_generated_abstraction_fixture()
+    -> (LinkedCoreValidationFixture, LinkedGeneratedAbstractions) {
+        let fixture = LinkedCoreValidationFixture::compile(
+            concat!(
+                "pub identity<A : Type> : A -> A\n",
+                "identity value = value\n",
+            ),
+            concat!(
+                "import dependency (identity)\n",
+                "main : Unit -> Int\n",
+                "main () = {\n",
+                "let outer = fn(value) {\n",
+                "let inner = fn(other) {\n",
+                "identity(other)\n",
+                "}\n",
+                "inner(value)\n",
+                "}\n",
+                "let later = fn(value) {\n",
+                "identity(value)\n",
+                "}\n",
+                "outer(42)\n",
+                "}\n",
+            ),
+            &["identity"],
+        );
+        let generated = fixture
+            .program
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    &node.kind
+                else {
+                    return None;
+                };
+                (!abstraction.parameters().is_empty()
+                    && abstraction.parameters().iter().all(|(parameter, _)| {
+                        matches!(parameter, crate::types::TypeVariableId::Generated(_))
+                    }))
+                .then(|| {
+                    NodeId::new(
+                        fixture.program.arena,
+                        u32::try_from(index).expect("the generated abstraction index should fit"),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            generated.len(),
+            3,
+            "the linked fixture should retain outer, inner, and later generated abstractions",
+        );
+        let reaches = |root: NodeId, sought: NodeId| {
+            let mut visited = HashSet::new();
+            let mut work = vec![root];
+            while let Some(id) = work.pop() {
+                if id == sought {
+                    return true;
+                }
+                if !visited.insert(id) {
+                    continue;
+                }
+                let node = &fixture.program.nodes[id
+                    .index()
+                    .expect("a linked generated node index should fit")];
+                work.extend(
+                    (0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)),
+                );
+            }
+            false
+        };
+        let (outer, inner) = generated
+            .iter()
+            .copied()
+            .find_map(|outer| {
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    &fixture.program.nodes[outer
+                        .index()
+                        .expect("the outer abstraction index should fit")]
+                    .kind
+                else {
+                    unreachable!("the selected node is a generated abstraction")
+                };
+                generated
+                    .iter()
+                    .copied()
+                    .find(|inner| *inner != outer && reaches(abstraction.body(), *inner))
+                    .map(|inner| (outer, inner))
+            })
+            .expect("one generated abstraction should lexically contain another");
+        let later = generated
+            .iter()
+            .copied()
+            .find(|candidate| *candidate != outer && *candidate != inner)
+            .expect("one generated abstraction should follow the outer binding");
+        let PureExprKind::Computation(PureComputation::TypeAbstraction(outer_abstraction)) =
+            &fixture.program.nodes[outer
+                .index()
+                .expect("the outer abstraction index should fit")]
+            .kind
+        else {
+            unreachable!("the selected outer node is a type abstraction")
+        };
+        assert!(reaches(outer_abstraction.body(), inner));
+        assert!(!reaches(outer_abstraction.body(), later));
+        (
+            fixture,
+            LinkedGeneratedAbstractions {
+                outer,
+                inner,
+                later,
+            },
+        )
+    }
+
+    fn generated_parameter(
+        program: &UnvalidatedProgram,
+        abstraction: NodeId,
+    ) -> crate::types::TypeVariableId {
+        let node = &program.nodes[abstraction
+            .index()
+            .expect("the generated abstraction index should fit")];
+        let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) = &node.kind
+        else {
+            panic!("the selected generated node should remain an abstraction");
+        };
+        let [(parameter, Kind::Type)] = abstraction.parameters() else {
+            panic!("the generated fixture abstraction should retain one Type parameter");
+        };
+        assert!(matches!(
+            parameter,
+            crate::types::TypeVariableId::Generated(_)
+        ));
+        *parameter
+    }
+
+    fn rewrite_type_variable(
+        root: &mut Type,
+        old: crate::types::TypeVariableId,
+        new: crate::types::TypeVariableId,
+        rewrite_forall_parameter: bool,
+    ) {
+        let mut work = vec![root];
+        while let Some(ty) = work.pop() {
+            match ty {
+                Type::Variable(parameter) => {
+                    if *parameter == old {
+                        *parameter = new;
+                    }
+                }
+                Type::Tuple(elements) => work.extend(elements.iter_mut()),
+                Type::Application(function, argument) | Type::Function(function, argument) => {
+                    work.push(argument);
+                    work.push(function);
+                }
+                Type::Forall(parameters, body) => {
+                    if rewrite_forall_parameter {
+                        for (parameter, _) in parameters {
+                            if *parameter == old {
+                                *parameter = new;
+                            }
+                        }
+                    }
+                    work.push(body);
+                }
+                Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+            }
+        }
+    }
+
+    fn type_quantifies(root: &Type, sought: crate::types::TypeVariableId) -> bool {
+        let mut work = vec![root];
+        while let Some(ty) = work.pop() {
+            match ty {
+                Type::Tuple(elements) => work.extend(elements.iter()),
+                Type::Application(function, argument) | Type::Function(function, argument) => {
+                    work.push(argument);
+                    work.push(function);
+                }
+                Type::Forall(parameters, body) => {
+                    if parameters.iter().any(|(parameter, _)| *parameter == sought) {
+                        return true;
+                    }
+                    work.push(body);
+                }
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_) => {}
+            }
+        }
+        false
+    }
+
+    fn type_mentions(root: &Type, sought: crate::types::TypeVariableId) -> bool {
+        let mut work = vec![root];
+        while let Some(ty) = work.pop() {
+            match ty {
+                Type::Variable(parameter) if *parameter == sought => return true,
+                Type::Tuple(elements) => work.extend(elements.iter()),
+                Type::Application(function, argument) | Type::Function(function, argument) => {
+                    work.push(argument);
+                    work.push(function);
+                }
+                Type::Forall(parameters, body) => {
+                    if parameters.iter().any(|(parameter, _)| *parameter == sought) {
+                        return true;
+                    }
+                    work.push(body);
+                }
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_) => {}
+            }
+        }
+        false
+    }
+
+    fn pattern_mentions(root: &CorePattern, sought: crate::types::TypeVariableId) -> bool {
+        let mut work = vec![root];
+        while let Some(pattern) = work.pop() {
+            if type_mentions(&pattern.ty, sought) {
+                return true;
+            }
+            match &pattern.kind {
+                CorePatternKind::Binder(binder) => {
+                    if type_mentions(binder.ty(), sought) {
+                        return true;
+                    }
+                }
+                CorePatternKind::Tuple(elements) => work.extend(elements.iter()),
+                CorePatternKind::Constructor { payload, .. } => {
+                    if let Some(payload) = payload.as_deref() {
+                        work.push(payload);
+                    }
+                }
+                CorePatternKind::Wildcard | CorePatternKind::Boolean(_) | CorePatternKind::Unit => {
+                }
+            }
+        }
+        false
+    }
+
+    fn node_type_carriers_mention(node: &StoredNode, sought: crate::types::TypeVariableId) -> bool {
+        if type_mentions(&node.ty, sought) {
+            return true;
+        }
+        match &node.kind {
+            PureExprKind::Value(PureValue::Function(function)) => {
+                type_mentions(function.parameter().ty(), sought)
+            }
+            PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                type_mentions(binding.binder().ty(), sought)
+            }
+            PureExprKind::Computation(PureComputation::RecursiveBind(group)) => group
+                .members()
+                .iter()
+                .any(|member| type_mentions(member.binder().ty(), sought)),
+            PureExprKind::Computation(PureComputation::Match(match_expression)) => match_expression
+                .arms()
+                .iter()
+                .any(|arm| pattern_mentions(arm.pattern(), sought)),
+            PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) => abstraction
+                .parameters()
+                .iter()
+                .any(|(parameter, _)| *parameter == sought),
+            PureExprKind::Computation(PureComputation::TypeApplication(application)) => application
+                .arguments()
+                .iter()
+                .any(|argument| type_mentions(argument, sought)),
+            PureExprKind::Value(
+                PureValue::Integer(_)
+                | PureValue::Boolean(_)
+                | PureValue::Unit(_)
+                | PureValue::Constructor(_),
+            )
+            | PureExprKind::Variable(_)
+            | PureExprKind::Computation(
+                PureComputation::Apply(_)
+                | PureComputation::Primitive(_)
+                | PureComputation::Tuple(_),
+            ) => false,
+        }
+    }
+
+    fn generated_identity_is_absent(
+        program: &UnvalidatedProgram,
+        candidate: crate::types::TypeVariableId,
+    ) -> bool {
+        matches!(candidate, crate::types::TypeVariableId::Generated(_))
+            && program
+                .nodes
+                .iter()
+                .all(|node| !node_type_carriers_mention(node, candidate))
+            && program.registry.type_variable(candidate).is_none()
+            && program
+                .registry
+                .type_variables()
+                .all(|parameter| parameter.id != candidate)
+            && program
+                .registry
+                .nominal_parameter_entries()
+                .flat_map(|(_, parameters)| parameters)
+                .all(|parameter| parameter.id != candidate)
+            && program
+                .registry
+                .global_parameter_rows()
+                .iter()
+                .flat_map(|row| row.parameters())
+                .all(|parameter| *parameter != candidate)
+    }
+
+    fn fresh_generated_identity(program: &UnvalidatedProgram) -> crate::types::TypeVariableId {
+        let fresh = (0..u32::MAX)
+            .map(crate::types::TypeVariableId::generated)
+            .find(|candidate| generated_identity_is_absent(program, *candidate))
+            .expect("the complete linked Core and registry should leave one generated identity");
+
+        assert!(matches!(fresh, crate::types::TypeVariableId::Generated(_)));
+        for node in &program.nodes {
+            assert!(
+                !node_type_carriers_mention(node, fresh),
+                "the selected identity must be absent from every read-only Core type carrier",
+            );
+        }
+        assert!(program.registry.type_variable(fresh).is_none());
+        assert!(
+            program
+                .registry
+                .type_variables()
+                .all(|parameter| parameter.id != fresh),
+            "the selected identity must be absent from the canonical registry namespace",
+        );
+        assert!(
+            program
+                .registry
+                .nominal_parameter_entries()
+                .flat_map(|(_, parameters)| parameters)
+                .all(|parameter| parameter.id != fresh),
+            "the selected identity must be absent from the nominal-parameter namespace",
+        );
+        assert!(
+            program
+                .registry
+                .global_parameter_rows()
+                .iter()
+                .flat_map(|row| row.parameters())
+                .all(|parameter| *parameter != fresh),
+            "the selected identity must be absent from every resolved-global row",
+        );
+        fresh
+    }
+
+    fn rewrite_binder_type_variable(
+        binder: &mut TypedBinder,
+        old: crate::types::TypeVariableId,
+        new: crate::types::TypeVariableId,
+        rewrite_forall_parameter: bool,
+    ) {
+        let mut ty = binder.ty().clone();
+        rewrite_type_variable(&mut ty, old, new, rewrite_forall_parameter);
+        binder.replace_type(ty);
+    }
+
+    fn rewrite_node_type_carriers(
+        node: &mut StoredNode,
+        old: crate::types::TypeVariableId,
+        new: crate::types::TypeVariableId,
+        rewrite_forall_parameter: bool,
+    ) {
+        rewrite_type_variable(&mut node.ty, old, new, rewrite_forall_parameter);
+        match &mut node.kind {
+            PureExprKind::Value(PureValue::Function(function)) => rewrite_binder_type_variable(
+                function.parameter_mut(),
+                old,
+                new,
+                rewrite_forall_parameter,
+            ),
+            PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                rewrite_binder_type_variable(
+                    binding.binder_mut(),
+                    old,
+                    new,
+                    rewrite_forall_parameter,
+                );
+            }
+            PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                for member in group.members_mut() {
+                    rewrite_binder_type_variable(
+                        member.binder_mut(),
+                        old,
+                        new,
+                        rewrite_forall_parameter,
+                    );
+                }
+            }
+            PureExprKind::Computation(PureComputation::Match(match_expression)) => {
+                for arm in match_expression.arms_mut() {
+                    arm.pattern_mut()
+                        .rewrite_types(&mut |ty| {
+                            let mut rewritten = ty.clone();
+                            rewrite_type_variable(
+                                &mut rewritten,
+                                old,
+                                new,
+                                rewrite_forall_parameter,
+                            );
+                            Ok(rewritten)
+                        })
+                        .expect("admitted generated pattern types should remain representable");
+                }
+            }
+            PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+                application
+                    .rewrite_types(&mut |ty| {
+                        let mut rewritten = ty.clone();
+                        rewrite_type_variable(&mut rewritten, old, new, rewrite_forall_parameter);
+                        Ok(rewritten)
+                    })
+                    .expect("admitted generated type arguments should remain representable");
+            }
+            PureExprKind::Value(
+                PureValue::Integer(_)
+                | PureValue::Boolean(_)
+                | PureValue::Unit(_)
+                | PureValue::Constructor(_),
+            )
+            | PureExprKind::Variable(_)
+            | PureExprKind::Computation(
+                PureComputation::Apply(_)
+                | PureComputation::Primitive(_)
+                | PureComputation::Tuple(_)
+                | PureComputation::TypeAbstraction(_),
+            ) => {}
+        }
+    }
+
+    fn lexical_subtree(program: &UnvalidatedProgram, root: NodeId) -> HashSet<NodeId> {
+        let mut result = HashSet::new();
+        let mut work = vec![root];
+        while let Some(id) = work.pop() {
+            if !result.insert(id) {
+                continue;
+            }
+            let node = &program.nodes[id.index().expect("the lexical subtree index should fit")];
+            work.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+        }
+        result
+    }
+
+    fn rename_generated_abstraction(
+        program: &mut UnvalidatedProgram,
+        abstraction_id: NodeId,
+        new: crate::types::TypeVariableId,
+    ) -> crate::types::TypeVariableId {
+        let abstraction_index = abstraction_id
+            .index()
+            .expect("the generated abstraction index should fit");
+        let (old, body) = {
+            let node = &program.nodes[abstraction_index];
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                &node.kind
+            else {
+                panic!("the alpha-renamed node should be a type abstraction");
+            };
+            let [(old, Kind::Type)] = abstraction.parameters() else {
+                panic!("the alpha-renamed abstraction should retain one Type parameter");
+            };
+            (*old, abstraction.body())
+        };
+        assert_ne!(old, new);
+        assert!(matches!(new, crate::types::TypeVariableId::Generated(_)));
+
+        for node in &mut program.nodes {
+            if type_quantifies(&node.ty, old) {
+                rewrite_type_variable(&mut node.ty, old, new, true);
+            }
+            match &mut node.kind {
+                PureExprKind::Value(PureValue::Function(function))
+                    if type_quantifies(function.parameter().ty(), old) =>
+                {
+                    rewrite_binder_type_variable(function.parameter_mut(), old, new, true);
+                }
+                PureExprKind::Computation(PureComputation::Bind(binding))
+                    if type_quantifies(binding.binder().ty(), old) =>
+                {
+                    rewrite_binder_type_variable(binding.binder_mut(), old, new, true);
+                }
+                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                    for member in group.members_mut() {
+                        if type_quantifies(member.binder().ty(), old) {
+                            rewrite_binder_type_variable(member.binder_mut(), old, new, true);
+                        }
+                    }
+                }
+                PureExprKind::Value(_)
+                | PureExprKind::Variable(_)
+                | PureExprKind::Computation(
+                    PureComputation::Bind(_)
+                    | PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_)
+                    | PureComputation::Match(_)
+                    | PureComputation::TypeAbstraction(_)
+                    | PureComputation::TypeApplication(_),
+                ) => {}
+            }
+        }
+
+        let subtree = lexical_subtree(program, body);
+        for id in subtree {
+            rewrite_node_type_carriers(
+                &mut program.nodes[id.index().expect("the lexical node index should fit")],
+                old,
+                new,
+                true,
+            );
+        }
+        let node = &mut program.nodes[abstraction_index];
+        let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+            &mut node.kind
+        else {
+            unreachable!("the alpha-renamed node remains an abstraction")
+        };
+        let parameters = abstraction
+            .parameters()
+            .iter()
+            .map(|(parameter, kind)| {
+                (
+                    if *parameter == old { new } else { *parameter },
+                    kind.clone(),
+                )
+            })
+            .collect();
+        *abstraction = TypeAbstractionNode::new(parameters, body);
+        old
+    }
+
+    fn rewrite_generated_body_occurrences_without_binder(
+        program: &mut UnvalidatedProgram,
+        abstraction_id: NodeId,
+        new: crate::types::TypeVariableId,
+    ) -> crate::types::TypeVariableId {
+        let abstraction_index = abstraction_id
+            .index()
+            .expect("the generated abstraction index should fit");
+        let (old, body) = {
+            let node = &program.nodes[abstraction_index];
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                &node.kind
+            else {
+                panic!("the escaped node should be a type abstraction");
+            };
+            (abstraction.parameters()[0].0, abstraction.body())
+        };
+        for node in &mut program.nodes {
+            if type_quantifies(&node.ty, old) {
+                rewrite_type_variable(&mut node.ty, old, new, false);
+            }
+            match &mut node.kind {
+                PureExprKind::Value(PureValue::Function(function))
+                    if type_quantifies(function.parameter().ty(), old) =>
+                {
+                    rewrite_binder_type_variable(function.parameter_mut(), old, new, false);
+                }
+                PureExprKind::Computation(PureComputation::Bind(binding))
+                    if type_quantifies(binding.binder().ty(), old) =>
+                {
+                    rewrite_binder_type_variable(binding.binder_mut(), old, new, false);
+                }
+                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                    for member in group.members_mut() {
+                        if type_quantifies(member.binder().ty(), old) {
+                            rewrite_binder_type_variable(member.binder_mut(), old, new, false);
+                        }
+                    }
+                }
+                PureExprKind::Value(_)
+                | PureExprKind::Variable(_)
+                | PureExprKind::Computation(
+                    PureComputation::Bind(_)
+                    | PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_)
+                    | PureComputation::Match(_)
+                    | PureComputation::TypeAbstraction(_)
+                    | PureComputation::TypeApplication(_),
+                ) => {}
+            }
+        }
+        for id in lexical_subtree(program, body) {
+            rewrite_node_type_carriers(
+                &mut program.nodes[id.index().expect("the escaped node index should fit")],
+                old,
+                new,
+                false,
+            );
+        }
+        old
+    }
+
+    #[test]
+    fn linked_core_accepts_capture_free_generated_alpha_renaming() {
+        let (valid_fixture, _) = linked_generated_abstraction_fixture();
+        valid_fixture
+            .validate()
+            .expect("an independently compiled generated fixture should validate before mutation");
+        let (mut fixture, targets) = linked_generated_abstraction_fixture();
+        let old = generated_parameter(&fixture.program, targets.outer);
+        let inner = generated_parameter(&fixture.program, targets.inner);
+        let later = generated_parameter(&fixture.program, targets.later);
+        let fresh = fresh_generated_identity(&fixture.program);
+        let registry = Arc::clone(&fixture.program.registry);
+        let rows_before = global_row_shape(&registry);
+        let module_sources_before = fixture.module_sources.clone();
+        let root_before = fixture.program.root;
+        let node_count_before = fixture.program.nodes.len();
+        let later_type_before = fixture.program.nodes[targets
+            .later
+            .index()
+            .expect("the later abstraction index should fit")]
+        .ty
+        .clone();
+
+        assert_eq!(
+            rename_generated_abstraction(&mut fixture.program, targets.outer, fresh),
+            old
+        );
+
+        let outer_node = &fixture.program.nodes[targets
+            .outer
+            .index()
+            .expect("the outer abstraction index should fit")];
+        let PureExprKind::Computation(PureComputation::TypeAbstraction(outer)) = &outer_node.kind
+        else {
+            panic!("the renamed outer node should remain a type abstraction");
+        };
+        assert_eq!(outer.parameters(), &[(fresh, Kind::Type)]);
+        let Type::Forall(parameters, _) = &outer_node.ty else {
+            panic!("the renamed outer abstraction should retain its scheme");
+        };
+        assert_eq!(parameters.as_ref(), &[(fresh, Kind::Type)]);
+        let outer_body = &fixture.program.nodes[outer
+            .body()
+            .index()
+            .expect("the outer body index should fit")]
+        .ty;
+        assert!(type_mentions(outer_body, fresh));
+        assert!(!type_mentions(outer_body, old));
+        assert!(
+            fixture
+                .program
+                .nodes
+                .iter()
+                .any(|node| node_type_carriers_mention(node, fresh)),
+        );
+        assert!(
+            !fixture
+                .program
+                .nodes
+                .iter()
+                .any(|node| node_type_carriers_mention(node, old)),
+            "the original generated identity must remain no external or cloned scheme authority",
+        );
+        let owning_binding = fixture
+            .program
+            .nodes
+            .iter()
+            .find_map(|node| {
+                let PureExprKind::Computation(PureComputation::Bind(binding)) = &node.kind else {
+                    return None;
+                };
+                (binding.initializer() == targets.outer).then_some(binding)
+            })
+            .expect("the outer local abstraction should retain one sequential owner");
+        assert!(type_quantifies(owning_binding.binder().ty(), fresh));
+        assert!(!type_mentions(owning_binding.binder().ty(), old));
+        let renamed_subtree = lexical_subtree(&fixture.program, outer.body());
+        assert!(renamed_subtree.iter().any(|id| {
+            let node = &fixture.program.nodes[id
+                .index()
+                .expect("the renamed lexical node index should fit")];
+            matches!(
+                &node.kind,
+                PureExprKind::Computation(PureComputation::TypeApplication(application))
+                    if application
+                        .arguments()
+                        .iter()
+                        .any(|argument| type_mentions(argument, fresh))
+            )
+        }));
+        assert_eq!(generated_parameter(&fixture.program, targets.inner), inner);
+        assert_eq!(generated_parameter(&fixture.program, targets.later), later);
+        let mut unrelated_type_budget = crate::types::TypeWorkBudget::with_limit(TYPE_WORK_LIMIT);
+        assert!(
+            same_type_with_budget(
+                &fixture.program.nodes[targets
+                    .later
+                    .index()
+                    .expect("the later abstraction index should fit")]
+                .ty,
+                &later_type_before,
+                &mut unrelated_type_budget,
+            )
+            .expect("the unrelated later scheme comparison should fit")
+        );
+        assert!(Arc::ptr_eq(&registry, &fixture.program.registry));
+        assert_eq!(global_row_shape(&fixture.program.registry), rows_before);
+        assert!(fixture.program.registry.type_variable(old).is_none());
+        assert!(fixture.program.registry.type_variable(fresh).is_none());
+        assert_eq!(fixture.module_sources, module_sources_before);
+        assert_eq!(fixture.program.root, root_before);
+        assert_eq!(fixture.program.nodes.len(), node_count_before);
+
+        let LinkedCoreValidationFixture {
+            directory,
+            graph,
+            program,
+            module_sources,
+            globals: _,
+        } = fixture;
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let original = validate_modules(program, &sources, &module_sources)
+            .expect("capture-free generated alpha-renaming should independently validate");
+        assert!(Arc::ptr_eq(&registry, original.registry()));
+        assert_eq!(
+            crate::eval::evaluate(&original)
+                .expect("the alpha-renamed linked Core should evaluate")
+                .value
+                .to_string(),
+            "42",
+        );
+        for transformed in [
+            crate::core::transform::identity_traversal(&original)
+                .expect("identity traversal should preserve alpha-renamed Core"),
+            crate::core::transform::fold_literal_primitives(&original)
+                .expect("literal folding should preserve alpha-renamed Core"),
+        ] {
+            assert!(Arc::ptr_eq(&registry, &transformed.registry));
+            let transformed = validate_modules(transformed, &sources, &module_sources)
+                .expect("each transformed alpha-renamed Core should freshly revalidate");
+            assert!(Arc::ptr_eq(&registry, transformed.registry()));
+            assert_eq!(
+                crate::eval::evaluate(&transformed)
+                    .expect("each transformed alpha-renamed Core should evaluate")
+                    .value
+                    .to_string(),
+                "42",
+            );
+        }
+        drop(directory);
+    }
+
+    #[test]
+    fn linked_core_rejects_each_independent_generated_binder_mutation() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            AbstractionIdentityOnly,
+            KindDisagreement,
+            ReusedSiblingIdentity,
+            NestedShadowing,
+            EscapeToEarlierSibling,
+            MissingAbstractionProvenance,
+        }
+
+        for (mutation, expected_reason) in [
+            (
+                Mutation::AbstractionIdentityOnly,
+                ValidationReason::TypeScope,
+            ),
+            (Mutation::KindDisagreement, ValidationReason::TypeOperation),
+            (
+                Mutation::ReusedSiblingIdentity,
+                ValidationReason::TypeOperation,
+            ),
+            (Mutation::NestedShadowing, ValidationReason::TypeOperation),
+            (
+                Mutation::EscapeToEarlierSibling,
+                ValidationReason::TypeScope,
+            ),
+            (
+                Mutation::MissingAbstractionProvenance,
+                ValidationReason::Provenance,
+            ),
+        ] {
+            let (valid_fixture, _) = linked_generated_abstraction_fixture();
+            valid_fixture.validate().unwrap_or_else(|error| {
+                panic!("the independently compiled {mutation:?} fixture should validate: {error}")
+            });
+            let (mut fixture, targets) = linked_generated_abstraction_fixture();
+            let outer = generated_parameter(&fixture.program, targets.outer);
+            let inner = generated_parameter(&fixture.program, targets.inner);
+            let later = generated_parameter(&fixture.program, targets.later);
+            assert_ne!(outer, inner);
+            assert_ne!(outer, later);
+            assert_ne!(inner, later);
+            let registry = Arc::clone(&fixture.program.registry);
+            let rows_before = global_row_shape(&registry);
+            let module_sources_before = fixture.module_sources.clone();
+            let root_before = fixture.program.root;
+            let node_count_before = fixture.program.nodes.len();
+            let target = match mutation {
+                Mutation::NestedShadowing => targets.inner,
+                Mutation::EscapeToEarlierSibling | Mutation::ReusedSiblingIdentity => targets.later,
+                Mutation::AbstractionIdentityOnly
+                | Mutation::KindDisagreement
+                | Mutation::MissingAbstractionProvenance => targets.outer,
+            };
+            let target_index = target
+                .index()
+                .expect("the generated mutation target index should fit");
+            let origin_before = fixture.program.nodes[target_index].origin.clone();
+            let generated_origins_before =
+                [targets.outer, targets.inner, targets.later].map(|id| {
+                    fixture.program.nodes[id
+                        .index()
+                        .expect("the generated provenance index should fit")]
+                    .origin
+                    .clone()
+                });
+
+            match mutation {
+                Mutation::AbstractionIdentityOnly => {
+                    let fresh = fresh_generated_identity(&fixture.program);
+                    let node = &mut fixture.program.nodes[target_index];
+                    let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                        &mut node.kind
+                    else {
+                        unreachable!("the identity target is an abstraction")
+                    };
+                    let body = abstraction.body();
+                    *abstraction = TypeAbstractionNode::new(vec![(fresh, Kind::Type)], body);
+                    let Type::Forall(parameters, _) = &node.ty else {
+                        unreachable!("the identity target retains its scheme")
+                    };
+                    assert_eq!(parameters.as_ref(), &[(outer, Kind::Type)]);
+                    assert_eq!(abstraction.parameters(), &[(fresh, Kind::Type)]);
+                }
+                Mutation::KindDisagreement => {
+                    let node = &mut fixture.program.nodes[target_index];
+                    let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                        &node.kind
+                    else {
+                        unreachable!("the Kind target is an abstraction")
+                    };
+                    assert_eq!(abstraction.parameters(), &[(outer, Kind::Type)]);
+                    let Type::Forall(_, body) = &node.ty else {
+                        unreachable!("the Kind target retains its scheme")
+                    };
+                    let body = body.clone();
+                    let mismatched = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+                    node.ty = Type::Forall(Box::new([(outer, mismatched.clone())]), body);
+                    let Type::Forall(parameters, _) = &node.ty else {
+                        unreachable!("the Kind target remains a scheme")
+                    };
+                    assert_eq!(parameters.as_ref(), &[(outer, mismatched)]);
+                }
+                Mutation::ReusedSiblingIdentity => {
+                    assert_eq!(
+                        rename_generated_abstraction(&mut fixture.program, target, outer),
+                        later,
+                    );
+                    assert_eq!(generated_parameter(&fixture.program, target), outer);
+                    assert_eq!(generated_parameter(&fixture.program, targets.outer), outer,);
+                }
+                Mutation::NestedShadowing => {
+                    assert!(
+                        lexical_subtree(
+                            &fixture.program,
+                            match &fixture.program.nodes[targets
+                                .outer
+                                .index()
+                                .expect("the outer abstraction index should fit")]
+                            .kind
+                            {
+                                PureExprKind::Computation(PureComputation::TypeAbstraction(
+                                    abstraction,
+                                )) => abstraction.body(),
+                                _ => unreachable!("the outer node remains an abstraction"),
+                            },
+                        )
+                        .contains(&targets.inner)
+                    );
+                    assert_eq!(
+                        rename_generated_abstraction(&mut fixture.program, target, outer),
+                        inner,
+                    );
+                    assert_eq!(generated_parameter(&fixture.program, target), outer);
+                }
+                Mutation::EscapeToEarlierSibling => {
+                    assert_eq!(
+                        rewrite_generated_body_occurrences_without_binder(
+                            &mut fixture.program,
+                            target,
+                            outer,
+                        ),
+                        later,
+                    );
+                    assert_eq!(generated_parameter(&fixture.program, target), later);
+                    let node = &fixture.program.nodes[target_index];
+                    let Type::Forall(parameters, body) = &node.ty else {
+                        unreachable!("the escaping abstraction retains its scheme")
+                    };
+                    assert_eq!(parameters.as_ref(), &[(later, Kind::Type)]);
+                    assert!(type_quantifies(&node.ty, later));
+                    assert!(type_mentions(body, outer));
+                    assert!(!type_mentions(body, later));
+                }
+                Mutation::MissingAbstractionProvenance => {
+                    fixture.program.nodes[target_index].origin = None;
+                    assert!(fixture.program.nodes[target_index].origin.is_none());
+                }
+            }
+
+            match mutation {
+                Mutation::AbstractionIdentityOnly => {
+                    assert_ne!(generated_parameter(&fixture.program, targets.outer), outer);
+                    assert_eq!(generated_parameter(&fixture.program, targets.inner), inner);
+                    assert_eq!(generated_parameter(&fixture.program, targets.later), later);
+                }
+                Mutation::KindDisagreement | Mutation::MissingAbstractionProvenance => {
+                    assert_eq!(generated_parameter(&fixture.program, targets.outer), outer);
+                    assert_eq!(generated_parameter(&fixture.program, targets.inner), inner);
+                    assert_eq!(generated_parameter(&fixture.program, targets.later), later);
+                }
+                Mutation::ReusedSiblingIdentity => {
+                    assert_eq!(generated_parameter(&fixture.program, targets.outer), outer);
+                    assert_eq!(generated_parameter(&fixture.program, targets.inner), inner);
+                }
+                Mutation::NestedShadowing => {
+                    assert_eq!(generated_parameter(&fixture.program, targets.outer), outer);
+                    assert_eq!(generated_parameter(&fixture.program, targets.later), later);
+                }
+                Mutation::EscapeToEarlierSibling => {
+                    assert_eq!(generated_parameter(&fixture.program, targets.outer), outer);
+                    assert_eq!(generated_parameter(&fixture.program, targets.inner), inner);
+                    assert_eq!(generated_parameter(&fixture.program, targets.later), later);
+                }
+            }
+
+            assert!(
+                Arc::ptr_eq(&registry, &fixture.program.registry),
+                "{mutation:?}"
+            );
+            assert_eq!(
+                global_row_shape(&fixture.program.registry),
+                rows_before,
+                "{mutation:?}",
+            );
+            assert_eq!(
+                fixture.module_sources, module_sources_before,
+                "{mutation:?}"
+            );
+            assert_eq!(fixture.program.root, root_before, "{mutation:?}");
+            assert_eq!(
+                fixture.program.nodes.len(),
+                node_count_before,
+                "{mutation:?}"
+            );
+            if !matches!(mutation, Mutation::MissingAbstractionProvenance) {
+                assert_eq!(
+                    fixture.program.nodes[target_index].origin, origin_before,
+                    "{mutation:?}",
+                );
+            }
+            let generated_origins_after = [targets.outer, targets.inner, targets.later].map(|id| {
+                fixture.program.nodes[id
+                    .index()
+                    .expect("the generated provenance index should fit")]
+                .origin
+                .clone()
+            });
+            if matches!(mutation, Mutation::MissingAbstractionProvenance) {
+                assert_eq!(
+                    generated_origins_after[1..],
+                    generated_origins_before[1..],
+                    "the unrelated generated origins should remain unchanged",
+                );
+            } else {
+                assert_eq!(
+                    generated_origins_after, generated_origins_before,
+                    "{mutation:?}",
+                );
+            }
+            let expected_node = match mutation {
+                Mutation::AbstractionIdentityOnly => {
+                    let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                        &fixture.program.nodes[targets
+                            .outer
+                            .index()
+                            .expect("the outer abstraction index should fit")]
+                        .kind
+                    else {
+                        unreachable!("the outer mutation target remains an abstraction")
+                    };
+                    let subtree = lexical_subtree(&fixture.program, abstraction.body());
+                    fixture
+                        .program
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, node)| {
+                            let id = NodeId::new(
+                                fixture.program.arena,
+                                u32::try_from(index).expect("the mentioned node index should fit"),
+                            );
+                            (subtree.contains(&id) && type_mentions(&node.ty, outer)).then_some(id)
+                        })
+                        .expect("the unchanged body should retain the old generated identity")
+                }
+                Mutation::KindDisagreement | Mutation::MissingAbstractionProvenance => target,
+                Mutation::ReusedSiblingIdentity => targets.later,
+                Mutation::NestedShadowing => targets.outer,
+                Mutation::EscapeToEarlierSibling => fixture.program.root,
+            };
+
+            let error = fixture
+                .validate()
+                .expect_err("each generated-binder mutation should stop at Core validation");
+            assert_eq!(error.reason(), expected_reason, "{mutation:?}");
+            assert_eq!(error.node(), Some(expected_node), "{mutation:?}");
+        }
     }
 
     #[test]

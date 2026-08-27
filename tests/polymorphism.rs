@@ -14,7 +14,7 @@ use ash::{
     },
     driver::PipelineFailure,
     elaborate::{Elaborator, check_module, link_modules},
-    eval::evaluate,
+    eval::{TraceEvent, evaluate},
     evidence_validation::validate_interface_evidence,
     module::{ModuleId, ModuleRoots, load_module_graph},
     resolve::resolve_module,
@@ -224,6 +224,177 @@ fn higher_kinded_instantiation_preserves_fixed_kinds() {
     assert!(
         found_partial_constructor,
         "the higher-kinded argument should zonk to the partial Pair<Int> constructor"
+    );
+}
+
+#[test]
+fn higher_kinded_type_operations_add_only_existing_erasure_entries() {
+    fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str {
+        let TraceEvent::Enter(id) = event;
+        match &program
+            .node(*id)
+            .expect("an entered Core node should exist")
+            .kind
+        {
+            PureExprKind::Value(ash::core::PureValue::Integer(_)) => "integer",
+            PureExprKind::Value(ash::core::PureValue::Boolean(_)) => "boolean",
+            PureExprKind::Value(ash::core::PureValue::Unit(_)) => "unit",
+            PureExprKind::Value(ash::core::PureValue::Function(_)) => "function",
+            PureExprKind::Value(ash::core::PureValue::Constructor(_)) => "constructor",
+            PureExprKind::Variable(_) => "variable-lookup",
+            PureExprKind::Computation(PureComputation::Bind(_)) => "bind",
+            PureExprKind::Computation(PureComputation::RecursiveBind(_)) => "recursive-bind",
+            PureExprKind::Computation(PureComputation::Apply(_)) => "apply",
+            PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
+            PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
+            PureExprKind::Computation(PureComputation::Match(_)) => "match",
+            PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
+                "type-abstraction-erasure"
+            }
+            PureExprKind::Computation(PureComputation::TypeApplication(_)) => {
+                "type-application-erasure"
+            }
+        }
+    }
+
+    fn assert_type_operations_enter_only_their_retained_child(
+        program: &ValidatedProgram,
+        trace: &[TraceEvent],
+    ) {
+        for pair in trace.windows(2) {
+            let [TraceEvent::Enter(current), TraceEvent::Enter(next)] = pair else {
+                unreachable!("the evaluator trace has one public event form")
+            };
+            let expected = match &program
+                .node(*current)
+                .expect("an entered type operation should exist")
+                .kind
+            {
+                PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+                    Some(operation.body())
+                }
+                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                    Some(operation.function())
+                }
+                _ => None,
+            };
+            if let Some(expected) = expected {
+                assert_eq!(*next, expected);
+            }
+        }
+    }
+
+    fn core_abstraction_count(program: &ValidatedProgram) -> usize {
+        let mut visited = std::collections::HashSet::new();
+        let mut work = vec![program.root()];
+        let mut count = 0;
+        while let Some(id) = work.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let node = program
+                .node(id)
+                .expect("a reachable Core abstraction candidate should exist");
+            count += usize::from(matches!(
+                node.kind,
+                PureExprKind::Computation(PureComputation::TypeAbstraction(_))
+            ));
+            work.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+        }
+        count
+    }
+
+    let shared_declarations = "type Pair<A, B> = Pair(A, B)\n\n";
+    let monomorphic_source = format!(
+        "{shared_declarations}keep : Pair<Int, Bool> -> Pair<Int, Bool>\nkeep value = value\n\nmain : Unit -> Pair<Int, Bool>\nmain () = keep(Pair(42, true))\n",
+    );
+    let higher_kinded_source = format!(
+        "{shared_declarations}keep<F : Type -> Type, A> : F<A> -> F<A>\nkeep value = value\n\nmain : Unit -> Pair<Int, Bool>\nmain () = keep(Pair(42, true))\n",
+    );
+    let (monomorphic, _, _) = elaborated(&monomorphic_source);
+    let (higher_kinded, _, _) = elaborated(&higher_kinded_source);
+    let monomorphic_evaluation =
+        evaluate(&monomorphic).expect("the monomorphic comparison Core should evaluate");
+    let higher_kinded_evaluation =
+        evaluate(&higher_kinded).expect("the higher-kinded comparison Core should evaluate");
+
+    assert_eq!(monomorphic_evaluation.value.to_string(), "Pair(42, true)");
+    assert_eq!(
+        higher_kinded_evaluation.value.to_string(),
+        monomorphic_evaluation.value.to_string(),
+    );
+    assert_eq!(
+        higher_kinded_evaluation.max_frame_depth, monomorphic_evaluation.max_frame_depth,
+        "type erasure must not push an evaluator frame",
+    );
+    assert_type_operations_enter_only_their_retained_child(
+        &higher_kinded,
+        &higher_kinded_evaluation.trace,
+    );
+
+    let monomorphic_classes = monomorphic_evaluation
+        .trace
+        .iter()
+        .map(|event| runtime_class(&monomorphic, event))
+        .collect::<Vec<_>>();
+    let higher_kinded_classes = higher_kinded_evaluation
+        .trace
+        .iter()
+        .map(|event| runtime_class(&higher_kinded, event))
+        .collect::<Vec<_>>();
+    let retained_runtime = |classes: &[&'static str]| {
+        classes
+            .iter()
+            .copied()
+            .filter(|class| !class.ends_with("-erasure"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        retained_runtime(&higher_kinded_classes),
+        retained_runtime(&monomorphic_classes),
+        "higher kinds add no value form, lookup, frame, or non-erasure transition",
+    );
+    assert_eq!(
+        higher_kinded_classes
+            .iter()
+            .filter(|class| **class == "variable-lookup")
+            .count(),
+        monomorphic_classes
+            .iter()
+            .filter(|class| **class == "variable-lookup")
+            .count(),
+    );
+    assert_eq!(
+        higher_kinded_evaluation.trace.len(),
+        monomorphic_evaluation.trace.len() + 1,
+        "recursive initialization erases the abstraction without a transition and the application contributes its one existing erasure entry",
+    );
+    assert_eq!(
+        core_abstraction_count(&higher_kinded),
+        core_abstraction_count(&monomorphic) + 1,
+        "the higher-kinded global should retain one additional static abstraction",
+    );
+    assert_eq!(
+        higher_kinded_classes
+            .iter()
+            .filter(|class| **class == "type-abstraction-erasure")
+            .count(),
+        monomorphic_classes
+            .iter()
+            .filter(|class| **class == "type-abstraction-erasure")
+            .count(),
+        "recursive function initialization strips outer abstractions without entering them",
+    );
+    assert_eq!(
+        higher_kinded_classes
+            .iter()
+            .filter(|class| **class == "type-application-erasure")
+            .count(),
+        monomorphic_classes
+            .iter()
+            .filter(|class| **class == "type-application-erasure")
+            .count()
+            + 1,
     );
 }
 

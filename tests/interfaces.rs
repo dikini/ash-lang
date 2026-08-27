@@ -5,7 +5,7 @@ use std::{
 };
 
 use ash::{
-    core::{PureComputation, PureExprKind, PureValue, validate_modules},
+    core::{PureComputation, PureExprKind, PureValue, ValidatedProgram, validate_modules},
     driver::{RunConfiguration, run_path},
     elaborate::{Elaborator, TypeError, check_module, link_modules},
     eval::{TraceEvent, evaluate},
@@ -113,6 +113,36 @@ fn observe_source(text: &str, expected_value: &str, expected_type: Type) {
 
     assert_eq!(observation.value_display(), expected_value);
     assert_eq!(observation.ty(), &expected_type);
+}
+
+fn validated_interface_core(text: &str) -> ValidatedProgram {
+    let fixture = InterfaceFixture::create(text);
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the interface Core fixture should load");
+    let checked = checked_graph(&graph);
+    let linked = link_modules(checked, graph.entry()).expect("the interface Core should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("the interface Core evidence should authenticate");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the interface Core namespace should fit");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("the interface Core should elaborate");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the interface Core should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    validate_modules(unchecked, &sources, &module_sources)
+        .expect("the interface Core should independently validate")
 }
 
 #[test]
@@ -938,6 +968,151 @@ fn higher_kinded_interface_evidence_evaluates() {
         ),
         "42",
         Type::Int,
+    );
+}
+
+#[test]
+fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
+    fn runtime_classes(program: &ValidatedProgram, trace: &[TraceEvent]) -> Vec<&'static str> {
+        trace
+            .iter()
+            .map(|event| {
+                let TraceEvent::Enter(id) = event;
+                match &program
+                    .node(*id)
+                    .expect("an entered interface Core node should exist")
+                    .kind
+                {
+                    PureExprKind::Value(PureValue::Integer(_)) => "integer",
+                    PureExprKind::Value(PureValue::Boolean(_)) => "boolean",
+                    PureExprKind::Value(PureValue::Unit(_)) => "unit",
+                    PureExprKind::Value(PureValue::Function(_)) => "function",
+                    PureExprKind::Value(PureValue::Constructor(_)) => "constructor",
+                    PureExprKind::Variable(_) => "variable-lookup",
+                    PureExprKind::Computation(PureComputation::Bind(_)) => "bind",
+                    PureExprKind::Computation(PureComputation::RecursiveBind(_)) => {
+                        "recursive-bind"
+                    }
+                    PureExprKind::Computation(PureComputation::Apply(_)) => "apply",
+                    PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
+                    PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
+                    PureExprKind::Computation(PureComputation::Match(_)) => "match",
+                    PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
+                        "type-abstraction-erasure"
+                    }
+                    PureExprKind::Computation(PureComputation::TypeApplication(_)) => {
+                        "type-application-erasure"
+                    }
+                }
+            })
+            .collect()
+    }
+
+    fn core_type_operation_shape(program: &ValidatedProgram) -> (usize, usize, usize, bool) {
+        let mut visited = std::collections::HashSet::new();
+        let mut work = vec![program.root()];
+        let mut abstractions = 0;
+        let mut applications = 0;
+        let mut maximum_argument_count = 0;
+        let mut has_arrow_parameter = false;
+        while let Some(id) = work.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let node = program
+                .node(id)
+                .expect("a reachable interface Core node should exist");
+            match &node.kind {
+                PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+                    abstractions += 1;
+                    has_arrow_parameter |= operation
+                        .parameters()
+                        .iter()
+                        .any(|(_, kind)| matches!(kind, Kind::Arrow(_, _)));
+                }
+                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                    applications += 1;
+                    maximum_argument_count =
+                        maximum_argument_count.max(operation.arguments().len());
+                }
+                _ => {}
+            }
+            work.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+        }
+        (
+            abstractions,
+            applications,
+            maximum_argument_count,
+            has_arrow_parameter,
+        )
+    }
+
+    let first_order = validated_interface_core(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "type Wrapped<A> = Wrapped(A)\n\n",
+        "interface Construct<A> {\nconstruct : Int -> A\n}\n\n",
+        "interface Extract<A> {\nextract : A -> Int\n}\n\n",
+        "impl Construct<Option<Int>> {\n",
+        "construct value = Some(value)\n",
+        "}\n\n",
+        "impl<A> Extract<Wrapped<A>> where Construct<A> {\n",
+        "extract (Wrapped(value)) = {\n",
+        "let witness : A = construct 0\n",
+        "42\n",
+        "}\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = extract(Wrapped(Some(0)))\n",
+    ));
+    let higher_kinded = validated_interface_core(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "type Wrapped<F : Type -> Type, A> = Wrapped(F<A>)\n\n",
+        "interface Construct<F : Type -> Type> {\n",
+        "construct : Int -> F<Int>\n",
+        "}\n\n",
+        "interface Extract<A> {\nextract : A -> Int\n}\n\n",
+        "impl Construct<Option> {\n",
+        "construct value = Some(value)\n",
+        "}\n\n",
+        "impl<F : Type -> Type, A> Extract<Wrapped<F, A>> where Construct<F> {\n",
+        "extract (Wrapped(value)) = {\n",
+        "let witness : F<Int> = construct 0\n",
+        "42\n",
+        "}\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = extract(Wrapped(Some(0)))\n",
+    ));
+    let first_order_shape = core_type_operation_shape(&first_order);
+    let higher_kinded_shape = core_type_operation_shape(&higher_kinded);
+    assert!(!first_order_shape.3);
+    assert!(higher_kinded_shape.3);
+    assert!(higher_kinded_shape.2 > first_order_shape.2);
+    assert_eq!(
+        (higher_kinded_shape.0, higher_kinded_shape.1),
+        (first_order_shape.0, first_order_shape.1),
+        "simultaneous higher-kinded arguments must not add Core operation nodes",
+    );
+
+    let first_order_evaluation =
+        evaluate(&first_order).expect("the first-order interface Core should evaluate");
+    let higher_kinded_evaluation =
+        evaluate(&higher_kinded).expect("the higher-kinded interface Core should evaluate");
+    assert_eq!(first_order_evaluation.value.to_string(), "42");
+    assert_eq!(
+        higher_kinded_evaluation.value.to_string(),
+        first_order_evaluation.value.to_string(),
+        "Kinds and interface evidence add no runtime value or interface object",
+    );
+    assert_eq!(
+        higher_kinded_evaluation.max_frame_depth, first_order_evaluation.max_frame_depth,
+        "higher-kinded abstraction and application add no evaluator frame",
+    );
+    let first_order_classes = runtime_classes(&first_order, &first_order_evaluation.trace);
+    let higher_kinded_classes = runtime_classes(&higher_kinded, &higher_kinded_evaluation.trace);
+    assert_eq!(
+        higher_kinded_classes, first_order_classes,
+        "higher-kinded evidence adds no lookup or transition beyond the same erased Core shape",
     );
 }
 
