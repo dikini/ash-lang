@@ -8199,6 +8199,20 @@ pub(crate) fn link_modules_with_budget(
     entry: crate::module::ModuleId,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<ResolvedModuleProgram, TypeError> {
+    link_modules_with_budgets(
+        modules,
+        entry,
+        constraint_work,
+        &mut TypeWorkBudget::default(),
+    )
+}
+
+pub(crate) fn link_modules_with_budgets(
+    modules: Vec<CheckedModule>,
+    entry: crate::module::ModuleId,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<ResolvedModuleProgram, TypeError> {
     constraint_work
         .charge(modules.len())
         .map_err(|()| constraint_resource())?;
@@ -8307,9 +8321,9 @@ pub(crate) fn link_modules_with_budget(
         }),
         span,
     };
-    let mut budget = TypeWorkBudget::default();
     let registry = Arc::new(
-        ResolvedRegistry::combine_checked(&modules, &mut budget).map_err(resolved_build_error)?,
+        ResolvedRegistry::combine_checked(&modules, type_work, constraint_work)
+            .map_err(resolved_build_error)?,
     );
     let mut groups = Vec::new();
     groups
@@ -11419,6 +11433,9 @@ mod tests {
 
     #[test]
     fn impl_method_substitution_uses_the_exact_constraint_budget() {
+        // The predecessor's 83 cells plus one Task 8 body-free method-scheme
+        // relationship form the complete check-and-freeze boundary.
+        const EXACT_WORK: usize = 84;
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
             "impl Keep<Int> {\nkeep value = value\n}\n",
@@ -11433,7 +11450,7 @@ mod tests {
             resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(82);
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -11445,11 +11462,11 @@ mod tests {
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut exact = InterfaceConstraintBudget::with_limit(83);
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
         check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
             .expect("the exact budget should admit one implementation method");
 
-        assert_eq!(exact.used(), 83);
+        assert_eq!(exact.used(), EXACT_WORK);
         assert_eq!(exact.charge(1), Err(()));
     }
 
@@ -12761,6 +12778,7 @@ mod tests {
                 ImportedNominalFact {
                     id: nominal,
                     parameter_count: parameters.len(),
+                    constructor_count: 1,
                     parameters: parameters.into_boxed_slice(),
                     constructors: Box::new([]),
                     access,
@@ -12898,6 +12916,7 @@ mod tests {
                 ImportedNominalFact {
                     id: abstract_nominal,
                     parameter_count: 1,
+                    constructor_count: 1,
                     parameters: Box::new([ResolvedTypeVariable {
                         id: TypeVariableId::resolved(abstract_module, 0),
                         spelling: "F".to_owned(),

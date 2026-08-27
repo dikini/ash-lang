@@ -1,7 +1,7 @@
 //! Stable typed identities for resolved interfaces and implementations.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
     sync::{Arc, OnceLock},
 };
@@ -15,7 +15,7 @@ use crate::{
     resolved::{BinderId, ResolvedRegistry},
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        Kind, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
+        Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
         clone_kinded_type_parameters_with_budget, clone_type_with_budget, discard_type_iteratively,
         same_kinded_type_parameters_with_charge, same_type,
     },
@@ -241,6 +241,86 @@ pub(crate) fn same_type_with_constraint_budget(
     right: &Type,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<bool, ()> {
+    same_type_with_constraint_budget_inner(left, right, budget, None)
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct MatchedNominalIdentities {
+    seen: HashSet<NominalTypeId>,
+    order: Vec<NominalTypeId>,
+}
+
+impl MatchedNominalIdentities {
+    fn observe(
+        &mut self,
+        identity: NominalTypeId,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<(), ()> {
+        if self.seen.contains(&identity) {
+            return Ok(());
+        }
+        budget.charge(2)?;
+        self.seen.try_reserve(1).map_err(|_| ())?;
+        self.order.try_reserve(1).map_err(|_| ())?;
+        self.seen.insert(identity);
+        self.order.push(identity);
+        Ok(())
+    }
+
+    pub(crate) fn identities(&self) -> &[NominalTypeId] {
+        &self.order
+    }
+}
+
+pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
+    root: &Type,
+    budget: &mut InterfaceConstraintBudget,
+    nominal_identities: &mut MatchedNominalIdentities,
+) -> Result<(), ()> {
+    budget.charge(1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| ())?;
+    pending.push(root);
+    while let Some(ty) = pending.pop() {
+        match ty {
+            Type::Nominal(id) => nominal_identities.observe(*id, budget)?,
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                budget.charge(2)?;
+                pending.try_reserve(2).map_err(|_| ())?;
+                pending.push(argument);
+                pending.push(function);
+            }
+            Type::Tuple(elements) => {
+                budget.charge(elements.len())?;
+                pending.try_reserve(elements.len()).map_err(|_| ())?;
+                pending.extend(elements.iter().rev());
+            }
+            Type::Forall(_, body) => {
+                budget.charge(1)?;
+                pending.try_reserve(1).map_err(|_| ())?;
+                pending.push(body);
+            }
+            Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn same_type_with_constraint_budget_observing_nominals(
+    left: &Type,
+    right: &Type,
+    budget: &mut InterfaceConstraintBudget,
+    nominal_identities: &mut MatchedNominalIdentities,
+) -> Result<bool, ()> {
+    same_type_with_constraint_budget_inner(left, right, budget, Some(nominal_identities))
+}
+
+fn same_type_with_constraint_budget_inner(
+    left: &Type,
+    right: &Type,
+    budget: &mut InterfaceConstraintBudget,
+    mut nominal_identities: Option<&mut MatchedNominalIdentities>,
+) -> Result<bool, ()> {
     budget.charge(1)?;
     let mut pending = Vec::new();
     pending.try_reserve(1).map_err(|_| ())?;
@@ -249,7 +329,11 @@ pub(crate) fn same_type_with_constraint_budget(
         budget.charge(1)?;
         match (left, right) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
-            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+            (Type::Nominal(left), Type::Nominal(right)) if left == right => {
+                if let Some(nominal_identities) = nominal_identities.as_deref_mut() {
+                    nominal_identities.observe(*left, budget)?;
+                }
+            }
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (Type::Inference(left), Type::Inference(right)) if left == right => {}
             (
@@ -803,7 +887,9 @@ fn map_overlap_kind_failure(failure: KindFailure) -> OverlapFailure {
     }
 }
 
-#[cfg(test)]
+/// Determines structural overlap after both heads and their declared binders
+/// have already been independently kind-authenticated for the same interface
+/// parameter kind.
 pub(crate) fn implementation_heads_overlap_structurally<L, R>(
     left_parameters: L,
     left: &Type,
@@ -2904,6 +2990,167 @@ mod tests {
             .charge_type(&ty)
             .expect("the exact traversal and worklist budget should fit");
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn nominal_identity_collection_is_first_occurrence_ordered_and_exact_across_roots() {
+        const FIRST_ROOT_TYPE_CELLS: usize = 9;
+        const UNIQUE_IDENTITIES: usize = 3;
+        const FIRST_ROOT_WORK: usize = FIRST_ROOT_TYPE_CELLS + 2 * UNIQUE_IDENTITIES;
+        const SECOND_ROOT_TYPE_CELLS: usize = 3;
+        const TOTAL_WORK: usize = FIRST_ROOT_WORK + SECOND_ROOT_TYPE_CELLS;
+
+        let module = ModuleId::new(40_100);
+        let first = NominalTypeId::new(module, 0);
+        let second = NominalTypeId::new(module, 1);
+        let third = NominalTypeId::new(module, 2);
+        let first_root = Type::Tuple(
+            vec![
+                Type::Application(
+                    Box::new(Type::Nominal(first)),
+                    Box::new(Type::Nominal(second)),
+                ),
+                Type::Function(
+                    Box::new(Type::Nominal(first)),
+                    Box::new(Type::Tuple(
+                        vec![Type::Nominal(third), Type::Int].into_boxed_slice(),
+                    )),
+                ),
+            ]
+            .into_boxed_slice(),
+        );
+        let second_root = Type::Application(
+            Box::new(Type::Nominal(third)),
+            Box::new(Type::Nominal(second)),
+        );
+
+        let mut short_identities = MatchedNominalIdentities::default();
+        let mut short = InterfaceConstraintBudget::with_limit(FIRST_ROOT_WORK - 1);
+        assert_eq!(
+            collect_type_nominal_identities_with_constraint_budget(
+                &first_root,
+                &mut short,
+                &mut short_identities,
+            ),
+            Err(())
+        );
+        assert_eq!(
+            short.used(),
+            FIRST_ROOT_WORK - 2,
+            "the final first-seen nominal reserves both indexes atomically",
+        );
+
+        let mut identities = MatchedNominalIdentities::default();
+        let mut exact = InterfaceConstraintBudget::with_limit(TOTAL_WORK);
+        collect_type_nominal_identities_with_constraint_budget(
+            &first_root,
+            &mut exact,
+            &mut identities,
+        )
+        .expect("the first root's V + 2U formula should fit exactly");
+        assert_eq!(identities.identities(), [first, second, third]);
+        collect_type_nominal_identities_with_constraint_budget(
+            &second_root,
+            &mut exact,
+            &mut identities,
+        )
+        .expect("a later root should charge V but deduplicate every observed identity");
+        assert_eq!(identities.identities(), [first, second, third]);
+        assert_eq!(exact.used(), TOTAL_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn nominal_identity_collection_is_stack_safe_at_depth_32768() {
+        const DEPTH: usize = 32_768;
+        const TYPE_CELLS: usize = 2 * DEPTH + 1;
+        const EXACT_WORK: usize = TYPE_CELLS + 2;
+
+        std::thread::Builder::new()
+            .name("deep-nominal-identity-collection".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let identity = NominalTypeId::new(ModuleId::new(40_101), 0);
+                let mut root = Type::Nominal(identity);
+                for _ in 0..DEPTH {
+                    root = Type::Application(Box::new(root), Box::new(Type::Nominal(identity)));
+                }
+                let root = IterativeTypeOwner::new(root);
+
+                let mut short_identities = MatchedNominalIdentities::default();
+                assert_eq!(
+                    collect_type_nominal_identities_with_constraint_budget(
+                        &root,
+                        &mut InterfaceConstraintBudget::with_limit(EXACT_WORK - 1),
+                        &mut short_identities,
+                    ),
+                    Err(())
+                );
+
+                let mut identities = MatchedNominalIdentities::default();
+                let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+                collect_type_nominal_identities_with_constraint_budget(
+                    &root,
+                    &mut exact,
+                    &mut identities,
+                )
+                .expect("the exact deep V + 2U collector formula should fit");
+                assert_eq!(exact.used(), EXACT_WORK);
+                assert_eq!(identities.identities(), [identity]);
+            })
+            .expect("the deep nominal-identity worker should spawn")
+            .join()
+            .expect("accepted and rejected collectors must tear down on a small stack");
+    }
+
+    #[test]
+    fn wide_nominal_identity_collection_precharges_every_tuple_task() {
+        const WIDTH: usize = 32_768;
+        // The Tuple root and each Unit element schedule exactly one visit; no
+        // nominal identity is retained, so V + 2U = WIDTH + 1.
+        const EXACT_WORK: usize = WIDTH + 1;
+
+        std::thread::Builder::new()
+            .name("wide-nominal-identity-collection".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let root = IterativeTypeOwner::new(Type::Tuple(
+                    std::iter::repeat_n(Type::Unit, WIDTH)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ));
+
+                let mut short_identities = MatchedNominalIdentities::default();
+                let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+                assert_eq!(
+                    collect_type_nominal_identities_with_constraint_budget(
+                        &root,
+                        &mut short,
+                        &mut short_identities,
+                    ),
+                    Err(()),
+                );
+                assert_eq!(
+                    short.used(),
+                    1,
+                    "the WIDTH-child scheduling charge must be atomic before reserve",
+                );
+                assert!(short_identities.identities().is_empty());
+
+                let mut exact_identities = MatchedNominalIdentities::default();
+                let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+                collect_type_nominal_identities_with_constraint_budget(
+                    &root,
+                    &mut exact,
+                    &mut exact_identities,
+                )
+                .expect("the exact wide V + 2U formula should fit");
+                assert_eq!(exact.used(), EXACT_WORK);
+                assert!(exact_identities.identities().is_empty());
+            })
+            .expect("the wide nominal-identity worker should start")
+            .join()
+            .expect("wide success, rejection, and teardown must fit 256 KiB");
     }
 
     #[test]

@@ -8,7 +8,8 @@ use ash::{
     interface::{ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId},
     module::{ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
-    resolved::{BinderId, CheckedModule},
+    resolved::{BinderId, CheckedModule, ImportedTypeAccess},
+    types::NominalTypeId,
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -46,6 +47,7 @@ impl Drop for ModuleTree {
 
 #[derive(Clone, Copy)]
 struct BaseIdentities {
+    nominal: NominalTypeId,
     interface: InterfaceId,
     method: MethodId,
     implementation: ImplId,
@@ -204,6 +206,12 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
                     .expect("the constrained summaries should retain hidden interface metadata");
                 assert_eq!(imported_interface.id, identities.interface);
                 assert_eq!(imported_interface.methods[0].id, identities.method);
+                let imported_nominal = resolved
+                    .imported_facts()
+                    .nominal(identities.nominal)
+                    .expect("identity-only facade closure should retain the implementation head");
+                assert_eq!(imported_nominal.access, ImportedTypeAccess::Hidden);
+                assert!(imported_nominal.constructors.is_empty());
 
                 for arm in [left, right] {
                     let imported = resolved
@@ -227,6 +235,9 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
             .expect("fixture name should be UTF-8")
         {
             "base.ash" => {
+                let [nominal] = module_checked.registry().nominals() else {
+                    panic!("base should retain one nominal identity");
+                };
                 let [interface] = module_checked.interface_facts() else {
                     panic!("base should retain one interface fact");
                 };
@@ -243,6 +254,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
                     panic!("base implementation should retain one prerequisite");
                 };
                 base = Some(BaseIdentities {
+                    nominal: nominal.id,
                     interface: interface.id,
                     method: method.id,
                     implementation: implementation.id,

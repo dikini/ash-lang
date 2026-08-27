@@ -21,11 +21,11 @@ use crate::{
         ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
         ResolvedLocalDeclaration, ResolvedModuleGroup, ResolvedModuleProgram, ResolvedOccurrence,
         ResolvedRegistry, ResolvedTermName, ResolvedTypeVariable,
-        same_resolved_type_variables_with_charge,
     },
     source::{Origin, Span},
     types::{
-        IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget, discard_type_iteratively,
+        ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
+        TypeWorkBudget, discard_type_iteratively, same_kind_with_charge,
     },
 };
 
@@ -828,7 +828,7 @@ impl LinkedInterfaceRegistry {
 fn validate_group_consistency<'a>(
     program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
-    group: &ResolvedModuleGroup,
+    group: &'a ResolvedModuleGroup,
     kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
@@ -870,7 +870,7 @@ fn validate_group_consistency<'a>(
         )? {
             return Err(unknown(source.span));
         }
-        if fact.origin != source.origin
+        if !same_origin_charged(&fact.origin, &source.origin, budget, source.span)?
             || fact.span != source.span
             || fact.methods.len() != source.methods.len()
         {
@@ -880,14 +880,6 @@ fn validate_group_consistency<'a>(
             .registry()
             .type_variable(fact.parameter.id)
             .ok_or_else(|| unknown(source.span))?;
-        if !same_binders_charged(
-            std::slice::from_ref(canonical_parameter),
-            std::slice::from_ref(&fact.parameter),
-            budget,
-            source.span,
-        )? {
-            return Err(unknown(source.span));
-        }
         kind_environments
             .insert_interface(
                 fact.id,
@@ -906,9 +898,12 @@ fn validate_group_consistency<'a>(
                 .methods
                 .get(method_index)
                 .ok_or_else(|| unknown(fact.span))?;
+            if !source_method.type_parameters.is_empty() {
+                return Err(unknown(method.span));
+            }
             if method.id != source_method.id
                 || method.spelling != source_method.spelling
-                || method.origin != source_method.origin
+                || !same_origin_charged(&method.origin, &source_method.origin, budget, method.span)?
                 || method.span != source_method.span
                 || !same_type_charged(
                     &method.value_type,
@@ -1003,6 +998,18 @@ fn validate_global_scheme<'a>(
             .saturating_add(1),
         span,
     )?;
+    for parameter in parameters {
+        let canonical = program
+            .registry()
+            .type_variable(parameter.id)
+            .ok_or_else(|| unknown(span))?;
+        if canonical.id != parameter.id
+            || canonical.spelling != parameter.spelling
+            || !same_origin_charged(&canonical.origin, &parameter.origin, budget, span)?
+        {
+            return Err(unknown(span));
+        }
+    }
     let checked_parameters =
         copy_kinded_parameter_ids(&checked.scheme.type_parameters, budget, span)?;
     for requirement in &checked.scheme.requirements {
@@ -1011,6 +1018,7 @@ fn validate_global_scheme<'a>(
             requirement.interface,
             program.registry(),
             &checked_parameters,
+            None,
             kind_environments,
             budget,
             type_work,
@@ -1019,7 +1027,7 @@ fn validate_global_scheme<'a>(
     }
     if checked.binder != name.id
         || checked.spelling != name.spelling
-        || checked.origin != name.origin
+        || !same_origin_charged(&checked.origin, &name.origin, budget, span)?
         || !checked
             .scheme
             .type_parameters
@@ -1038,14 +1046,7 @@ fn validate_global_scheme<'a>(
         return Err(unknown(span));
     }
     let value_matches = match definition.kind() {
-        ResolvedDefinitionKind::Equational(global) => same_linked_value_type_charged(
-            &checked.scheme.value_type,
-            &global.interface.annotation.ty,
-            program.registry(),
-            &checked_parameters,
-            budget,
-            span,
-        )?,
+        ResolvedDefinitionKind::Equational(_) => true,
         ResolvedDefinitionKind::InlineOperational(global) => {
             validate_linked_value_structure(
                 &checked.scheme.value_type,
@@ -1123,7 +1124,12 @@ fn requirements_match(
         )?;
         if checked.id != source.id
             || checked.interface != source.interface.id
-            || checked.origin != Origin::Source(source.span)
+            || !same_origin_charged(
+                &checked.origin,
+                &Origin::Source(source.span),
+                budget,
+                source.span,
+            )?
             || checked.span != source.span
             || !same_type_charged(&checked.argument, &source.argument.ty, budget, source.span)?
         {
@@ -1137,9 +1143,9 @@ fn requirements_match(
 fn validate_implementation_consistency<'a>(
     program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
-    body: &crate::resolved::CheckedImplementationBody,
+    body: &'a crate::resolved::CheckedImplementationBody,
     token: &crate::interface::CheckedImplementation,
-    fact: &CheckedImplementationFact,
+    fact: &'a CheckedImplementationFact,
     kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
@@ -1164,11 +1170,30 @@ fn validate_implementation_consistency<'a>(
     {
         return Err(unknown(span));
     }
-    if !same_binders_charged(&fact.head_parameters, &source.head_parameters, budget, span)? {
+    if !same_binder_metadata_charged(&fact.head_parameters, &source.head_parameters, budget, span)?
+    {
         return Err(unknown(span));
     }
-    if fact.origin != Origin::Source(source.span)
-        || fact.span != source.span
+    for parameter in &fact.head_parameters {
+        let canonical = program
+            .registry()
+            .type_variable(parameter.id)
+            .ok_or_else(|| unknown(span))?;
+        if !same_binder_metadata_charged(
+            std::slice::from_ref(canonical),
+            std::slice::from_ref(parameter),
+            budget,
+            span,
+        )? {
+            return Err(unknown(span));
+        }
+    }
+    if !same_origin_charged(
+        &fact.origin,
+        &Origin::Source(source.span),
+        budget,
+        source.span,
+    )? || fact.span != source.span
         || fact.methods.len() != token.methods.len()
         || fact.methods.len()
             != registry
@@ -1189,6 +1214,8 @@ fn validate_implementation_consistency<'a>(
         fact.interface,
         program.registry(),
         &variables,
+        &fact.head_parameters,
+        &source.head_parameters,
         kind_environments,
         budget,
         type_work,
@@ -1200,6 +1227,7 @@ fn validate_implementation_consistency<'a>(
             prerequisite.interface,
             program.registry(),
             &variables,
+            None,
             kind_environments,
             budget,
             type_work,
@@ -1243,6 +1271,14 @@ fn validate_implementation_consistency<'a>(
             .method_groups
             .get(checked.source_group)
             .ok_or_else(|| unknown(span))?;
+        if !same_parameter_pairs_to_records_charged(
+            &method.scheme.type_parameters,
+            &fact.head_parameters,
+            budget,
+            method.span,
+        )? {
+            return Err(unknown(method.span));
+        }
         if method.id != checked.id
             || method.method != checked.method
             || method.binder != checked.binder
@@ -1342,6 +1378,8 @@ fn validate_linked_interface_argument<'a>(
     interface: InterfaceId,
     registry: &'a ResolvedRegistry,
     variables: &[TypeVariableId],
+    parameter_records: &'a [ResolvedTypeVariable],
+    source_parameter_records: &'a [ResolvedTypeVariable],
     environments: &mut KindEnvironments<'a>,
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
@@ -1353,6 +1391,7 @@ fn validate_linked_interface_argument<'a>(
         interface,
         registry,
         variables,
+        Some((parameter_records, source_parameter_records)),
         environments,
         constraint_work,
         type_work,
@@ -1366,17 +1405,50 @@ fn authenticate_linked_interface_argument_kind<'a>(
     interface: InterfaceId,
     registry: &'a ResolvedRegistry,
     variables: &[TypeVariableId],
+    parameter_records: Option<(&'a [ResolvedTypeVariable], &'a [ResolvedTypeVariable])>,
     environments: &mut KindEnvironments<'a>,
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
-    environments
-        .install_canonical_owner_ids(registry, variables, type_work, span)
-        .map_err(|failure| map_kind_type_failure(failure, span))?;
-    environments
-        .expect_body_free_interface_argument_with_ledger(interface, ty, span, constraint_work)
-        .map_err(|failure| map_kind_constraint_failure(failure, span))
+    if let Some((parameters, source_parameters)) = parameter_records {
+        if !parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .eq(variables.iter().copied())
+        {
+            return Err(unknown(span));
+        }
+        environments
+            .install_canonical_owner_records_with_source(
+                registry,
+                parameters,
+                source_parameters,
+                type_work,
+                span,
+            )
+            .map_err(|failure| map_kind_type_failure(failure, span))?;
+    } else {
+        environments
+            .install_canonical_owner_ids(registry, variables, type_work, span)
+            .map_err(|failure| map_kind_type_failure(failure, span))?;
+    }
+    let result = if parameter_records.is_some() {
+        environments.expect_body_free_exact_owner_interface_argument_with_ledger(
+            interface,
+            ty,
+            span,
+            constraint_work,
+        )
+    } else {
+        environments.expect_body_free_interface_argument_with_ledger(
+            interface,
+            ty,
+            span,
+            constraint_work,
+        )
+    };
+    result.map_err(|failure| map_kind_constraint_failure(failure, span))
 }
 
 fn validate_linked_value_structure(
@@ -1436,6 +1508,32 @@ fn validate_linked_value_type<'a>(
         .map_err(|failure| map_kind_constraint_failure(failure, span))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn validate_linked_paired_value_type_with_kind_mirrors<'a>(
+    checked: &Type,
+    source: &Type,
+    registry: &'a ResolvedRegistry,
+    parameters: &'a [(TypeVariableId, Kind)],
+    source_parameters: &'a [ResolvedTypeVariable],
+    environments: &mut KindEnvironments<'a>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    environments
+        .install_canonical_owner_pairs_with_source(
+            registry,
+            parameters,
+            source_parameters,
+            type_work,
+            span,
+        )
+        .map_err(|failure| map_kind_type_failure(failure, span))?;
+    environments
+        .expect_body_free_paired_value_type_with_ledger(checked, source, span, constraint_work)
+        .map_err(|failure| map_kind_constraint_failure(failure, span))
+}
+
 fn validate_linked_value_schemes<'a>(
     program: &'a ResolvedModuleProgram,
     environments: &mut KindEnvironments<'a>,
@@ -1466,15 +1564,22 @@ fn validate_linked_value_schemes<'a>(
                     .methods
                     .get(method_index)
                     .ok_or_else(|| unknown(fact.span))?;
-                validate_linked_value_type(
-                    method.value_type(),
-                    program.registry(),
-                    &variables,
-                    environments,
-                    constraint_work,
-                    type_work,
-                    method.span,
-                )?;
+                environments
+                    .install_canonical_owner_ids(
+                        program.registry(),
+                        &variables,
+                        type_work,
+                        method.span,
+                    )
+                    .map_err(|failure| map_kind_type_failure(failure, method.span))?;
+                environments
+                    .expect_body_free_interface_method_with_ledger(
+                        method.value_type(),
+                        fact.parameter.id,
+                        method.span,
+                        constraint_work,
+                    )
+                    .map_err(|failure| map_kind_constraint_failure(failure, method.span))?;
             }
         }
 
@@ -1484,18 +1589,44 @@ fn validate_linked_value_schemes<'a>(
                 .schemes()
                 .get(scheme_index)
                 .ok_or_else(|| unknown(group_span))?;
+            let definition = group
+                .definitions()
+                .get(scheme_index)
+                .ok_or_else(|| unknown(group_span))?;
             let span = scheme.origin.primary_span();
-            let variables =
-                copy_kinded_parameter_ids(&scheme.scheme.type_parameters, constraint_work, span)?;
-            validate_linked_value_type(
-                &scheme.scheme.value_type,
-                program.registry(),
-                &variables,
-                environments,
-                constraint_work,
-                type_work,
-                span,
-            )?;
+            match definition.kind() {
+                ResolvedDefinitionKind::Equational(global) => {
+                    validate_linked_paired_value_type_with_kind_mirrors(
+                        &scheme.scheme.value_type,
+                        &global.interface.annotation.ty,
+                        program.registry(),
+                        &scheme.scheme.type_parameters,
+                        &global.interface.type_parameters,
+                        environments,
+                        constraint_work,
+                        type_work,
+                        span,
+                    )?;
+                }
+                ResolvedDefinitionKind::InlineOperational(global) => {
+                    environments
+                        .install_canonical_owner_pairs_with_source(
+                            program.registry(),
+                            &scheme.scheme.type_parameters,
+                            &global.header.type_parameters,
+                            type_work,
+                            span,
+                        )
+                        .map_err(|failure| map_kind_type_failure(failure, span))?;
+                    environments
+                        .expect_body_free_exact_owner_value_type_with_ledger(
+                            &scheme.scheme.value_type,
+                            span,
+                            constraint_work,
+                        )
+                        .map_err(|failure| map_kind_constraint_failure(failure, span))?;
+                }
+            }
         }
 
         for fact_index in 0..group.implementation_facts().len() {
@@ -1729,8 +1860,15 @@ pub(crate) fn validate_interface_evidence_with_budget(
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure> {
+    authenticate_linked_registry_facts(&program, constraint_work)?;
     let mut kind_environments =
         build_linked_kind_environments(program.registry(), type_work, program.result().span)?;
+    authenticate_linked_constructor_payloads(
+        &program,
+        &mut kind_environments,
+        constraint_work,
+        type_work,
+    )?;
     let linked_interfaces = LinkedInterfaceRegistry::build_with_kinds(
         &program,
         &mut kind_environments,
@@ -1747,6 +1885,210 @@ pub(crate) fn validate_interface_evidence_with_budget(
     )?;
     drop(kind_environments);
     Ok(ValidatedInterfaceProgram { source: program })
+}
+
+fn authenticate_linked_constructor_payloads<'a>(
+    program: &'a ResolvedModuleProgram,
+    environments: &mut KindEnvironments<'a>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let registry = program.registry();
+    for nominal in registry.nominals() {
+        let span = nominal.origin.primary_span();
+        charge(constraint_work, 1, span)?;
+        let parameters = registry
+            .nominal_parameters(nominal.id)
+            .ok_or_else(|| unknown(span))?;
+        charge(constraint_work, parameters.len(), span)?;
+        let mut variables = Vec::new();
+        variables
+            .try_reserve(parameters.len())
+            .map_err(|_| resource(span))?;
+        variables.extend(parameters.iter().map(|parameter| parameter.id));
+        for identity in &nominal.constructors {
+            charge(constraint_work, 1, span)?;
+            let constructor = registry
+                .constructor(*identity)
+                .ok_or_else(|| unknown(span))?;
+            let Some(payload) = constructor.payload.as_ref() else {
+                continue;
+            };
+            let payload_span = constructor.origin.primary_span();
+            validate_linked_value_structure(
+                payload,
+                registry,
+                &variables,
+                constraint_work,
+                payload_span,
+            )?;
+            validate_linked_value_type(
+                payload,
+                registry,
+                &variables,
+                environments,
+                constraint_work,
+                type_work,
+                payload_span,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LinkedBinderOwner {
+    Nominal(NominalTypeId),
+    Interface(InterfaceId),
+    Global(BinderId),
+    Implementation(ImplId),
+}
+
+fn reserve_linked_registry_authentication_indexes(
+    group_count: usize,
+    owner_count: usize,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<
+    (
+        HashSet<ModuleId>,
+        HashMap<TypeVariableId, LinkedBinderOwner>,
+    ),
+    EvidenceValidationFailure,
+> {
+    let index_work = group_count
+        .checked_add(owner_count)
+        .ok_or_else(|| resource(span))?;
+    charge(budget, index_work, span)?;
+    let mut modules = HashSet::new();
+    modules
+        .try_reserve(group_count)
+        .map_err(|_| resource(span))?;
+    let mut owners = HashMap::new();
+    owners
+        .try_reserve(owner_count)
+        .map_err(|_| resource(span))?;
+    Ok((modules, owners))
+}
+
+fn authenticate_linked_registry_facts(
+    program: &ResolvedModuleProgram,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let span = program.result().span;
+    charge(budget, 1, span)?;
+    let registry = program.registry();
+    let (mut modules, mut owners) = reserve_linked_registry_authentication_indexes(
+        program.groups().len(),
+        registry.type_variable_count(),
+        budget,
+        span,
+    )?;
+    for group in program.groups() {
+        charge(budget, 1, group.span())?;
+        if !modules.insert(group.module()) {
+            return Err(unknown(group.span()));
+        }
+    }
+    let mut constructor_count = 0_usize;
+
+    for nominal in registry.nominals() {
+        charge(budget, 1, span)?;
+        if !modules.contains(&nominal.id.module())
+            || registry
+                .nominal(nominal.id)
+                .is_none_or(|found| found.id != nominal.id || found.spelling != nominal.spelling)
+            || nominal.constructors.is_empty()
+        {
+            return Err(unknown(nominal.origin.primary_span()));
+        }
+        let parameters = registry
+            .nominal_parameters(nominal.id)
+            .ok_or_else(|| unknown(nominal.origin.primary_span()))?;
+        for parameter in parameters {
+            let canonical = registry
+                .type_variable(parameter.id)
+                .ok_or_else(|| unknown(parameter.origin.primary_span()))?;
+            if !same_binders_charged(
+                std::slice::from_ref(canonical),
+                std::slice::from_ref(parameter),
+                budget,
+                parameter.origin.primary_span(),
+            )? || owners
+                .insert(parameter.id, LinkedBinderOwner::Nominal(nominal.id))
+                .is_some()
+            {
+                return Err(unknown(parameter.origin.primary_span()));
+            }
+        }
+        constructor_count = constructor_count
+            .checked_add(nominal.constructors.len())
+            .ok_or_else(|| resource(nominal.origin.primary_span()))?;
+        for (ordinal, identity) in nominal.constructors.iter().copied().enumerate() {
+            charge(budget, 1, nominal.origin.primary_span())?;
+            let ordinal =
+                u32::try_from(ordinal).map_err(|_| unknown(nominal.origin.primary_span()))?;
+            let expected = ConstructorId::new(nominal.id, ordinal);
+            let constructor = registry
+                .constructor(identity)
+                .ok_or_else(|| unknown(nominal.origin.primary_span()))?;
+            if identity != expected || constructor.id != identity || constructor.owner != nominal.id
+            {
+                return Err(unknown(constructor.origin.primary_span()));
+            }
+        }
+    }
+    if constructor_count != registry.constructors().len() {
+        return Err(unknown(span));
+    }
+
+    for group in program.groups() {
+        for interface in group.interface_facts() {
+            charge(budget, 1, interface.span)?;
+            let owner = LinkedBinderOwner::Interface(interface.id);
+            let canonical = registry
+                .type_variable(interface.parameter.id)
+                .ok_or_else(|| unknown(interface.span))?;
+            if !same_binders_charged(
+                std::slice::from_ref(canonical),
+                std::slice::from_ref(&interface.parameter),
+                budget,
+                interface.span,
+            )? || owners.insert(interface.parameter.id, owner).is_some()
+            {
+                return Err(unknown(interface.span));
+            }
+        }
+        for scheme in group.schemes() {
+            charge(budget, 1, scheme.origin.primary_span())?;
+            for (identity, _) in &scheme.scheme.type_parameters {
+                charge(budget, 1, scheme.origin.primary_span())?;
+                let owner = LinkedBinderOwner::Global(scheme.binder);
+                if registry.type_variable(*identity).is_none()
+                    || owners.insert(*identity, owner).is_some()
+                {
+                    return Err(unknown(scheme.origin.primary_span()));
+                }
+            }
+        }
+        for implementation in group.implementation_facts() {
+            charge(budget, 1, implementation.span)?;
+            for parameter in &implementation.head_parameters {
+                charge(budget, 1, parameter.origin.primary_span())?;
+                let owner = LinkedBinderOwner::Implementation(implementation.id);
+                if registry.type_variable(parameter.id).is_none()
+                    || owners.insert(parameter.id, owner).is_some()
+                {
+                    return Err(unknown(parameter.origin.primary_span()));
+                }
+            }
+        }
+    }
+    charge(budget, 1, span)?;
+    if owners.len() != registry.type_variable_count() {
+        return Err(unknown(span));
+    }
+    Ok(())
 }
 
 fn validate_occurrences<'a>(
@@ -2829,121 +3171,114 @@ fn same_type_charged(
     Ok(true)
 }
 
-fn same_linked_value_type_charged(
-    checked: &Type,
-    source: &Type,
-    registry: &ResolvedRegistry,
-    variables: &[TypeVariableId],
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<bool, EvidenceValidationFailure> {
-    enum Continuation<'a> {
-        Pair(&'a Type, &'a Type),
-        Sequence {
-            checked: std::slice::Iter<'a, Type>,
-            source: std::slice::Iter<'a, Type>,
-        },
-    }
-
-    let mut unique = HashSet::new();
-    charge(budget, variables.len(), span)?;
-    unique
-        .try_reserve(variables.len())
-        .map_err(|_| resource(span))?;
-    for variable in variables {
-        charge(budget, 1, span)?;
-        if !unique.insert(*variable)
-            || registry
-                .type_variable(*variable)
-                .is_none_or(|known| known.id != *variable)
-        {
-            return Err(invalid_root(span));
-        }
-    }
-
-    charge(budget, 1, span)?;
-    let mut current = (checked, source);
-    let mut pending = Vec::new();
-    loop {
-        charge(budget, 1, span)?;
-        match current {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
-            (Type::Nominal(left), Type::Nominal(right))
-                if left == right && registry.nominal_parameters(*left).is_some() => {}
-            (Type::Variable(left), Type::Variable(right))
-                if left == right && unique.contains(left) => {}
-            (
-                Type::Application(left_function, left_argument),
-                Type::Application(right_function, right_argument),
-            ) => {
-                charge(budget, 1, span)?;
-                pending.try_reserve(1).map_err(|_| resource(span))?;
-                pending.push(Continuation::Pair(left_argument, right_argument));
-                current = (left_function, right_function);
-                continue;
-            }
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                charge(budget, 1, span)?;
-                pending.try_reserve(1).map_err(|_| resource(span))?;
-                pending.push(Continuation::Pair(left_codomain, right_codomain));
-                current = (left_domain, right_domain);
-                continue;
-            }
-            (Type::Tuple(left), Type::Tuple(right))
-                if left.len() >= 2 && left.len() == right.len() =>
-            {
-                let mut checked = left.iter();
-                let mut source = right.iter();
-                let first = (
-                    checked.next().ok_or_else(|| invalid_root(span))?,
-                    source.next().ok_or_else(|| invalid_root(span))?,
-                );
-                charge(budget, 1, span)?;
-                pending.try_reserve(1).map_err(|_| resource(span))?;
-                pending.push(Continuation::Sequence { checked, source });
-                current = first;
-                continue;
-            }
-            _ => return Ok(false),
-        }
-
-        loop {
-            let Some(continuation) = pending.pop() else {
-                return Ok(true);
-            };
-            match continuation {
-                Continuation::Pair(left, right) => {
-                    current = (left, right);
-                    break;
-                }
-                Continuation::Sequence {
-                    mut checked,
-                    mut source,
-                } => match (checked.next(), source.next()) {
-                    (Some(left), Some(right)) => {
-                        pending.push(Continuation::Sequence { checked, source });
-                        current = (left, right);
-                        break;
-                    }
-                    (None, None) => {}
-                    _ => return Ok(false),
-                },
-            }
-        }
-    }
-}
-
 fn same_binders_charged(
     left: &[ResolvedTypeVariable],
     right: &[ResolvedTypeVariable],
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<bool, EvidenceValidationFailure> {
-    same_resolved_type_variables_with_charge(left, right, |work| budget.charge(work))
-        .map_err(|()| resource(span))
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.iter().zip(right) {
+        charge(budget, 1, span)?;
+        if left.id != right.id
+            || left.spelling != right.spelling
+            || !same_origin_charged(&left.origin, &right.origin, budget, span)?
+            || !same_kind_with_charge(&left.kind, &right.kind, || budget.charge(1))
+                .map_err(|()| resource(span))?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_binder_metadata_charged(
+    left: &[ResolvedTypeVariable],
+    right: &[ResolvedTypeVariable],
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<bool, EvidenceValidationFailure> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.iter().zip(right) {
+        charge(budget, 1, span)?;
+        if left.id != right.id
+            || left.spelling != right.spelling
+            || !same_origin_charged(&left.origin, &right.origin, budget, span)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_parameter_pairs_to_records_charged(
+    pairs: &[(TypeVariableId, Kind)],
+    records: &[ResolvedTypeVariable],
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<bool, EvidenceValidationFailure> {
+    if pairs.len() != records.len() {
+        return Ok(false);
+    }
+    for ((identity, kind), record) in pairs.iter().zip(records) {
+        charge(budget, 1, span)?;
+        if *identity != record.id
+            || !same_kind_with_charge(kind, &record.kind, || budget.charge(1))
+                .map_err(|()| resource(span))?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_origin_charged(
+    mut left: &Origin,
+    mut right: &Origin,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<bool, EvidenceValidationFailure> {
+    loop {
+        charge(budget, 1, span)?;
+        match (left, right) {
+            (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
+            (
+                Origin::Generated {
+                    cause: left_cause,
+                    reason: left_reason,
+                },
+                Origin::Generated {
+                    cause: right_cause,
+                    reason: right_reason,
+                },
+            ) if left_reason == right_reason => {
+                left = left_cause;
+                right = right_cause;
+            }
+            (
+                Origin::Related {
+                    primary: left_primary,
+                    related: left_related,
+                },
+                Origin::Related {
+                    primary: right_primary,
+                    related: right_related,
+                },
+            ) if left_related.len() == right_related.len() => {
+                charge(budget, left_related.len(), span)?;
+                if left_related != right_related {
+                    return Ok(false);
+                }
+                left = left_primary;
+                right = right_primary;
+            }
+            _ => return Ok(false),
+        }
+    }
 }
 
 fn reserve_type_pairs<'a>(
@@ -3350,12 +3685,16 @@ mod tests {
 
     use super::*;
     use crate::{
-        elaborate::{check_module, link_modules, link_modules_with_budget},
+        elaborate::{
+            check_module, link_modules, link_modules_with_budget, link_modules_with_budgets,
+        },
         interface::{EvidenceSelectionBuilder, match_implementation_head_structurally},
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{
-            CheckedModule, ImplementationRoute, ImplementationRouteHop, ResolvedTypeVariable,
+            CheckedModule, ImplementationRoute, ImplementationRouteHop,
+            LinkedCarrierMutationForTest, ResolvedTypeVariable,
+            same_imported_constructor_fact_with_budget,
         },
         source::{ByteRange, SourceFile},
         types::{InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
@@ -3385,8 +3724,9 @@ mod tests {
 
     #[test]
     fn fixed_kind_binder_authentication_uses_the_constraint_budget() {
-        // One binder record plus the Arrow and its two Type leaves.
-        const EXACT_WORK: usize = 4;
+        // One binder record, one Source-Origin cell, and the Arrow with its two
+        // Type leaves.
+        const EXACT_WORK: usize = 5;
         let source = SourceFile::new("constraint-kind-comparison.ash", "F")
             .expect("the comparison fixture should fit");
         let span = source
@@ -3420,12 +3760,12 @@ mod tests {
             kind: Kind::Type,
             ..parameter()
         }];
-        let mut mismatch = InterfaceConstraintBudget::with_limit(2);
+        let mut mismatch = InterfaceConstraintBudget::with_limit(3);
         assert_eq!(
             same_binders_charged(&left, &mismatched, &mut mismatch, span),
             Ok(false),
         );
-        assert_eq!(mismatch.used(), 2);
+        assert_eq!(mismatch.used(), 3);
     }
 
     #[test]
@@ -3472,6 +3812,7 @@ mod tests {
                     fact.interface,
                     program.registry(),
                     &variables,
+                    None,
                     &mut environments,
                     &mut constraint_work,
                     &mut type_work,
@@ -3482,6 +3823,7 @@ mod tests {
                     prerequisite.interface,
                     program.registry(),
                     &variables,
+                    None,
                     &mut environments,
                     &mut constraint_work,
                     &mut type_work,
@@ -3938,7 +4280,15 @@ mod tests {
     #[test]
     fn deep_public_linked_value_kinding_fits_the_default_budget_on_a_small_stack() {
         const DEPTH: usize = 32_768;
-        const EXACT_WORK: usize = 9 * DEPTH + 60;
+        // Checked/source type equality is fused into synthesis. The canonical
+        // lookup separately charges both checked and source Kind pairs, while
+        // each scheduled codomain owns one continuation cell. Iterative
+        // source-binder provenance owns its retained Origin cell. One retained
+        // coverage-set cell proves the owner binder was visited; the module
+        // and binder-owner authentication indexes add two fixed cells.
+        const EXACT_WORK: usize = 9 * DEPTH + 63;
+        // TypeWork retains only the two canonical environment records.
+        const EXACT_TYPE_WORK: usize = 2;
 
         thread::Builder::new()
             .stack_size(256 * 1024)
@@ -3999,12 +4349,25 @@ mod tests {
                 );
                 assert_eq!(one_short.used(), EXACT_WORK - 1);
 
+                let mut type_one_short = TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1);
+                let failure = validate_interface_evidence_with_budget(
+                    fixture(),
+                    &mut InterfaceConstraintBudget::with_limit(EXACT_WORK),
+                    &mut type_one_short,
+                )
+                .expect_err("one-short linked Kind-mirror work must prevent publication");
+                assert_eq!(
+                    failure.reason(),
+                    EvidenceValidationReason::TypeResourceExhausted,
+                );
+                assert_eq!(type_one_short.used(), EXACT_TYPE_WORK - 1);
+
                 let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
-                let mut type_work = TypeWorkBudget::default();
+                let mut type_work = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
                 validate_interface_evidence_with_budget(fixture(), &mut exact, &mut type_work)
                     .expect("the exact public linked Kind budget should validate");
                 assert_eq!(exact.used(), EXACT_WORK);
-                assert_eq!(type_work.used(), 2);
+                assert_eq!(type_work.used(), EXACT_TYPE_WORK);
 
                 validate_interface_evidence(fixture())
                     .expect("the admitted deep linked program must fit the production budget");
@@ -4080,6 +4443,116 @@ mod tests {
             checked.push(check_module(resolved).expect("the validation fixture should check"));
         }
         checked
+    }
+
+    fn deep_constructor_lifecycle_checked_graph() -> (Vec<CheckedModule>, ModuleId) {
+        const DEPTH: usize = 32_768;
+        let fixture = ValidationFixture::create(concat!(
+            "import dependency (Deep, Make)\n",
+            "main : Unit -> Unit\nmain value = value\n",
+        ));
+        fixture.write("dependency.ash", "pub type Deep = Make(Unit)\n");
+        let graph = fixture.graph();
+        let mut checked = Vec::new();
+        let mut constructor = None;
+
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let dependency = checked
+                        .iter()
+                        .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                        .expect("the deep constructor dependency should check first");
+                    DependencyExports::new(edge, dependency.exports())
+                        .expect("the deep constructor edge should match its summary")
+                })
+                .collect::<Vec<_>>();
+            let mut resolved = resolve_module(module, &dependencies)
+                .expect("the deep constructor lifecycle module should resolve");
+            if module.id() != graph.entry() {
+                let id = resolved.registry().constructors()[0].id;
+                let mut payload = Type::Unit;
+                for _ in 0..DEPTH {
+                    payload = Type::Function(Box::new(Type::Int), Box::new(payload));
+                }
+                assert!(resolved.replace_local_constructor_payload_for_test(id, payload));
+                constructor = Some(id);
+            } else {
+                let id = constructor.expect("the defining constructor should precede the entry");
+                let exported = checked[0]
+                    .exports()
+                    .constructor("Make")
+                    .expect("the checked dependency should publish Make's physical scheme");
+                let imported = resolved
+                    .imported_facts()
+                    .constructor(id)
+                    .expect("the targeted entry should retain Make's physical scheme");
+                assert_eq!(imported.scheme.type_parameters.len(), 0);
+                assert_eq!(imported.scheme.requirements.len(), 0);
+                let mut type_work = TypeWorkBudget::with_limit(0);
+                let mut constraint_work = InterfaceConstraintBudget::default();
+                assert_eq!(
+                    same_imported_constructor_fact_with_budget(
+                        imported,
+                        exported,
+                        &mut type_work,
+                        &mut constraint_work,
+                    ),
+                    Ok(true),
+                );
+                assert_eq!(type_work.used(), 0);
+            }
+            checked.push(
+                check_module(resolved)
+                    .expect("checking should consume the imported physical scheme iteratively"),
+            );
+        }
+        (checked, graph.entry())
+    }
+
+    #[test]
+    fn deep_constructor_scheme_crosses_check_and_link_then_is_disposed_before_core() {
+        // Seven graph/link cells precede the combined registry's twelve fixed
+        // module/nominal/family/constructor/global inventory cells.
+        const LINK_CONSTRAINT_WORK: usize = 7 + 12;
+        const ONE_SHORT_PREFIX: usize = 7;
+        std::thread::Builder::new()
+            .name("deep-constructor-check-link-lifecycle".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let (measured_modules, measured_entry) = deep_constructor_lifecycle_checked_graph();
+                let mut measured = InterfaceConstraintBudget::with_limit(usize::MAX);
+                let measured_program =
+                    link_modules_with_budget(measured_modules, measured_entry, &mut measured)
+                        .expect("the deep constructor registry should link");
+                let exact_work = measured.used();
+                assert_eq!(exact_work, LINK_CONSTRAINT_WORK);
+                drop(
+                    validate_interface_evidence(measured_program)
+                        .expect("the minimal linked program should publish before Core"),
+                );
+
+                let (short_modules, short_entry) = deep_constructor_lifecycle_checked_graph();
+                let mut one_short = InterfaceConstraintBudget::with_limit(exact_work - 1);
+                link_modules_with_budget(short_modules, short_entry, &mut one_short)
+                    .expect_err("one missing late-link cell must reject before publication");
+                assert_eq!(one_short.used(), ONE_SHORT_PREFIX);
+
+                let (exact_modules, exact_entry) = deep_constructor_lifecycle_checked_graph();
+                let mut exact = InterfaceConstraintBudget::with_limit(exact_work);
+                let program = link_modules_with_budget(exact_modules, exact_entry, &mut exact)
+                    .expect("the exact late-link boundary should publish the program");
+                assert_eq!(exact.used(), exact_work);
+                drop(
+                    validate_interface_evidence(program)
+                        .expect("the exact deep linked program should validate before Core"),
+                );
+            })
+            .expect("the deep check/link lifecycle worker should spawn")
+            .join()
+            .expect("accepted and rejected deep lifecycle owners must tear down iteratively");
     }
 
     fn local_program() -> ResolvedModuleProgram {
@@ -4213,6 +4686,165 @@ mod tests {
             "relay value = value\n\n",
             "main : Unit -> Unit\nmain () = ()\n",
         ))
+    }
+
+    fn multi_module_all_binder_owner_program() -> ResolvedModuleProgram {
+        let fixture = ValidationFixture::create(concat!(
+            "import dependency (relay)\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        fixture.write(
+            "dependency.ash",
+            concat!(
+                "pub type Wrapped<F : Type -> Type, A> = Wrapped(F<A>)\n\n",
+                "pub interface Extract<A> {\nextract : A -> A\n}\n\n",
+                "pub impl<F : Type -> Type, A> Extract<Wrapped<F, A>> {\n",
+                "extract value = value\n",
+                "}\n\n",
+                "pub relay<G : Type -> Type> : G<Int> -> G<Int>\n",
+                "relay value = value\n",
+            ),
+        );
+        let graph = fixture.graph();
+        link_modules(check_graph(&graph), graph.entry())
+            .expect("the all-binder-owner fixture should link")
+    }
+
+    #[test]
+    fn linked_registry_indexes_precharge_exactly_before_reserve_and_retry() {
+        const WIDTH: usize = 32_768;
+        std::thread::Builder::new()
+            .name("wide-linked-registry-index-reservation".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("linked-registry-indexes.ash", "index")
+                    .expect("the index source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 5).expect("the index range should be ordered"))
+                    .expect("the index span should fit");
+                let mut short = InterfaceConstraintBudget::with_limit(2 * WIDTH - 1);
+                assert!(
+                    reserve_linked_registry_authentication_indexes(WIDTH, WIDTH, &mut short, span,)
+                        .is_err()
+                );
+                assert_eq!(short.used(), 0, "the aggregate index charge is atomic");
+
+                for _ in 0..2 {
+                    let mut exact = InterfaceConstraintBudget::with_limit(2 * WIDTH);
+                    let (modules, owners) = reserve_linked_registry_authentication_indexes(
+                        WIDTH, WIDTH, &mut exact, span,
+                    )
+                    .expect("the exact module and owner index capacities should fit");
+                    assert_eq!(exact.used(), 2 * WIDTH);
+                    assert!(modules.is_empty());
+                    assert!(owners.is_empty());
+                }
+            })
+            .expect("the wide linked-registry index worker should start")
+            .join()
+            .expect("wide linked-registry index success and rejection must fit 256 KiB");
+
+        let program = multi_module_all_binder_owner_program();
+        assert!(program.groups().len() > 1);
+        assert!(program.registry().nominals().iter().any(|nominal| {
+            program
+                .registry()
+                .nominal_parameters(nominal.id)
+                .is_some_and(|parameters| !parameters.is_empty())
+        }));
+        assert!(
+            program
+                .groups()
+                .iter()
+                .any(|group| !group.interface_facts().is_empty())
+        );
+        assert!(program.groups().iter().any(|group| {
+            group
+                .schemes()
+                .iter()
+                .any(|scheme| !scheme.scheme.type_parameters.is_empty())
+        }));
+        assert!(program.groups().iter().any(|group| {
+            group
+                .implementation_facts()
+                .iter()
+                .any(|fact| !fact.head_parameters.is_empty())
+        }));
+
+        let index_boundary = 1 + program.groups().len() + program.registry().type_variable_count();
+        let mut index_short = InterfaceConstraintBudget::with_limit(index_boundary - 1);
+        assert!(authenticate_linked_registry_facts(&program, &mut index_short).is_err());
+        assert_eq!(
+            index_short.used(),
+            1,
+            "root authentication precedes the atomic index-storage charge",
+        );
+
+        let mut measured = InterfaceConstraintBudget::default();
+        authenticate_linked_registry_facts(&program, &mut measured)
+            .expect("the all-owner linked registry should authenticate");
+        let exact_work = measured.used();
+        assert!(exact_work > index_boundary);
+        let mut one_short = InterfaceConstraintBudget::with_limit(exact_work - 1);
+        assert!(authenticate_linked_registry_facts(&program, &mut one_short).is_err());
+        for _ in 0..2 {
+            let mut exact = InterfaceConstraintBudget::with_limit(exact_work);
+            authenticate_linked_registry_facts(&program, &mut exact)
+                .expect("the immutable all-owner registry should remain reusable");
+            assert_eq!(exact.used(), exact_work);
+        }
+    }
+
+    fn linked_higher_kinded_diamond_program() -> (ResolvedModuleProgram, ModuleId) {
+        let fixture = ValidationFixture::create(concat!(
+            "import left (relay as leftRelay, expose as leftExpose, Wrap as LeftWrap, ",
+            "First as LeftFirst, Capsule as LeftCapsule, Observe as LeftObserve, ",
+            "observe as leftObserve, impl Observe)\n",
+            "import right (relay as rightRelay, expose as rightExpose, Wrap as RightWrap, ",
+            "First as RightFirst, Capsule as RightCapsule, Observe as RightObserve, ",
+            "observe as rightObserve, impl Observe)\n\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+        ));
+        fixture.write(
+            "base.ash",
+            concat!(
+                "type Secret<F : Type -> Type> = Secret(F<Int>)\n\n",
+                "pub expose<F : Type -> Type> : Secret<F> -> Secret<F>\n",
+                "expose value = value\n\n",
+                "pub type Wrap<F : Type -> Type, A> =\n",
+                "First(F<A>)\n| Second(F<A>)\n\n",
+                "pub opaque type Capsule<F : Type -> Type> = Seal(Unit)\n\n",
+                "pub interface Observe<A> {\nobserve : A -> A\n}\n\n",
+                "pub interface Witness<A> {\nwitness : A -> A\n}\n\n",
+                "pub impl<F : Type -> Type, A> Observe<Wrap<F, A>> where Witness<A> {\n",
+                "observe value = value\n}\n\n",
+                "pub impl<F : Type -> Type> Observe<Capsule<F>> {\n",
+                "observe value = value\n}\n\n",
+                "pub relay<G : Type -> Type> : G<Int> -> G<Int>\n",
+                "relay value = value\n",
+            ),
+        );
+        let facade = concat!(
+            "pub import base (relay, expose, Wrap, First, Capsule, Observe, observe, ",
+            "impl Observe)\n",
+        );
+        fixture.write("left.ash", facade);
+        fixture.write("right.ash", facade);
+        let graph = fixture.graph();
+        let program = link_modules(check_graph(&graph), graph.entry())
+            .expect("the higher-kinded diamond fixture should link");
+        let base = program
+            .groups()
+            .iter()
+            .find(|group| {
+                group
+                    .schemes()
+                    .iter()
+                    .any(|scheme| scheme.spelling == "relay")
+            })
+            .map(ResolvedModuleGroup::module)
+            .expect("the linked diamond should retain its defining base group");
+        (program, base)
     }
 
     fn single_substitution(
@@ -4563,6 +5195,213 @@ mod tests {
             .reason(),
             EvidenceValidationReason::InvalidEvidenceRoot,
         );
+    }
+
+    #[test]
+    fn rejects_checked_global_parameter_kind_mirror_before_core() {
+        let mut program = higher_kinded_generic_program();
+        let module = program.groups()[0].module();
+        assert!(program.replace_first_checked_global_parameter_kind_for_test(module, Kind::Type,));
+
+        let failure = validate_interface_evidence(program)
+            .expect_err("a checked scheme Kind mirror must match the combined registry");
+
+        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+    }
+
+    #[test]
+    fn authenticates_one_reusable_higher_kinded_linked_diamond() {
+        let (program, _) = linked_higher_kinded_diamond_program();
+        validate_interface_evidence(program)
+            .expect("the exact public, hidden, opaque, and implementation mirrors must link");
+    }
+
+    #[test]
+    fn rejects_every_task8_kinded_linked_diamond_carrier_before_core() {
+        let mutations = [
+            LinkedCarrierMutationForTest::NominalParameterKind(0),
+            LinkedCarrierMutationForTest::NominalParameterKind(1),
+            LinkedCarrierMutationForTest::ConstructorIdentity,
+            LinkedCarrierMutationForTest::ConstructorOrdinal,
+            LinkedCarrierMutationForTest::DefiningModule,
+            LinkedCarrierMutationForTest::GlobalRegistryKind,
+            LinkedCarrierMutationForTest::GlobalSourceParameterIdentity,
+            LinkedCarrierMutationForTest::GlobalSourceParameterSpelling,
+            LinkedCarrierMutationForTest::GlobalSourceParameterOrigin,
+            LinkedCarrierMutationForTest::GlobalSourceNameIdentity,
+            LinkedCarrierMutationForTest::GlobalSourceNameSpelling,
+            LinkedCarrierMutationForTest::GlobalSourceNameOrigin,
+            LinkedCarrierMutationForTest::GlobalSourceKind,
+            LinkedCarrierMutationForTest::GlobalCheckedKind,
+            LinkedCarrierMutationForTest::GlobalSourceType,
+            LinkedCarrierMutationForTest::InterfaceTokenIdentity,
+            LinkedCarrierMutationForTest::InterfaceTokenSourceIndex,
+            LinkedCarrierMutationForTest::InterfaceSourceParameterIdentity,
+            LinkedCarrierMutationForTest::InterfaceSourceParameterSpelling,
+            LinkedCarrierMutationForTest::InterfaceSourceMethodIdentity,
+            LinkedCarrierMutationForTest::InterfaceSourceMethodSpelling,
+            LinkedCarrierMutationForTest::InterfaceSourceMethodSpan,
+            LinkedCarrierMutationForTest::InterfaceSourceMethodLocalBinder,
+            LinkedCarrierMutationForTest::InterfaceRegistryKind,
+            LinkedCarrierMutationForTest::InterfaceFactParameterIdentity,
+            LinkedCarrierMutationForTest::InterfaceFactParameterSpelling,
+            LinkedCarrierMutationForTest::InterfaceFactParameterKind,
+            LinkedCarrierMutationForTest::InterfaceHiddenFactParameterKind,
+            LinkedCarrierMutationForTest::InterfaceFactParameterOrigin,
+            LinkedCarrierMutationForTest::InterfaceMethodType,
+            LinkedCarrierMutationForTest::InterfaceMethodOrigin,
+            LinkedCarrierMutationForTest::ImplementationRegistryKind,
+            LinkedCarrierMutationForTest::ImplementationSourceParameterIdentity,
+            LinkedCarrierMutationForTest::ImplementationSourceParameterSpelling,
+            LinkedCarrierMutationForTest::ImplementationSourceParameterOrigin,
+            LinkedCarrierMutationForTest::ImplementationSourceKind,
+            LinkedCarrierMutationForTest::ImplementationFactKind,
+            LinkedCarrierMutationForTest::ImplementationOpaqueFactKind,
+            LinkedCarrierMutationForTest::ImplementationTokenIdentity,
+            LinkedCarrierMutationForTest::ImplementationTokenInterface,
+            LinkedCarrierMutationForTest::ImplementationTokenSourceIndex,
+            LinkedCarrierMutationForTest::ImplementationTokenMethod,
+            LinkedCarrierMutationForTest::ImplementationPrerequisite,
+            LinkedCarrierMutationForTest::ImplementationMethodRequirement,
+            LinkedCarrierMutationForTest::ImplementationMethodIdentity,
+            LinkedCarrierMutationForTest::ImplementationMethodBinder,
+        ];
+        for mutation in mutations {
+            let (mut program, base) = linked_higher_kinded_diamond_program();
+            assert!(
+                program.corrupt_linked_carrier_for_test(base, mutation),
+                "the linked diamond must retain {mutation:?}",
+            );
+            assert_eq!(
+                validate_interface_evidence(program)
+                    .expect_err("every independent linked carrier must authenticate before Core")
+                    .reason(),
+                EvidenceValidationReason::UnknownIdentity,
+                "{mutation:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_implementation_method_parameter_kind_mirror_before_core() {
+        let mut program = higher_kinded_generic_program();
+        let module = program.groups()[0].module();
+        assert!(
+            program
+                .replace_first_implementation_method_parameter_kind_for_test(module, Kind::Type,)
+        );
+
+        let failure = validate_interface_evidence(program)
+            .expect_err("an implementation method Kind mirror must match its registry binder");
+
+        assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+    }
+
+    #[test]
+    fn rejects_every_surviving_linked_nominal_and_constructor_mirror_before_core() {
+        enum Mutation {
+            NominalParameter,
+            Family,
+            Payload,
+            DefiningOwner,
+        }
+
+        for mutation in [
+            Mutation::NominalParameter,
+            Mutation::Family,
+            Mutation::Payload,
+            Mutation::DefiningOwner,
+        ] {
+            let mut program = match mutation {
+                Mutation::Family => entry_program(concat!(
+                    "type Choice<A> =\n",
+                    "First(A)\n",
+                    "| Second(A)\n\n",
+                    "main : Unit -> Unit\n",
+                    "main () = ()\n",
+                )),
+                _ => higher_kinded_generic_program(),
+            };
+            let changed = match mutation {
+                Mutation::NominalParameter => {
+                    program.replace_first_linked_nominal_parameter_kind_for_test(Kind::Type)
+                }
+                Mutation::Family => program.truncate_first_linked_constructor_family_for_test(),
+                Mutation::Payload => {
+                    let owner = program.registry().nominals()[0].id;
+                    program.replace_first_linked_constructor_payload_for_test(Type::Nominal(owner))
+                }
+                Mutation::DefiningOwner => {
+                    program.detach_first_linked_constructor_from_owner_for_test()
+                }
+            };
+            assert!(
+                changed,
+                "the selected linked mutation must reach its carrier"
+            );
+
+            let failure = validate_interface_evidence(program)
+                .expect_err("every surviving linked registry mirror must authenticate");
+            assert_eq!(failure.reason(), EvidenceValidationReason::UnknownIdentity);
+        }
+    }
+
+    #[test]
+    fn rejects_unused_inline_and_implementation_registry_binder_mirrors_before_core() {
+        let mut inline = entry_program(concat!(
+            "fn operational<F : Type -> Type>(value : F<Int>) -> F<Int> {\n",
+            "value\n",
+            "}\n\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
+        ));
+        let module = inline.groups()[0].module();
+        assert!(inline.erase_first_inline_global_binder_occurrence_for_test(module));
+        assert_eq!(
+            validate_interface_evidence(inline)
+                .expect_err("an inline checked/source pair cannot retain an unused binder")
+                .reason(),
+            EvidenceValidationReason::UnknownIdentity,
+        );
+
+        let mut implementation = higher_kinded_generic_program();
+        assert!(implementation.corrupt_first_linked_implementation_parameter_spelling_for_test());
+        assert_eq!(
+            validate_interface_evidence(implementation)
+                .expect_err("an implementation binder record must match registry metadata")
+                .reason(),
+            EvidenceValidationReason::UnknownIdentity,
+        );
+    }
+
+    #[test]
+    fn rejects_correlated_interface_method_shape_tampering_before_core() {
+        for replacement in [
+            None,
+            Some(Type::Function(Box::new(Type::Int), Box::new(Type::Int))),
+        ] {
+            let mut program = entry_program(concat!(
+                "interface View<A> {\n",
+                "view : A -> A\n",
+                "}\n\n",
+                "main : Unit -> Unit\n",
+                "main () = ()\n",
+            ));
+            let group = &program.groups()[0];
+            let module = group.module();
+            let parameter = group.interface_facts()[0].parameter.id;
+            let replacement = replacement.unwrap_or(Type::Variable(parameter));
+            assert!(
+                program.replace_first_interface_method_type_pair_for_test(module, replacement,)
+            );
+
+            assert_eq!(
+                validate_interface_evidence(program)
+                    .expect_err("a linked interface method must retain its exact shape")
+                    .reason(),
+                EvidenceValidationReason::UnknownIdentity,
+            );
+        }
     }
 
     #[test]
@@ -6412,11 +7251,22 @@ mod tests {
 
     #[test]
     fn linked_registry_entries_have_an_exact_constraint_limit() {
-        const PREDECESSOR_RELATION_WORK: usize = 97;
+        // The complete canonical interface-carrier mirror is authenticated by
+        // linked-registry ingress before this private registry build begins.
+        // The build therefore owns three fewer duplicate comparison cells.
+        const PREDECESSOR_RELATION_WORK: usize = 94;
         // The one retained implementation head is additionally authenticated
         // against canonical IOTA: two total-synthesis cells for `Int` and
         // one `Type`/`Type` Kind comparison cell.
         const IMPLEMENTATION_HEAD_KIND_WORK: usize = 3;
+        // The retained `(A, A) -> Bool` interface method authenticates its
+        // free-variable closure and outer Function shape in the same Kind/type
+        // walk that validates the linked value, so it has no standalone
+        // constraint traversal. Charging retained provenance and binder
+        // mirrors still has a net additional one-cell carrier cost here.
+        // Six newly iterative Source-Origin cells displace five cells from the
+        // removed standalone checked/source value-type equality walk.
+        const FUSED_CARRIER_NET_WORK: usize = 6 - 5;
         let program = local_program();
         let mut measured = InterfaceConstraintBudget::default();
         drop(
@@ -6426,7 +7276,7 @@ mod tests {
         let limit = measured.used();
         assert_eq!(
             limit,
-            PREDECESSOR_RELATION_WORK + IMPLEMENTATION_HEAD_KIND_WORK,
+            PREDECESSOR_RELATION_WORK + IMPLEMENTATION_HEAD_KIND_WORK + FUSED_CARRIER_NET_WORK,
             "every retained registry relationship, binder record, total-synthesis cell, and Kind pair is charged"
         );
 
@@ -6528,7 +7378,11 @@ mod tests {
         let linked = link_modules_with_budget(check_graph(&graph), graph.entry(), &mut measured)
             .expect("the checked local graph should link");
         let link_used = measured.used();
-        assert_eq!(link_used, 7, "every linked retained entry is charged");
+        // The graph/link prefix costs seven cells. Combined-registry
+        // authentication adds five fixed structural inventory cells and one
+        // binder-index cell. The three-cell interface mirror belongs to the
+        // consuming linked-evidence boundary.
+        assert_eq!(link_used, 7 + 6, "every linked retained entry is charged");
         drop(
             validate_interface_evidence_with_budget(
                 linked,
@@ -6567,6 +7421,75 @@ mod tests {
             .expect("the exact combined boundary should admit validation"),
         );
         assert_eq!(exact.used(), total);
+    }
+
+    #[test]
+    fn link_exposes_exact_independent_combined_registry_ledgers() {
+        // The ordinary link prefix is seven cells. The one-interface local
+        // registry contributes five fixed module/interface/global/
+        // implementation inventory cells and one binder-index cell. The
+        // consuming linked-evidence boundary owns the full interface mirror.
+        // TypeWork owns only the retained record and its Type Kind plus the
+        // canonical-variable staging cell.
+        const CONSTRAINT_WORK: usize = 7 + 6;
+        const TYPE_WORK: usize = 3;
+        let fixture = ValidationFixture::create(concat!(
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\n",
+            "impl Equal<Int> {\nequal (left, right) = left == right\n}\n\n",
+            "main : Unit -> Bool\nmain () = equal((1, 1))\n",
+        ));
+        let graph = fixture.graph();
+
+        let mut constraint_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+        let mut untouched_type = TypeWorkBudget::with_limit(TYPE_WORK);
+        let constraint_failure = link_modules_with_budgets(
+            check_graph(&graph),
+            graph.entry(),
+            &mut constraint_short,
+            &mut untouched_type,
+        )
+        .expect_err("one missing combined-registry owner-index cell must reject linking");
+        assert_eq!(
+            constraint_failure,
+            crate::elaborate::TypeError::Internal(
+                crate::elaborate::ElaborationFailure::ConstraintResourceExhausted,
+            ),
+        );
+        assert_eq!(constraint_short.used(), CONSTRAINT_WORK - 1);
+        assert_eq!(untouched_type.used(), 0);
+
+        let mut constraint = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+        let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+        let type_failure = link_modules_with_budgets(
+            check_graph(&graph),
+            graph.entry(),
+            &mut constraint,
+            &mut type_short,
+        )
+        .expect_err("one missing combined-registry retention cell must reject linking");
+        assert_eq!(
+            type_failure,
+            crate::elaborate::TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            ),
+        );
+        assert_eq!(constraint.used(), CONSTRAINT_WORK);
+        assert_eq!(type_short.used(), 0);
+
+        for _ in 0..2 {
+            let mut constraint = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+            let mut type_work = TypeWorkBudget::with_limit(TYPE_WORK);
+            let linked = link_modules_with_budgets(
+                check_graph(&graph),
+                graph.entry(),
+                &mut constraint,
+                &mut type_work,
+            )
+            .expect("the exact independent link budgets should fit reproducibly");
+            assert_eq!(constraint.used(), CONSTRAINT_WORK);
+            assert_eq!(type_work.used(), TYPE_WORK);
+            drop(linked);
+        }
     }
 
     #[test]

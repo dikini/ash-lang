@@ -886,6 +886,16 @@ mod tests {
         source
     }
 
+    fn public_interface_declarations(width: usize) -> String {
+        let mut source = String::new();
+        for index in 0..width {
+            source.push_str(&format!(
+                "pub interface Marker{index}<A> {{\nmark{index} : A -> A\n}}\n\n"
+            ));
+        }
+        source
+    }
+
     fn public_route_reexports(module: &str, width: usize) -> String {
         let mut selected = Vec::with_capacity(width * 3);
         let mut repeated_implementations = Vec::with_capacity(width);
@@ -1205,6 +1215,100 @@ mod tests {
         .expect("the measured cumulative work should fit exactly");
         assert_eq!(observation.value_display(), "42");
         assert_eq!(exact_budget.used(), exact);
+    }
+
+    #[test]
+    fn wide_interface_graph_records_the_exact_validation_prefix() {
+        const WIDTH: usize = 5_000;
+        // Dependency checking is declaration 8W + checked facts 9W +
+        // selector admission 10W + summary freeze 10W. Summary freeze visits
+        // each public method reference but does not allocate a hidden-carrier
+        // slot for its already-public interface owner.
+        const DEPENDENCY_CHECKED: usize = 37 * WIDTH;
+        // Entry resolution adds summary authentication 6W, first-route
+        // interface retention 9W, and one dependency-route cell.
+        const ENTRY_RESOLVED: usize = 52 * WIDTH + 1;
+        const ENTRY_CHECKED: usize = 62 * WIDTH + 12;
+        // Linking adds its W+7 graph/carrier prefix, W+5 structural
+        // authentication, and the W-cell canonical-owner uniqueness index.
+        // It does not repeat the 3W complete interface mirror owned by the
+        // consuming evidence validator.
+        const LINKED: usize = 65 * WIDTH + 24;
+        const VALIDATED: usize = 110 * WIDTH + 68;
+        let source = TestSource::write(concat!(
+            "import dependency as Dependency\n",
+            "main : Unit -> Int\n",
+            "main () = 42\n",
+        ));
+        source.write_sibling("dependency.ash", &public_interface_declarations(WIDTH));
+
+        let graph = load_module_graph(&source.0, &ModuleRoots::empty())
+            .expect("the wide interface graph should load");
+        let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
+        let mut checked_by_module: HashMap<ModuleId, usize> = HashMap::new();
+        let mut resolution_type_work = TypeWorkBudget::default();
+        let mut checking_type_work = TypeWorkBudget::default();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut measured = InterfaceConstraintBudget::with_limit(usize::MAX);
+        let mut phase_boundaries = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let index = checked_by_module
+                        .get(&edge.target())
+                        .expect("dependency order should publish the dependency first");
+                    DependencyExports::new(edge, checked[*index].exports())
+                        .expect("the dependency summary should match its edge")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module_with_budget(
+                module,
+                &dependencies,
+                &mut resolution_type_work,
+                &mut measured,
+            )
+            .expect("the unbounded resolution stage should fit");
+            phase_boundaries.push(measured.used());
+            let checked_module = check_module_with_budget(
+                resolved,
+                &mut checking_type_work,
+                &mut coverage_work,
+                &mut measured,
+            )
+            .expect("the unbounded checking stage should fit");
+            phase_boundaries.push(measured.used());
+            checked_by_module.insert(module.id(), checked.len());
+            checked.push(checked_module);
+        }
+        let linked = link_modules_with_budget(checked, graph.entry(), &mut measured)
+            .expect("the unbounded link stage should fit");
+        phase_boundaries.push(measured.used());
+        drop(
+            validate_interface_evidence_with_budget(
+                linked,
+                &mut measured,
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the unbounded validation stage should fit"),
+        );
+        phase_boundaries.push(measured.used());
+        assert_eq!(
+            phase_boundaries,
+            [
+                0,
+                DEPENDENCY_CHECKED,
+                ENTRY_RESOLVED,
+                ENTRY_CHECKED,
+                LINKED,
+                VALIDATED,
+            ],
+        );
+        const {
+            assert!(LINKED < crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
+            assert!(VALIDATED > crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
+        }
     }
 
     #[test]

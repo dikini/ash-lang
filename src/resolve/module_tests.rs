@@ -5,18 +5,24 @@ use std::{
 };
 
 use crate::{
+    elaborate::check_module,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolved::{
         BinderId, ExportSummary, ExportedTypeAccess, ImportedNominalFactRef, ImportedTypeAccess,
-        ResolvedDefinitionKind, ResolvedExprKind, ResolvedModule, ResolvedPatternKind,
-        ResolvedTypeVariable,
+        ResolvedBuildFailure, ResolvedDefinitionKind, ResolvedExprKind, ResolvedModule,
+        ResolvedPatternKind, ResolvedTypeVariable, SummaryCarrierMutationForTest,
+        SummaryConstructorFusionMutationForTest, SummaryDuplicateFactForTest,
+        SummaryHiddenDiamondMutationForTest, SummaryOrderForTest, SummaryWithheldMutationForTest,
     },
     source::Origin,
-    types::{ConstructorId, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
+    types::{
+        ConstructorId, Kind, NominalTypeId, TYPE_WORK_LIMIT, Type, TypeVariableId, TypeWorkBudget,
+    },
 };
 
 use super::{
     DependencyExports, ResolveError, ResolveModuleError, ResolveReason, Resolver, resolve_module,
+    resolve_module_with_budget,
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -121,6 +127,1354 @@ fn reordered_dependency_pairs_are_rejected_before_scope_installation() {
     let ResolveModuleError::Resolution(error) = error else {
         panic!("mismatched dependencies should fail during resolution")
     };
+    assert_eq!(error.reason, ResolveReason::InternalState);
+}
+
+#[test]
+fn malformed_summary_admission_precedes_later_type_resource_in_dependency_order() {
+    for malformed_first in [true, false] {
+        let tree = TempTree::create();
+        let first = if malformed_first {
+            "malformed"
+        } else {
+            "clean"
+        };
+        let second = if malformed_first {
+            "clean"
+        } else {
+            "malformed"
+        };
+        let entry = format!("import {first} as First\nimport {second} as Second\n");
+        let graph = load(&tree, &entry, &[("malformed.ash", ""), ("clean.ash", "")]);
+        let malformed = module_named(&graph, "malformed.ash");
+        let clean = module_named(&graph, "clean.ash");
+        let make_summary = |module: &LoadedModule| {
+            ExportSummary::test_fixture(
+                module.id(),
+                vec![(
+                    "unit",
+                    BinderId::resolved(module.id(), 0),
+                    Type::Unit,
+                    Origin::Source(module.surface().span),
+                )],
+                vec![],
+                vec![],
+                vec![],
+            )
+        };
+        let mut malformed_summary = make_summary(malformed);
+        assert!(malformed_summary.corrupt_order_for_test(SummaryOrderForTest::Term));
+        let clean_summary = make_summary(clean);
+        let importer = module_named(&graph, "entry.ash");
+        let summaries = if malformed_first {
+            [&malformed_summary, &clean_summary]
+        } else {
+            [&clean_summary, &malformed_summary]
+        };
+        let dependencies = importer
+            .dependencies()
+            .iter()
+            .zip(summaries)
+            .map(|(edge, summary)| {
+                DependencyExports::new(edge, summary).expect("the summary must match its edge")
+            })
+            .collect::<Vec<_>>();
+        let mut type_work = TypeWorkBudget::with_limit(3);
+        let error = resolve_module_with_budget(
+            importer,
+            &dependencies,
+            &mut type_work,
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect_err("the first dependency boundary must own the failure");
+        let ResolveModuleError::Resolution(error) = error else {
+            panic!("summary admission should fail before the local Kind gate")
+        };
+        assert_eq!(
+            error.reason,
+            if malformed_first {
+                ResolveReason::InternalState
+            } else {
+                ResolveReason::TypeResourceExhausted
+            },
+        );
+        assert_eq!(type_work.used(), if malformed_first { 0 } else { 3 });
+    }
+}
+
+#[test]
+fn unselected_kind_invalid_summary_fact_is_rejected_before_local_checking() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (Token)\nmain : Unit -> Unit\nmain () = ()\n",
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub type Token = Token\n\n",
+                "pub lift<F : Type -> Type> : F<Int> -> F<Int>\n",
+                "lift value = value\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let checked = check_module(
+        resolve_module(dependency, &[]).expect("the dependency should resolve before mutation"),
+    )
+    .expect("the dependency should check before mutation");
+    let mut summary = checked.into_exports();
+    assert!(summary.replace_first_term_parameter_kind_for_test(Kind::Type));
+    let importer = module_named(&graph, "entry.ash");
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("an unselected forged scheme must fail dependency-summary admission");
+
+    assert_eq!(error.reason, ResolveReason::InternalState);
+}
+
+#[test]
+fn frozen_summary_retains_authoritative_declaration_order() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency as Dependency\n",
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub zeta : Unit -> Unit\nzeta value = value\n\n",
+                "pub alpha : Unit -> Unit\nalpha value = value\n\n",
+                "pub type Zed = Zed\n\n",
+                "pub type Able = Able\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let summary = check_module(
+        resolve_module(dependency, &[]).expect("the ordered dependency should resolve"),
+    )
+    .expect("the ordered dependency should check")
+    .into_exports();
+
+    assert_eq!(
+        summary.term_authentication_order_for_test(),
+        ["zeta", "alpha"],
+    );
+    assert_eq!(
+        summary.nominal_authentication_order_for_test(),
+        ["Zed", "Able"],
+    );
+    assert_eq!(
+        summary.constructor_authentication_order_for_test(),
+        ["Zed", "Able"],
+    );
+    let importer = module_named(&graph, "entry.ash");
+    let retained = resolve_with(importer, &[&summary])
+        .expect("the qualified import should preserve authenticated freeze order");
+    let retained_binders = retained
+        .imported_facts()
+        .globals()
+        .map(|global| global.binder)
+        .collect::<Vec<_>>();
+    let expected_binders = summary
+        .terms()
+        .map(|(_, global)| global.binder)
+        .collect::<Vec<_>>();
+    assert_eq!(retained_binders, expected_binders);
+}
+
+#[test]
+fn unselected_constructor_scheme_corruption_fails_summary_admission() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub type Boxed<A> = Boxed(A)\n\n",
+                "pub marker : Unit -> Unit\nmarker value = value\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let checked = check_module(
+        resolve_module(dependency, &[]).expect("the constructor dependency should resolve"),
+    )
+    .expect("the constructor dependency should check");
+    let mut summary = checked.into_exports();
+    assert!(summary.replace_first_constructor_scheme_value_type_for_test(Type::Unit));
+    let importer = module_named(&graph, "entry.ash");
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("an unselected forged constructor scheme must fail admission");
+
+    assert_eq!(error.reason, ResolveReason::InternalState);
+}
+
+#[test]
+fn unselected_implementation_method_corruption_fails_summary_admission() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub interface Observe<A> {\nobserve : A -> A\n}\n\n",
+                "pub impl Observe<Int> {\nobserve value = value\n}\n\n",
+                "pub marker : Unit -> Unit\nmarker value = value\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let checked = check_module(
+        resolve_module(dependency, &[]).expect("the implementation dependency should resolve"),
+    )
+    .expect("the implementation dependency should check");
+    let mut summary = checked.into_exports();
+    assert!(summary.replace_first_implementation_method_value_type_for_test(Type::Unit));
+    let importer = module_named(&graph, "entry.ash");
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("an unselected kind-valid method forgery must fail admission");
+
+    assert_eq!(error.reason, ResolveReason::InternalState);
+}
+
+#[test]
+fn exhaustive_summary_orders_indexes_aliases_and_owners_fail_before_local_checking() {
+    #[derive(Clone, Copy)]
+    enum Mutation {
+        Order(SummaryOrderForTest),
+        NominalIndex,
+        ConstructorIndex,
+        ConflictingGlobalAlias,
+        ConflictingNominalAlias,
+        ConstructorCount,
+        HiddenConstructorCount,
+        CrossOwnerBinder,
+        InterfacePosition,
+        ImplementationPosition,
+        WithheldBijection,
+        Withheld(SummaryWithheldMutationForTest),
+        ExpressionCollision,
+        TypeCollision,
+        BinderCollision,
+    }
+
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (Wrap)\nmain : Unit -> Unit\nmain () = ()\n",
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub type Wrap<F : Type -> Type> = Wrap(F<Int>)\n\n",
+                "type Secret<F : Type -> Type> = Secret(F<Int>)\n\n",
+                "private_marker : Unit -> Unit\nprivate_marker value = value\n\n",
+                "pub interface Observe<A> {\nobserve : A -> A\n}\n\n",
+                "pub expose<F : Type -> Type> : Secret<F> -> Secret<F>\n",
+                "expose value = value\n\n",
+                "pub impl<F : Type -> Type> Observe<Wrap<F>> {\n",
+                "observe value = value\n}\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let importer = module_named(&graph, "entry.ash");
+    let mutations = [
+        Mutation::Order(SummaryOrderForTest::Term),
+        Mutation::Order(SummaryOrderForTest::Nominal),
+        Mutation::Order(SummaryOrderForTest::Constructor),
+        Mutation::Order(SummaryOrderForTest::InterfaceName),
+        Mutation::Order(SummaryOrderForTest::MethodName),
+        Mutation::Order(SummaryOrderForTest::HiddenNominal),
+        Mutation::NominalIndex,
+        Mutation::ConstructorIndex,
+        Mutation::ConflictingGlobalAlias,
+        Mutation::ConflictingNominalAlias,
+        Mutation::ConstructorCount,
+        Mutation::HiddenConstructorCount,
+        Mutation::CrossOwnerBinder,
+        Mutation::InterfacePosition,
+        Mutation::ImplementationPosition,
+        Mutation::WithheldBijection,
+        Mutation::Withheld(SummaryWithheldMutationForTest::TermKind),
+        Mutation::Withheld(SummaryWithheldMutationForTest::TermOwner),
+        Mutation::Withheld(SummaryWithheldMutationForTest::NominalKind),
+        Mutation::Withheld(SummaryWithheldMutationForTest::NominalOwner),
+        Mutation::Withheld(SummaryWithheldMutationForTest::ConstructorOwner),
+        Mutation::Withheld(SummaryWithheldMutationForTest::ConstructorPosition),
+        Mutation::Withheld(SummaryWithheldMutationForTest::MapOnly),
+        Mutation::ExpressionCollision,
+        Mutation::TypeCollision,
+        Mutation::BinderCollision,
+    ];
+
+    for mutation in mutations {
+        let checked = check_module(
+            resolve_module(dependency, &[]).expect("the matrix dependency should resolve"),
+        )
+        .expect("the matrix dependency should check");
+        let mut summary = checked.into_exports();
+        let changed = match mutation {
+            Mutation::Order(order) => summary.corrupt_order_for_test(order),
+            Mutation::NominalIndex => summary.remove_first_reverse_index_for_test(false),
+            Mutation::ConstructorIndex => summary.remove_first_reverse_index_for_test(true),
+            Mutation::ConflictingGlobalAlias => summary
+                .duplicate_first_global_with_conflicting_scheme_for_test("forged", Type::Unit),
+            Mutation::ConflictingNominalAlias => {
+                summary.duplicate_first_nominal_with_conflicting_origin_for_test("ForgedWrap")
+            }
+            Mutation::ConstructorCount => summary.increment_first_constructor_count_for_test(),
+            Mutation::HiddenConstructorCount => {
+                summary.increment_first_hidden_constructor_count_for_test()
+            }
+            Mutation::CrossOwnerBinder => {
+                summary.reuse_nominal_parameter_as_interface_owner_for_test()
+            }
+            Mutation::InterfacePosition => summary.corrupt_position_index_for_test(false),
+            Mutation::ImplementationPosition => summary.corrupt_position_index_for_test(true),
+            Mutation::WithheldBijection => summary.duplicate_withheld_order_entry_for_test(),
+            Mutation::Withheld(mutation) => summary.corrupt_withheld_for_test(mutation),
+            Mutation::ExpressionCollision => {
+                summary.collide_first_method_with_first_term_for_test()
+            }
+            Mutation::TypeCollision => {
+                summary.collide_first_interface_with_first_nominal_for_test()
+            }
+            Mutation::BinderCollision => {
+                summary.collide_first_implementation_method_with_global_for_test()
+            }
+        };
+        assert!(changed, "the selected matrix carrier should be present");
+        let error = resolve_with(importer, &[&summary])
+            .expect_err("every forged summary carrier must fail exhaustive admission");
+        assert_eq!(error.reason, ResolveReason::InternalState);
+    }
+}
+
+#[test]
+fn exhaustive_public_and_hidden_summary_carriers_fail_before_local_checking() {
+    const BASE_SOURCE: &str = concat!(
+        "pub type Wrap<F : Type -> Type, A> =\n",
+        "First(F<A>)\n",
+        "| Second(F<A>)\n\n",
+        "pub type Other<F : Type -> Type, A> = Other(F<A>)\n\n",
+        "pub interface Observe<A> {\nobserve : A -> A\n}\n\n",
+        "pub interface Witness<A> {\nwitness : A -> A\n}\n\n",
+        "pub generic<B, A> : A -> B -> A where Observe<B>\n",
+        "generic left right = left\n\n",
+        "pub impl<F : Type -> Type, A> Observe<Wrap<F, A>> where Observe<A>, Witness<A> {\n",
+        "observe value = value\n}\n\n",
+        "pub impl<F : Type -> Type, A> Observe<Other<F, A>> {\n",
+        "observe value = value\n}\n",
+    );
+    let direct_mutations = [
+        SummaryCarrierMutationForTest::PublicNominalKind,
+        SummaryCarrierMutationForTest::PublicNominalParameterIdentity,
+        SummaryCarrierMutationForTest::PublicNominalParameterOwner,
+        SummaryCarrierMutationForTest::PublicNominalParameterOrder,
+        SummaryCarrierMutationForTest::PublicConstructorFamilyOrdinal,
+        SummaryCarrierMutationForTest::PublicConstructorFamilyOwner,
+        SummaryCarrierMutationForTest::PublicConstructorResultOwner,
+        SummaryCarrierMutationForTest::PublicConstructorPayload,
+        SummaryCarrierMutationForTest::PublicConstructorPayloadDomainKind,
+        SummaryCarrierMutationForTest::PublicConstructorSchemeKind,
+        SummaryCarrierMutationForTest::PublicConstructorSchemeParameterIdentity,
+        SummaryCarrierMutationForTest::PublicInterfaceKind,
+        SummaryCarrierMutationForTest::PublicInterfaceParameterIdentity,
+        SummaryCarrierMutationForTest::PublicInterfaceParameterOwner,
+        SummaryCarrierMutationForTest::PublicInterfaceMethodType,
+        SummaryCarrierMutationForTest::PublicInterfaceMethodFreeBinder,
+        SummaryCarrierMutationForTest::PublicInterfaceMethodKind,
+        SummaryCarrierMutationForTest::PublicInterfaceMethodNonFunction,
+        SummaryCarrierMutationForTest::PublicInterfaceEmptyMethods,
+        SummaryCarrierMutationForTest::InterfaceIdentity,
+        SummaryCarrierMutationForTest::MethodIdentity,
+        SummaryCarrierMutationForTest::MethodOrdinal,
+        SummaryCarrierMutationForTest::InterfaceNameTarget,
+        SummaryCarrierMutationForTest::MethodNameTarget,
+        SummaryCarrierMutationForTest::GlobalParameterIdentity,
+        SummaryCarrierMutationForTest::GlobalParameterOrder,
+        SummaryCarrierMutationForTest::GlobalUnusedParameter,
+        SummaryCarrierMutationForTest::GlobalRequirementIdentity,
+        SummaryCarrierMutationForTest::GlobalRequirementInterface,
+        SummaryCarrierMutationForTest::GlobalRequirementArgumentKind,
+        SummaryCarrierMutationForTest::GlobalParameterOwner,
+        SummaryCarrierMutationForTest::GlobalParameterKind,
+        SummaryCarrierMutationForTest::ImplementationHeadKind,
+        SummaryCarrierMutationForTest::ImplementationHeadIdentity,
+        SummaryCarrierMutationForTest::ImplementationHeadOrder,
+        SummaryCarrierMutationForTest::ImplementationHeadOwner,
+        SummaryCarrierMutationForTest::ImplementationArgument,
+        SummaryCarrierMutationForTest::ImplementationSemanticHead,
+        SummaryCarrierMutationForTest::ImplementationInterfaceIdentity,
+        SummaryCarrierMutationForTest::ImplementationPrerequisiteIdentity,
+        SummaryCarrierMutationForTest::ImplementationPrerequisiteOrder,
+        SummaryCarrierMutationForTest::ImplementationPrerequisiteDuplicate,
+        SummaryCarrierMutationForTest::ImplementationPrerequisiteKind,
+        SummaryCarrierMutationForTest::ImplementationPrerequisiteInterface,
+        SummaryCarrierMutationForTest::ImplementationPrerequisiteArgument,
+        SummaryCarrierMutationForTest::ImplementationPrerequisiteOriginMirror,
+        SummaryCarrierMutationForTest::ImplementationPrerequisiteSpanMirror,
+        SummaryCarrierMutationForTest::ImplementationMethodRequirementIdentity,
+        SummaryCarrierMutationForTest::ImplementationMethodSchemeParameterIdentity,
+        SummaryCarrierMutationForTest::ImplementationMethodSchemeParameterKind,
+        SummaryCarrierMutationForTest::ImplementationMethodIdentity,
+        SummaryCarrierMutationForTest::ImplementationMethodMapping,
+        SummaryCarrierMutationForTest::ImplementationMethodBinder,
+        SummaryCarrierMutationForTest::ImplementationAuthorization,
+        SummaryCarrierMutationForTest::ImplementationOverlap,
+    ];
+
+    for mutation in direct_mutations {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            "import dependency as Dependency\nmain : Unit -> Unit\nmain value = value\n",
+            &[("dependency.ash", BASE_SOURCE)],
+        );
+        let dependency = module_named(&graph, "dependency.ash");
+        let mut summary = check_module(
+            resolve_module(dependency, &[]).expect("the rich dependency should resolve"),
+        )
+        .expect("the rich dependency should check")
+        .into_exports();
+        assert!(
+            summary.corrupt_carrier_for_test(mutation),
+            "the direct carrier {mutation:?} should exist",
+        );
+        assert_eq!(
+            summary.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "the raw boundary must reject {mutation:?} independently",
+        );
+        let importer = module_named(&graph, "entry.ash");
+        let error = resolve_with(importer, &[&summary])
+            .expect_err("every forged public summary carrier must fail admission");
+        assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
+    }
+
+    let hidden_mutations = [
+        SummaryCarrierMutationForTest::HiddenNominalKind,
+        SummaryCarrierMutationForTest::HiddenNominalParameterIdentity,
+        SummaryCarrierMutationForTest::HiddenNominalParameterOwner,
+        SummaryCarrierMutationForTest::HiddenNominalParameterOrder,
+        SummaryCarrierMutationForTest::HiddenNominalAccess,
+        SummaryCarrierMutationForTest::HiddenConstructorPayload,
+        SummaryCarrierMutationForTest::HiddenConstructorPayloadDomainKind,
+        SummaryCarrierMutationForTest::HiddenConstructorSchemeKind,
+        SummaryCarrierMutationForTest::HiddenConstructorSchemeParameterIdentity,
+        SummaryCarrierMutationForTest::HiddenConstructorResultOwner,
+        SummaryCarrierMutationForTest::HiddenInterfaceKind,
+        SummaryCarrierMutationForTest::HiddenInterfaceParameterIdentity,
+        SummaryCarrierMutationForTest::HiddenInterfaceParameterOwner,
+        SummaryCarrierMutationForTest::HiddenInterfaceIdentity,
+        SummaryCarrierMutationForTest::HiddenInterfaceMethodType,
+        SummaryCarrierMutationForTest::HiddenInterfaceMethodIdentity,
+        SummaryCarrierMutationForTest::HiddenInterfaceMethodOwner,
+        SummaryCarrierMutationForTest::HiddenInterfaceMethodFreeBinder,
+        SummaryCarrierMutationForTest::HiddenInterfaceMethodKind,
+    ];
+    for mutation in hidden_mutations {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            "import facade as Facade\nmain : Unit -> Unit\nmain value = value\n",
+            &[
+                ("facade.ash", "pub import base (First, impl Observe)\n"),
+                ("base.ash", BASE_SOURCE),
+            ],
+        );
+        let base = module_named(&graph, "base.ash");
+        let base_summary = check_module(
+            resolve_module(base, &[]).expect("the hidden-carrier base should resolve"),
+        )
+        .expect("the hidden-carrier base should check")
+        .into_exports();
+        let facade = module_named(&graph, "facade.ash");
+        let mut summary = check_module(
+            resolve_with(facade, &[&base_summary]).expect("the facade should resolve"),
+        )
+        .expect("the facade should check")
+        .into_exports();
+        assert!(
+            summary.corrupt_carrier_for_test(mutation),
+            "the hidden carrier {mutation:?} should exist",
+        );
+        assert_eq!(
+            summary.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "the raw boundary must reject {mutation:?} independently",
+        );
+        let importer = module_named(&graph, "entry.ash");
+        let error = resolve_with(importer, &[&summary])
+            .expect_err("every forged hidden summary carrier must fail admission");
+        assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
+    }
+}
+
+#[test]
+fn fused_constructor_scheme_authentication_rejects_every_independent_type_obligation() {
+    let mutations = [
+        SummaryConstructorFusionMutationForTest::UnboundPayloadVariable,
+        SummaryConstructorFusionMutationForTest::RegisteredForeignPayloadVariable,
+        SummaryConstructorFusionMutationForTest::InferencePayload,
+        SummaryConstructorFusionMutationForTest::OuterForallPayload,
+        SummaryConstructorFusionMutationForTest::NestedForallPayload,
+        SummaryConstructorFusionMutationForTest::UnexpectedRequirement,
+        SummaryConstructorFusionMutationForTest::ResultSpineTooShort,
+        SummaryConstructorFusionMutationForTest::ResultSpineExtra,
+        SummaryConstructorFusionMutationForTest::ResultArgumentSwap,
+        SummaryConstructorFusionMutationForTest::ResultArgumentDuplicate,
+    ];
+    for mutation in mutations {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            "import dependency as Dependency\nmain : Unit -> Unit\nmain value = value\n",
+            &[(
+                "dependency.ash",
+                concat!(
+                    "pub type Pair<A, B> = Make(A)\n\n",
+                    "pub interface Marker<A> {\nmark : A -> A\n}\n",
+                ),
+            )],
+        );
+        let dependency = module_named(&graph, "dependency.ash");
+        let importer = module_named(&graph, "entry.ash");
+        let mut summary = check_module(
+            resolve_module(dependency, &[]).expect("the phantom-parameter fixture should resolve"),
+        )
+        .expect("a constructor payload need not mention every owner parameter")
+        .into_exports();
+        summary
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the canonical two-parameter constructor scheme should authenticate");
+        assert!(
+            summary.corrupt_first_constructor_fusion_obligation_for_test(mutation),
+            "the constructor mutation {mutation:?} should apply",
+        );
+        assert_eq!(
+            summary.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "the fused raw boundary must reject {mutation:?}",
+        );
+        let error = resolve_with(importer, &[&summary])
+            .expect_err("forged constructor closure must fail before local checking");
+        assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
+    }
+}
+
+#[test]
+fn fused_constructor_payload_clone_preserves_first_nominal_occurrence_order() {
+    // One owner insertion costs three Type cells; two hidden prerequisite
+    // nominal insertions cost two each. Three prepared nominal actions and one
+    // staged constructor action cost four, while the four-cell payload,
+    // six-cell physical scheme, and constructor-map record cost eleven.
+    const EXACT_TYPE_WORK: usize = 22;
+    // The owner shape and one family-plan action cost three Constraint cells.
+    // The six-cell scheme observes three unique nominal identities for twelve;
+    // the four-cell payload observes no new identity. Two absent foreign
+    // nominal validations and their plan records cost four.
+    const EXACT_CONSTRAINT_WORK: usize = 23;
+    let tree = TempTree::create();
+    let graph = load(&tree, "", &[]);
+    let dependency = module_named(&graph, "entry.ash");
+    let module = dependency.id();
+    let owner = NominalTypeId::new(module, 0);
+    let first = NominalTypeId::new(module, 1);
+    let second = NominalTypeId::new(module, 2);
+    let span = dependency.surface().span;
+    let origin = Origin::Source(span);
+    let summary = ExportSummary::test_fixture(
+        module,
+        Vec::new(),
+        vec![
+            (
+                "Owner",
+                owner,
+                ExportedTypeAccess::Transparent,
+                origin.clone(),
+            ),
+            ("N1", first, ExportedTypeAccess::Transparent, origin.clone()),
+            (
+                "N2",
+                second,
+                ExportedTypeAccess::Transparent,
+                origin.clone(),
+            ),
+        ],
+        vec![
+            (
+                "Make",
+                ConstructorId::new(owner, 0),
+                Some(Type::Tuple(
+                    vec![
+                        Type::Nominal(first),
+                        Type::Nominal(second),
+                        Type::Nominal(first),
+                    ]
+                    .into_boxed_slice(),
+                )),
+                origin.clone(),
+            ),
+            (
+                "N1Value",
+                ConstructorId::new(first, 0),
+                None,
+                origin.clone(),
+            ),
+            ("N2Value", ConstructorId::new(second, 0), None, origin),
+        ],
+        Vec::new(),
+    );
+    summary
+        .authenticate(
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect("the repeated-nominal payload summary should authenticate");
+    let exported = summary.constructor("Make").expect("Make should be public");
+
+    let mut constraint_short = Resolver::with_budgets(
+        module,
+        TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+        crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1),
+    );
+    let error = constraint_short
+        .retain_imported_constructor(exported, &summary, span)
+        .expect_err("one missing nominal-plan cell should reject the complete transaction");
+    assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+    assert_eq!(
+        constraint_short.constraint_work.used(),
+        EXACT_CONSTRAINT_WORK - 1
+    );
+    assert_eq!(constraint_short.type_work.used(), 0);
+    assert!(constraint_short.imported.constructor(exported.id).is_none());
+    assert!(constraint_short.imported.nominals().next().is_none());
+
+    let mut type_short = Resolver::with_budgets(
+        module,
+        TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1),
+        crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK),
+    );
+    let error = type_short
+        .retain_imported_constructor(exported, &summary, span)
+        .expect_err("one missing aggregate Type cell should reject the complete transaction");
+    assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+    assert_eq!(type_short.type_work.used(), 0);
+    assert_eq!(type_short.constraint_work.used(), EXACT_CONSTRAINT_WORK);
+    assert!(type_short.imported.constructor(exported.id).is_none());
+    assert!(type_short.imported.nominals().next().is_none());
+
+    let mut exact = Resolver::with_budgets(
+        module,
+        TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+        crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK),
+    );
+    exact
+        .retain_imported_constructor(exported, &summary, span)
+        .expect("the exact fused clone/discovery formula should fit");
+    assert_eq!(exact.type_work.used(), EXACT_TYPE_WORK);
+    assert_eq!(exact.constraint_work.used(), EXACT_CONSTRAINT_WORK);
+    assert_eq!(
+        exact
+            .imported
+            .nominals()
+            .map(|fact| fact.id)
+            .collect::<Vec<_>>(),
+        vec![owner, first, second],
+    );
+}
+
+#[test]
+fn public_admission_rejects_one_short_constructor_closure_without_publishing_output() {
+    const DEPTH: usize = 32_768;
+    std::thread::Builder::new()
+        .name("deep-constructor-public-admission".to_owned())
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let tree = TempTree::create();
+            let graph = load(
+                &tree,
+                "import dependency (Make)\nmain : Unit -> Unit\nmain value = value\n",
+                &[("dependency.ash", "")],
+            );
+            let dependency = module_named(&graph, "dependency.ash");
+            let importer = module_named(&graph, "entry.ash");
+            let nominal = NominalTypeId::new(dependency.id(), 0);
+            let constructor = ConstructorId::new(nominal, 0);
+            let mut payload = Type::Unit;
+            for _ in 0..DEPTH {
+                payload = Type::Function(Box::new(Type::Int), Box::new(payload));
+            }
+            let summary = ExportSummary::test_fixture(
+                dependency.id(),
+                Vec::new(),
+                vec![(
+                    "Deep",
+                    nominal,
+                    ExportedTypeAccess::Transparent,
+                    Origin::Source(dependency.surface().span),
+                )],
+                vec![(
+                    "Make",
+                    constructor,
+                    Some(payload),
+                    Origin::Source(dependency.surface().span),
+                )],
+                Vec::new(),
+            );
+            let exports = importer
+                .dependencies()
+                .iter()
+                .map(|edge| DependencyExports::new(edge, &summary).expect("matching dependency"))
+                .collect::<Vec<_>>();
+
+            let mut measured = TypeWorkBudget::with_limit(usize::MAX);
+            let measured_module = resolve_module_with_budget(
+                importer,
+                &exports,
+                &mut measured,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the complete body-free constructor closure should resolve");
+            let exact_work = measured.used();
+            assert!(exact_work <= TYPE_WORK_LIMIT);
+            drop(measured_module);
+
+            let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
+            resolve_module_with_budget(
+                importer,
+                &exports,
+                &mut one_short,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect_err("one missing public-admission cell must publish no resolved module");
+
+            let mut exact = TypeWorkBudget::with_limit(exact_work);
+            let resolved = resolve_module_with_budget(
+                importer,
+                &exports,
+                &mut exact,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the same immutable summary must remain reusable after rejection");
+            assert_eq!(exact.used(), exact_work);
+            drop(resolved);
+            drop(summary);
+        })
+        .expect("the public-admission lifecycle worker should spawn")
+        .join()
+        .expect("accepted and rejected public admission must tear down iteratively");
+}
+
+#[test]
+fn hidden_constructor_order_and_family_coverage_are_authenticated() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import facade (First)\nmain : Unit -> Unit\nmain () = ()\n",
+        &[
+            ("facade.ash", "pub import base (First)\n"),
+            ("base.ash", "pub type Pair<A> =\nFirst(A)\n| Second(A)\n"),
+        ],
+    );
+    let base = module_named(&graph, "base.ash");
+    let base_summary =
+        check_module(resolve_module(base, &[]).expect("the constructor base should resolve"))
+            .expect("the constructor base should check")
+            .into_exports();
+    let facade = module_named(&graph, "facade.ash");
+    let importer = module_named(&graph, "entry.ash");
+
+    for remove_fact in [false, true] {
+        let mut summary = check_module(
+            resolve_with(facade, &[&base_summary]).expect("the constructor facade should resolve"),
+        )
+        .expect("the constructor facade should check")
+        .into_exports();
+        let changed = if remove_fact {
+            summary.remove_first_hidden_constructor_for_test()
+        } else {
+            summary.corrupt_order_for_test(SummaryOrderForTest::HiddenConstructor)
+        };
+        assert!(
+            changed,
+            "the partial family should retain its hidden sibling"
+        );
+        let error = resolve_with(importer, &[&summary])
+            .expect_err("hidden constructor closure must authenticate before local checking");
+        assert_eq!(error.reason, ResolveReason::InternalState);
+    }
+}
+
+#[test]
+fn diamond_routes_require_complete_fact_agreement_before_route_mutation() {
+    let mutations = [
+        SummaryDuplicateFactForTest::Global,
+        SummaryDuplicateFactForTest::GlobalValueType,
+        SummaryDuplicateFactForTest::GlobalRequirementOrigin,
+        SummaryDuplicateFactForTest::GlobalRequirementSpan,
+        SummaryDuplicateFactForTest::Nominal,
+        SummaryDuplicateFactForTest::NominalParameterOrigin,
+        SummaryDuplicateFactForTest::Constructor,
+        SummaryDuplicateFactForTest::ConstructorOrigin,
+        SummaryDuplicateFactForTest::Interface,
+        SummaryDuplicateFactForTest::InterfaceOrigin,
+        SummaryDuplicateFactForTest::InterfaceSpan,
+        SummaryDuplicateFactForTest::InterfaceParameterOrigin,
+        SummaryDuplicateFactForTest::InterfaceMethodSpan,
+        SummaryDuplicateFactForTest::InterfaceWithoutImplementationType,
+        SummaryDuplicateFactForTest::Implementation,
+        SummaryDuplicateFactForTest::ImplementationOrigin,
+        SummaryDuplicateFactForTest::ImplementationSpan,
+        SummaryDuplicateFactForTest::ImplementationHeadParameterOrigin,
+        SummaryDuplicateFactForTest::ImplementationHeadArgument,
+        SummaryDuplicateFactForTest::ImplementationPrerequisiteOrigin,
+        SummaryDuplicateFactForTest::ImplementationPrerequisiteSpan,
+        SummaryDuplicateFactForTest::ImplementationPrerequisiteType,
+        SummaryDuplicateFactForTest::ImplementationMethodSpan,
+        SummaryDuplicateFactForTest::OpaqueNominalKindClosure,
+    ];
+
+    for mutation in mutations {
+        for reverse in [false, true] {
+            let tree = TempTree::create();
+            let first = if reverse { "right" } else { "left" };
+            let second = if reverse { "left" } else { "right" };
+            let entry = if matches!(
+                mutation,
+                SummaryDuplicateFactForTest::Implementation
+                    | SummaryDuplicateFactForTest::ImplementationOrigin
+                    | SummaryDuplicateFactForTest::ImplementationSpan
+                    | SummaryDuplicateFactForTest::ImplementationHeadParameterOrigin
+                    | SummaryDuplicateFactForTest::ImplementationHeadArgument
+                    | SummaryDuplicateFactForTest::ImplementationPrerequisiteOrigin
+                    | SummaryDuplicateFactForTest::ImplementationPrerequisiteSpan
+                    | SummaryDuplicateFactForTest::ImplementationPrerequisiteType
+                    | SummaryDuplicateFactForTest::ImplementationMethodSpan
+            ) {
+                format!("import {first} (impl Observe)\nimport {second} (impl Observe)\n")
+            } else {
+                format!("import {first} as First\nimport {second} as Second\n")
+            };
+            let facade = concat!(
+                "pub import base (value, generic, Box, Capsule, Observe, observe, ",
+                "Witness, witness, impl Observe)\n",
+            );
+            let graph = load(
+                &tree,
+                &entry,
+                &[
+                    ("left.ash", facade),
+                    ("right.ash", facade),
+                    (
+                        "base.ash",
+                        concat!(
+                            "pub type Box<A> = Box(A)\n\n",
+                            "pub opaque type Capsule<F : Type -> Type> = Seal(Unit)\n\n",
+                            "pub value : Unit -> Unit\nvalue item = item\n\n",
+                            "pub generic<A> : A -> A where Observe<A>\n",
+                            "generic value = value\n\n",
+                            "pub interface Observe<A> {\nobserve : A -> Unit\n}\n\n",
+                            "pub interface Witness<A> {\nwitness : A -> A\n}\n\n",
+                            "pub impl Observe<Box<Int>> {\nobserve value = ()\n}\n",
+                            "\npub impl<F : Type -> Type> Observe<Capsule<F>> where Witness<Int> {\n",
+                            "observe value = ()\n}\n",
+                        ),
+                    ),
+                ],
+            );
+            let base = module_named(&graph, "base.ash");
+            let base_summary =
+                check_module(resolve_module(base, &[]).expect("the diamond base should resolve"))
+                    .expect("the diamond base should check")
+                    .into_exports();
+            let left = module_named(&graph, "left.ash");
+            let left_summary = check_module(
+                resolve_with(left, &[&base_summary]).expect("the left facade should resolve"),
+            )
+            .expect("the left facade should check")
+            .into_exports();
+            let right = module_named(&graph, "right.ash");
+            let mut right_summary = check_module(
+                resolve_with(right, &[&base_summary]).expect("the right facade should resolve"),
+            )
+            .expect("the right facade should check")
+            .into_exports();
+            let importer = module_named(&graph, "entry.ash");
+            let clean = if reverse {
+                [&right_summary, &left_summary]
+            } else {
+                [&left_summary, &right_summary]
+            };
+            resolve_with(importer, &clean).expect("exact diamond mirrors should deduplicate");
+
+            let changed = right_summary.corrupt_first_duplicate_fact_for_test(mutation);
+            assert!(
+                changed,
+                "the selected diamond carrier {mutation:?} should be present (reverse={reverse})",
+            );
+            right_summary
+                .authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                )
+                .expect("the coherent alternate route must authenticate independently");
+            let conflicting = if reverse {
+                [&right_summary, &left_summary]
+            } else {
+                [&left_summary, &right_summary]
+            };
+            let error = match resolve_with(importer, &conflicting) {
+                Err(error) => error,
+                Ok(_) => {
+                    panic!("conflicting diamond fact {mutation:?} must fail at the second route")
+                }
+            };
+            assert_eq!(error.reason, ResolveReason::InternalState);
+            let second_import = importer.dependencies()[1].import_span();
+            let primary = error.primary.span();
+            assert_eq!(primary.source(), second_import.source());
+            assert!(
+                primary.range().start() >= second_import.range().start()
+                    && primary.range().end() <= second_import.range().end(),
+                "the retained first route must remain the comparison baseline",
+            );
+        }
+    }
+}
+
+#[test]
+fn hidden_diamond_facts_require_complete_provenance_agreement_in_dependency_order() {
+    let mutations = [
+        SummaryHiddenDiamondMutationForTest::NominalOrigin,
+        SummaryHiddenDiamondMutationForTest::NominalParameterOrigin,
+        SummaryHiddenDiamondMutationForTest::ConstructorOrigin,
+        SummaryHiddenDiamondMutationForTest::InterfaceOrigin,
+        SummaryHiddenDiamondMutationForTest::InterfaceParameterOrigin,
+        SummaryHiddenDiamondMutationForTest::InterfaceMethodOrigin,
+        SummaryHiddenDiamondMutationForTest::InterfaceMethodSpan,
+        SummaryHiddenDiamondMutationForTest::InterfaceMethodType,
+    ];
+    for mutation in mutations {
+        for reverse in [false, true] {
+            let tree = TempTree::create();
+            let first = if reverse { "right" } else { "left" };
+            let second = if reverse { "left" } else { "right" };
+            let entry = format!("import {first} as First\nimport {second} as Second\n");
+            let graph = load(
+                &tree,
+                &entry,
+                &[
+                    (
+                        "left.ash",
+                        "pub import base (expose, First, impl Observe)\n",
+                    ),
+                    (
+                        "right.ash",
+                        "pub import base (expose, First, impl Observe)\n",
+                    ),
+                    (
+                        "base.ash",
+                        concat!(
+                            "type Secret<F : Type -> Type> = Secret(F<Int>)\n\n",
+                            "pub expose<F : Type -> Type> : Secret<F> -> Secret<F>\n",
+                            "expose value = value\n\n",
+                            "pub type Wrap<A> =\nFirst(A)\n| Second(A)\n\n",
+                            "pub interface Observe<A> {\nobserve : A -> A\n}\n\n",
+                            "pub interface Witness<A> {\nwitness : A -> A\n}\n\n",
+                            "pub impl<A> Observe<Wrap<A>> where Witness<A> {\n",
+                            "observe value = value\n}\n",
+                        ),
+                    ),
+                ],
+            );
+            let base = module_named(&graph, "base.ash");
+            let base_summary = check_module(
+                resolve_module(base, &[]).expect("the hidden diamond base should resolve"),
+            )
+            .expect("the hidden diamond base should check")
+            .into_exports();
+            let left = module_named(&graph, "left.ash");
+            let left_summary = check_module(
+                resolve_with(left, &[&base_summary]).expect("the left facade should resolve"),
+            )
+            .expect("the left facade should check")
+            .into_exports();
+            let right = module_named(&graph, "right.ash");
+            let mut right_summary = check_module(
+                resolve_with(right, &[&base_summary]).expect("the right facade should resolve"),
+            )
+            .expect("the right facade should check")
+            .into_exports();
+            assert!(
+                right_summary.corrupt_hidden_diamond_fact_for_test(mutation),
+                "the hidden diamond carrier {mutation:?} should exist",
+            );
+            right_summary
+                .authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                )
+                .expect("the coherent hidden route must authenticate independently");
+            let importer = module_named(&graph, "entry.ash");
+            let summaries = if reverse {
+                [&right_summary, &left_summary]
+            } else {
+                [&left_summary, &right_summary]
+            };
+            let error = match resolve_with(importer, &summaries) {
+                Err(error) => error,
+                Ok(_) => panic!(
+                    "hidden diamond provenance {mutation:?} must agree before route mutation (reverse={reverse})",
+                ),
+            };
+            assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
+            let second_import = importer.dependencies()[1].import_span();
+            assert_eq!(error.primary.span().source(), second_import.source());
+        }
+    }
+}
+
+#[test]
+fn interface_and_implementation_only_diamonds_compare_hidden_nominal_closure() {
+    let cases = [
+        (
+            "interface",
+            "pub import base (Observe)\n",
+            concat!(
+                "type Secret<A> = Secret(A)\n\n",
+                "pub interface Observe<A> {\nobserve : Secret<A> -> Secret<A>\n}\n",
+            ),
+        ),
+        (
+            "implementation",
+            "pub import base (First, impl Observe)\n",
+            concat!(
+                "pub type Marker = First\n\n",
+                "type Secret<A> = Secret(A)\n\n",
+                "pub interface Observe<A> {\nobserve : A -> A\n}\n\n",
+                "pub impl<A> Observe<Secret<A>> {\nobserve value = value\n}\n",
+            ),
+        ),
+    ];
+    for (carrier, facade, base_source) in cases {
+        for reverse in [false, true] {
+            let tree = TempTree::create();
+            let first = if reverse { "right" } else { "left" };
+            let second = if reverse { "left" } else { "right" };
+            let entry = format!("import {first} as First\nimport {second} as Second\n");
+            let graph = load(
+                &tree,
+                &entry,
+                &[
+                    ("left.ash", facade),
+                    ("right.ash", facade),
+                    ("base.ash", base_source),
+                ],
+            );
+            let base = module_named(&graph, "base.ash");
+            let base_summary = check_module(
+                resolve_module(base, &[]).expect("the nominal-closure base should resolve"),
+            )
+            .expect("the nominal-closure base should check")
+            .into_exports();
+            let left = module_named(&graph, "left.ash");
+            let left_summary = check_module(
+                resolve_with(left, &[&base_summary]).expect("the left facade should resolve"),
+            )
+            .expect("the left facade should check")
+            .into_exports();
+            let right = module_named(&graph, "right.ash");
+            let mut right_summary = check_module(
+                resolve_with(right, &[&base_summary]).expect("the right facade should resolve"),
+            )
+            .expect("the right facade should check")
+            .into_exports();
+            assert!(right_summary.corrupt_hidden_diamond_fact_for_test(
+                SummaryHiddenDiamondMutationForTest::NominalOrigin,
+            ));
+            right_summary
+                .authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                )
+                .expect("the coherent alternate closure should authenticate independently");
+
+            let importer = module_named(&graph, "entry.ash");
+            let summaries = if reverse {
+                [&right_summary, &left_summary]
+            } else {
+                [&left_summary, &right_summary]
+            };
+            let error = resolve_with(importer, &summaries).expect_err(&format!(
+                "the {carrier}-only diamond should reject conflicting nominal provenance",
+            ));
+            assert_eq!(error.reason, ResolveReason::InternalState, "{carrier}");
+            assert_eq!(
+                error.primary.span().source(),
+                importer.dependencies()[1].import_span().source(),
+                "{carrier}",
+            );
+        }
+    }
+}
+
+#[test]
+fn targeted_constructor_diamond_authenticates_its_hidden_owner_before_deduplication() {
+    for reverse in [false, true] {
+        let tree = TempTree::create();
+        let first = if reverse { "right" } else { "left" };
+        let second = if reverse { "left" } else { "right" };
+        let entry = format!(
+            "import {first} (First as FirstRoute)\nimport {second} (First as SecondRoute)\n"
+        );
+        let graph = load(
+            &tree,
+            &entry,
+            &[
+                ("left.ash", "pub import base (First)\n"),
+                ("right.ash", "pub import base (First)\n"),
+                ("base.ash", "pub type Pair<A> =\nFirst(A)\n| Second(A)\n"),
+            ],
+        );
+        let base = module_named(&graph, "base.ash");
+        let base_summary =
+            check_module(resolve_module(base, &[]).expect("the Pair base should resolve"))
+                .expect("the Pair base should check")
+                .into_exports();
+        let left = module_named(&graph, "left.ash");
+        let left_summary = check_module(
+            resolve_with(left, &[&base_summary])
+                .expect("the left constructor facade should resolve"),
+        )
+        .expect("the left constructor facade should check")
+        .into_exports();
+        let right = module_named(&graph, "right.ash");
+        let mut right_summary = check_module(
+            resolve_with(right, &[&base_summary])
+                .expect("the right constructor facade should resolve"),
+        )
+        .expect("the right constructor facade should check")
+        .into_exports();
+        let importer = module_named(&graph, "entry.ash");
+        let clean = if reverse {
+            [&right_summary, &left_summary]
+        } else {
+            [&left_summary, &right_summary]
+        };
+        resolve_with(importer, &clean)
+            .expect("exact targeted constructor and hidden-owner mirrors should deduplicate");
+
+        assert!(right_summary.corrupt_hidden_diamond_fact_for_test(
+            SummaryHiddenDiamondMutationForTest::NominalOrigin
+        ));
+        right_summary
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the coherent hidden owner mutation should authenticate independently");
+        let conflicting = if reverse {
+            [&right_summary, &left_summary]
+        } else {
+            [&left_summary, &right_summary]
+        };
+        let error = resolve_with(importer, &conflicting)
+            .expect_err("constructor deduplication must not skip its hidden owner mirror");
+        assert_eq!(error.reason, ResolveReason::InternalState);
+        let second_import = importer.dependencies()[1].import_span();
+        assert_eq!(error.primary.span().source(), second_import.source());
+    }
+}
+
+#[test]
+fn duplicate_constructor_payload_routes_compare_foreign_nominal_provenance() {
+    for reverse in [false, true] {
+        let tree = TempTree::create();
+        let first = if reverse { "right" } else { "left" };
+        let second = if reverse { "left" } else { "right" };
+        let entry =
+            format!("import {first} (Wrap as FirstWrap)\nimport {second} (Wrap as SecondWrap)\n",);
+        let graph = load(
+            &tree,
+            &entry,
+            &[
+                ("left.ash", "pub import base (Container, Wrap)\n"),
+                ("right.ash", "pub import base (Container, Wrap)\n"),
+                (
+                    "base.ash",
+                    "type Secret = Secret\n\npub type Container = Wrap(Secret)\n",
+                ),
+            ],
+        );
+        let base = module_named(&graph, "base.ash");
+        let base_summary = check_module(
+            resolve_module(base, &[]).expect("the constructor-payload base should resolve"),
+        )
+        .expect("the constructor-payload base should check")
+        .into_exports();
+        let left = module_named(&graph, "left.ash");
+        let left_summary = check_module(
+            resolve_with(left, &[&base_summary]).expect("the left facade should resolve"),
+        )
+        .expect("the left facade should check")
+        .into_exports();
+        let right = module_named(&graph, "right.ash");
+        let mut right_summary = check_module(
+            resolve_with(right, &[&base_summary]).expect("the right facade should resolve"),
+        )
+        .expect("the right facade should check")
+        .into_exports();
+        assert!(right_summary.corrupt_hidden_diamond_fact_for_test(
+            SummaryHiddenDiamondMutationForTest::NominalOrigin,
+        ));
+        right_summary
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the coherent foreign-payload closure should authenticate independently");
+
+        let importer = module_named(&graph, "entry.ash");
+        let summaries = if reverse {
+            [&right_summary, &left_summary]
+        } else {
+            [&left_summary, &right_summary]
+        };
+        let error = resolve_with(importer, &summaries)
+            .expect_err("duplicate constructors should compare foreign payload nominal provenance");
+        assert_eq!(error.reason, ResolveReason::InternalState);
+        assert_eq!(
+            error.primary.span().source(),
+            importer.dependencies()[1].import_span().source(),
+        );
+    }
+}
+
+#[test]
+fn unselected_non_decreasing_prerequisite_fails_summary_admission() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub type Option<A> =\nNone\n| Some(A)\n\n",
+                "pub interface Parent<A> {\nparent : A -> A\n}\n\n",
+                "pub interface Child<A> {\nchild : A -> A\n}\n\n",
+                "pub impl<A> Child<Option<A>> where Parent<A> {\n",
+                "child value = value\n}\n\n",
+                "pub marker : Unit -> Unit\nmarker value = value\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let mut summary = check_module(
+        resolve_module(dependency, &[]).expect("the prerequisite dependency should resolve"),
+    )
+    .expect("the decreasing prerequisite should check")
+    .into_exports();
+    assert!(summary.replace_first_implementation_prerequisite_with_head_for_test());
+    let importer = module_named(&graph, "entry.ash");
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("a non-strict imported prerequisite must fail summary admission");
+
+    assert_eq!(error.reason, ResolveReason::InternalState);
+}
+
+#[test]
+fn unselected_kind_valid_bare_variable_head_fails_summary_admission() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub type Option<A> =\nNone\n| Some(A)\n\n",
+                "pub interface Observe<A> {\nobserve : A -> Unit\n}\n\n",
+                "pub impl<A> Observe<Option<A>> {\nobserve value = ()\n}\n\n",
+                "pub marker : Unit -> Unit\nmarker value = value\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let mut summary = check_module(
+        resolve_module(dependency, &[]).expect("the generic dependency should resolve"),
+    )
+    .expect("the concrete generic head should check")
+    .into_exports();
+    assert!(summary.replace_first_implementation_head_with_bare_parameter_for_test());
+    let importer = module_named(&graph, "entry.ash");
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("a bare-variable imported implementation head must fail admission");
+
+    assert_eq!(error.reason, ResolveReason::InternalState);
+}
+
+#[test]
+fn unselected_kind_valid_orphan_head_fails_summary_admission() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (marker)\nmain : Unit -> Unit\nmain () = marker(())\n",
+        &[
+            (
+                "dependency.ash",
+                concat!(
+                    "pub import base (Foreign, Observe, observe)\n\n",
+                    "pub type Local = Local\n\n",
+                    "pub impl Observe<Local> {\nobserve value = ()\n}\n\n",
+                    "pub marker : Unit -> Unit\nmarker value = value\n",
+                ),
+            ),
+            (
+                "base.ash",
+                concat!(
+                    "pub type Foreign = Foreign\n\n",
+                    "pub interface Observe<A> {\nobserve : A -> Unit\n}\n",
+                ),
+            ),
+        ],
+    );
+    let base = module_named(&graph, "base.ash");
+    let base_summary =
+        check_module(resolve_module(base, &[]).expect("the foreign base should resolve"))
+            .expect("the foreign base should check")
+            .into_exports();
+    let dependency = module_named(&graph, "dependency.ash");
+    let mut summary = check_module(
+        resolve_with(dependency, &[&base_summary])
+            .expect("the local orphan-safe impl should resolve"),
+    )
+    .expect("the local nominal should satisfy the owner rule")
+    .into_exports();
+    assert!(summary.replace_first_implementation_head_with_foreign_nominal_for_test());
+    let importer = module_named(&graph, "entry.ash");
+
+    let error = resolve_with(importer, &[&summary])
+        .expect_err("a foreign-interface/foreign-nominal impl must fail admission");
+
     assert_eq!(error.reason, ResolveReason::InternalState);
 }
 
@@ -361,7 +1715,12 @@ fn targeted_term_and_constructor_cannot_share_a_renamed_expression_spelling() {
     let second_summary = ExportSummary::test_fixture(
         second.id(),
         vec![],
-        vec![],
+        vec![(
+            "Option",
+            nominal,
+            ExportedTypeAccess::Transparent,
+            Origin::Source(second.surface().span),
+        )],
         vec![(
             "Some",
             ConstructorId::new(nominal, 0),
@@ -459,16 +1818,18 @@ fn local_interface_cannot_shadow_a_targeted_nominal() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let importer = module_named(&graph, "entry.ash");
+    let nominal = NominalTypeId::new(dependency.id(), 0);
+    let origin = Origin::Source(dependency.surface().span);
     let summary = ExportSummary::test_fixture(
         dependency.id(),
         vec![],
         vec![(
             "Equal",
-            NominalTypeId::new(dependency.id(), 0),
+            nominal,
             ExportedTypeAccess::Transparent,
-            Origin::Source(dependency.surface().span),
+            origin.clone(),
         )],
-        vec![],
+        vec![("Equal", ConstructorId::new(nominal, 0), None, origin)],
         vec![],
     );
 
@@ -518,6 +1879,7 @@ fn local_method_cannot_shadow_a_targeted_constructor_under_a_lowercase_rename() 
     let dependency = module_named(&graph, "dependency.ash");
     let importer = module_named(&graph, "entry.ash");
     let nominal = NominalTypeId::new(dependency.id(), 0);
+    let origin = Origin::Source(dependency.surface().span);
     let summary = ExportSummary::test_fixture(
         dependency.id(),
         vec![],
@@ -525,14 +1887,9 @@ fn local_method_cannot_shadow_a_targeted_constructor_under_a_lowercase_rename() 
             "Option",
             nominal,
             ExportedTypeAccess::Transparent,
-            Origin::Source(dependency.surface().span),
+            origin.clone(),
         )],
-        vec![(
-            "Some",
-            ConstructorId::new(nominal, 0),
-            None,
-            Origin::Source(dependency.surface().span),
-        )],
+        vec![("Some", ConstructorId::new(nominal, 0), None, origin)],
         vec![],
     );
 
@@ -631,16 +1988,14 @@ fn a_renamed_imported_type_does_not_conflict_with_a_local_global() {
     let dependency = module_named(&graph, "dependency.ash");
     let importer = module_named(&graph, "entry.ash");
     let nominal = NominalTypeId::new(dependency.id(), 0);
-    let summary = ExportSummary::test_fixture(
+    let origin = Origin::Source(dependency.surface().span);
+    let summary = ExportSummary::test_fixture_with_access(
         dependency.id(),
         vec![],
-        vec![(
-            "Token",
-            nominal,
-            ExportedTypeAccess::Transparent,
-            Origin::Source(dependency.surface().span),
-        )],
+        vec![("Token", nominal, ExportedTypeAccess::Opaque, origin)],
         vec![],
+        vec![],
+        vec![("<Token>", Origin::Source(dependency.surface().span))],
         vec![],
     );
 
@@ -665,11 +2020,11 @@ fn qualified_import_charges_withheld_namespace_retention() {
         .iter()
         .map(|edge| DependencyExports::new(edge, &summary).expect("matching summary"))
         .collect::<Vec<_>>();
-    let mut resolver = Resolver::with_type_work(importer.id(), TypeWorkBudget::with_limit(2));
+    let mut resolver = Resolver::with_type_work(importer.id(), TypeWorkBudget::with_limit(1));
 
     let error = resolver
         .install_imports(importer.surface(), &dependencies)
-        .expect_err("three withheld namespace entries should exceed two retained units");
+        .expect_err("two withheld namespace entries should exceed one retained unit");
 
     assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
     assert!(resolver.module_aliases.is_empty());
@@ -731,11 +2086,13 @@ fn diamond_consumers_preserve_one_shared_binder_and_nominal_identity() {
     let binder = BinderId::resolved(shared.id(), 4);
     let nominal = NominalTypeId::new(shared.id(), 2);
     let origin = Origin::Source(shared.surface().span);
-    let summary = ExportSummary::test_fixture(
+    let summary = ExportSummary::test_fixture_with_access(
         shared.id(),
         vec![("identity", binder, Type::Unit, origin.clone())],
         vec![("Token", nominal, ExportedTypeAccess::Opaque, origin)],
         vec![],
+        vec![],
+        vec![("<Token>", Origin::Source(shared.surface().span))],
         vec![],
     );
 
@@ -1135,8 +2492,16 @@ fn a_public_transparent_nominal_in_a_targeted_term_scheme_is_hidden() {
             Type::Function(Box::new(Type::Unit), Box::new(Type::Nominal(choice))),
             origin.clone(),
         )],
-        vec![("Choice", choice, ExportedTypeAccess::Transparent, origin)],
-        vec![],
+        vec![(
+            "Choice",
+            choice,
+            ExportedTypeAccess::Transparent,
+            origin.clone(),
+        )],
+        vec![
+            ("First", ConstructorId::new(choice, 0), None, origin.clone()),
+            ("Second", ConstructorId::new(choice, 1), None, origin),
+        ],
         vec![],
     );
 
@@ -1161,15 +2526,16 @@ fn scheme_only_nominal_retention_charges_only_hidden_metadata() {
         .map(|index| ConstructorId::new(nominal, index))
         .collect::<Vec<_>>();
     let origin = Origin::Source(module.surface().span);
-    // A payload-free hidden nominal retains exactly one source-order record;
-    // its unretained constructor family adds no work.
-    let mut exact = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(1));
+    // A payload-free hidden nominal authenticates one defining-count mirror
+    // and retains one source-order record; its unretained family adds no work.
+    let mut exact = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(2));
 
     exact
         .retain_scheme_nominal_fact(
             ImportedNominalFactRef {
                 id: nominal,
                 parameter_count: 0,
+                constructor_count: constructors.len(),
                 parameters: &[],
                 constructors: &constructors,
                 access: ImportedTypeAccess::Transparent,
@@ -1194,13 +2560,14 @@ fn scheme_only_nominal_retention_charges_only_hidden_metadata() {
         origin: origin.clone(),
     };
     // One kinded parameter adds one binder record and one Kind node, for
-    // 1 order record + 1 binder record + 1 Kind node = 3.
-    let mut short = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(2));
+    // 1 count mirror + 1 order record + 1 binder record + 1 Kind node = 4.
+    let mut short = Resolver::with_type_work(module.id(), TypeWorkBudget::with_limit(3));
     let error = short
         .retain_scheme_nominal_fact(
             ImportedNominalFactRef {
                 id: nominal,
                 parameter_count: 1,
+                constructor_count: constructors.len(),
                 parameters: std::slice::from_ref(&parameter),
                 constructors: &constructors,
                 access: ImportedTypeAccess::Transparent,
@@ -1290,9 +2657,9 @@ fn direct_nominal_access_upgrades_the_same_identity_reached_hidden_in_either_imp
                 "Token",
                 token,
                 ExportedTypeAccess::Transparent,
-                owner_origin,
+                owner_origin.clone(),
             )],
-            vec![],
+            vec![("Token", ConstructorId::new(token, 0), None, owner_origin)],
             vec![],
         );
         let summaries = if entry_text.starts_with("import carrier") {
@@ -1323,13 +2690,20 @@ fn withheld_type_and_constructor_facts_with_one_spelling_keep_their_namespaces()
     );
     let dependency = module_named(&graph, "dependency.ash");
     let importer = module_named(&graph, "entry.ash");
+    let owner = NominalTypeId::new(dependency.id(), 0);
+    let owner_origin = Origin::Source(dependency.surface().span);
     let summary = ExportSummary::test_fixture_with_access(
         dependency.id(),
         vec![],
-        vec![],
+        vec![(
+            "Token",
+            owner,
+            ExportedTypeAccess::Opaque,
+            owner_origin.clone(),
+        )],
         vec![],
         vec!["Foo"],
-        vec![("Foo", Origin::Source(dependency.surface().span))],
+        vec![("Foo", owner_origin)],
         vec![],
     );
 
@@ -1345,13 +2719,20 @@ fn withheld_type_and_constructor_facts_with_one_spelling_keep_their_namespaces()
     );
     let expression_dependency = module_named(&expression_graph, "dependency.ash");
     let expression_importer = module_named(&expression_graph, "entry.ash");
+    let expression_owner = NominalTypeId::new(expression_dependency.id(), 0);
+    let expression_origin = Origin::Source(expression_dependency.surface().span);
     let expression_summary = ExportSummary::test_fixture_with_access(
         expression_dependency.id(),
         vec![],
-        vec![],
+        vec![(
+            "Token",
+            expression_owner,
+            ExportedTypeAccess::Opaque,
+            expression_origin.clone(),
+        )],
         vec![],
         vec!["Foo"],
-        vec![("Foo", Origin::Source(expression_dependency.surface().span))],
+        vec![("Foo", expression_origin)],
         vec![],
     );
 

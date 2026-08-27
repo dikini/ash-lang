@@ -11,7 +11,8 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     interface::{
         CheckedRequirement, ConstrainedScheme, EvidenceSlot, ImplId, ImplMethodId,
-        InterfaceConstraintBudget, InterfaceId, MethodId, RequirementId, RequirementOwner,
+        InterfaceConstraintBudget, InterfaceId, MatchedNominalIdentities, MethodId, RequirementId,
+        RequirementOwner, collect_type_nominal_identities_with_constraint_budget,
     },
     module::{LoadedModule, ModuleDependency, ModuleId},
     resolved::{
@@ -21,8 +22,8 @@ use crate::{
         CheckedInterfaceMethodFact, DirectDependencyRoute, ExportSummary, ExportedConstructor,
         ExportedGlobal, ExportedType, ExportedTypeAccess, ImplementationAuthorization,
         ImplementationRouteRank, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
-        ImportedNominalFact, ImportedNominalMergeFailure, ImportedTypeAccess,
-        ResolvedApplicationExpr, ResolvedBinaryExpr, ResolvedBinding, ResolvedBlock,
+        ImportedNominalMergeFailure, ImportedTypeAccess, ResolvedApplicationExpr,
+        ResolvedBinaryExpr, ResolvedBinding, ResolvedBlock, ResolvedBuildFailure,
         ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
         ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
         ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
@@ -33,12 +34,18 @@ use crate::{
         ResolvedModuleParts, ResolvedNominalType, ResolvedOccurrence, ResolvedPattern,
         ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry,
         ResolvedRequirement, ResolvedTermName, ResolvedType, ResolvedTypeProvenance,
-        ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern, WithheldExport,
-        WithheldExportKind, WithheldNamespace, clone_resolved_type_variable_with_budget,
-        discard_resolved_definition_iteratively, discard_resolved_equation_iteratively,
-        discard_resolved_expression_iteratively, discard_resolved_implementation_iteratively,
-        discard_resolved_interface_iteratively, discard_resolved_local_declaration_iteratively,
-        discard_resolved_pattern_iteratively, discard_resolved_requirement,
+        ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern,
+        ValidatedImportedNominalMerge, WithheldExport, WithheldExportKind, WithheldNamespace,
+        clone_resolved_type_variable_with_budget, discard_resolved_definition_iteratively,
+        discard_resolved_equation_iteratively, discard_resolved_expression_iteratively,
+        discard_resolved_implementation_iteratively, discard_resolved_interface_iteratively,
+        discard_resolved_local_declaration_iteratively, discard_resolved_pattern_iteratively,
+        discard_resolved_requirement,
+        same_checked_implementation_fact_observing_nominals_with_budget,
+        same_checked_interface_fact_observing_nominals_with_budget,
+        same_imported_constructor_fact_observing_nominals_with_budget,
+        same_imported_global_fact_observing_nominals_with_budget,
+        same_imported_nominal_closure_with_constraint_budget,
     },
     source::{Origin, discard_origin_iteratively},
     surface::{
@@ -52,12 +59,94 @@ use crate::{
     },
     types::{
         ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
-        TypeWorkBudget, charge_type_cells, clone_type_with_budget, discard_type_iteratively,
-        same_kind_with_charge,
+        TypeWorkBudget, charge_kind_nodes, charge_type_cells, clone_type_with_budget,
+        discard_type_iteratively, same_kind_with_charge,
     },
 };
 
 struct ResolvedTypeBuffer(Vec<(Type, usize)>);
+
+struct ImportedTypeCloneBuffer(Vec<Type>);
+
+struct ImportedTypeVariableBuffer(Vec<ResolvedTypeVariable>);
+
+struct ImportedConstructorFactBuffer(Vec<ImportedConstructorFact>);
+
+#[derive(Clone, Copy)]
+struct ValidatedImportedConstructorRoute<'summary> {
+    exported: &'summary ExportedConstructor,
+    requires_commit: bool,
+}
+
+impl ImportedConstructorFactBuffer {
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn push(&mut self, fact: ImportedConstructorFact) {
+        self.0.push(fact);
+    }
+
+    fn into_vec(mut self) -> Vec<ImportedConstructorFact> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ImportedConstructorFactBuffer {
+    fn drop(&mut self) {
+        for fact in self.0.drain(..) {
+            fact.discard_iteratively();
+        }
+    }
+}
+
+impl ImportedTypeVariableBuffer {
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn push(&mut self, parameter: ResolvedTypeVariable) {
+        self.0.push(parameter);
+    }
+
+    fn into_boxed_slice(mut self) -> Box<[ResolvedTypeVariable]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for ImportedTypeVariableBuffer {
+    fn drop(&mut self) {
+        for parameter in self.0.drain(..) {
+            discard_origin_iteratively(parameter.origin);
+        }
+    }
+}
+
+impl ImportedTypeCloneBuffer {
+    fn push(&mut self, ty: Type) {
+        self.0.push(ty);
+    }
+
+    fn pop_owned(&mut self) -> Option<IterativeTypeOwner> {
+        self.0.pop().map(IterativeTypeOwner::new)
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
+    }
+
+    fn into_vec(mut self) -> Vec<Type> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ImportedTypeCloneBuffer {
+    fn drop(&mut self) {
+        while let Some(ty) = self.0.pop() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
 
 impl Deref for ResolvedTypeBuffer {
     type Target = Vec<(Type, usize)>;
@@ -693,6 +782,29 @@ fn resolve_module_names_with_budget(
             surface.span,
             "the resolver received incomplete or mismatched dependency summaries",
         ));
+    }
+
+    for dependency in dependencies {
+        dependency
+            .summary
+            .authenticate(type_work, constraint_work)
+            .map_err(|failure| {
+                let (reason, message) = match failure {
+                    ResolvedBuildFailure::TypeResource => (
+                        ResolveReason::TypeResourceExhausted,
+                        "dependency-summary authentication exceeded its type-work budget",
+                    ),
+                    ResolvedBuildFailure::ConstraintResource => (
+                        ResolveReason::ConstraintResourceExhausted,
+                        "dependency-summary authentication exceeded its constraint-work budget",
+                    ),
+                    ResolvedBuildFailure::InvalidState => (
+                        ResolveReason::InternalState,
+                        "a dependency summary failed body-free authentication",
+                    ),
+                };
+                error(reason, dependency.edge.import_span(), message)
+            })?;
     }
 
     let mut resolver = Resolver::with_budgets(
@@ -1705,6 +1817,7 @@ impl Resolver {
         for (dependency_summary_order, (import, dependency)) in
             surface.imports.iter().zip(dependencies).enumerate()
         {
+            let mut retained_constructor_owners = HashSet::new();
             self.retain_dependency_interface_facts(
                 dependency.summary,
                 dependency.edge.target(),
@@ -1835,6 +1948,7 @@ impl Resolver {
                                 dependency.summary,
                                 Some(&name.text),
                                 *span,
+                                &mut retained_constructor_owners,
                             )?;
                             if import.public {
                                 self.public_import_candidate.try_insert_nominal(
@@ -1862,9 +1976,14 @@ impl Resolver {
                                     for (spelling, withheld) in
                                         dependency.summary.opaque_constructors(exported.id)
                                     {
+                                        let spelling = if spelling == name.text {
+                                            local.text.clone()
+                                        } else {
+                                            spelling.to_owned()
+                                        };
                                         self.public_import_candidate.try_insert_withheld(
                                             WithheldNamespace::Constructor,
-                                            spelling.to_owned(),
+                                            spelling,
                                             withheld.clone(),
                                             &mut self.type_work,
                                         ).map_err(|()| export_candidate_resource_error(
@@ -1910,7 +2029,12 @@ impl Resolver {
                             }
                             self.constructor_names
                                 .insert(local.text.clone(), exported.id);
-                            self.retain_imported_constructor(exported, dependency.summary, *span)?;
+                            self.retain_imported_constructor_once_per_route(
+                                exported,
+                                dependency.summary,
+                                *span,
+                                &mut retained_constructor_owners,
+                            )?;
                             if import.public {
                                 self.public_import_candidate.try_insert_constructor(
                                     local.text.clone(),
@@ -2079,7 +2203,14 @@ impl Resolver {
         import_span: crate::source::Span,
     ) -> Result<ImportedNamespaces, ResolveError> {
         let mut namespaces = ImportedNamespaces::default();
-        let entry_count = summary.namespace_entry_count();
+        let mut retained_constructor_owners = HashSet::new();
+        let entry_count = summary.namespace_entry_count().ok_or_else(|| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                import_span,
+                "imported namespace retention exceeded its work budget",
+            )
+        })?;
         self.type_work.charge(entry_count).map_err(|()| {
             error(
                 ResolveReason::TypeResourceExhausted,
@@ -2087,20 +2218,63 @@ impl Resolver {
                 "imported namespace retention exceeded its work budget",
             )
         })?;
-
-        let mut terms = Vec::new();
-        terms
-            .try_reserve(summary.terms().size_hint().0)
+        let (term_count, nominal_count, interface_count, constructor_count, withheld_count) =
+            summary.namespace_capacities().ok_or_else(|| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    import_span,
+                    "imported namespace capacity exceeded its work budget",
+                )
+            })?;
+        namespaces.terms.try_reserve(term_count).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                import_span,
+                "imported term namespace storage exceeded its work budget",
+            )
+        })?;
+        namespaces
+            .nominals
+            .try_reserve(nominal_count)
             .map_err(|_| {
                 error(
                     ResolveReason::TypeResourceExhausted,
                     import_span,
-                    "imported namespace retention exceeded its work budget",
+                    "imported nominal namespace storage exceeded its work budget",
                 )
             })?;
-        terms.extend(summary.terms());
-        terms.sort_unstable_by_key(|(spelling, _)| *spelling);
-        for (spelling, exported) in terms {
+        namespaces
+            .interfaces
+            .try_reserve(interface_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    import_span,
+                    "imported interface namespace storage exceeded its work budget",
+                )
+            })?;
+        namespaces
+            .constructors
+            .try_reserve(constructor_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    import_span,
+                    "imported constructor namespace storage exceeded its work budget",
+                )
+            })?;
+        namespaces
+            .withheld
+            .try_reserve(withheld_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    import_span,
+                    "imported withheld namespace storage exceeded its work budget",
+                )
+            })?;
+
+        for (spelling, exported) in summary.terms() {
             namespaces.terms.insert(
                 spelling.to_owned(),
                 ResolvedTermBinding::imported(
@@ -2111,9 +2285,7 @@ impl Resolver {
             self.retain_imported_global(exported, summary, import_span)?;
         }
 
-        let mut methods = summary.method_names().collect::<Vec<_>>();
-        methods.sort_unstable_by_key(|(spelling, _)| *spelling);
-        for (spelling, method) in methods {
+        for (spelling, method) in summary.method_names() {
             if namespaces
                 .terms
                 .insert(
@@ -2130,28 +2302,20 @@ impl Resolver {
             }
         }
 
-        let mut nominals = Vec::new();
-        nominals
-            .try_reserve(summary.nominals().size_hint().0)
-            .map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    import_span,
-                    "imported namespace retention exceeded its work budget",
-                )
-            })?;
-        nominals.extend(summary.nominals());
-        nominals.sort_unstable_by_key(|(spelling, _)| *spelling);
-        for (spelling, exported) in nominals {
+        for (spelling, exported) in summary.nominals() {
             namespaces
                 .nominals
                 .insert(spelling.to_owned(), ImportedNominalName { id: exported.id });
-            self.retain_imported_nominal(exported, summary, Some(spelling), import_span)?;
+            self.retain_imported_nominal(
+                exported,
+                summary,
+                Some(spelling),
+                import_span,
+                &mut retained_constructor_owners,
+            )?;
         }
 
-        let mut interfaces = summary.interface_names().collect::<Vec<_>>();
-        interfaces.sort_unstable_by_key(|(spelling, _)| *spelling);
-        for (spelling, interface) in interfaces {
+        for (spelling, interface) in summary.interface_names() {
             if namespaces
                 .interfaces
                 .insert(spelling.to_owned(), interface)
@@ -2165,34 +2329,17 @@ impl Resolver {
             }
         }
 
-        let mut constructors = Vec::new();
-        constructors
-            .try_reserve(summary.constructors().size_hint().0)
-            .map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    import_span,
-                    "imported namespace retention exceeded its work budget",
-                )
-            })?;
-        constructors.extend(summary.constructors());
-        constructors.sort_unstable_by_key(|(spelling, _)| *spelling);
-        for (spelling, exported) in constructors {
+        for (spelling, exported) in summary.constructors() {
             namespaces
                 .constructors
                 .insert(spelling.to_owned(), exported.id);
-            self.retain_imported_constructor(exported, summary, import_span)?;
+            self.retain_imported_constructor_once_per_route(
+                exported,
+                summary,
+                import_span,
+                &mut retained_constructor_owners,
+            )?;
         }
-        namespaces
-            .withheld
-            .try_reserve(summary.withheld_count())
-            .map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    import_span,
-                    "imported namespace retention exceeded its work budget",
-                )
-            })?;
         for (namespace, spelling, withheld) in summary.withheld() {
             namespaces
                 .withheld
@@ -2260,7 +2407,23 @@ impl Resolver {
             ));
         }
         if let Some(existing) = self.imported.interface(exported.id) {
-            debug_assert_eq!(existing.id, exported.id);
+            let mut nominal_identities = MatchedNominalIdentities::default();
+            let matches = same_checked_interface_fact_observing_nominals_with_budget(
+                existing,
+                exported,
+                &mut self.type_work,
+                &mut self.constraint_work,
+                &mut nominal_identities,
+            )
+            .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+            if !matches {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "alternate interface routes disagree on the checked fact",
+                ));
+            }
+            self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
             self.imported.merge_interface_route(
                 exported.id,
                 direct_dependency,
@@ -2371,14 +2534,9 @@ impl Resolver {
             )
         })?;
         let fact = exported.fact();
-        self.constraint_work
-            .charge(
-                exported
-                    .authorization()
-                    .hops()
-                    .len()
-                    .saturating_add(fact.methods.len()),
-            )
+        let authorization_is_well_formed = exported
+            .authorization()
+            .is_well_formed_for(summary.module(), fact, &mut self.constraint_work)
             .map_err(|()| {
                 error(
                     ResolveReason::ConstraintResourceExhausted,
@@ -2386,16 +2544,31 @@ impl Resolver {
                     "implementation authorization inspection exceeded its work budget",
                 )
             })?;
-        if selection.direct_dependency != summary.module()
-            || !exported
-                .authorization()
-                .is_well_formed_for(summary.module(), fact)
-        {
+        if selection.direct_dependency != summary.module() || !authorization_is_well_formed {
             return Err(error(
                 ResolveReason::InternalState,
                 span,
                 "an implementation summary contains an invalid authorization route",
             ));
+        }
+        if let Some(existing) = self.imported.implementation(fact.id) {
+            let mut nominal_identities = MatchedNominalIdentities::default();
+            let matches = same_checked_implementation_fact_observing_nominals_with_budget(
+                existing,
+                fact,
+                &mut self.type_work,
+                &mut self.constraint_work,
+                &mut nominal_identities,
+            )
+            .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+            if !matches {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "alternate implementation routes disagree on the checked fact",
+                ));
+            }
+            self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
         }
         let authorization = ImplementationAuthorization::prepend(
             self.module,
@@ -2461,6 +2634,97 @@ impl Resolver {
                         "public implementation route ordering exceeded its work budget",
                     )
                 })?;
+        }
+        if self.imported.implementation(fact.id).is_some() {
+            let existing_rank = self
+                .implementation_route_ranks
+                .get(&fact.id)
+                .copied()
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an effective implementation route lost its transient ordering rank",
+                    )
+                })?;
+            let existing_public_rank = self
+                .public_implementation_route_ranks
+                .get(&fact.id)
+                .copied();
+            let existing = self
+                .imported
+                .implementation_import(fact.id)
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an implementation route rank has no selected fact",
+                    )
+                })?;
+            let replace_effective_rank = effective_implementation_route_precedes(
+                &authorization,
+                selection.route_rank,
+                &existing.authorization,
+                existing_rank,
+                span,
+                &mut self.constraint_work,
+            )?;
+            if existing.public_authorization.is_some() != existing_public_rank.is_some() {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "a public implementation route lost its transient ordering rank",
+                ));
+            }
+            let replace_public_rank = if let Some(candidate) = &public_authorization {
+                match (&existing.public_authorization, existing_public_rank) {
+                    (Some(selected), Some(selected_rank)) => public_implementation_route_precedes(
+                        candidate,
+                        selection.route_rank,
+                        selected,
+                        selected_rank,
+                        span,
+                        &mut self.constraint_work,
+                    )?,
+                    (None, None) => true,
+                    (Some(_), None) | (None, Some(_)) => {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            span,
+                            "a public implementation route lost its transient ordering rank",
+                        ));
+                    }
+                }
+            } else {
+                false
+            };
+            let effective_replacement = replace_effective_rank.then_some(authorization);
+            let public_replacement = replace_public_rank
+                .then(|| public_authorization.take())
+                .flatten();
+            self.imported
+                .commit_existing_implementation_routes(
+                    fact.id,
+                    effective_replacement,
+                    public_replacement,
+                    needs_public_order,
+                )
+                .map_err(|()| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an implementation route rank has no selected fact",
+                    )
+                })?;
+            if replace_effective_rank {
+                self.implementation_route_ranks
+                    .insert(fact.id, selection.route_rank);
+            }
+            if replace_public_rank {
+                self.public_implementation_route_ranks
+                    .insert(fact.id, selection.route_rank);
+            }
+            return Ok(());
         }
         self.constraint_work
             .charge(
@@ -2542,7 +2806,7 @@ impl Resolver {
                 span: prerequisite.span,
             });
         }
-        let mut head_parameters = Vec::new();
+        let mut head_parameters = ImportedTypeVariableBuffer(Vec::new());
         head_parameters
             .try_reserve(fact.head_parameters.len())
             .map_err(|_| {
@@ -2666,166 +2930,25 @@ impl Resolver {
                 span: method.span,
             });
         }
+        let argument = IterativeTypeOwner::new(
+            clone_type_with_budget(&fact.argument, &mut self.type_work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation head exceeded its type-work budget",
+                )
+            })?,
+        );
         let cloned_fact = CheckedImplementationFact {
             id: fact.id,
             interface: fact.interface,
             head_parameters: head_parameters.into_boxed_slice(),
-            argument: clone_type_with_budget(&fact.argument, &mut self.type_work).map_err(
-                |()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "imported implementation head exceeded its type-work budget",
-                    )
-                },
-            )?,
+            argument: argument.into_inner(),
             prerequisites: prerequisites.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
             origin: fact.origin.clone(),
             span: fact.span,
         };
-        if self.imported.implementation(fact.id).is_some() {
-            self.constraint_work
-                .charge(
-                    fact.head_parameters
-                        .len()
-                        .saturating_add(fact.prerequisites.len())
-                        .saturating_add(fact.methods.len())
-                        .saturating_add(1),
-                )
-                .map_err(|()| {
-                    error(
-                        ResolveReason::ConstraintResourceExhausted,
-                        span,
-                        "alternate implementation identity comparison exceeded its work budget",
-                    )
-                })?;
-        }
-        if self.imported.implementation(fact.id).is_some() {
-            let existing_rank = self
-                .implementation_route_ranks
-                .get(&fact.id)
-                .copied()
-                .ok_or_else(|| {
-                    error(
-                        ResolveReason::InternalState,
-                        span,
-                        "an effective implementation route lost its transient ordering rank",
-                    )
-                })?;
-            let existing_public_rank = self
-                .public_implementation_route_ranks
-                .get(&fact.id)
-                .copied();
-            let existing = self
-                .imported
-                .implementation_import_mut(fact.id)
-                .ok_or_else(|| {
-                    error(
-                        ResolveReason::InternalState,
-                        span,
-                        "an implementation route rank has no selected fact",
-                    )
-                })?;
-            let stable_identity_matches = existing.fact.id == cloned_fact.id
-                && existing.fact.interface == cloned_fact.interface
-                && existing.fact.head_parameters.len() == cloned_fact.head_parameters.len()
-                && existing
-                    .fact
-                    .head_parameters
-                    .iter()
-                    .zip(&cloned_fact.head_parameters)
-                    .all(|(left, right)| left.id == right.id)
-                && existing.fact.prerequisites.len() == cloned_fact.prerequisites.len()
-                && existing
-                    .fact
-                    .prerequisites
-                    .iter()
-                    .zip(&cloned_fact.prerequisites)
-                    .all(|(left, right)| left.id == right.id && left.interface == right.interface)
-                && existing.fact.methods.len() == cloned_fact.methods.len()
-                && existing
-                    .fact
-                    .methods
-                    .iter()
-                    .zip(&cloned_fact.methods)
-                    .all(|(left, right)| {
-                        left.id == right.id
-                            && left.method == right.method
-                            && left.binder == right.binder
-                    });
-            if !stable_identity_matches {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    span,
-                    "alternate implementation routes disagree on the checked fact",
-                ));
-            }
-            let replace_effective_rank = effective_implementation_route_precedes(
-                &authorization,
-                selection.route_rank,
-                &existing.authorization,
-                existing_rank,
-                span,
-                &mut self.constraint_work,
-            )?;
-            if existing.public_authorization.is_some() != existing_public_rank.is_some() {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    span,
-                    "a public implementation route lost its transient ordering rank",
-                ));
-            }
-            let replace_public_rank = if let Some(candidate) = &public_authorization {
-                match (&existing.public_authorization, existing_public_rank) {
-                    (Some(selected), Some(selected_rank)) => public_implementation_route_precedes(
-                        candidate,
-                        selection.route_rank,
-                        selected,
-                        selected_rank,
-                        span,
-                        &mut self.constraint_work,
-                    )?,
-                    (None, None) => true,
-                    (Some(_), None) | (None, Some(_)) => {
-                        return Err(error(
-                            ResolveReason::InternalState,
-                            span,
-                            "a public implementation route lost its transient ordering rank",
-                        ));
-                    }
-                }
-            } else {
-                false
-            };
-            if replace_effective_rank {
-                existing.authorization = authorization;
-            }
-            if replace_public_rank {
-                existing.public_authorization = public_authorization.take();
-            }
-            drop(cloned_fact);
-            if replace_effective_rank {
-                self.implementation_route_ranks
-                    .insert(fact.id, selection.route_rank);
-            }
-            if replace_public_rank {
-                self.public_implementation_route_ranks
-                    .insert(fact.id, selection.route_rank);
-            }
-            if needs_public_order {
-                self.imported
-                    .mark_implementation_public(fact.id)
-                    .map_err(|()| {
-                        error(
-                            ResolveReason::InternalState,
-                            span,
-                            "a public implementation lost its selected fact",
-                        )
-                    })?;
-            }
-            return Ok(());
-        }
         self.imported.reserve_implementation().map_err(|()| {
             error(
                 ResolveReason::ConstraintResourceExhausted,
@@ -2897,7 +3020,24 @@ impl Resolver {
                 )
             })?;
         }
-        if self.imported.contains_global(exported.binder) {
+        if let Some(existing) = self.imported.global(exported.binder) {
+            let mut nominal_identities = MatchedNominalIdentities::default();
+            let matches = same_imported_global_fact_observing_nominals_with_budget(
+                existing,
+                exported,
+                &mut self.type_work,
+                &mut self.constraint_work,
+                &mut nominal_identities,
+            )
+            .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+            if !matches {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "alternate global routes disagree on the checked fact",
+                ));
+            }
+            self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
             return Ok(());
         }
         if constrained {
@@ -2981,6 +3121,183 @@ impl Resolver {
             self.retain_type_nominals(&requirement.argument, summary, span)?;
         }
         Ok(())
+    }
+
+    fn constructor_scheme_retention_type_work(scheme: &ConstrainedScheme) -> Result<usize, ()> {
+        let mut work = TypeWorkBudget::unbounded();
+        work.charge(scheme.requirements.len())?;
+        work.charge(scheme.type_parameters.len())?;
+        for (_, kind) in &scheme.type_parameters {
+            charge_kind_nodes(kind, &mut work)?;
+        }
+        for requirement in &scheme.requirements {
+            charge_type_cells(requirement.argument(), &mut work)?;
+        }
+        charge_type_cells(scheme.value_type(), &mut work)?;
+        Ok(work.used())
+    }
+
+    fn constructor_payload_retention_type_work(payload: Option<&Type>) -> Result<usize, ()> {
+        let mut work = TypeWorkBudget::unbounded();
+        if let Some(payload) = payload {
+            charge_type_cells(payload, &mut work)?;
+        }
+        Ok(work.used())
+    }
+
+    fn collect_exported_constructor_nominal_identities(
+        &mut self,
+        exported: &ExportedConstructor,
+        nominal_identities: &mut MatchedNominalIdentities,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        for requirement in &exported.scheme.requirements {
+            collect_type_nominal_identities_with_constraint_budget(
+                requirement.argument(),
+                &mut self.constraint_work,
+                nominal_identities,
+            )
+            .map_err(|()| {
+                imported_fact_comparison_error(ResolvedBuildFailure::ConstraintResource, span)
+            })?;
+        }
+        collect_type_nominal_identities_with_constraint_budget(
+            exported.scheme.value_type(),
+            &mut self.constraint_work,
+            nominal_identities,
+        )
+        .map_err(|()| {
+            imported_fact_comparison_error(ResolvedBuildFailure::ConstraintResource, span)
+        })?;
+        if let Some(payload) = exported.payload.as_ref() {
+            collect_type_nominal_identities_with_constraint_budget(
+                payload,
+                &mut self.constraint_work,
+                nominal_identities,
+            )
+            .map_err(|()| {
+                imported_fact_comparison_error(ResolvedBuildFailure::ConstraintResource, span)
+            })?;
+        }
+        Ok(())
+    }
+
+    fn clone_imported_string_after_precharge(
+        value: &str,
+        span: crate::source::Span,
+    ) -> Result<String, ResolveError> {
+        let mut cloned = String::new();
+        cloned.try_reserve_exact(value.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported constructor spelling retention could not reserve storage",
+            )
+        })?;
+        cloned.push_str(value);
+        Ok(cloned)
+    }
+
+    fn clone_imported_payload_with_budget(
+        payload: &Type,
+        span: crate::source::Span,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<IterativeTypeOwner, ResolveError> {
+        enum Task<'a> {
+            Visit(&'a Type),
+            Sequence(std::slice::Iter<'a, Type>),
+            Tuple(usize),
+            Application,
+            Function,
+        }
+
+        const MESSAGE: &str =
+            "imported constructor payload retention exceeded its type-work budget";
+        let start = type_work.used();
+        charge_type_cells(payload, type_work)
+            .map_err(|()| error(ResolveReason::TypeResourceExhausted, span, MESSAGE))?;
+        let type_cells = type_work
+            .used()
+            .checked_sub(start)
+            .ok_or_else(|| error(ResolveReason::InternalState, span, MESSAGE))?;
+
+        let mut work = Vec::new();
+        work.try_reserve(type_cells)
+            .map_err(|_| error(ResolveReason::TypeResourceExhausted, span, MESSAGE))?;
+        work.push(Task::Visit(payload));
+        let mut rebuilt = ImportedTypeCloneBuffer(Vec::new());
+        rebuilt
+            .0
+            .try_reserve(type_cells)
+            .map_err(|_| error(ResolveReason::TypeResourceExhausted, span, MESSAGE))?;
+        while let Some(task) = work.pop() {
+            match task {
+                Task::Visit(Type::Int) => rebuilt.push(Type::Int),
+                Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
+                Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
+                Task::Visit(Type::Variable(id)) => rebuilt.push(Type::Variable(*id)),
+                Task::Visit(Type::Inference(id)) => rebuilt.push(Type::Inference(*id)),
+                Task::Visit(Type::Nominal(id)) => rebuilt.push(Type::Nominal(*id)),
+                Task::Visit(Type::Tuple(elements)) => {
+                    work.push(Task::Tuple(elements.len()));
+                    work.push(Task::Sequence(elements.iter()));
+                }
+                Task::Visit(Type::Application(function, argument)) => {
+                    work.push(Task::Application);
+                    work.push(Task::Visit(argument));
+                    work.push(Task::Visit(function));
+                }
+                Task::Visit(Type::Function(domain, codomain)) => {
+                    work.push(Task::Function);
+                    work.push(Task::Visit(codomain));
+                    work.push(Task::Visit(domain));
+                }
+                Task::Visit(Type::Forall(_, _)) => {
+                    return Err(error(ResolveReason::InternalState, span, MESSAGE));
+                }
+                Task::Sequence(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        work.push(Task::Sequence(remaining));
+                        work.push(Task::Visit(next));
+                    }
+                }
+                Task::Tuple(count) => {
+                    let elements = rebuilt.split_off(rebuilt.0.len() - count).into_vec();
+                    rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+                }
+                Task::Application => {
+                    let argument = rebuilt
+                        .pop_owned()
+                        .expect("an authenticated application retains its argument");
+                    let function = rebuilt
+                        .pop_owned()
+                        .expect("an authenticated application retains its function");
+                    rebuilt.push(Type::Application(
+                        Box::new(function.into_inner()),
+                        Box::new(argument.into_inner()),
+                    ));
+                }
+                Task::Function => {
+                    let codomain = rebuilt
+                        .pop_owned()
+                        .expect("an authenticated function retains its codomain");
+                    let domain = rebuilt
+                        .pop_owned()
+                        .expect("an authenticated function retains its domain");
+                    rebuilt.push(Type::Function(
+                        Box::new(domain.into_inner()),
+                        Box::new(codomain.into_inner()),
+                    ));
+                }
+            }
+        }
+        let cloned = rebuilt
+            .pop_owned()
+            .ok_or_else(|| error(ResolveReason::InternalState, span, MESSAGE))?;
+        if !rebuilt.0.is_empty() {
+            return Err(error(ResolveReason::InternalState, span, MESSAGE));
+        }
+        Ok(cloned)
     }
 
     fn retain_type_nominals(
@@ -3084,59 +3401,63 @@ impl Resolver {
         Ok(())
     }
 
+    fn compare_retained_nominal_closure(
+        &mut self,
+        nominal_identities: &MatchedNominalIdentities,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        for id in nominal_identities.identities() {
+            let existing = self.imported.nominal(*id).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an alternate route lost its retained nominal closure",
+                )
+            })?;
+            let candidate = summary.nominal_fact(*id).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an alternate route references missing nominal metadata",
+                )
+            })?;
+            let matches = same_imported_nominal_closure_with_constraint_budget(
+                existing,
+                candidate,
+                &mut self.constraint_work,
+            )
+            .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+            if !matches {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "alternate routes disagree on retained nominal metadata",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn retain_scheme_nominal_fact(
         &mut self,
         exported: crate::resolved::ImportedNominalFactRef<'_>,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
-        self.charge_imported_nominal_metadata(0, span)?;
-        let parameters = self.clone_type_variables_for_retention(
-            exported.parameters,
-            span,
-            "imported nominal parameters exceeded their type-work budget",
-        )?;
-        self.imported
-            .merge_nominal(
-                ImportedNominalFact {
-                    id: exported.id,
-                    parameter_count: exported.parameter_count,
-                    parameters,
-                    constructors: Vec::new().into_boxed_slice(),
+        let prepared = self
+            .imported
+            .prepare_nominal_merge(
+                crate::resolved::ImportedNominalFactRef {
+                    constructors: &[],
                     access: ImportedTypeAccess::Hidden,
-                    display_spelling: exported.display_spelling.map(str::to_owned),
-                    display_is_private: exported.display_is_private,
-                    origin: exported.origin.clone(),
+                    ..exported
                 },
                 &mut self.type_work,
+                &mut self.constraint_work,
             )
-            .map_err(|failure| imported_nominal_merge_error(failure, span))
-    }
-
-    fn retain_imported_nominal_fact(
-        &mut self,
-        exported: crate::resolved::ImportedNominalFactRef<'_>,
-        span: crate::source::Span,
-    ) -> Result<(), ResolveError> {
-        self.charge_imported_nominal_metadata(exported.constructors.len(), span)?;
-        let parameters = self.clone_type_variables_for_retention(
-            exported.parameters,
-            span,
-            "imported nominal parameters exceeded their type-work budget",
-        )?;
+            .map_err(|failure| imported_nominal_merge_error(failure, span))?;
         self.imported
-            .merge_nominal(
-                ImportedNominalFact {
-                    id: exported.id,
-                    parameter_count: exported.parameter_count,
-                    parameters,
-                    constructors: exported.constructors.to_vec().into_boxed_slice(),
-                    access: exported.access,
-                    display_spelling: exported.display_spelling.map(str::to_owned),
-                    display_is_private: exported.display_is_private,
-                    origin: exported.origin.clone(),
-                },
-                &mut self.type_work,
-            )
+            .commit_nominal_merge(prepared)
             .map_err(|failure| imported_nominal_merge_error(failure, span))
     }
 
@@ -3146,62 +3467,45 @@ impl Resolver {
         summary: &ExportSummary,
         display_spelling: Option<&str>,
         span: crate::source::Span,
+        retained_constructor_owners: &mut HashSet<NominalTypeId>,
     ) -> Result<(), ResolveError> {
-        self.charge_imported_nominal_metadata(exported.constructors.len(), span)?;
-        let parameters = self.clone_type_variables_for_retention(
-            &exported.parameters,
-            span,
-            "imported nominal parameters exceeded their type-work budget",
-        )?;
-        self.imported
-            .merge_nominal(
-                ImportedNominalFact {
-                    id: exported.id,
-                    parameter_count: exported.parameter_count,
-                    parameters,
-                    constructors: exported.constructors.to_vec().into_boxed_slice(),
-                    access: exported.access.into(),
-                    display_spelling: display_spelling.map(str::to_owned),
-                    display_is_private: false,
-                    origin: exported.origin.clone(),
-                },
-                &mut self.type_work,
-            )
-            .map_err(|failure| imported_nominal_merge_error(failure, span))?;
-        for constructor in &exported.constructors {
-            let constructor = summary.constructor_by_id(*constructor).ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "a transparent type summary lost one of its constructors",
-                )
-            })?;
-            self.retain_imported_constructor_fact(constructor, summary, span)?;
-        }
-        Ok(())
-    }
-
-    fn charge_imported_nominal_metadata(
-        &mut self,
-        constructor_count: usize,
-        span: crate::source::Span,
-    ) -> Result<(), ResolveError> {
-        self.type_work.charge(constructor_count).map_err(|()| {
-            error(
-                ResolveReason::TypeResourceExhausted,
+        let candidate = crate::resolved::ImportedNominalFactRef {
+            id: exported.id,
+            parameter_count: exported.parameter_count,
+            constructor_count: exported.constructor_count,
+            parameters: &exported.parameters,
+            constructors: &exported.constructors,
+            access: exported.access.into(),
+            display_spelling,
+            display_is_private: false,
+            origin: &exported.origin,
+        };
+        if exported.access == ExportedTypeAccess::Transparent {
+            self.retain_imported_constructor_family_once_per_route(
+                candidate,
+                summary,
                 span,
-                "imported nominal metadata retention exceeded its work budget",
+                retained_constructor_owners,
             )
-        })
+        } else {
+            let prepared = self
+                .imported
+                .prepare_nominal_merge(candidate, &mut self.type_work, &mut self.constraint_work)
+                .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+            self.imported
+                .commit_nominal_merge(prepared)
+                .map_err(|failure| imported_nominal_merge_error(failure, span))
+        }
     }
 
+    #[cfg(test)]
     fn clone_type_variables_for_retention(
         &mut self,
         parameters: &[ResolvedTypeVariable],
         span: crate::source::Span,
         message: &'static str,
     ) -> Result<Box<[ResolvedTypeVariable]>, ResolveError> {
-        let mut cloned = Vec::new();
+        let mut cloned = ImportedTypeVariableBuffer(Vec::new());
         cloned
             .try_reserve(parameters.len())
             .map_err(|_| error(ResolveReason::TypeResourceExhausted, span, message))?;
@@ -3233,15 +3537,353 @@ impl Resolver {
         Ok(retained)
     }
 
-    fn retain_imported_constructor(
+    fn retain_imported_constructor_family(
+        &mut self,
+        owner: crate::resolved::ImportedNominalFactRef<'_>,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        let owner_was_retained = self.imported.nominal(owner.id).is_some();
+        let validated_owner = self
+            .imported
+            .validate_nominal_merge_shape(owner, &mut self.constraint_work)
+            .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+        self.constraint_work
+            .charge(owner.constructors.len())
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "constructor-family transaction planning exceeded its constraint-work budget",
+                )
+            })?;
+        let mut constructor_routes = Vec::new();
+        constructor_routes
+            .try_reserve_exact(owner.constructors.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "constructor-family transaction planning could not reserve storage",
+                )
+            })?;
+        let mut nominal_identities = MatchedNominalIdentities::default();
+        let mut new_constructor_count = 0_usize;
+        for identity in owner.constructors {
+            let exported = summary.constructor_by_id(*identity).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "a transparent type summary lost one of its constructors",
+                )
+            })?;
+            if let Some(existing) = self.imported.constructor(*identity) {
+                let matches = same_imported_constructor_fact_observing_nominals_with_budget(
+                    existing,
+                    exported,
+                    &mut self.type_work,
+                    &mut self.constraint_work,
+                    &mut nominal_identities,
+                )
+                .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+                if !matches {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        span,
+                        "alternate constructor routes disagree on the checked fact",
+                    ));
+                }
+                constructor_routes.push(ValidatedImportedConstructorRoute {
+                    exported,
+                    requires_commit: false,
+                });
+            } else {
+                self.collect_exported_constructor_nominal_identities(
+                    exported,
+                    &mut nominal_identities,
+                    span,
+                )?;
+                new_constructor_count = new_constructor_count.checked_add(1).ok_or_else(|| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "constructor-family staging exceeded its type-work budget",
+                    )
+                })?;
+                constructor_routes.push(ValidatedImportedConstructorRoute {
+                    exported,
+                    requires_commit: true,
+                });
+            }
+        }
+
+        let mut foreign_validated = Vec::<ValidatedImportedNominalMerge<'_>>::new();
+        let mut owner_metadata_observed = false;
+        for id in nominal_identities.identities() {
+            let candidate = summary.nominal_fact(*id).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an exported constructor references missing nominal metadata",
+                )
+            })?;
+            if *id == owner.id {
+                owner_metadata_observed = true;
+                if owner_was_retained {
+                    self.imported
+                        .validate_nominal_merge_metadata(
+                            &validated_owner,
+                            &mut self.constraint_work,
+                        )
+                        .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+                }
+            } else if let Some(existing) = self.imported.nominal(*id) {
+                let matches = same_imported_nominal_closure_with_constraint_budget(
+                    existing,
+                    candidate,
+                    &mut self.constraint_work,
+                )
+                .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+                if !matches {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        span,
+                        "alternate constructor routes disagree on retained nominal metadata",
+                    ));
+                }
+            } else {
+                let validated = self
+                    .imported
+                    .validate_nominal_merge_shape(
+                        crate::resolved::ImportedNominalFactRef {
+                            constructors: &[],
+                            access: ImportedTypeAccess::Hidden,
+                            ..candidate
+                        },
+                        &mut self.constraint_work,
+                    )
+                    .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+                self.constraint_work.charge(1).map_err(|()| {
+                    imported_fact_comparison_error(ResolvedBuildFailure::ConstraintResource, span)
+                })?;
+                foreign_validated.try_reserve(1).map_err(|_| {
+                    imported_fact_comparison_error(ResolvedBuildFailure::ConstraintResource, span)
+                })?;
+                foreign_validated.push(validated);
+            }
+        }
+        if owner_was_retained && !owner_metadata_observed {
+            self.imported
+                .validate_nominal_merge_metadata(&validated_owner, &mut self.constraint_work)
+                .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+        }
+
+        let prepared_count = foreign_validated
+            .len()
+            .checked_add(usize::from(validated_owner.requires_commit()))
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "nominal transaction staging exceeded its type-work budget",
+                )
+            })?;
+        let mut retention_work = validated_owner
+            .retention_type_work()
+            .map_err(|failure| imported_nominal_merge_error(failure, span))?
+            .checked_add(prepared_count)
+            .and_then(|work| work.checked_add(new_constructor_count))
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "constructor-family retention exceeded its type-work budget",
+                )
+            })?;
+        for validated in &foreign_validated {
+            retention_work = retention_work
+                .checked_add(
+                    validated
+                        .retention_type_work()
+                        .map_err(|failure| imported_nominal_merge_error(failure, span))?,
+                )
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "nominal-closure retention exceeded its type-work budget",
+                    )
+                })?;
+        }
+        for route in &constructor_routes {
+            if !route.requires_commit {
+                continue;
+            }
+            let exported = route.exported;
+            let constructor_work =
+                Self::constructor_payload_retention_type_work(exported.payload.as_ref())
+                    .and_then(|work| {
+                        work.checked_add(Self::constructor_scheme_retention_type_work(
+                            &exported.scheme,
+                        )?)
+                        .and_then(|work| work.checked_add(1))
+                        .ok_or(())
+                    })
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "constructor fact retention exceeded its type-work budget",
+                        )
+                    })?;
+            retention_work = retention_work
+                .checked_add(constructor_work)
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "constructor-family retention exceeded its type-work budget",
+                    )
+                })?;
+        }
+        self.type_work.charge(retention_work).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "constructor-family retention exceeded its type-work budget",
+            )
+        })?;
+
+        let mut prepared_nominals = Vec::new();
+        prepared_nominals
+            .try_reserve_exact(prepared_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "nominal transaction staging could not reserve storage",
+                )
+            })?;
+        if validated_owner.requires_commit() {
+            prepared_nominals.push(
+                self.imported
+                    .materialize_nominal_merge_after_precharge(validated_owner)
+                    .map_err(|failure| imported_nominal_merge_error(failure, span))?,
+            );
+        }
+        for validated in foreign_validated {
+            prepared_nominals.push(
+                self.imported
+                    .materialize_nominal_merge_after_precharge(validated)
+                    .map_err(|failure| imported_nominal_merge_error(failure, span))?,
+            );
+        }
+
+        let mut staged_constructors = ImportedConstructorFactBuffer(Vec::new());
+        staged_constructors
+            .try_reserve(new_constructor_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "constructor transaction staging could not reserve storage",
+                )
+            })?;
+        for route in constructor_routes {
+            if !route.requires_commit {
+                continue;
+            }
+            let exported = route.exported;
+            let mut unbounded = TypeWorkBudget::unbounded();
+            let payload = exported
+                .payload
+                .as_ref()
+                .map(|payload| {
+                    Self::clone_imported_payload_with_budget(payload, span, &mut unbounded)
+                })
+                .transpose()?;
+            let scheme = exported
+                .scheme
+                .clone_with_budget(&mut unbounded)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "imported constructor scheme retention could not reserve storage",
+                    )
+                })?;
+            staged_constructors.push(ImportedConstructorFact {
+                id: exported.id,
+                spelling: Self::clone_imported_string_after_precharge(&exported.spelling, span)?,
+                payload: payload.map(IterativeTypeOwner::into_inner),
+                scheme,
+                origin: exported.origin.clone(),
+            });
+        }
+
+        self.imported
+            .reserve_prepared_nominal_merges(&prepared_nominals)
+            .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+        self.imported
+            .reserve_constructor_inserts(new_constructor_count)
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "constructor transaction publication could not reserve storage",
+                )
+            })?;
+        self.imported
+            .commit_prepared_nominal_merges(&mut prepared_nominals);
+        self.imported
+            .commit_constructor_inserts(staged_constructors.into_vec());
+        Ok(())
+    }
+
+    fn retain_imported_constructor_family_once_per_route(
+        &mut self,
+        owner: crate::resolved::ImportedNominalFactRef<'_>,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        retained_constructor_owners: &mut HashSet<NominalTypeId>,
+    ) -> Result<(), ResolveError> {
+        self.constraint_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "constructor-family route lookup exceeded its constraint-work budget",
+            )
+        })?;
+        if retained_constructor_owners.contains(&owner.id) {
+            return Ok(());
+        }
+        self.constraint_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "constructor-family route retention exceeded its constraint-work budget",
+            )
+        })?;
+        retained_constructor_owners.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "constructor-family route retention could not reserve storage",
+            )
+        })?;
+        self.retain_imported_constructor_family(owner, summary, span)?;
+        let inserted = retained_constructor_owners.insert(owner.id);
+        debug_assert!(inserted);
+        Ok(())
+    }
+
+    fn retain_imported_constructor_once_per_route(
         &mut self,
         exported: &ExportedConstructor,
         summary: &ExportSummary,
         span: crate::source::Span,
+        retained_constructor_owners: &mut HashSet<NominalTypeId>,
     ) -> Result<(), ResolveError> {
-        if self.imported.contains_constructor(exported.id) {
-            return Ok(());
-        }
         let owner = summary.nominal_fact(exported.id.owner()).ok_or_else(|| {
             error(
                 ResolveReason::InternalState,
@@ -3249,52 +3891,29 @@ impl Resolver {
                 "an exported constructor references missing owner metadata",
             )
         })?;
-        let siblings = owner.constructors;
-        self.retain_imported_nominal_fact(owner, span)?;
-        for sibling in siblings {
-            let sibling = summary.constructor_by_id(*sibling).ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "a transparent type summary lost one of its constructors",
-                )
-            })?;
-            self.retain_imported_constructor_fact(sibling, summary, span)?;
-        }
-        self.retain_imported_constructor_fact(exported, summary, span)
+        self.retain_imported_constructor_family_once_per_route(
+            owner,
+            summary,
+            span,
+            retained_constructor_owners,
+        )
     }
 
-    fn retain_imported_constructor_fact(
+    #[cfg(test)]
+    fn retain_imported_constructor(
         &mut self,
         exported: &ExportedConstructor,
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
-        if self.imported.contains_constructor(exported.id) {
-            return Ok(());
-        }
-        if let Some(payload) = &exported.payload {
-            self.retain_type_nominals(payload, summary, span)?;
-        }
-        let payload = exported
-            .payload
-            .as_ref()
-            .map(|payload| clone_type_with_budget(payload, &mut self.type_work))
-            .transpose()
-            .map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    span,
-                    "imported constructor retention exceeded its work budget",
-                )
-            })?;
-        self.imported.insert_constructor(ImportedConstructorFact {
-            id: exported.id,
-            spelling: exported.spelling.clone(),
-            payload,
-            origin: exported.origin.clone(),
-        });
-        Ok(())
+        let owner = summary.nominal_fact(exported.id.owner()).ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "an exported constructor references missing owner metadata",
+            )
+        })?;
+        self.retain_imported_constructor_family(owner, summary, span)
     }
 
     fn file_name_is_bound(&self, spelling: &str) -> bool {
@@ -5531,6 +6150,34 @@ fn imported_nominal_merge_error(
             span,
             "imported nominal authentication exceeded its type-work budget",
         ),
+        ImportedNominalMergeFailure::ConstraintResource => error(
+            ResolveReason::ConstraintResourceExhausted,
+            span,
+            "imported nominal authentication exceeded its constraint-work budget",
+        ),
+    }
+}
+
+fn imported_fact_comparison_error(
+    failure: ResolvedBuildFailure,
+    span: crate::source::Span,
+) -> ResolveError {
+    match failure {
+        ResolvedBuildFailure::TypeResource => error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "alternate imported-fact comparison exceeded its type-work budget",
+        ),
+        ResolvedBuildFailure::ConstraintResource => error(
+            ResolveReason::ConstraintResourceExhausted,
+            span,
+            "alternate imported-fact comparison exceeded its constraint-work budget",
+        ),
+        ResolvedBuildFailure::InvalidState => error(
+            ResolveReason::InternalState,
+            span,
+            "alternate imported-fact comparison encountered invalid retained state",
+        ),
     }
 }
 
@@ -5813,6 +6460,1113 @@ mod tests {
     };
 
     static IMPORT_BUDGET_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn nullary_constructor_family_transaction_and_route_cache_are_exact_atomic_and_reusable() {
+        const FIRST_CONSTRAINT_WORK: usize = 9;
+        const FIRST_TYPE_WORK: usize = 11;
+        const DUPLICATE_CONSTRAINT_WORK: usize = 16;
+
+        let source = SourceFile::new("nullary-constructor-family.ash", "First Second")
+            .expect("the constructor-family source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the constructor range should be ordered"))
+            .expect("the constructor span should fit");
+        let module = ModuleId::new(9_090);
+        let owner = NominalTypeId::new(module, 0);
+        let first = ConstructorId::new(owner, 0);
+        let second = ConstructorId::new(owner, 1);
+        let summary = ExportSummary::test_fixture(
+            module,
+            Vec::new(),
+            vec![(
+                "Pair",
+                owner,
+                ExportedTypeAccess::Transparent,
+                Origin::Source(span),
+            )],
+            vec![
+                ("First", first, None, Origin::Source(span)),
+                ("Second", second, None, Origin::Source(span)),
+            ],
+            Vec::new(),
+        );
+        summary
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the immutable two-constructor summary should authenticate");
+        let exported = summary
+            .constructor("First")
+            .expect("the first constructor should be public");
+
+        let assert_snapshot = |resolver: &Resolver| {
+            let nominal = resolver
+                .imported
+                .nominal(owner)
+                .expect("the complete owner should be retained");
+            assert_eq!(nominal.access, ImportedTypeAccess::Transparent);
+            assert_eq!(nominal.constructors.as_ref(), [first, second]);
+            assert!(resolver.imported.constructor(first).is_some());
+            assert!(resolver.imported.constructor(second).is_some());
+        };
+
+        let mut constraint_short = Resolver::with_budgets(
+            ModuleId::new(9_091),
+            TypeWorkBudget::with_limit(FIRST_TYPE_WORK),
+            InterfaceConstraintBudget::with_limit(FIRST_CONSTRAINT_WORK - 1),
+        );
+        let error = constraint_short
+            .retain_imported_constructor(exported, &summary, span)
+            .expect_err("one missing family-discovery cell must reject before retention");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(
+            constraint_short.constraint_work.used(),
+            FIRST_CONSTRAINT_WORK - 1
+        );
+        assert_eq!(constraint_short.type_work.used(), 0);
+        assert!(constraint_short.imported.nominals().next().is_none());
+        assert!(constraint_short.imported.constructor(first).is_none());
+        assert!(constraint_short.imported.constructor(second).is_none());
+
+        let mut type_short = Resolver::with_budgets(
+            ModuleId::new(9_092),
+            TypeWorkBudget::with_limit(FIRST_TYPE_WORK - 1),
+            InterfaceConstraintBudget::with_limit(FIRST_CONSTRAINT_WORK),
+        );
+        let error = type_short
+            .retain_imported_constructor(exported, &summary, span)
+            .expect_err("one missing aggregate Type cell must reject before retention");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(type_short.constraint_work.used(), FIRST_CONSTRAINT_WORK);
+        assert_eq!(type_short.type_work.used(), 0);
+        assert!(type_short.imported.nominals().next().is_none());
+        assert!(type_short.imported.constructor(first).is_none());
+        assert!(type_short.imported.constructor(second).is_none());
+
+        let mut duplicate_short = Resolver::with_budgets(
+            ModuleId::new(9_093),
+            TypeWorkBudget::with_limit(FIRST_TYPE_WORK),
+            InterfaceConstraintBudget::with_limit(
+                FIRST_CONSTRAINT_WORK + DUPLICATE_CONSTRAINT_WORK - 1,
+            ),
+        );
+        duplicate_short
+            .retain_imported_constructor(exported, &summary, span)
+            .expect("the exact first route should publish the complete family");
+        assert_snapshot(&duplicate_short);
+        let error = duplicate_short
+            .retain_imported_constructor(exported, &summary, span)
+            .expect_err("one missing duplicate-route cell must preserve the first route");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(
+            duplicate_short.constraint_work.used(),
+            FIRST_CONSTRAINT_WORK + DUPLICATE_CONSTRAINT_WORK - 1,
+        );
+        assert_eq!(duplicate_short.type_work.used(), FIRST_TYPE_WORK);
+        assert_snapshot(&duplicate_short);
+
+        let mut exact = Resolver::with_budgets(
+            ModuleId::new(9_094),
+            TypeWorkBudget::with_limit(FIRST_TYPE_WORK),
+            InterfaceConstraintBudget::with_limit(
+                FIRST_CONSTRAINT_WORK + DUPLICATE_CONSTRAINT_WORK,
+            ),
+        );
+        exact
+            .retain_imported_constructor(exported, &summary, span)
+            .expect("the exact first route should publish the complete family");
+        exact
+            .retain_imported_constructor(exported, &summary, span)
+            .expect("the exact duplicate route should authenticate without retention");
+        assert_eq!(exact.type_work.used(), FIRST_TYPE_WORK);
+        assert_eq!(
+            exact.constraint_work.used(),
+            FIRST_CONSTRAINT_WORK + DUPLICATE_CONSTRAINT_WORK,
+        );
+        assert_snapshot(&exact);
+
+        const FIRST_ROUTE_CONSTRAINT_WORK: usize = FIRST_CONSTRAINT_WORK + 2;
+        const REPEATED_ROUTE_CONSTRAINT_WORK: usize = 1;
+
+        let owner_fact = summary
+            .nominal_fact(owner)
+            .expect("the family owner metadata should exist");
+        let mut route_short = Resolver::with_budgets(
+            ModuleId::new(9_095),
+            TypeWorkBudget::with_limit(FIRST_TYPE_WORK),
+            InterfaceConstraintBudget::with_limit(FIRST_ROUTE_CONSTRAINT_WORK - 1),
+        );
+        let mut short_route_owners = HashSet::new();
+        let error = route_short
+            .retain_imported_constructor_family_once_per_route(
+                owner_fact,
+                &summary,
+                span,
+                &mut short_route_owners,
+            )
+            .expect_err("one missing family cell must leave the route cache and facts empty");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(
+            route_short.constraint_work.used(),
+            FIRST_ROUTE_CONSTRAINT_WORK - 1,
+        );
+        assert_eq!(route_short.type_work.used(), 0);
+        assert!(short_route_owners.is_empty());
+        assert!(route_short.imported.nominals().next().is_none());
+        assert!(route_short.imported.constructor(first).is_none());
+        assert!(route_short.imported.constructor(second).is_none());
+
+        let mut route_exact = Resolver::with_budgets(
+            ModuleId::new(9_096),
+            TypeWorkBudget::with_limit(FIRST_TYPE_WORK),
+            InterfaceConstraintBudget::with_limit(
+                FIRST_ROUTE_CONSTRAINT_WORK + REPEATED_ROUTE_CONSTRAINT_WORK,
+            ),
+        );
+        let mut exact_route_owners = HashSet::new();
+        route_exact
+            .retain_imported_constructor_family_once_per_route(
+                owner_fact,
+                &summary,
+                span,
+                &mut exact_route_owners,
+            )
+            .expect("the exact first route should retain the complete family");
+        assert_snapshot(&route_exact);
+        route_exact
+            .retain_imported_constructor_family_once_per_route(
+                owner_fact,
+                &summary,
+                span,
+                &mut exact_route_owners,
+            )
+            .expect("the exact repeated selector should consume only its route probe");
+        assert_eq!(route_exact.type_work.used(), FIRST_TYPE_WORK);
+        assert_eq!(
+            route_exact.constraint_work.used(),
+            FIRST_ROUTE_CONSTRAINT_WORK + REPEATED_ROUTE_CONSTRAINT_WORK,
+        );
+        assert_eq!(exact_route_owners, HashSet::from([owner]));
+        assert_snapshot(&route_exact);
+
+        let error = route_exact
+            .retain_imported_constructor_family_once_per_route(
+                owner_fact,
+                &summary,
+                span,
+                &mut exact_route_owners,
+            )
+            .expect_err("one missing repeat probe must preserve the complete route snapshot");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(exact_route_owners, HashSet::from([owner]));
+        assert_snapshot(&route_exact);
+    }
+
+    #[test]
+    fn shared_foreign_nominal_constructor_family_transaction_is_exact_atomic_and_reusable() {
+        const FIRST_CONSTRAINT_WORK: usize = 19;
+        const FIRST_TYPE_WORK: usize = 20;
+        const DUPLICATE_CONSTRAINT_WORK: usize = 32;
+        const DEFERRED_FOREIGN_CONFLICT_WORK: usize = 31;
+        const LATE_SIBLING_CONFLICT_WORK: usize = 21;
+
+        std::thread::Builder::new()
+            .name("shared-foreign-constructor-family".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new(
+                    "shared-foreign-constructor-family.ash",
+                    "First Second Foreign forged",
+                )
+                .expect("the shared-foreign source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 5).expect("the clean range should be ordered"))
+                    .expect("the clean span should fit");
+                let forged_span = source
+                    .span(ByteRange::new(21, 27).expect("the forged range should be ordered"))
+                    .expect("the forged span should fit");
+                let module = ModuleId::new(9_110);
+                let owner = NominalTypeId::new(module, 0);
+                let foreign = NominalTypeId::new(module, 1);
+                let first = ConstructorId::new(owner, 0);
+                let second = ConstructorId::new(owner, 1);
+                let foreign_constructor = ConstructorId::new(foreign, 0);
+                let make_summary = |foreign_origin, second_origin| {
+                    ExportSummary::test_fixture(
+                        module,
+                        Vec::new(),
+                        vec![
+                            (
+                                "Pair",
+                                owner,
+                                ExportedTypeAccess::Transparent,
+                                Origin::Source(span),
+                            ),
+                            (
+                                "Foreign",
+                                foreign,
+                                ExportedTypeAccess::Transparent,
+                                foreign_origin,
+                            ),
+                        ],
+                        vec![
+                            (
+                                "First",
+                                first,
+                                Some(Type::Nominal(foreign)),
+                                Origin::Source(span),
+                            ),
+                            (
+                                "Second",
+                                second,
+                                Some(Type::Nominal(foreign)),
+                                second_origin,
+                            ),
+                            (
+                                "ForeignValue",
+                                foreign_constructor,
+                                None,
+                                Origin::Source(span),
+                            ),
+                        ],
+                        Vec::new(),
+                    )
+                };
+                let clean = make_summary(Origin::Source(span), Origin::Source(span));
+                let foreign_conflicting =
+                    make_summary(Origin::Source(forged_span), Origin::Source(span));
+                let late_sibling_conflicting =
+                    make_summary(Origin::Source(forged_span), Origin::Source(forged_span));
+                for candidate in [&clean, &foreign_conflicting, &late_sibling_conflicting] {
+                    candidate
+                        .authenticate(
+                            &mut TypeWorkBudget::default(),
+                            &mut InterfaceConstraintBudget::default(),
+                        )
+                        .expect("each independently coherent family route should authenticate");
+                }
+                let clean_first = clean
+                    .constructor("First")
+                    .expect("the clean first constructor should exist");
+
+                let assert_empty_snapshot = |resolver: &Resolver| {
+                    assert!(resolver.imported.nominals().next().is_none());
+                    assert!(resolver.imported.constructor(first).is_none());
+                    assert!(resolver.imported.constructor(second).is_none());
+                    assert!(resolver.imported.constructor(foreign_constructor).is_none());
+                };
+                let assert_clean_snapshot = |resolver: &Resolver| {
+                    assert_eq!(
+                        resolver
+                            .imported
+                            .nominals()
+                            .map(|nominal| nominal.id)
+                            .collect::<Vec<_>>(),
+                        [owner, foreign],
+                    );
+                    let retained_owner = resolver
+                        .imported
+                        .nominal(owner)
+                        .expect("the complete owner should be retained");
+                    assert_eq!(retained_owner.access, ImportedTypeAccess::Transparent);
+                    assert_eq!(retained_owner.constructors.as_ref(), [first, second]);
+                    let retained_foreign = resolver
+                        .imported
+                        .nominal(foreign)
+                        .expect("the shared foreign closure should be retained once");
+                    assert_eq!(retained_foreign.access, ImportedTypeAccess::Hidden);
+                    assert!(retained_foreign.constructors.is_empty());
+                    assert_eq!(retained_foreign.constructor_count, 1);
+                    for (identity, spelling) in [(first, "First"), (second, "Second")] {
+                        let constructor = resolver
+                            .imported
+                            .constructor(identity)
+                            .expect("both physical owner constructors should be retained");
+                        assert_eq!(constructor.spelling, spelling);
+                        assert_eq!(constructor.payload.as_ref(), Some(&Type::Nominal(foreign)));
+                        assert_eq!(
+                            constructor.scheme.value_type(),
+                            &Type::Function(
+                                Box::new(Type::Nominal(foreign)),
+                                Box::new(Type::Nominal(owner)),
+                            ),
+                        );
+                        assert_eq!(constructor.origin, Origin::Source(span));
+                    }
+                    assert!(resolver.imported.constructor(foreign_constructor).is_none());
+                };
+
+                // Shape and family planning cost five cells. The first sibling's
+                // three-node scheme and one-node payload cost eight cells,
+                // including two cells for each newly observed owner and foreign
+                // identity. The second sibling costs four traversal cells because
+                // the family-wide observer has already seen both identities. The
+                // deferred foreign closure validation and staging record cost two.
+                let mut constraint_short = Resolver::with_budgets(
+                    ModuleId::new(9_111),
+                    TypeWorkBudget::with_limit(FIRST_TYPE_WORK),
+                    InterfaceConstraintBudget::with_limit(FIRST_CONSTRAINT_WORK - 1),
+                );
+                let error = constraint_short
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect_err("one missing foreign-closure cell must reject atomically");
+                assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                assert_eq!(
+                    constraint_short.constraint_work.used(),
+                    FIRST_CONSTRAINT_WORK - 1,
+                );
+                assert_eq!(constraint_short.type_work.used(), 0);
+                assert_empty_snapshot(&constraint_short);
+
+                let mut type_short = Resolver::with_budgets(
+                    ModuleId::new(9_112),
+                    TypeWorkBudget::with_limit(FIRST_TYPE_WORK - 1),
+                    InterfaceConstraintBudget::with_limit(FIRST_CONSTRAINT_WORK),
+                );
+                let error = type_short
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect_err("one missing aggregate Type cell must reject atomically");
+                assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+                assert_eq!(type_short.constraint_work.used(), FIRST_CONSTRAINT_WORK);
+                assert_eq!(type_short.type_work.used(), 0);
+                assert_empty_snapshot(&type_short);
+
+                let mut resolver = Resolver::with_budgets(
+                    ModuleId::new(9_113),
+                    TypeWorkBudget::with_limit(FIRST_TYPE_WORK),
+                    InterfaceConstraintBudget::with_limit(FIRST_CONSTRAINT_WORK),
+                );
+                resolver
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect("the exact family budget should retain both siblings and one closure");
+                assert_eq!(resolver.constraint_work.used(), FIRST_CONSTRAINT_WORK);
+                assert_eq!(resolver.type_work.used(), FIRST_TYPE_WORK);
+                assert_clean_snapshot(&resolver);
+
+                // Both sibling facts must compare before the shared foreign
+                // closure. One short stops on that closure's Origin comparison;
+                // exact reaches the semantic disagreement. Neither path retains
+                // Type cells or changes the published family.
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(DEFERRED_FOREIGN_CONFLICT_WORK - 1);
+                let error = resolver
+                    .retain_imported_constructor(
+                        foreign_conflicting
+                            .constructor("First")
+                            .expect("the foreign-conflicting route should retain First"),
+                        &foreign_conflicting,
+                        span,
+                    )
+                    .expect_err("one missing deferred Origin cell must preserve the clean family");
+                assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                assert_eq!(
+                    resolver.constraint_work.used(),
+                    DEFERRED_FOREIGN_CONFLICT_WORK - 1,
+                );
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(DEFERRED_FOREIGN_CONFLICT_WORK);
+                let error = resolver
+                    .retain_imported_constructor(
+                        foreign_conflicting
+                            .constructor("First")
+                            .expect("the foreign-conflicting route should retain First"),
+                        &foreign_conflicting,
+                        span,
+                    )
+                    .expect_err("the deferred foreign Origin disagreement must reject");
+                assert_eq!(error.reason, ResolveReason::InternalState);
+                assert_eq!(
+                    resolver.constraint_work.used(),
+                    DEFERRED_FOREIGN_CONFLICT_WORK,
+                );
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                // A late second-sibling fact disagreement owns failure before the
+                // same route's foreign-closure disagreement can run.
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(LATE_SIBLING_CONFLICT_WORK - 1);
+                let error = resolver
+                    .retain_imported_constructor(
+                        late_sibling_conflicting
+                            .constructor("First")
+                            .expect("the late-conflicting route should retain First"),
+                        &late_sibling_conflicting,
+                        span,
+                    )
+                    .expect_err("one missing late sibling Origin cell must preserve the family");
+                assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                assert_eq!(
+                    resolver.constraint_work.used(),
+                    LATE_SIBLING_CONFLICT_WORK - 1,
+                );
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(LATE_SIBLING_CONFLICT_WORK);
+                let error = resolver
+                    .retain_imported_constructor(
+                        late_sibling_conflicting
+                            .constructor("First")
+                            .expect("the late-conflicting route should retain First"),
+                        &late_sibling_conflicting,
+                        span,
+                    )
+                    .expect_err("the late sibling disagreement must own deterministic rejection");
+                assert_eq!(error.reason, ResolveReason::InternalState);
+                assert_eq!(resolver.constraint_work.used(), LATE_SIBLING_CONFLICT_WORK,);
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                // A clean duplicate route performs only Constraint comparisons.
+                // The first sibling observes both identities once for the whole
+                // family; the second sibling reuses that observer, and D compares
+                // the foreign closure before the already retained owner metadata.
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK - 1);
+                let error = resolver
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect_err("one missing duplicate owner-metadata cell must preserve state");
+                assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                assert_eq!(
+                    resolver.constraint_work.used(),
+                    DUPLICATE_CONSTRAINT_WORK - 1,
+                );
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
+                resolver
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect("the clean duplicate route should remain reusable after every failure");
+                assert_eq!(resolver.constraint_work.used(), DUPLICATE_CONSTRAINT_WORK);
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+            })
+            .expect("the shared-foreign family thread should start")
+            .join()
+            .expect("the shared-foreign family thread should finish");
+    }
+
+    #[test]
+    fn constructor_family_transaction_rejects_a_late_sibling_conflict_before_owner_metadata() {
+        const FIRST_CONSTRAINT_WORK: usize = 9;
+        const LATE_CONFLICT_WORK: usize = 13;
+        const CLEAN_RETRY_WORK: usize = 16;
+        const TYPE_WORK: usize = 11;
+
+        let source = SourceFile::new(
+            "late-constructor-family-conflict.ash",
+            "First Second forged",
+        )
+        .expect("the late-conflict source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the constructor range should be ordered"))
+            .expect("the constructor span should fit");
+        let forged_span = source
+            .span(ByteRange::new(13, 19).expect("the forged range should be ordered"))
+            .expect("the forged span should fit");
+        let module = ModuleId::new(9_097);
+        let owner = NominalTypeId::new(module, 0);
+        let first = ConstructorId::new(owner, 0);
+        let second = ConstructorId::new(owner, 1);
+        let summary = |second_origin| {
+            ExportSummary::test_fixture(
+                module,
+                Vec::new(),
+                vec![(
+                    "Pair",
+                    owner,
+                    ExportedTypeAccess::Transparent,
+                    Origin::Source(span),
+                )],
+                vec![
+                    ("First", first, None, Origin::Source(span)),
+                    ("Second", second, None, second_origin),
+                ],
+                Vec::new(),
+            )
+        };
+        let clean = summary(Origin::Source(span));
+        let conflicting = summary(Origin::Source(forged_span));
+        for candidate in [&clean, &conflicting] {
+            candidate
+                .authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("each complete family route should authenticate independently");
+        }
+
+        let assert_clean_snapshot = |resolver: &Resolver| {
+            assert_eq!(
+                resolver
+                    .imported
+                    .nominals()
+                    .map(|nominal| nominal.id)
+                    .collect::<Vec<_>>(),
+                [owner],
+            );
+            let nominal = resolver
+                .imported
+                .nominal(owner)
+                .expect("the clean owner should remain retained");
+            assert_eq!(nominal.access, ImportedTypeAccess::Transparent);
+            assert_eq!(nominal.constructors.as_ref(), [first, second]);
+            for (identity, spelling) in [(first, "First"), (second, "Second")] {
+                let constructor = resolver
+                    .imported
+                    .constructor(identity)
+                    .expect("the clean constructor fact should remain retained");
+                assert_eq!(constructor.spelling, spelling);
+                assert!(constructor.payload.is_none());
+                assert_eq!(constructor.scheme.value_type(), &Type::Nominal(owner));
+                assert_eq!(constructor.origin, Origin::Source(span));
+            }
+        };
+
+        let mut resolver = Resolver::with_budgets(
+            ModuleId::new(9_098),
+            TypeWorkBudget::with_limit(TYPE_WORK),
+            InterfaceConstraintBudget::with_limit(
+                FIRST_CONSTRAINT_WORK + LATE_CONFLICT_WORK + CLEAN_RETRY_WORK,
+            ),
+        );
+        resolver
+            .retain_imported_constructor(
+                clean
+                    .constructor("First")
+                    .expect("the clean first constructor should exist"),
+                &clean,
+                span,
+            )
+            .expect("the first complete family should publish");
+        assert_eq!(resolver.constraint_work.used(), FIRST_CONSTRAINT_WORK);
+        assert_eq!(resolver.type_work.used(), TYPE_WORK);
+        assert_clean_snapshot(&resolver);
+
+        let error = resolver
+            .retain_imported_constructor(
+                conflicting
+                    .constructor("First")
+                    .expect("the conflicting first constructor should exist"),
+                &conflicting,
+                span,
+            )
+            .expect_err("the late second-constructor Origin conflict must reject");
+        assert_eq!(error.reason, ResolveReason::InternalState);
+        assert_eq!(
+            resolver.constraint_work.used(),
+            FIRST_CONSTRAINT_WORK + LATE_CONFLICT_WORK,
+            "owner metadata must not run before every constructor fact agrees",
+        );
+        assert_eq!(resolver.type_work.used(), TYPE_WORK);
+        assert_clean_snapshot(&resolver);
+
+        resolver
+            .retain_imported_constructor(
+                clean
+                    .constructor("First")
+                    .expect("the reusable clean constructor should exist"),
+                &clean,
+                span,
+            )
+            .expect("the clean family should remain reusable after the failed route");
+        assert_eq!(
+            resolver.constraint_work.used(),
+            FIRST_CONSTRAINT_WORK + LATE_CONFLICT_WORK + CLEAN_RETRY_WORK,
+        );
+        assert_eq!(resolver.type_work.used(), TYPE_WORK);
+        assert_clean_snapshot(&resolver);
+    }
+
+    #[test]
+    fn constructor_family_transaction_rejects_a_late_missing_sibling_atomically_and_reuses_inputs()
+    {
+        const MISSING_CONSTRAINT_WORK: usize = 8;
+        const CLEAN_RETRY_WORK: usize = 9;
+        const TYPE_WORK: usize = 11;
+
+        let source = SourceFile::new("late-missing-constructor-family.ash", "First Second")
+            .expect("the late-missing source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the constructor range should be ordered"))
+            .expect("the constructor span should fit");
+        let module = ModuleId::new(9_102);
+        let owner = NominalTypeId::new(module, 0);
+        let first = ConstructorId::new(owner, 0);
+        let second = ConstructorId::new(owner, 1);
+        let make_summary = || {
+            ExportSummary::test_fixture(
+                module,
+                Vec::new(),
+                vec![(
+                    "Pair",
+                    owner,
+                    ExportedTypeAccess::Transparent,
+                    Origin::Source(span),
+                )],
+                vec![
+                    ("First", first, None, Origin::Source(span)),
+                    ("Second", second, None, Origin::Source(span)),
+                ],
+                Vec::new(),
+            )
+        };
+        let clean = make_summary();
+        let mut malformed = make_summary();
+        for candidate in [&clean, &malformed] {
+            candidate
+                .authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("each complete family summary should authenticate before mutation");
+        }
+        assert!(
+            malformed.remove_last_public_constructor_fact_preserving_family_for_test(),
+            "the mutator should remove the late physical fact",
+        );
+        assert!(malformed.constructor("First").is_some());
+        assert!(malformed.constructor("Second").is_none());
+        assert_eq!(
+            malformed
+                .nominal_fact(owner)
+                .expect("the malformed summary should retain owner metadata")
+                .constructors,
+            [first, second],
+            "the malformed owner must still claim the complete family",
+        );
+        assert_eq!(
+            malformed.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "raw authentication must reject a missing physical family member",
+        );
+
+        let mut resolver = Resolver::with_budgets(
+            ModuleId::new(9_103),
+            TypeWorkBudget::with_limit(TYPE_WORK),
+            InterfaceConstraintBudget::with_limit(MISSING_CONSTRAINT_WORK + CLEAN_RETRY_WORK),
+        );
+        let error = resolver
+            .retain_imported_constructor(
+                malformed
+                    .constructor("First")
+                    .expect("the first physical fact should remain selectable"),
+                &malformed,
+                span,
+            )
+            .expect_err("the private family helper must reject the missing late sibling");
+        assert_eq!(error.reason, ResolveReason::InternalState);
+        assert_eq!(resolver.constraint_work.used(), MISSING_CONSTRAINT_WORK);
+        assert_eq!(resolver.type_work.used(), 0);
+        assert!(resolver.imported.nominals().next().is_none());
+        assert!(resolver.imported.constructor(first).is_none());
+        assert!(resolver.imported.constructor(second).is_none());
+
+        resolver
+            .retain_imported_constructor(
+                clean
+                    .constructor("First")
+                    .expect("the clean first constructor should exist"),
+                &clean,
+                span,
+            )
+            .expect("the unchanged clean family should remain reusable after rejection");
+        assert_eq!(
+            resolver.constraint_work.used(),
+            MISSING_CONSTRAINT_WORK + CLEAN_RETRY_WORK,
+        );
+        assert_eq!(resolver.type_work.used(), TYPE_WORK);
+        assert_eq!(
+            resolver
+                .imported
+                .nominals()
+                .map(|nominal| nominal.id)
+                .collect::<Vec<_>>(),
+            [owner],
+        );
+        let nominal = resolver
+            .imported
+            .nominal(owner)
+            .expect("the retry should retain the complete owner");
+        assert_eq!(nominal.access, ImportedTypeAccess::Transparent);
+        assert_eq!(nominal.constructors.as_ref(), [first, second]);
+        assert!(resolver.imported.constructor(first).is_some());
+        assert!(resolver.imported.constructor(second).is_some());
+    }
+
+    #[test]
+    fn named_and_targeted_constructor_routes_share_one_family_transaction_in_both_orders() {
+        const ROUTE_CONSTRAINT_WORK: usize = 12;
+        const TYPE_WORK: usize = 11;
+
+        let source = SourceFile::new("named-targeted-constructor-family.ash", "First Second")
+            .expect("the named-targeted source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the constructor range should be ordered"))
+            .expect("the constructor span should fit");
+        let module = ModuleId::new(9_099);
+        let owner = NominalTypeId::new(module, 0);
+        let first = ConstructorId::new(owner, 0);
+        let second = ConstructorId::new(owner, 1);
+        let summary = ExportSummary::test_fixture(
+            module,
+            Vec::new(),
+            vec![(
+                "Pair",
+                owner,
+                ExportedTypeAccess::Transparent,
+                Origin::Source(span),
+            )],
+            vec![
+                ("First", first, None, Origin::Source(span)),
+                ("Second", second, None, Origin::Source(span)),
+            ],
+            Vec::new(),
+        );
+        summary
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the shared family summary should authenticate");
+        let exported_nominal = summary
+            .nominal("Pair")
+            .expect("the public Pair nominal should exist");
+        let exported_constructor = summary
+            .constructor("First")
+            .expect("the public First constructor should exist");
+
+        for named_first in [true, false] {
+            let mut resolver = Resolver::with_budgets(
+                ModuleId::new(if named_first { 9_100 } else { 9_101 }),
+                TypeWorkBudget::with_limit(TYPE_WORK),
+                InterfaceConstraintBudget::with_limit(ROUTE_CONSTRAINT_WORK),
+            );
+            let mut retained_constructor_owners = HashSet::new();
+            let retain_named =
+                |resolver: &mut Resolver,
+                 retained_constructor_owners: &mut HashSet<NominalTypeId>| {
+                    resolver.retain_imported_nominal(
+                        exported_nominal,
+                        &summary,
+                        Some("Pair"),
+                        span,
+                        retained_constructor_owners,
+                    )
+                };
+            let retain_targeted =
+                |resolver: &mut Resolver,
+                 retained_constructor_owners: &mut HashSet<NominalTypeId>| {
+                    resolver.retain_imported_constructor_once_per_route(
+                        exported_constructor,
+                        &summary,
+                        span,
+                        retained_constructor_owners,
+                    )
+                };
+            if named_first {
+                retain_named(&mut resolver, &mut retained_constructor_owners)
+                    .expect("the named route should retain the complete family");
+                retain_targeted(&mut resolver, &mut retained_constructor_owners)
+                    .expect("the targeted route should reuse the named family transaction");
+            } else {
+                retain_targeted(&mut resolver, &mut retained_constructor_owners)
+                    .expect("the targeted route should retain the complete family");
+                retain_named(&mut resolver, &mut retained_constructor_owners)
+                    .expect("the named route should reuse the targeted family transaction");
+            }
+
+            assert_eq!(resolver.constraint_work.used(), ROUTE_CONSTRAINT_WORK);
+            assert_eq!(resolver.type_work.used(), TYPE_WORK);
+            assert_eq!(retained_constructor_owners, HashSet::from([owner]));
+            assert_eq!(
+                resolver
+                    .imported
+                    .nominals()
+                    .map(|nominal| nominal.id)
+                    .collect::<Vec<_>>(),
+                [owner],
+            );
+            let nominal = resolver
+                .imported
+                .nominal(owner)
+                .expect("the shared route should retain Pair");
+            assert_eq!(nominal.access, ImportedTypeAccess::Transparent);
+            assert_eq!(nominal.constructors.as_ref(), [first, second]);
+            assert!(resolver.imported.constructor(first).is_some());
+            assert!(resolver.imported.constructor(second).is_some());
+        }
+    }
+
+    #[test]
+    fn deep_constructor_scheme_import_lifecycle_is_exact_reusable_and_stack_safe() {
+        const DEPTH: usize = 32_768;
+        // Fused constructor and nominal name/order authentication contributes
+        // two constraint
+        // cells. The nominal-carrier pre-scan, family ordinal, withheld-owner
+        // relation, physical fact, and canonical-family closure add five more;
+        // the two public reverse-index records add two. Type authentication performs one fused body-free Kind walk
+        // over the physical scheme and its independently retained payload,
+        // collecting its exact owner-variable closure in that same walk.
+        const RAW_CONSTRAINT_WORK: usize = 9;
+        const RAW_CONSTRAINT_PRE_CLOSE: usize = 6;
+        const RAW_CONSTRAINT_PRE_REVERSE: usize = 7;
+        const RAW_TYPE_WORK: usize = 5 * DEPTH + 11;
+        // First-route constraint work validates the two-cell owner shape,
+        // retains one constructor-family transaction action, then discovers
+        // nominal identities in the 2D+3-node physical scheme and independently
+        // retained 2D+1-node payload. The first owner identity retains two
+        // observer cells.
+        const RETAIN_CONSTRAINT_WORK: usize = 4 * DEPTH + 9;
+        // First-route Type work retains the three-cell owner, one prepared
+        // nominal action, one staged constructor record, the 2D+1-node payload,
+        // the 2D+3-node scheme, and one constructor-map record.
+        const RETAIN_TYPE_WORK: usize = 4 * DEPTH + 10;
+        // A repeated route validates the two-cell owner shape, retains one
+        // constructor-family transaction action, compares one metadata and
+        // Source-Origin cell, the 4D+6 scheme pair and 4D+2 payload pair,
+        // observes the owner once, then compares the owner Source Origin. It
+        // retains no Type cells.
+        const MIRROR_CONSTRAINT_WORK: usize = 8 * DEPTH + 16;
+
+        const { assert!(RAW_TYPE_WORK <= TYPE_WORK_LIMIT) };
+
+        std::thread::Builder::new()
+            .name("deep-constructor-scheme-lifecycle".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-constructor-lifecycle.ash", "make")
+                    .expect("the lifecycle source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 4).expect("the lifecycle range should be ordered"))
+                    .expect("the lifecycle span should fit");
+                let module = ModuleId::new(9_100);
+                let nominal = NominalTypeId::new(module, 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                let deep_payload = || {
+                    let mut ty = Type::Unit;
+                    for _ in 0..DEPTH {
+                        ty = Type::Function(Box::new(Type::Int), Box::new(ty));
+                    }
+                    ty
+                };
+                let summary = ExportSummary::test_fixture(
+                    module,
+                    Vec::new(),
+                    vec![(
+                        "Deep",
+                        nominal,
+                        ExportedTypeAccess::Transparent,
+                        Origin::Source(span),
+                    )],
+                    vec![(
+                        "Make",
+                        constructor,
+                        Some(deep_payload()),
+                        Origin::Source(span),
+                    )],
+                    Vec::new(),
+                );
+                let mut raw_constraint_short =
+                    InterfaceConstraintBudget::with_limit(RAW_CONSTRAINT_WORK - 1);
+                let mut raw_constraint_short_type = TypeWorkBudget::with_limit(RAW_TYPE_WORK);
+                assert_eq!(
+                    summary
+                        .authenticate(&mut raw_constraint_short_type, &mut raw_constraint_short,),
+                    Err(ResolvedBuildFailure::ConstraintResource)
+                );
+                assert_eq!(raw_constraint_short.used(), RAW_CONSTRAINT_PRE_REVERSE);
+                assert_eq!(raw_constraint_short_type.used(), RAW_TYPE_WORK);
+
+                let mut raw_type_short = TypeWorkBudget::with_limit(RAW_TYPE_WORK - 1);
+                let mut raw_type_short_constraint =
+                    InterfaceConstraintBudget::with_limit(RAW_CONSTRAINT_WORK);
+                assert_eq!(
+                    summary.authenticate(&mut raw_type_short, &mut raw_type_short_constraint),
+                    Err(ResolvedBuildFailure::TypeResource)
+                );
+                assert_eq!(raw_type_short.used(), RAW_TYPE_WORK - 1);
+                assert_eq!(raw_type_short_constraint.used(), RAW_CONSTRAINT_PRE_CLOSE,);
+
+                for _ in 0..2 {
+                    let mut raw_type = TypeWorkBudget::with_limit(RAW_TYPE_WORK);
+                    let mut raw_constraint =
+                        InterfaceConstraintBudget::with_limit(RAW_CONSTRAINT_WORK);
+                    summary
+                        .authenticate(&mut raw_type, &mut raw_constraint)
+                        .expect("the exact admissible constructor summary should authenticate");
+                    assert_eq!(raw_type.used(), RAW_TYPE_WORK);
+                    assert_eq!(raw_constraint.used(), RAW_CONSTRAINT_WORK);
+                }
+                summary
+                    .authenticate(
+                        &mut TypeWorkBudget::default(),
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the deep constructor summary must fit the unchanged default limit");
+                let exported = summary
+                    .constructor("Make")
+                    .expect("the authenticated summary should retain Make's physical scheme");
+
+                {
+                    let mut unbounded = TypeWorkBudget::unbounded();
+                    let payload = exported
+                        .payload
+                        .as_ref()
+                        .map(|payload| {
+                            Resolver::clone_imported_payload_with_budget(
+                                payload,
+                                span,
+                                &mut unbounded,
+                            )
+                        })
+                        .transpose()
+                        .expect("the staged deep payload should clone");
+                    let scheme = exported
+                        .scheme
+                        .clone_with_budget(&mut unbounded)
+                        .expect("the staged deep scheme should clone");
+                    let mut abandoned = ImportedConstructorFactBuffer(Vec::new());
+                    abandoned
+                        .try_reserve(1)
+                        .expect("the abandoned-fact guard should reserve one record");
+                    abandoned.push(ImportedConstructorFact {
+                        id: exported.id,
+                        spelling: exported.spelling.clone(),
+                        payload: payload.map(IterativeTypeOwner::into_inner),
+                        scheme,
+                        origin: exported.origin.clone(),
+                    });
+                    drop(abandoned);
+                }
+
+                let mut constraint_short = Resolver::with_budgets(
+                    ModuleId::new(9_101),
+                    TypeWorkBudget::with_limit(RETAIN_TYPE_WORK),
+                    InterfaceConstraintBudget::with_limit(RETAIN_CONSTRAINT_WORK - 1),
+                );
+                let error = constraint_short
+                    .retain_imported_constructor(exported, &summary, span)
+                    .expect_err("one missing discovery cell must reject before retention");
+                assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                assert_eq!(
+                    constraint_short.constraint_work.used(),
+                    RETAIN_CONSTRAINT_WORK - 2,
+                    "the final two-cell first-identity observation is atomic",
+                );
+                assert_eq!(constraint_short.type_work.used(), 0);
+                assert!(constraint_short.imported.nominals().next().is_none());
+                assert!(constraint_short.imported.constructor(constructor).is_none());
+                drop(constraint_short);
+
+                let mut type_short = Resolver::with_budgets(
+                    ModuleId::new(9_102),
+                    TypeWorkBudget::with_limit(RETAIN_TYPE_WORK - 1),
+                    InterfaceConstraintBudget::with_limit(RETAIN_CONSTRAINT_WORK),
+                );
+                let error = type_short
+                    .retain_imported_constructor(exported, &summary, span)
+                    .expect_err("one missing aggregate Type cell must reject atomically");
+                assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+                assert_eq!(type_short.type_work.used(), 0);
+                assert_eq!(type_short.constraint_work.used(), RETAIN_CONSTRAINT_WORK);
+                assert!(type_short.imported.nominals().next().is_none());
+                assert!(type_short.imported.constructor(constructor).is_none());
+                drop(type_short);
+
+                let assert_imported_shape = |resolver: &Resolver| {
+                    let imported = resolver
+                        .imported
+                        .constructor(constructor)
+                        .expect("one authenticated ImportedConstructorFact should survive");
+                    assert!(imported.scheme.type_parameters.is_empty());
+                    assert!(imported.scheme.requirements.is_empty());
+                    let Type::Function(domain, result) = imported.scheme.value_type() else {
+                        panic!("the physical constructor scheme should retain payload -> result")
+                    };
+                    let mut payload = domain.as_ref();
+                    for _ in 0..DEPTH {
+                        let Type::Function(argument, codomain) = payload else {
+                            panic!("the retained constructor payload lost a Function cell")
+                        };
+                        assert!(matches!(argument.as_ref(), Type::Int));
+                        payload = codomain;
+                    }
+                    assert!(matches!(payload, Type::Unit));
+                    assert!(matches!(result.as_ref(), Type::Nominal(id) if *id == nominal));
+                };
+
+                for consumer in [9_103, 9_104] {
+                    let mut exact = Resolver::with_budgets(
+                        ModuleId::new(consumer),
+                        TypeWorkBudget::with_limit(RETAIN_TYPE_WORK),
+                        InterfaceConstraintBudget::with_limit(
+                            RETAIN_CONSTRAINT_WORK + MIRROR_CONSTRAINT_WORK - 1,
+                        ),
+                    );
+                    exact
+                        .retain_imported_constructor(exported, &summary, span)
+                        .expect("the exact physical constructor-scheme lifecycle should fit");
+                    assert_eq!(exact.type_work.used(), RETAIN_TYPE_WORK);
+                    assert_eq!(exact.constraint_work.used(), RETAIN_CONSTRAINT_WORK);
+                    assert_imported_shape(&exact);
+
+                    let error = exact
+                        .retain_imported_constructor(exported, &summary, span)
+                        .expect_err("the one-short alternate route must reject before mutation");
+                    assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                    assert_eq!(exact.type_work.used(), RETAIN_TYPE_WORK);
+                    assert_eq!(
+                        exact.constraint_work.used(),
+                        RETAIN_CONSTRAINT_WORK + MIRROR_CONSTRAINT_WORK - 1,
+                    );
+                    assert_imported_shape(&exact);
+                    drop(exact);
+                }
+
+                let mut mirror_exact = Resolver::with_budgets(
+                    ModuleId::new(9_105),
+                    TypeWorkBudget::with_limit(RETAIN_TYPE_WORK),
+                    InterfaceConstraintBudget::with_limit(
+                        RETAIN_CONSTRAINT_WORK + MIRROR_CONSTRAINT_WORK,
+                    ),
+                );
+                mirror_exact
+                    .retain_imported_constructor(exported, &summary, span)
+                    .expect("the first exact route should publish one constructor fact");
+                mirror_exact
+                    .retain_imported_constructor(exported, &summary, span)
+                    .expect("the exact alternate route comparison should fit");
+                assert_eq!(mirror_exact.type_work.used(), RETAIN_TYPE_WORK);
+                assert_eq!(
+                    mirror_exact.constraint_work.used(),
+                    RETAIN_CONSTRAINT_WORK + MIRROR_CONSTRAINT_WORK,
+                );
+                drop(mirror_exact);
+                drop(summary);
+            })
+            .expect("the lifecycle worker should spawn")
+            .join()
+            .expect("accepted and rejected deep constructor facts must tear down iteratively");
+    }
 
     #[test]
     fn recursive_resolution_buffers_do_not_expose_broad_mutation() {
@@ -6149,6 +7903,402 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_global_route_compares_nominal_closure_without_recloning_it() {
+        const ENTRY: &str = "import dependency (lift)\n";
+        const DEPENDENCY: &str = concat!(
+            "pub type Token = Token\n",
+            "pub lift<F : Type -> Type> : F<Token> -> F<Token>\n",
+            "lift value = value\n",
+        );
+        // Fact comparison is metadata P+R+1 = 2, Source-Origin = 1, the
+        // parameter record plus its Arrow Kind = 4, and the seven-node value
+        // Type pair = 14. The fused read-only closure adds 2U=2 simultaneous
+        // unique-ID indexes and Token header+Origin D=2.
+        const DUPLICATE_CONSTRAINT_WORK: usize = 2 + 1 + 4 + 14 + 2 + 2;
+
+        let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the duplicate-global graph should load");
+        let dependency = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name()
+                    == Some("dependency.ash".as_ref())
+            })
+            .expect("the duplicate-global dependency should load");
+        let dependency =
+            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
+                .expect("the higher-kinded dependency should check");
+        let entry = graph
+            .module(graph.entry())
+            .expect("the duplicate-global entry should load");
+        let summary = dependency.exports();
+        let exported = summary
+            .term("lift")
+            .expect("the dependency should export the higher-kinded global");
+        let token = summary
+            .nominal("Token")
+            .expect("the dependency should export the nominal used by the scheme")
+            .id;
+        let span = entry.surface().imports[0].span;
+
+        let snapshot = |resolver: &Resolver| {
+            let globals = resolver
+                .imported
+                .globals()
+                .map(|global| global.binder)
+                .collect::<Vec<_>>();
+            let nominals = resolver
+                .imported
+                .nominals()
+                .map(|nominal| (nominal.id, nominal.access, nominal.constructors.to_vec()))
+                .collect::<Vec<_>>();
+            (globals, nominals, resolver.global_requirement_counts.len())
+        };
+
+        let mut resolver = Resolver::new(entry.id());
+        resolver
+            .retain_imported_global(exported, summary, span)
+            .expect("the first route should retain the canonical global and its closure");
+        let baseline = snapshot(&resolver);
+        assert_eq!(
+            baseline.1,
+            vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
+        );
+
+        resolver.type_work = TypeWorkBudget::with_limit(0);
+        resolver.constraint_work =
+            InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK - 1);
+        let error = resolver
+            .retain_imported_global(exported, summary, span)
+            .expect_err("one missing comparison unit should reject the alternate route");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(
+            resolver.constraint_work.used(),
+            DUPLICATE_CONSTRAINT_WORK - 1,
+        );
+        assert_eq!(resolver.type_work.used(), 0);
+        assert_eq!(snapshot(&resolver), baseline);
+
+        resolver.type_work = TypeWorkBudget::with_limit(0);
+        resolver.constraint_work = InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
+        resolver
+            .retain_imported_global(exported, summary, span)
+            .expect("the exact duplicate comparison should retain no second closure");
+        assert_eq!(resolver.constraint_work.used(), DUPLICATE_CONSTRAINT_WORK,);
+        assert_eq!(resolver.type_work.used(), 0);
+        assert_eq!(snapshot(&resolver), baseline);
+    }
+
+    #[test]
+    fn duplicate_implementation_routes_stage_precedence_without_recloning_the_fact() {
+        const ENTRY: &str = "pub import dependency (impl Equal)\n";
+        const DEPENDENCY: &str = concat!(
+            "pub type Token = Token\n\n",
+            "pub interface Equal<A> {\nequal : A -> A\n}\n\n",
+            "pub impl Equal<Token> {\nequal value = value\n}\n",
+        );
+        // Route probe 1 + local authorization validation M=1 + fact equality:
+        // metadata 2, head Type 2, unique nominal indexes 2, fact Origin 1,
+        // the method's Related-Origin cells 7, and method value Type 6. The
+        // canonical Token definition is header+Source-Origin 2. Two one-hop
+        // prepends and the effective/public hop comparisons complete the route.
+        const PUBLIC_DUPLICATE_CONSTRAINT_WORK: usize =
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1;
+        // A private-to-public promotion replaces the public hop comparison with
+        // one public-order/rank reservation cell, so its exact total is equal.
+        const PUBLIC_PROMOTION_CONSTRAINT_WORK: usize =
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1;
+
+        let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the duplicate-implementation graph should load");
+        let dependency = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name()
+                    == Some("dependency.ash".as_ref())
+            })
+            .expect("the duplicate-implementation dependency should load");
+        let dependency =
+            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
+                .expect("the nominal-head implementation should check");
+        let entry = graph
+            .module(graph.entry())
+            .expect("the duplicate-implementation entry should load");
+        let summary = dependency.exports();
+        let exported = summary
+            .implementations()
+            .next()
+            .expect("the dependency should export one implementation");
+        let implementation = exported.fact().id;
+        let token = summary
+            .nominal("Token")
+            .expect("the implementation head should retain its nominal")
+            .id;
+        let import = &entry.surface().imports[0];
+        let SurfaceImportSelection::Targeted(items) = &import.selection else {
+            panic!("the fixture should use a targeted implementation import");
+        };
+        let SurfaceImportItem::Implementation { span, .. } = &items[0] else {
+            panic!("the fixture should select implementations");
+        };
+        let public_selection = ImplementationImportSelection {
+            direct_dependency: dependency.module(),
+            selector_span: *span,
+            import_span: import.span,
+            public: true,
+            route_rank: ImplementationRouteRank::new(0, 0, 0),
+        };
+        let private_selection = ImplementationImportSelection {
+            public: false,
+            ..public_selection
+        };
+        let snapshot = |resolver: &Resolver| {
+            let implementations = resolver
+                .imported
+                .implementations()
+                .map(|implementation| {
+                    (
+                        implementation.fact.id,
+                        implementation.authorization().hops().to_vec(),
+                        implementation
+                            .public_authorization()
+                            .map(|authorization| authorization.hops().to_vec()),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let nominals = resolver
+                .imported
+                .nominals()
+                .map(|nominal| (nominal.id, nominal.access, nominal.constructors.to_vec()))
+                .collect::<Vec<_>>();
+            (
+                implementations,
+                nominals,
+                resolver
+                    .implementation_route_ranks
+                    .get(&implementation)
+                    .copied(),
+                resolver
+                    .public_implementation_route_ranks
+                    .get(&implementation)
+                    .copied(),
+                resolver.imported.public_implementation_ids().to_vec(),
+            )
+        };
+
+        let mut duplicate = Resolver::new(entry.id());
+        duplicate
+            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .expect("the first public route should retain the fact and nominal closure");
+        let public_baseline = snapshot(&duplicate);
+        assert_eq!(
+            public_baseline.1,
+            vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
+        );
+        duplicate.type_work = TypeWorkBudget::with_limit(0);
+        duplicate.constraint_work =
+            InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1);
+        let error = duplicate
+            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .expect_err("one missing public-hop comparison cell should reject the duplicate");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(
+            duplicate.constraint_work.used(),
+            PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1,
+        );
+        assert_eq!(duplicate.type_work.used(), 0);
+        assert_eq!(snapshot(&duplicate), public_baseline);
+
+        duplicate.type_work = TypeWorkBudget::with_limit(0);
+        duplicate.constraint_work =
+            InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
+        duplicate
+            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .expect("the exact duplicate route should retain no second fact or closure");
+        assert_eq!(
+            duplicate.constraint_work.used(),
+            PUBLIC_DUPLICATE_CONSTRAINT_WORK,
+        );
+        assert_eq!(duplicate.type_work.used(), 0);
+        assert_eq!(snapshot(&duplicate), public_baseline);
+
+        let mut promotion = Resolver::new(entry.id());
+        promotion
+            .retain_imported_implementation_fact(exported, summary, private_selection)
+            .expect("the first private route should retain the fact and closure");
+        let private_baseline = snapshot(&promotion);
+        assert!(private_baseline.0[0].2.is_none());
+        assert!(private_baseline.4.is_empty());
+        promotion.type_work = TypeWorkBudget::with_limit(0);
+        promotion.constraint_work =
+            InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK - 1);
+        let error = promotion
+            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .expect_err("one missing effective-hop cell should reject public promotion");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(
+            promotion.constraint_work.used(),
+            PUBLIC_PROMOTION_CONSTRAINT_WORK - 1,
+        );
+        assert_eq!(promotion.type_work.used(), 0);
+        assert_eq!(snapshot(&promotion), private_baseline);
+
+        promotion.type_work = TypeWorkBudget::with_limit(0);
+        promotion.constraint_work =
+            InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK);
+        promotion
+            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .expect("the exact promotion should append one public route without recloning");
+        assert_eq!(
+            promotion.constraint_work.used(),
+            PUBLIC_PROMOTION_CONSTRAINT_WORK,
+        );
+        assert_eq!(promotion.type_work.used(), 0);
+        let promoted = snapshot(&promotion);
+        assert_eq!(promoted.0.len(), 1);
+        assert_eq!(promoted.1, private_baseline.1);
+        assert_eq!(promoted.2, private_baseline.2);
+        assert_eq!(promoted.3, Some(public_selection.route_rank));
+        assert_eq!(promoted.4, vec![implementation]);
+        assert!(promoted.0[0].2.is_some());
+    }
+
+    #[test]
+    fn duplicate_interface_route_compares_nominal_closure_with_exact_constraint_work() {
+        const ENTRY: &str = "import dependency as Facade\n";
+        const FACADE: &str = "pub import base (Observe)\n";
+        const BASE: &str = concat!(
+            "type Secret<A> = Secret(A)\n\n",
+            "pub interface Observe<A> {\nobserve : Secret<A> -> Secret<A>\n}\n",
+        );
+        // Route 1; fact metadata 2; parameter record, Source-Origin, and Type
+        // Kind 3; interface Source-Origin 1; method Source-Origin 1; the
+        // seven-node Type pair 14 plus its 2U nominal indexes; and Secret D=5
+        // (header, one parameter record/Origin/Kind, defining Origin).
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 3 + 1 + 1 + (14 + 2) + 5;
+
+        let fixture = ImportBudgetFixture::create(ENTRY, FACADE);
+        fs::write(fixture.0.join("base.ash"), BASE)
+            .expect("the duplicate-interface base should be writable");
+        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+            .expect("the duplicate-interface graph should load");
+        let base = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name() == Some("base.ash".as_ref())
+            })
+            .expect("the duplicate-interface base should load");
+        let base = check_module(resolve_module(base, &[]).expect("the base should resolve"))
+            .expect("the nominal method interface should check");
+        let facade = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name()
+                    == Some("dependency.ash".as_ref())
+            })
+            .expect("the duplicate-interface facade should load");
+        let facade_dependencies = facade
+            .dependencies()
+            .iter()
+            .map(|edge| DependencyExports::new(edge, base.exports()).unwrap())
+            .collect::<Vec<_>>();
+        let facade = check_module(
+            resolve_module(facade, &facade_dependencies).expect("the facade should resolve"),
+        )
+        .expect("the facade should check");
+        let entry = graph
+            .module(graph.entry())
+            .expect("the duplicate-interface entry should load");
+        let summary = facade.exports();
+        let exported = summary
+            .interfaces()
+            .next()
+            .expect("the facade should re-export Observe");
+        let secret = summary
+            .hidden_nominals()
+            .next()
+            .expect("the method should retain Secret as hidden closure")
+            .id;
+        let span = entry.surface().imports[0].span;
+        let snapshot = |resolver: &Resolver| {
+            let interface = resolver
+                .imported
+                .interface_imports()
+                .next()
+                .map(|interface| {
+                    (
+                        interface.fact.id,
+                        interface.direct_dependency,
+                        interface.available_at,
+                        interface.publicly_available,
+                    )
+                });
+            let nominals = resolver
+                .imported
+                .nominals()
+                .map(|nominal| (nominal.id, nominal.access, nominal.constructors.to_vec()))
+                .collect::<Vec<_>>();
+            (interface, nominals)
+        };
+
+        let mut resolver = Resolver::new(entry.id());
+        resolver
+            .retain_imported_interface_fact(
+                exported,
+                summary,
+                ImportedInterfaceAccess::HiddenSummaryClosure,
+                facade.module(),
+                span,
+            )
+            .expect("the first hidden route should retain the interface and closure");
+        let hidden = snapshot(&resolver);
+        assert_eq!(
+            hidden.1,
+            vec![(secret, ImportedTypeAccess::Hidden, Vec::new())],
+        );
+        assert!(!hidden.0.expect("the interface should be retained").3);
+
+        resolver.type_work = TypeWorkBudget::with_limit(0);
+        resolver.constraint_work = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1);
+        let error = resolver
+            .retain_imported_interface_fact(
+                exported,
+                summary,
+                ImportedInterfaceAccess::PublicExport,
+                facade.module(),
+                span,
+            )
+            .expect_err("one missing definition cell should reject public promotion");
+        assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+        assert_eq!(resolver.constraint_work.used(), EXACT_CONSTRAINT_WORK - 1);
+        assert_eq!(resolver.type_work.used(), 0);
+        assert_eq!(snapshot(&resolver), hidden);
+
+        resolver.type_work = TypeWorkBudget::with_limit(0);
+        resolver.constraint_work = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        resolver
+            .retain_imported_interface_fact(
+                exported,
+                summary,
+                ImportedInterfaceAccess::PublicExport,
+                facade.module(),
+                span,
+            )
+            .expect("the exact route should promote access without recloning the closure");
+        assert_eq!(resolver.constraint_work.used(), EXACT_CONSTRAINT_WORK);
+        assert_eq!(resolver.type_work.used(), 0);
+        let public = snapshot(&resolver);
+        assert_eq!(public.1, hidden.1);
+        assert!(public.0.expect("the interface should remain retained").3);
+    }
+
+    #[test]
     fn duplicate_impl_route_charges_lookup_without_retaining_a_second_fact() {
         let one_source = "import dependency (impl Equal)\n";
         let two_source = "import dependency (impl Equal)\nimport dependency (impl Equal)\n";
@@ -6476,64 +8626,91 @@ mod tests {
 
     #[test]
     fn implementation_selector_index_probes_use_exact_constraint_budgets() {
+        // Exhaustive dependency-summary admission precedes every selected-name
+        // probe. The two fused name/namespace cells are followed by the nominal,
+        // family-ordinal, withheld-owner, physical, closure, and two reverse
+        // index cells for this one-nullary-constructor fixture.
+        const SUMMARY_AUTHENTICATION_WORK: usize = 9;
+        const NOMINAL_SELECTOR_WORK: usize = 4;
+        const CONSTRUCTOR_SELECTOR_WORK: usize = 5;
+        const MISSING_SELECTOR_WORK: usize = 8;
+
         let (nominal_short, nominal_short_used) = resolve_import_fixture_with_dependency_and_limit(
             "import dependency (impl Nominal)\n",
             "pub type Nominal = Nominal\n",
-            3,
+            SUMMARY_AUTHENTICATION_WORK + NOMINAL_SELECTOR_WORK - 1,
         );
         let error =
             nominal_short.expect_err("one missing nominal-index probe should reject the selector");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
-        assert_eq!(nominal_short_used, 3);
+        assert_eq!(
+            nominal_short_used,
+            SUMMARY_AUTHENTICATION_WORK + NOMINAL_SELECTOR_WORK - 1,
+        );
 
         let (nominal_exact, nominal_exact_used) = resolve_import_fixture_with_dependency_and_limit(
             "import dependency (impl Nominal)\n",
             "pub type Nominal = Nominal\n",
-            4,
+            SUMMARY_AUTHENTICATION_WORK + NOMINAL_SELECTOR_WORK,
         );
         let error = nominal_exact.expect_err("a public nominal is not an interface");
         assert_eq!(error.reason, ResolveReason::InterfaceKind);
-        assert_eq!(nominal_exact_used, 4);
+        assert_eq!(
+            nominal_exact_used,
+            SUMMARY_AUTHENTICATION_WORK + NOMINAL_SELECTOR_WORK,
+        );
 
         let (constructor_short, constructor_short_used) =
             resolve_import_fixture_with_dependency_and_limit(
                 "import dependency (impl Constructor)\n",
                 "pub type Nominal = Constructor\n",
-                4,
+                SUMMARY_AUTHENTICATION_WORK + CONSTRUCTOR_SELECTOR_WORK - 1,
             );
         let error = constructor_short
             .expect_err("one missing constructor-index probe should reject the selector");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
-        assert_eq!(constructor_short_used, 4);
+        assert_eq!(
+            constructor_short_used,
+            SUMMARY_AUTHENTICATION_WORK + CONSTRUCTOR_SELECTOR_WORK - 1,
+        );
 
         let (constructor_exact, constructor_exact_used) =
             resolve_import_fixture_with_dependency_and_limit(
                 "import dependency (impl Constructor)\n",
                 "pub type Nominal = Constructor\n",
-                5,
+                SUMMARY_AUTHENTICATION_WORK + CONSTRUCTOR_SELECTOR_WORK,
             );
         let error = constructor_exact.expect_err("a public constructor is not an interface");
         assert_eq!(error.reason, ResolveReason::InterfaceKind);
-        assert_eq!(constructor_exact_used, 5);
+        assert_eq!(
+            constructor_exact_used,
+            SUMMARY_AUTHENTICATION_WORK + CONSTRUCTOR_SELECTOR_WORK,
+        );
 
         let (missing_short, missing_short_used) = resolve_import_fixture_with_dependency_and_limit(
             "import dependency (impl Missing)\n",
             "pub type Nominal = Nominal\n",
-            7,
+            SUMMARY_AUTHENTICATION_WORK + MISSING_SELECTOR_WORK - 1,
         );
         let error =
             missing_short.expect_err("one missing withheld-index probe should reject the selector");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
-        assert_eq!(missing_short_used, 7);
+        assert_eq!(
+            missing_short_used,
+            SUMMARY_AUTHENTICATION_WORK + MISSING_SELECTOR_WORK - 1,
+        );
 
         let (missing_exact, missing_exact_used) = resolve_import_fixture_with_dependency_and_limit(
             "import dependency (impl Missing)\n",
             "pub type Nominal = Nominal\n",
-            8,
+            SUMMARY_AUTHENTICATION_WORK + MISSING_SELECTOR_WORK,
         );
         let error = missing_exact.expect_err("an absent interface should remain unavailable");
         assert_eq!(error.reason, ResolveReason::UnavailableExport);
-        assert_eq!(missing_exact_used, 8);
+        assert_eq!(
+            missing_exact_used,
+            SUMMARY_AUTHENTICATION_WORK + MISSING_SELECTOR_WORK,
+        );
     }
 
     #[test]
@@ -6619,13 +8796,15 @@ mod tests {
         distinct_heads.dedup();
         assert_eq!(distinct_heads.len(), WIDTH);
 
-        let (short, _, _) = select_with_limit(exact_limit - 1);
+        let (short, short_used, short_heads) = select_with_limit(exact_limit - 1);
         let error = short.expect_err("one missing unit should reject selector expansion");
+        assert_eq!(short_used, exact_limit - 1);
+        assert_eq!(short_heads.len(), WIDTH - 1);
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(error.primary.span(), selector_span);
         assert_eq!(
             error.primary.message(),
-            "imported implementation method type exceeded its work budget",
+            "imported nominal authentication exceeded its constraint-work budget",
         );
 
         let (exact, exact_used, exact_heads) = select_with_limit(exact_limit);
@@ -6964,7 +9143,89 @@ mod tests {
     }
 
     #[test]
+    fn imported_parameter_clone_late_failure_dismantles_deep_completed_binders() {
+        const DEPTH: usize = 32_768;
+        const FIRST_PARAMETER_WORK: usize = 2;
+        const SECOND_PARAMETER_RECORD_WORK: usize = 1;
+        const EXACT_WORK: usize = 2 * FIRST_PARAMETER_WORK;
+
+        std::thread::Builder::new()
+            .name("imported-parameter-late-clone-rejection".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("imported-parameters.ash", "Pair")
+                    .expect("the imported-parameter source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 4).expect("the parameter range should be ordered"))
+                    .expect("the parameter range should belong to the fixture");
+                let module = ModuleId::new(9_001);
+                let mut deep_origin = Origin::Source(span);
+                for _ in 0..DEPTH {
+                    deep_origin = Origin::Generated {
+                        cause: Box::new(deep_origin),
+                        reason: crate::source::GeneratedReason::TypeChecking,
+                    };
+                }
+                let parameters = vec![
+                    ResolvedTypeVariable {
+                        id: TypeVariableId::resolved(module, 0),
+                        spelling: "A".to_owned(),
+                        kind: Kind::Type,
+                        origin: deep_origin,
+                    },
+                    ResolvedTypeVariable {
+                        id: TypeVariableId::resolved(module, 1),
+                        spelling: "B".to_owned(),
+                        kind: Kind::Type,
+                        origin: Origin::Source(span),
+                    },
+                ];
+
+                let mut short = Resolver::with_type_work(
+                    ModuleId::new(9_002),
+                    TypeWorkBudget::with_limit(FIRST_PARAMETER_WORK + SECOND_PARAMETER_RECORD_WORK),
+                );
+                let failure = short
+                    .clone_type_variables_for_retention(
+                        &parameters,
+                        span,
+                        "imported parameter clone exceeded its type-work budget",
+                    )
+                    .expect_err("the second parameter Kind clone must fail after its record cell");
+                assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+                assert_eq!(
+                    short.type_work.used(),
+                    FIRST_PARAMETER_WORK + SECOND_PARAMETER_RECORD_WORK,
+                );
+
+                let mut exact = Resolver::with_type_work(
+                    ModuleId::new(9_002),
+                    TypeWorkBudget::with_limit(EXACT_WORK),
+                );
+                let retained = exact
+                    .clone_type_variables_for_retention(
+                        &parameters,
+                        span,
+                        "imported parameter clone exceeded its type-work budget",
+                    )
+                    .expect("the immutable imported parameters must remain reusable");
+                assert_eq!(exact.type_work.used(), EXACT_WORK);
+                assert_eq!(retained.len(), parameters.len());
+                for parameter in retained.into_vec() {
+                    discard_origin_iteratively(parameter.origin);
+                }
+                for parameter in parameters {
+                    discard_origin_iteratively(parameter.origin);
+                }
+            })
+            .expect("the imported parameter clone worker should spawn")
+            .join()
+            .expect("accepted and rejected imported binders must tear down iteratively");
+    }
+
+    #[test]
     fn imported_implementation_kinded_head_retention_is_exact_and_atomic() {
+        const DEPTH: usize = 32_768;
         // M is one method record, A is the argument, H is one head binder,
         // K is its three-node Kind, and V is the three-cell method value type:
         // M + A + (H + K) + V + (H + K + V) + A
@@ -6983,122 +9244,140 @@ mod tests {
         const ENTRY: &str = "import dependency (impl Marker)\n";
         const DEPENDENCY: &str = "pub interface Marker<A> {\nmark : A -> A\n}\n";
 
-        let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
-        let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
-            .expect("the implementation-retention graph should load");
-        let dependency = graph
-            .modules()
-            .iter()
-            .find(|module| {
-                Path::new(module.source().display_path()).file_name()
-                    == Some("dependency.ash".as_ref())
-            })
-            .expect("the implementation-retention dependency should load");
-        let checked_dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
+        std::thread::Builder::new()
+            .name("imported-implementation-deep-head-rejection".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
+                let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+                    .expect("the implementation-retention graph should load");
+                let dependency = graph
+                    .modules()
+                    .iter()
+                    .find(|module| {
+                        Path::new(module.source().display_path()).file_name()
+                            == Some("dependency.ash".as_ref())
+                    })
+                    .expect("the implementation-retention dependency should load");
+                let checked_dependency = check_module(
+                    resolve_module(dependency, &[]).expect("the dependency should resolve"),
+                )
                 .expect("the dependency interface should check");
-        let entry = graph
-            .module(graph.entry())
-            .expect("the implementation-retention entry should load");
-        let import = entry
-            .surface()
-            .imports
-            .first()
-            .expect("the entry should retain its implementation selector");
-        let SurfaceImportSelection::Targeted(items) = &import.selection else {
-            panic!("the fixture should contain a targeted import");
-        };
-        let SurfaceImportItem::Implementation { span, .. } = &items[0] else {
-            panic!("the fixture should select implementations");
-        };
+                let entry = graph
+                    .module(graph.entry())
+                    .expect("the implementation-retention entry should load");
+                let import = entry
+                    .surface()
+                    .imports
+                    .first()
+                    .expect("the entry should retain its implementation selector");
+                let SurfaceImportSelection::Targeted(items) = &import.selection else {
+                    panic!("the fixture should contain a targeted import");
+                };
+                let SurfaceImportItem::Implementation { span, .. } = &items[0] else {
+                    panic!("the fixture should select implementations");
+                };
 
-        let module = checked_dependency.module();
-        let interface = InterfaceId::new(module, 0);
-        let method = MethodId::new(interface, 0);
-        let implementation = ImplId::new(module, 0);
-        let implementation_method = ImplMethodId::new(implementation, method);
-        let parameter = TypeVariableId::resolved(module, 0);
-        let kind = || Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
-        let source_span = dependency.surface().span;
-        let fact = CheckedImplementationFact {
-            id: implementation,
-            interface,
-            head_parameters: Box::new([ResolvedTypeVariable {
-                id: parameter,
-                spelling: "F".to_owned(),
-                kind: kind(),
-                origin: Origin::Source(source_span),
-            }]),
-            argument: Type::Variable(parameter),
-            prerequisites: Box::new([]),
-            methods: Box::new([crate::resolved::CheckedImplementationMethodFact {
-                id: implementation_method,
-                method,
-                binder: BinderId::resolved(module, 0),
-                scheme: ConstrainedScheme {
-                    type_parameters: Box::new([(parameter, kind())]),
-                    requirements: Box::new([]),
-                    value_type: Type::Function(
-                        Box::new(Type::Variable(parameter)),
-                        Box::new(Type::Variable(parameter)),
-                    ),
-                },
-                origin: Origin::Source(source_span),
-                span: source_span,
-            }]),
-            origin: Origin::Source(source_span),
-            span: source_span,
-        };
-        let exported = AuthorizedImplementationFact::local_for_test(fact);
-        let selection = ImplementationImportSelection {
-            direct_dependency: module,
-            selector_span: *span,
-            import_span: import.span,
-            public: false,
-            route_rank: ImplementationRouteRank::new(0, 0, 0),
-        };
+                let module = checked_dependency.module();
+                let interface = InterfaceId::new(module, 0);
+                let method = MethodId::new(interface, 0);
+                let implementation = ImplId::new(module, 0);
+                let implementation_method = ImplMethodId::new(implementation, method);
+                let parameter = TypeVariableId::resolved(module, 0);
+                let kind = || Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+                let source_span = dependency.surface().span;
+                let mut parameter_origin = Origin::Source(source_span);
+                for _ in 0..DEPTH {
+                    parameter_origin = Origin::Generated {
+                        cause: Box::new(parameter_origin),
+                        reason: crate::source::GeneratedReason::TypeChecking,
+                    };
+                }
+                let fact = CheckedImplementationFact {
+                    id: implementation,
+                    interface,
+                    head_parameters: Box::new([ResolvedTypeVariable {
+                        id: parameter,
+                        spelling: "F".to_owned(),
+                        kind: kind(),
+                        origin: parameter_origin,
+                    }]),
+                    argument: Type::Variable(parameter),
+                    prerequisites: Box::new([]),
+                    methods: Box::new([crate::resolved::CheckedImplementationMethodFact {
+                        id: implementation_method,
+                        method,
+                        binder: BinderId::resolved(module, 0),
+                        scheme: ConstrainedScheme {
+                            type_parameters: Box::new([(parameter, kind())]),
+                            requirements: Box::new([]),
+                            value_type: Type::Function(
+                                Box::new(Type::Variable(parameter)),
+                                Box::new(Type::Variable(parameter)),
+                            ),
+                        },
+                        origin: Origin::Source(source_span),
+                        span: source_span,
+                    }]),
+                    origin: Origin::Source(source_span),
+                    span: source_span,
+                };
+                let exported = AuthorizedImplementationFact::local_for_test(fact);
+                let selection = ImplementationImportSelection {
+                    direct_dependency: module,
+                    selector_span: *span,
+                    import_span: import.span,
+                    public: false,
+                    route_rank: ImplementationRouteRank::new(0, 0, 0),
+                };
 
-        let retain_with_limit = |limit| {
-            let mut resolver = Resolver::with_budgets(
-                entry.id(),
-                TypeWorkBudget::with_limit(limit),
-                InterfaceConstraintBudget::default(),
-            );
-            let result = resolver.retain_imported_implementation_fact(
-                &exported,
-                checked_dependency.exports(),
-                selection,
-            );
-            let retained_kind = resolver
-                .imported
-                .implementation(implementation)
-                .map(|fact| fact.head_parameters[0].kind.clone());
-            let retained_identity = resolver
-                .implementation_route_ranks
-                .contains_key(&implementation)
-                || resolver
-                    .public_implementation_route_ranks
-                    .contains_key(&implementation);
-            (
-                result,
-                resolver.type_work.used(),
-                retained_kind,
-                retained_identity,
-            )
-        };
+                let retain_with_limit = |limit| {
+                    let mut resolver = Resolver::with_budgets(
+                        entry.id(),
+                        TypeWorkBudget::with_limit(limit),
+                        InterfaceConstraintBudget::default(),
+                    );
+                    let result = resolver.retain_imported_implementation_fact(
+                        &exported,
+                        checked_dependency.exports(),
+                        selection,
+                    );
+                    let retained_kind = resolver
+                        .imported
+                        .implementation(implementation)
+                        .map(|fact| fact.head_parameters[0].kind.clone());
+                    let retained_identity = resolver
+                        .implementation_route_ranks
+                        .contains_key(&implementation)
+                        || resolver
+                            .public_implementation_route_ranks
+                            .contains_key(&implementation);
+                    (
+                        result,
+                        resolver.type_work.used(),
+                        retained_kind,
+                        retained_identity,
+                    )
+                };
 
-        let (short, short_used, short_kind, short_identity) = retain_with_limit(EXACT_WORK - 1);
-        let error = short.expect_err("one missing type-work unit must reject the whole fact");
-        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
-        assert_eq!(short_used, EXACT_WORK - 1);
-        assert_eq!(short_kind, None);
-        assert!(!short_identity);
+                let (short, short_used, short_kind, short_identity) =
+                    retain_with_limit(EXACT_WORK - 1);
+                let error =
+                    short.expect_err("one missing type-work unit must reject the whole fact");
+                assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+                assert_eq!(short_used, EXACT_WORK - 1);
+                assert_eq!(short_kind, None);
+                assert!(!short_identity);
 
-        let (exact, exact_used, exact_kind, exact_identity) = retain_with_limit(EXACT_WORK);
-        exact.expect("the exact implementation-retention budget should fit");
-        assert_eq!(exact_used, EXACT_WORK);
-        assert_eq!(exact_kind, Some(kind()));
-        assert!(exact_identity);
+                let (exact, exact_used, exact_kind, exact_identity) = retain_with_limit(EXACT_WORK);
+                exact.expect("the exact implementation-retention budget should fit");
+                assert_eq!(exact_used, EXACT_WORK);
+                assert_eq!(exact_kind, Some(kind()));
+                assert!(exact_identity);
+            })
+            .expect("the imported implementation retention worker should spawn")
+            .join()
+            .expect("accepted and rejected implementation facts must tear down iteratively");
     }
 
     #[test]

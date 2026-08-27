@@ -222,8 +222,14 @@ impl fmt::Display for KindStageFailure {
 #[derive(Clone, Copy)]
 struct KindFact<'a> {
     kind: &'a Kind,
+    retained_mirrors: Option<RetainedKindMirrors<'a>>,
     origin: Option<Span>,
     occurrence: Span,
+}
+
+#[derive(Clone, Copy)]
+enum RetainedKindMirrors<'a> {
+    Two(&'a Kind, &'a Kind),
 }
 
 struct NominalKindFact {
@@ -300,6 +306,7 @@ impl<'a> KindEnvironments<'a> {
             identity,
             KindFact {
                 kind,
+                retained_mirrors: None,
                 origin: Some(origin),
                 occurrence: origin,
             },
@@ -372,6 +379,134 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
+    /// Installs checked and source implementation-head record mirrors together.
+    pub(crate) fn install_canonical_owner_records_with_source(
+        &mut self,
+        registry: &'a crate::resolved::ResolvedRegistry,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        source_parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+        span: Span,
+    ) -> Result<(), KindFailure> {
+        if parameters.len() != source_parameters.len() {
+            return Err(KindFailure::internal(
+                span,
+                "linked implementation-head mirrors retain different binder counts",
+            ));
+        }
+        self.clear_declared();
+        for (parameter, source) in parameters.iter().zip(source_parameters) {
+            if parameter.id != source.id {
+                return Err(KindFailure::internal(
+                    span,
+                    "linked implementation-head mirrors retain different binder identities",
+                ));
+            }
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "linked owner-binder lookup exceeded its type-work budget",
+                )
+            })?;
+            let canonical = registry.type_variable(parameter.id).ok_or_else(|| {
+                KindFailure::internal(span, "a linked owner binder has no canonical registry fact")
+            })?;
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "declaration kind environment exceeded its type-work budget",
+                )
+            })?;
+            if self.delta.contains_key(&parameter.id) {
+                return Err(KindFailure::internal(
+                    span,
+                    "an owner binder list repeats a type-variable identity",
+                ));
+            }
+            self.delta.try_reserve(1).map_err(|_| {
+                KindFailure::resource(
+                    span,
+                    "declaration kind environment could not reserve storage",
+                )
+            })?;
+            self.delta.insert(
+                parameter.id,
+                KindFact {
+                    kind: &canonical.kind,
+                    retained_mirrors: Some(RetainedKindMirrors::Two(&parameter.kind, &source.kind)),
+                    origin: Some(canonical.origin.primary_span()),
+                    occurrence: span,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Installs a checked scheme pair plus the independently retained source
+    /// binder Kind. Both mirrors are authenticated against the canonical
+    /// registry Kind when the binder occurs in the paired value type.
+    pub(crate) fn install_canonical_owner_pairs_with_source(
+        &mut self,
+        registry: &'a crate::resolved::ResolvedRegistry,
+        parameters: &'a [(TypeVariableId, Kind)],
+        source_parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+        span: Span,
+    ) -> Result<(), KindFailure> {
+        if parameters.len() != source_parameters.len() {
+            return Err(KindFailure::internal(
+                span,
+                "a linked source and checked scheme retain different binder counts",
+            ));
+        }
+        self.clear_declared();
+        for ((identity, retained_kind), source) in parameters.iter().zip(source_parameters) {
+            if *identity != source.id {
+                return Err(KindFailure::internal(
+                    span,
+                    "a linked source and checked scheme retain different binder identities",
+                ));
+            }
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "linked owner-binder lookup exceeded its type-work budget",
+                )
+            })?;
+            let parameter = registry.type_variable(*identity).ok_or_else(|| {
+                KindFailure::internal(span, "a linked owner binder has no canonical registry fact")
+            })?;
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "declaration kind environment exceeded its type-work budget",
+                )
+            })?;
+            if self.delta.contains_key(identity) {
+                return Err(KindFailure::internal(
+                    span,
+                    "an owner binder list repeats a type-variable identity",
+                ));
+            }
+            self.delta.try_reserve(1).map_err(|_| {
+                KindFailure::resource(
+                    span,
+                    "declaration kind environment could not reserve storage",
+                )
+            })?;
+            self.delta.insert(
+                *identity,
+                KindFact {
+                    kind: &parameter.kind,
+                    retained_mirrors: Some(RetainedKindMirrors::Two(retained_kind, &source.kind)),
+                    origin: Some(parameter.origin.primary_span()),
+                    occurrence: span,
+                },
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn insert_inference(
         &mut self,
         identity: InferenceVariableId,
@@ -404,6 +539,7 @@ impl<'a> KindEnvironments<'a> {
                 identity,
                 KindFact {
                     kind,
+                    retained_mirrors: None,
                     origin,
                     occurrence: causal_span,
                 },
@@ -444,7 +580,8 @@ impl<'a> KindEnvironments<'a> {
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
         let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found = self.synthesize_with_ledger(ty, None, span, &mut ledger)?;
+        let found =
+            self.synthesize_with_ledger(ty, None, None, None, None, None, span, &mut ledger)?;
         let equal =
             same_kind_with_charge(expected, found.kind, || ledger.charge(1)).map_err(|()| {
                 KindFailure::resource(
@@ -471,7 +608,257 @@ impl<'a> KindEnvironments<'a> {
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
         let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found = self.synthesize_with_ledger(ty, None, span, &mut ledger)?;
+        let found =
+            self.synthesize_with_ledger(ty, None, None, None, None, None, span, &mut ledger)?;
+        let equal =
+            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free value kind checking exceeded its owning work budget",
+                )
+            })?;
+        if equal {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "a checked body-free value scheme does not end at kind Type",
+            ))
+        }
+    }
+
+    /// Checks a physical body-free constructor scheme while authenticating
+    /// its independently retained payload against the outer function domain
+    /// in the same Kind-synthesis walk.
+    pub(crate) fn expect_body_free_constructor_value_type_with_ledger(
+        &self,
+        value_type: &Type,
+        payload: Option<&Type>,
+        owner_parameters: &[crate::resolved::ResolvedTypeVariable],
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        let root_domain_mirror = match (payload, value_type) {
+            (Some(payload), Type::Function(_, _)) => Some(payload),
+            (None, _) => None,
+            (Some(_), _) => {
+                return Err(KindFailure::internal(
+                    span,
+                    "a payload constructor scheme does not have an outer function",
+                ));
+            }
+        };
+        budget.charge(owner_parameters.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "body-free constructor owner-variable storage exceeded its owning work budget",
+            )
+        })?;
+        let mut allowed_variables = HashSet::new();
+        allowed_variables
+            .try_reserve(owner_parameters.len())
+            .map_err(|_| {
+                KindFailure::resource(
+                    span,
+                    "body-free constructor owner-variable storage could not reserve capacity",
+                )
+            })?;
+        allowed_variables.extend(owner_parameters.iter().map(|parameter| parameter.id));
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(
+            value_type,
+            None,
+            None,
+            root_domain_mirror,
+            Some(&allowed_variables),
+            None,
+            span,
+            &mut ledger,
+        )?;
+        let equal =
+            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free constructor kind checking exceeded its owning work budget",
+                )
+            })?;
+        if equal {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "a checked body-free constructor scheme does not end at kind Type",
+            ))
+        }
+    }
+
+    /// Checks one body-free interface method in a single type walk. The
+    /// method must be a function, may mention only its owning interface
+    /// parameter, must mention that parameter, and must end at kind `Type`.
+    pub(crate) fn expect_body_free_interface_method_with_ledger(
+        &self,
+        ty: &Type,
+        parameter: TypeVariableId,
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        if !matches!(ty, Type::Function(_, _)) {
+            return Err(KindFailure::internal(
+                span,
+                "a checked body-free interface method is not a function",
+            ));
+        }
+        budget.charge(2).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "body-free interface-method variable storage exceeded its owning work budget",
+            )
+        })?;
+        let mut allowed = HashSet::new();
+        allowed.try_reserve(1).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "body-free interface-method variable storage could not reserve capacity",
+            )
+        })?;
+        allowed.insert(parameter);
+        let mut visited = HashSet::new();
+        visited.try_reserve(1).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "body-free interface-method coverage could not reserve capacity",
+            )
+        })?;
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(
+            ty,
+            None,
+            None,
+            None,
+            Some(&allowed),
+            Some(&mut visited),
+            span,
+            &mut ledger,
+        )?;
+        if visited.len() != 1 || !visited.contains(&parameter) {
+            return Err(KindFailure::internal(
+                span,
+                "a checked body-free interface method does not use exactly its owner parameter",
+            ));
+        }
+        let equal =
+            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free interface-method kind checking exceeded its owning work budget",
+                )
+            })?;
+        if equal {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "a checked body-free interface method does not end at kind Type",
+            ))
+        }
+    }
+
+    /// Checks a linked checked value type together with its retained source
+    /// type, and requires every installed owner binder to occur. Structural
+    /// comparison is fused into kind synthesis so no second deep type walk is
+    /// retained.
+    pub(crate) fn expect_body_free_paired_value_type_with_ledger(
+        &self,
+        checked: &Type,
+        source: &Type,
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        let mut visited = HashSet::new();
+        budget.charge(self.delta.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "linked owner-binder coverage exceeded its owning work budget",
+            )
+        })?;
+        visited.try_reserve(self.delta.len()).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "linked owner-binder coverage could not reserve storage",
+            )
+        })?;
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(
+            checked,
+            None,
+            Some(source),
+            None,
+            None,
+            Some(&mut visited),
+            span,
+            &mut ledger,
+        )?;
+        if visited.len() != self.delta.len() {
+            return Err(KindFailure::internal(
+                span,
+                "a linked value scheme retains an unused owner binder",
+            ));
+        }
+        let equal =
+            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free value kind checking exceeded its owning work budget",
+                )
+            })?;
+        if equal {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "a checked body-free value scheme does not end at kind Type",
+            ))
+        }
+    }
+
+    /// Checks one checked value type and requires every installed Kind mirror
+    /// to be exercised by an owner-binder occurrence.
+    pub(crate) fn expect_body_free_exact_owner_value_type_with_ledger(
+        &self,
+        ty: &Type,
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        let mut visited = HashSet::new();
+        budget.charge(self.delta.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "linked owner-binder coverage exceeded its owning work budget",
+            )
+        })?;
+        visited.try_reserve(self.delta.len()).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "linked owner-binder coverage could not reserve storage",
+            )
+        })?;
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(
+            ty,
+            None,
+            None,
+            None,
+            None,
+            Some(&mut visited),
+            span,
+            &mut ledger,
+        )?;
+        if visited.len() != self.delta.len() {
+            return Err(KindFailure::internal(
+                span,
+                "a linked value scheme retains an unused owner binder",
+            ));
+        }
         let equal =
             same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
                 KindFailure::resource(
@@ -733,7 +1120,77 @@ impl<'a> KindEnvironments<'a> {
             ));
         };
         let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found = self.synthesize_with_ledger(ty, None, span, &mut ledger)?;
+        let found =
+            self.synthesize_with_ledger(ty, None, None, None, None, None, span, &mut ledger)?;
+        let equal = same_kind_with_charge(expected.kind, found.kind, || ledger.charge(1)).map_err(
+            |()| {
+                KindFailure::resource(
+                    span,
+                    "body-free interface kind authentication exceeded its owning work budget",
+                )
+            },
+        )?;
+        if equal {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "a checked body-free interface argument has the wrong kind",
+            ))
+        }
+    }
+
+    /// Checks an implementation head and proves that every installed rigid
+    /// owner binder occurs in the authenticated head argument.
+    pub(crate) fn expect_body_free_exact_owner_interface_argument_with_ledger(
+        &self,
+        interface: InterfaceId,
+        ty: &Type,
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        let Some(expected) = self.iota.get(&interface) else {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free interface-kind lookup exceeded its owning work budget",
+                )
+            })?;
+            return Err(KindFailure::internal(
+                span,
+                "a body-free interface occurrence has no canonical parameter kind",
+            ));
+        };
+        let mut visited = HashSet::new();
+        budget.charge(self.delta.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "linked implementation-head coverage exceeded its owning work budget",
+            )
+        })?;
+        visited.try_reserve(self.delta.len()).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "linked implementation-head coverage could not reserve storage",
+            )
+        })?;
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(
+            ty,
+            None,
+            None,
+            None,
+            None,
+            Some(&mut visited),
+            span,
+            &mut ledger,
+        )?;
+        if visited.len() != self.delta.len() {
+            return Err(KindFailure::internal(
+                span,
+                "a linked implementation head retains an unused rigid binder",
+            ));
+        }
         let equal = same_kind_with_charge(expected.kind, found.kind, || ledger.charge(1)).map_err(
             |()| {
                 KindFailure::resource(
@@ -773,13 +1230,27 @@ impl<'a> KindEnvironments<'a> {
         'a: 'environment,
     {
         let mut ledger = SynthesisLedger::Resolved(budget);
-        self.synthesize_with_ledger(ty, provenance, fallback_span, &mut ledger)
+        self.synthesize_with_ledger(
+            ty,
+            provenance,
+            None,
+            None,
+            None,
+            None,
+            fallback_span,
+            &mut ledger,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn synthesize_with_ledger<'environment>(
         &'environment self,
         ty: &Type,
         provenance: Option<&ResolvedTypeProvenance>,
+        type_mirror: Option<&Type>,
+        root_function_domain_mirror: Option<&Type>,
+        allowed_variables: Option<&HashSet<TypeVariableId>>,
+        mut visited_variables: Option<&mut HashSet<TypeVariableId>>,
         fallback_span: Span,
         budget: &mut SynthesisLedger<'_>,
     ) -> Result<KindFact<'environment>, KindFailure>
@@ -787,13 +1258,14 @@ impl<'a> KindEnvironments<'a> {
         'a: 'environment,
     {
         enum State<'t, 'kind> {
-            Visit(&'t Type, Option<usize>),
+            Visit(&'t Type, Option<&'t Type>, Option<usize>),
             Complete(KindFact<'kind>),
         }
 
         enum Continuation<'t, 'kind> {
             ApplicationFunction {
                 argument: &'t Type,
+                argument_mirror: Option<&'t Type>,
                 argument_root: Option<usize>,
                 span: Span,
                 argument_span: Span,
@@ -805,11 +1277,13 @@ impl<'a> KindEnvironments<'a> {
             },
             Tuple {
                 remaining: std::slice::Iter<'t, Type>,
+                remaining_mirrors: Option<std::slice::Iter<'t, Type>>,
                 roots: Option<std::slice::Iter<'t, usize>>,
                 span: Span,
             },
             FunctionDomain {
                 codomain: &'t Type,
+                codomain_mirror: Option<&'t Type>,
                 codomain_root: Option<usize>,
                 span: Span,
             },
@@ -842,11 +1316,23 @@ impl<'a> KindEnvironments<'a> {
                 "kind-synthesis current-state retention exceeded its owning work budget",
             )
         })?;
-        let mut current = State::Visit(ty, provenance.map(ResolvedTypeProvenance::root));
+        let mut current = State::Visit(
+            ty,
+            type_mirror,
+            provenance.map(ResolvedTypeProvenance::root),
+        );
+        let mut root_function_domain_mirror = root_function_domain_mirror;
+        let mut at_root = true;
         let mut work = Vec::<Continuation<'_, 'environment>>::new();
         loop {
             current = match current {
-                State::Visit(ty, root) => {
+                State::Visit(ty, type_mirror, root) => {
+                    let domain_override = if at_root {
+                        at_root = false;
+                        root_function_domain_mirror.take()
+                    } else {
+                        None
+                    };
                     let node = match (provenance, root) {
                         (Some(provenance), Some(root)) => {
                             let Some(node) = provenance.nodes().get(root) else {
@@ -871,34 +1357,84 @@ impl<'a> KindEnvironments<'a> {
                     match ty {
                         Type::Int | Type::Bool | Type::Unit => {
                             charge_synthesis_cell(span, budget)?;
+                            let mirror_matches = matches!(
+                                (ty, type_mirror),
+                                (Type::Int, None | Some(Type::Int))
+                                    | (Type::Bool, None | Some(Type::Bool))
+                                    | (Type::Unit, None | Some(Type::Unit))
+                            );
+                            if !mirror_matches {
+                                return Err(KindFailure::internal(
+                                    span,
+                                    "a linked source type does not match its checked value type",
+                                ));
+                            }
                             require_fact_node(node, span, budget)?;
                             State::Complete(KindFact {
                                 kind: &TYPE_KIND,
+                                retained_mirrors: None,
                                 origin: None,
                                 occurrence: span,
                             })
                         }
                         Type::Variable(identity) => {
+                            if type_mirror
+                                .is_some_and(|mirror| !matches!(mirror, Type::Variable(found) if found == identity))
+                            {
+                                charge_lookup_attempt(span, budget)?;
+                                return Err(KindFailure::internal(
+                                    span,
+                                    "a linked source type does not match its checked value type",
+                                ));
+                            }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
+                            if allowed_variables.is_some_and(|allowed| !allowed.contains(identity))
+                            {
+                                return Err(KindFailure::internal(
+                                    span,
+                                    "a body-free constructor scheme references a non-owner variable",
+                                ));
+                            }
+                            if let Some(visited) = visited_variables.as_deref_mut() {
+                                visited.insert(*identity);
+                            }
                             let mut fact = *self.delta.get(identity).ok_or_else(|| {
                                 KindFailure::internal(
                                     span,
                                     "a resolved type variable has no canonical kind",
                                 )
                             })?;
-                            charge_kind_descendants_with_ledger(fact.kind, budget).map_err(
-                                |()| {
-                                    KindFailure::resource(
+                            authenticate_kind_descendants_with_ledger(
+                                fact.kind,
+                                fact.retained_mirrors,
+                                budget,
+                            )
+                            .map_err(|failure| {
+                                match failure {
+                                    LinkedKindMirrorFailure::Resource => KindFailure::resource(
                                         span,
                                         "declaration kind lookup exceeded its type-work budget",
-                                    )
-                                },
-                            )?;
+                                    ),
+                                    LinkedKindMirrorFailure::Mismatch => KindFailure::internal(
+                                        span,
+                                        "a linked retained binder Kind does not match its canonical registry fact",
+                                    ),
+                                }
+                            })?;
                             fact.occurrence = span;
                             State::Complete(fact)
                         }
                         Type::Inference(identity) => {
+                            if type_mirror
+                                .is_some_and(|mirror| !matches!(mirror, Type::Inference(found) if found == identity))
+                            {
+                                charge_lookup_attempt(span, budget)?;
+                                return Err(KindFailure::internal(
+                                    span,
+                                    "a linked source type does not match its checked value type",
+                                ));
+                            }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
                             let mut fact = *self.omega.get(identity).ok_or_else(|| {
@@ -919,6 +1455,15 @@ impl<'a> KindEnvironments<'a> {
                             State::Complete(fact)
                         }
                         Type::Nominal(identity) => {
+                            if type_mirror
+                                .is_some_and(|mirror| !matches!(mirror, Type::Nominal(found) if found == identity))
+                            {
+                                charge_lookup_attempt(span, budget)?;
+                                return Err(KindFailure::internal(
+                                    span,
+                                    "a linked source type does not match its checked value type",
+                                ));
+                            }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
                             let fact = self.xi.get(identity).ok_or_else(|| {
@@ -934,12 +1479,25 @@ impl<'a> KindEnvironments<'a> {
                             )?;
                             State::Complete(KindFact {
                                 kind: &fact.kind,
+                                retained_mirrors: None,
                                 origin: Some(fact.origin),
                                 occurrence: span,
                             })
                         }
                         Type::Tuple(elements) => {
                             charge_synthesis_cell(span, budget)?;
+                            let mirror_elements = match type_mirror {
+                                None => None,
+                                Some(Type::Tuple(mirrors)) if mirrors.len() == elements.len() => {
+                                    Some(mirrors)
+                                }
+                                Some(_) => {
+                                    return Err(KindFailure::internal(
+                                        span,
+                                        "a linked source type does not match its checked value type",
+                                    ));
+                                }
+                            };
                             let roots = match node {
                                 Some(ResolvedTypeProvenanceNode::Tuple { elements, .. }) => {
                                     Some(elements.iter())
@@ -962,8 +1520,12 @@ impl<'a> KindEnvironments<'a> {
                                 ));
                             }
                             let mut remaining = elements.iter();
+                            let mut remaining_mirrors =
+                                mirror_elements.map(|mirrors| mirrors.iter());
                             let mut roots = roots;
                             if let Some(first) = remaining.next() {
+                                let first_mirror =
+                                    remaining_mirrors.as_mut().and_then(Iterator::next);
                                 let first_root = roots.as_mut().and_then(Iterator::next).copied();
                                 if provenance.is_some() && first_root.is_none() {
                                     charge_lookup_attempt(span, budget)?;
@@ -976,15 +1538,17 @@ impl<'a> KindEnvironments<'a> {
                                     work,
                                     Continuation::Tuple {
                                         remaining,
+                                        remaining_mirrors,
                                         roots,
                                         span,
                                     },
                                     span
                                 );
-                                State::Visit(first, first_root)
+                                State::Visit(first, first_mirror, first_root)
                             } else {
                                 State::Complete(KindFact {
                                     kind: &TYPE_KIND,
+                                    retained_mirrors: None,
                                     origin: None,
                                     occurrence: span,
                                 })
@@ -992,6 +1556,18 @@ impl<'a> KindEnvironments<'a> {
                         }
                         Type::Application(function, argument) => {
                             charge_synthesis_cell(span, budget)?;
+                            let (function_mirror, argument_mirror) = match type_mirror {
+                                None => (None, None),
+                                Some(Type::Application(function, argument)) => {
+                                    (Some(function.as_ref()), Some(argument.as_ref()))
+                                }
+                                Some(_) => {
+                                    return Err(KindFailure::internal(
+                                        span,
+                                        "a linked source type does not match its checked value type",
+                                    ));
+                                }
+                            };
                             let (function_root, argument_root, argument_span) = match node {
                                 Some(ResolvedTypeProvenanceNode::Application {
                                     function,
@@ -1011,16 +1587,38 @@ impl<'a> KindEnvironments<'a> {
                                 work,
                                 Continuation::ApplicationFunction {
                                     argument,
+                                    argument_mirror,
                                     argument_root,
                                     span,
                                     argument_span,
                                 },
                                 span
                             );
-                            State::Visit(function, function_root)
+                            State::Visit(function, function_mirror, function_root)
                         }
                         Type::Function(domain, codomain) => {
                             charge_synthesis_cell(span, budget)?;
+                            let (mut domain_mirror, codomain_mirror) = match type_mirror {
+                                None => (None, None),
+                                Some(Type::Function(domain, codomain)) => {
+                                    (Some(domain.as_ref()), Some(codomain.as_ref()))
+                                }
+                                Some(_) => {
+                                    return Err(KindFailure::internal(
+                                        span,
+                                        "a linked source type does not match its checked value type",
+                                    ));
+                                }
+                            };
+                            if domain_override.is_some() {
+                                if domain_mirror.is_some() {
+                                    return Err(KindFailure::internal(
+                                        span,
+                                        "a linked constructor domain has two retained mirrors",
+                                    ));
+                                }
+                                domain_mirror = domain_override;
+                            }
                             let (domain_root, codomain_root) = match node {
                                 Some(ResolvedTypeProvenanceNode::Function {
                                     domain,
@@ -1039,15 +1637,24 @@ impl<'a> KindEnvironments<'a> {
                                 work,
                                 Continuation::FunctionDomain {
                                     codomain,
+                                    codomain_mirror,
                                     codomain_root,
                                     span,
                                 },
                                 span
                             );
-                            State::Visit(domain, domain_root)
+                            State::Visit(domain, domain_mirror, domain_root)
                         }
                         Type::Forall(_, _) => {
                             charge_synthesis_cell(span, budget)?;
+                            if type_mirror
+                                .is_some_and(|mirror| !matches!(mirror, Type::Forall(_, _)))
+                            {
+                                return Err(KindFailure::internal(
+                                    span,
+                                    "a linked source type does not match its checked value type",
+                                ));
+                            }
                             return Err(KindFailure::internal(
                                 span,
                                 "a rank-1 scheme entered the resolved monotype kind judgment",
@@ -1062,6 +1669,7 @@ impl<'a> KindEnvironments<'a> {
                     match continuation {
                         Continuation::Tuple {
                             mut remaining,
+                            mut remaining_mirrors,
                             mut roots,
                             span,
                         } => {
@@ -1094,6 +1702,8 @@ impl<'a> KindEnvironments<'a> {
                                 )?)));
                             }
                             if let Some(next) = remaining.next() {
+                                let next_mirror =
+                                    remaining_mirrors.as_mut().and_then(Iterator::next);
                                 let root = roots.as_mut().and_then(Iterator::next).copied();
                                 if provenance.is_some() && root.is_none() {
                                     charge_lookup_attempt(span, budget)?;
@@ -1104,13 +1714,15 @@ impl<'a> KindEnvironments<'a> {
                                 }
                                 work.push(Continuation::Tuple {
                                     remaining,
+                                    remaining_mirrors,
                                     roots,
                                     span,
                                 });
-                                State::Visit(next, root)
+                                State::Visit(next, next_mirror, root)
                             } else {
                                 State::Complete(KindFact {
                                     kind: &TYPE_KIND,
+                                    retained_mirrors: None,
                                     origin: None,
                                     occurrence: span,
                                 })
@@ -1118,6 +1730,7 @@ impl<'a> KindEnvironments<'a> {
                         }
                         Continuation::ApplicationFunction {
                             argument,
+                            argument_mirror,
                             argument_root,
                             span,
                             argument_span,
@@ -1127,7 +1740,7 @@ impl<'a> KindEnvironments<'a> {
                                 span,
                                 argument_span,
                             });
-                            State::Visit(argument, argument_root)
+                            State::Visit(argument, argument_mirror, argument_root)
                         }
                         Continuation::ApplicationArgument {
                             function,
@@ -1191,12 +1804,14 @@ impl<'a> KindEnvironments<'a> {
                             }
                             State::Complete(KindFact {
                                 kind: codomain,
+                                retained_mirrors: None,
                                 origin: function.origin,
                                 occurrence: span,
                             })
                         }
                         Continuation::FunctionDomain {
                             codomain,
+                            codomain_mirror,
                             codomain_root,
                             span,
                         } => {
@@ -1229,7 +1844,7 @@ impl<'a> KindEnvironments<'a> {
                                 )?)));
                             }
                             work.push(Continuation::FunctionCodomain { span });
-                            State::Visit(codomain, codomain_root)
+                            State::Visit(codomain, codomain_mirror, codomain_root)
                         }
                         Continuation::FunctionCodomain { span } => {
                             let equal =
@@ -1262,6 +1877,7 @@ impl<'a> KindEnvironments<'a> {
                             }
                             State::Complete(KindFact {
                                 kind: &TYPE_KIND,
+                                retained_mirrors: None,
                                 origin: None,
                                 occurrence: span,
                             })
@@ -2406,6 +3022,91 @@ fn charge_kind_descendants_with_ledger(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LinkedKindMirrorFailure {
+    Resource,
+    Mismatch,
+}
+
+fn authenticate_kind_descendants_with_ledger(
+    canonical: &Kind,
+    retained_mirrors: Option<RetainedKindMirrors<'_>>,
+    budget: &mut SynthesisLedger<'_>,
+) -> Result<(), LinkedKindMirrorFailure> {
+    let Some(retained_mirrors) = retained_mirrors else {
+        return charge_kind_descendants_with_ledger(canonical, budget)
+            .map_err(|()| LinkedKindMirrorFailure::Resource);
+    };
+
+    let RetainedKindMirrors::Two(first, second) = retained_mirrors;
+    let second = Some(second);
+    if second.is_some() {
+        budget
+            .charge(1)
+            .map_err(|()| LinkedKindMirrorFailure::Resource)?;
+    }
+
+    let mut current = (canonical, first, second);
+    let mut pending = Vec::new();
+    loop {
+        match current {
+            (Kind::Type, Kind::Type, None | Some(Kind::Type)) => {}
+            (
+                Kind::Arrow(canonical_domain, canonical_codomain),
+                Kind::Arrow(first_domain, first_codomain),
+                second,
+            ) => {
+                let (second_domain, second_codomain) = match second {
+                    None => (None, None),
+                    Some(Kind::Arrow(domain, codomain)) => {
+                        (Some(domain.as_ref()), Some(codomain.as_ref()))
+                    }
+                    Some(Kind::Type) => return Err(LinkedKindMirrorFailure::Mismatch),
+                };
+                budget
+                    .charge(1)
+                    .map_err(|()| LinkedKindMirrorFailure::Resource)?;
+                pending
+                    .try_reserve(1)
+                    .map_err(|_| LinkedKindMirrorFailure::Resource)?;
+                pending.push((
+                    canonical_codomain.as_ref(),
+                    first_codomain.as_ref(),
+                    second_codomain,
+                ));
+                budget
+                    .charge(1)
+                    .map_err(|()| LinkedKindMirrorFailure::Resource)?;
+                if second_domain.is_some() {
+                    budget
+                        .charge(1)
+                        .map_err(|()| LinkedKindMirrorFailure::Resource)?;
+                }
+                current = (
+                    canonical_domain.as_ref(),
+                    first_domain.as_ref(),
+                    second_domain,
+                );
+                continue;
+            }
+            _ => return Err(LinkedKindMirrorFailure::Mismatch),
+        }
+
+        let Some(next) = pending.pop() else {
+            return Ok(());
+        };
+        budget
+            .charge(1)
+            .map_err(|()| LinkedKindMirrorFailure::Resource)?;
+        if next.2.is_some() {
+            budget
+                .charge(1)
+                .map_err(|()| LinkedKindMirrorFailure::Resource)?;
+        }
+        current = next;
+    }
+}
+
 fn charge_lookup_attempt(span: Span, budget: &mut impl KindWorkLedger) -> Result<(), KindFailure> {
     budget.charge(1).map_err(|()| {
         KindFailure::resource(
@@ -2536,6 +3237,104 @@ mod tests {
             kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
         }
         kind
+    }
+
+    #[test]
+    fn retained_kind_mirror_continuations_are_exact_for_both_deep_spines() {
+        const DEPTH: usize = 32_768;
+        const EXACT_WORK: usize = 5 * DEPTH + 1;
+
+        #[derive(Clone, Copy)]
+        enum Spine {
+            Left,
+            Right,
+        }
+
+        fn kind(spine: Spine, late_mismatch: bool) -> Kind {
+            match spine {
+                Spine::Right => {
+                    let mut kind = if late_mismatch {
+                        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+                    } else {
+                        Kind::Type
+                    };
+                    for _ in 0..DEPTH {
+                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+                    }
+                    kind
+                }
+                Spine::Left => {
+                    let mut kind = Kind::Type;
+                    for index in 0..DEPTH {
+                        let codomain = if late_mismatch && index == DEPTH - 1 {
+                            Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+                        } else {
+                            Kind::Type
+                        };
+                        kind = Kind::Arrow(Box::new(kind), Box::new(codomain));
+                    }
+                    kind
+                }
+            }
+        }
+
+        fn authenticate(
+            canonical: &Kind,
+            first: &Kind,
+            second: &Kind,
+            limit: usize,
+        ) -> (Result<(), LinkedKindMirrorFailure>, usize) {
+            let mut budget = crate::interface::InterfaceConstraintBudget::with_limit(limit);
+            let result = {
+                let mut ledger = SynthesisLedger::BodyFree(&mut budget);
+                authenticate_kind_descendants_with_ledger(
+                    canonical,
+                    Some(RetainedKindMirrors::Two(first, second)),
+                    &mut ledger,
+                )
+            };
+            (result, budget.used())
+        }
+
+        std::thread::Builder::new()
+            .name("deep-retained-kind-mirrors".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                for spine in [Spine::Right, Spine::Left] {
+                    let canonical = kind(spine, false);
+                    let first = kind(spine, false);
+                    let second = kind(spine, false);
+                    assert_eq!(
+                        authenticate(&canonical, &first, &second, EXACT_WORK - 1),
+                        (Err(LinkedKindMirrorFailure::Resource), EXACT_WORK - 1),
+                    );
+                    assert_eq!(
+                        authenticate(&canonical, &first, &second, EXACT_WORK),
+                        (Ok(()), EXACT_WORK),
+                    );
+                    drop(canonical);
+                    drop(first);
+                    drop(second);
+
+                    let canonical = kind(spine, false);
+                    let first = kind(spine, false);
+                    let second = kind(spine, true);
+                    assert_eq!(
+                        authenticate(&canonical, &first, &second, EXACT_WORK - 1),
+                        (Err(LinkedKindMirrorFailure::Resource), EXACT_WORK - 1),
+                    );
+                    assert_eq!(
+                        authenticate(&canonical, &first, &second, EXACT_WORK),
+                        (Err(LinkedKindMirrorFailure::Mismatch), EXACT_WORK),
+                    );
+                    drop(canonical);
+                    drop(first);
+                    drop(second);
+                }
+            })
+            .expect("the deep retained-mirror worker should start")
+            .join()
+            .expect("both retained Kind spines must authenticate and tear down on 256 KiB");
     }
 
     fn unit_expression(span: Span) -> ResolvedExpr {
