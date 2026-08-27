@@ -1108,6 +1108,19 @@ pub(crate) enum LinkedCarrierMutationForTest {
     ImplementationMethodBinder,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum LinkedGlobalParameterRowMutationForTest {
+    Owner,
+    ParameterIdentity,
+    ParameterOrder,
+    RowOrder,
+    OwnerPosition,
+    MissingRow,
+    ExtraRow,
+    DuplicateOwner,
+}
+
 impl ResolvedModuleProgram {
     pub(crate) fn new(
         registry: Arc<ResolvedRegistry>,
@@ -1145,6 +1158,211 @@ impl ResolvedModuleProgram {
     #[must_use]
     pub const fn result(&self) -> &ResolvedExpr {
         &self.result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_linked_global_parameter_rows_for_test(
+        &mut self,
+        mutation: LinkedGlobalParameterRowMutationForTest,
+    ) -> bool {
+        let empty_owner = self
+            .groups
+            .iter()
+            .flat_map(|group| group.schemes.iter())
+            .find(|scheme| scheme.scheme.type_parameters.is_empty())
+            .map(|scheme| scheme.binder);
+        let Some(registry) = Arc::get_mut(&mut self.registry) else {
+            return false;
+        };
+
+        match mutation {
+            LinkedGlobalParameterRowMutationForTest::Owner => {
+                let Some(owner) = empty_owner else {
+                    return false;
+                };
+                let Some(original_owner) =
+                    registry.global_parameter_rows.first().map(|row| row.owner)
+                else {
+                    return false;
+                };
+                let Some(position) = registry
+                    .global_parameter_positions
+                    .get(&original_owner)
+                    .copied()
+                else {
+                    return false;
+                };
+                if position != 0 || registry.global_parameter_positions.contains_key(&owner) {
+                    return false;
+                }
+                let removed = registry.global_parameter_positions.remove(&original_owner);
+                debug_assert_eq!(removed, Some(position));
+                registry.global_parameter_rows[position].owner = owner;
+                let displaced = registry.global_parameter_positions.insert(owner, position);
+                debug_assert!(displaced.is_none());
+            }
+            LinkedGlobalParameterRowMutationForTest::ParameterIdentity => {
+                let Some((row_index, replacement)) =
+                    registry.global_parameter_rows.iter().enumerate().find_map(
+                        |(row_index, row)| {
+                            let replaced = *row.parameters.first()?;
+                            let replaced_kind = &registry.type_variables.get(&replaced)?.kind;
+                            registry
+                                .global_parameter_rows
+                                .iter()
+                                .flat_map(|candidate| candidate.parameters.iter().copied())
+                                .find(|candidate| {
+                                    !row.parameters.contains(candidate)
+                                        && registry
+                                            .type_variables
+                                            .get(candidate)
+                                            .is_some_and(|variable| variable.kind == *replaced_kind)
+                                })
+                                .map(|replacement| (row_index, replacement))
+                        },
+                    )
+                else {
+                    return false;
+                };
+                registry.global_parameter_rows[row_index].parameters[0] = replacement;
+            }
+            LinkedGlobalParameterRowMutationForTest::ParameterOrder => {
+                let Some(row_index) = registry.global_parameter_rows.iter().position(|row| {
+                    let [first, second, ..] = row.parameters.as_ref() else {
+                        return false;
+                    };
+                    registry
+                        .type_variables
+                        .get(first)
+                        .zip(registry.type_variables.get(second))
+                        .is_some_and(|(first, second)| first.kind == second.kind)
+                }) else {
+                    return false;
+                };
+                registry.global_parameter_rows[row_index]
+                    .parameters
+                    .swap(0, 1);
+            }
+            LinkedGlobalParameterRowMutationForTest::RowOrder => {
+                let [first, second, ..] = registry.global_parameter_rows.as_ref() else {
+                    return false;
+                };
+                let (first_owner, second_owner) = (first.owner, second.owner);
+                let Some(first_position) = registry
+                    .global_parameter_positions
+                    .get(&first_owner)
+                    .copied()
+                else {
+                    return false;
+                };
+                let Some(second_position) = registry
+                    .global_parameter_positions
+                    .get(&second_owner)
+                    .copied()
+                else {
+                    return false;
+                };
+                if first_position != 0 || second_position != 1 {
+                    return false;
+                }
+                registry
+                    .global_parameter_rows
+                    .swap(first_position, second_position);
+                let displaced = registry
+                    .global_parameter_positions
+                    .insert(first_owner, second_position);
+                debug_assert_eq!(displaced, Some(first_position));
+                let displaced = registry
+                    .global_parameter_positions
+                    .insert(second_owner, first_position);
+                debug_assert_eq!(displaced, Some(second_position));
+            }
+            LinkedGlobalParameterRowMutationForTest::OwnerPosition => {
+                let [first, second, ..] = registry.global_parameter_rows.as_ref() else {
+                    return false;
+                };
+                let (first_owner, second_owner) = (first.owner, second.owner);
+                let Some(first_position) = registry
+                    .global_parameter_positions
+                    .get(&first_owner)
+                    .copied()
+                else {
+                    return false;
+                };
+                let Some(second_position) = registry
+                    .global_parameter_positions
+                    .get(&second_owner)
+                    .copied()
+                else {
+                    return false;
+                };
+                registry
+                    .global_parameter_positions
+                    .insert(first_owner, second_position);
+                registry
+                    .global_parameter_positions
+                    .insert(second_owner, first_position);
+            }
+            LinkedGlobalParameterRowMutationForTest::MissingRow => {
+                let mut rows = std::mem::take(&mut registry.global_parameter_rows).into_vec();
+                let Some(removed) = rows.pop() else {
+                    return false;
+                };
+                registry.global_parameter_positions.remove(&removed.owner);
+                registry.global_parameter_rows = rows.into_boxed_slice();
+            }
+            LinkedGlobalParameterRowMutationForTest::ExtraRow => {
+                let Some(owner) = empty_owner else {
+                    return false;
+                };
+                let Some(parameter) = registry
+                    .global_parameter_rows
+                    .first()
+                    .and_then(|row| row.parameters.first())
+                    .copied()
+                else {
+                    return false;
+                };
+                let mut rows = std::mem::take(&mut registry.global_parameter_rows).into_vec();
+                let position = rows.len();
+                rows.push(ResolvedGlobalParameterRow {
+                    owner,
+                    parameters: vec![parameter].into_boxed_slice(),
+                });
+                registry.global_parameter_positions.insert(owner, position);
+                registry.global_parameter_rows = rows.into_boxed_slice();
+            }
+            LinkedGlobalParameterRowMutationForTest::DuplicateOwner => {
+                let [first, second, ..] = registry.global_parameter_rows.as_ref() else {
+                    return false;
+                };
+                let (first_owner, second_owner) = (first.owner, second.owner);
+                if first_owner == second_owner {
+                    return false;
+                }
+                let Some(first_position) = registry
+                    .global_parameter_positions
+                    .get(&first_owner)
+                    .copied()
+                else {
+                    return false;
+                };
+                let Some(second_position) = registry
+                    .global_parameter_positions
+                    .get(&second_owner)
+                    .copied()
+                else {
+                    return false;
+                };
+                if first_position != 0 || second_position != 1 {
+                    return false;
+                }
+                let removed = registry.global_parameter_positions.remove(&second_owner);
+                debug_assert_eq!(removed, Some(second_position));
+                registry.global_parameter_rows[second_position].owner = first_owner;
+            }
+        }
+        true
     }
 
     #[cfg(test)]

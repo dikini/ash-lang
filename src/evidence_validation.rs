@@ -2088,6 +2088,49 @@ fn authenticate_linked_registry_facts(
     if owners.len() != registry.type_variable_count() {
         return Err(unknown(span));
     }
+    // Preserve canonical-fact precedence, then authenticate the ordered row
+    // carrier before the validated capability can be constructed.
+    authenticate_linked_global_parameter_rows(program, budget)?;
+    Ok(())
+}
+
+fn authenticate_linked_global_parameter_rows(
+    program: &ResolvedModuleProgram,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let registry = program.registry();
+    let rows = registry.global_parameter_rows();
+    let mut row_position = 0usize;
+    for group in program.groups() {
+        for scheme in group.schemes() {
+            let parameters = &scheme.scheme.type_parameters;
+            if parameters.is_empty() {
+                continue;
+            }
+            let span = scheme.origin.primary_span();
+            charge(budget, 1, span)?;
+            let row = rows.get(row_position).ok_or_else(|| unknown(span))?;
+            let indexed = registry
+                .global_parameter_row(scheme.binder)
+                .ok_or_else(|| unknown(span))?;
+            if row.owner() != scheme.binder
+                || !std::ptr::eq(row, indexed)
+                || row.parameters().len() != parameters.len()
+            {
+                return Err(unknown(span));
+            }
+            for (retained, (expected, _)) in row.parameters().iter().zip(parameters) {
+                charge(budget, 1, span)?;
+                if retained != expected || registry.type_variable(*retained).is_none() {
+                    return Err(unknown(span));
+                }
+            }
+            row_position = row_position.checked_add(1).ok_or_else(|| resource(span))?;
+        }
+    }
+    if row_position != rows.len() {
+        return Err(unknown(program.result().span));
+    }
     Ok(())
 }
 
@@ -3693,8 +3736,8 @@ mod tests {
         resolve::{DependencyExports, resolve_module},
         resolved::{
             CheckedModule, ImplementationRoute, ImplementationRouteHop,
-            LinkedCarrierMutationForTest, ResolvedTypeVariable,
-            same_imported_constructor_fact_with_budget,
+            LinkedCarrierMutationForTest, LinkedGlobalParameterRowMutationForTest,
+            ResolvedTypeVariable, same_imported_constructor_fact_with_budget,
         },
         source::{ByteRange, SourceFile},
         types::{InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget},
@@ -4285,8 +4328,10 @@ mod tests {
         // each scheduled codomain owns one continuation cell. Iterative
         // source-binder provenance owns its retained Origin cell. One retained
         // coverage-set cell proves the owner binder was visited; the module
-        // and binder-owner authentication indexes add two fixed cells.
-        const EXACT_WORK: usize = 9 * DEPTH + 63;
+        // and binder-owner authentication indexes add two fixed cells. Linked
+        // registry-row authentication visits the identity row and parameter.
+        const ROW_WORK: usize = 2;
+        const EXACT_WORK: usize = 9 * DEPTH + 63 + ROW_WORK;
         // TypeWork retains only the two canonical environment records.
         const EXACT_TYPE_WORK: usize = 2;
 
@@ -4708,6 +4753,390 @@ mod tests {
         let graph = fixture.graph();
         link_modules(check_graph(&graph), graph.entry())
             .expect("the all-binder-owner fixture should link")
+    }
+
+    fn linked_registry_row_program() -> ResolvedModuleProgram {
+        let fixture = ValidationFixture::create(concat!(
+            "import dependency (pair)\n\n",
+            "second<C, D> : (C, D) -> (C, D)\n",
+            "second value = value\n\n",
+            "main : Unit -> Unit\n",
+            "main value = value\n",
+        ));
+        fixture.write(
+            "dependency.ash",
+            concat!(
+                "pub pair<A, B> : (A, B) -> (A, B)\n",
+                "pair value = value\n",
+            ),
+        );
+        let graph = fixture.graph();
+        link_modules(check_graph(&graph), graph.entry())
+            .expect("the linked registry-row fixture should link")
+    }
+
+    #[test]
+    fn linked_registry_rejects_every_resolved_global_parameter_row_mutation_before_core() {
+        let mutations = [
+            LinkedGlobalParameterRowMutationForTest::Owner,
+            LinkedGlobalParameterRowMutationForTest::ParameterIdentity,
+            LinkedGlobalParameterRowMutationForTest::ParameterOrder,
+            LinkedGlobalParameterRowMutationForTest::RowOrder,
+            LinkedGlobalParameterRowMutationForTest::OwnerPosition,
+            LinkedGlobalParameterRowMutationForTest::MissingRow,
+            LinkedGlobalParameterRowMutationForTest::ExtraRow,
+            LinkedGlobalParameterRowMutationForTest::DuplicateOwner,
+        ];
+        for mutation in mutations {
+            let mut program = linked_registry_row_program();
+            let [first_row, second_row] = program.registry().global_parameter_rows() else {
+                panic!("the linked fixture must retain exactly two global rows");
+            };
+            let original_owners = [first_row.owner(), second_row.owner()];
+            let original_parameters = [
+                first_row.parameters().to_vec(),
+                second_row.parameters().to_vec(),
+            ];
+            let empty_owner = program
+                .groups()
+                .iter()
+                .flat_map(|group| group.schemes())
+                .find(|scheme| scheme.scheme.type_parameters.is_empty())
+                .map(|scheme| scheme.binder)
+                .expect("the linked fixture must retain an empty-scheme owner");
+            let scheme_spans = program
+                .groups()
+                .iter()
+                .flat_map(|group| group.schemes())
+                .filter(|scheme| !scheme.scheme.type_parameters.is_empty())
+                .map(|scheme| scheme.origin.primary_span())
+                .collect::<Vec<_>>();
+            let [first_span, second_span] = scheme_spans.as_slice() else {
+                panic!("the linked fixture must retain exactly two non-empty schemes");
+            };
+            let result_span = program.result().span;
+            let expected_primary = match mutation {
+                LinkedGlobalParameterRowMutationForTest::Owner
+                | LinkedGlobalParameterRowMutationForTest::ParameterIdentity
+                | LinkedGlobalParameterRowMutationForTest::ParameterOrder
+                | LinkedGlobalParameterRowMutationForTest::RowOrder
+                | LinkedGlobalParameterRowMutationForTest::OwnerPosition => *first_span,
+                LinkedGlobalParameterRowMutationForTest::MissingRow
+                | LinkedGlobalParameterRowMutationForTest::DuplicateOwner => *second_span,
+                LinkedGlobalParameterRowMutationForTest::ExtraRow => result_span,
+            };
+            assert!(
+                program.corrupt_linked_global_parameter_rows_for_test(mutation),
+                "the linked fixture must support {mutation:?}",
+            );
+            match mutation {
+                LinkedGlobalParameterRowMutationForTest::Owner => {
+                    let rows = program.registry().global_parameter_rows();
+                    assert_eq!(rows.len(), 2);
+                    assert_eq!(rows[0].owner(), empty_owner);
+                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
+                    assert!(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[0])
+                            .is_none()
+                    );
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(empty_owner)
+                            .expect("the replacement owner index must remain coherent"),
+                        &rows[0],
+                    ));
+                }
+                LinkedGlobalParameterRowMutationForTest::RowOrder => {
+                    let rows = program.registry().global_parameter_rows();
+                    assert_eq!(rows.len(), 2);
+                    assert_eq!(rows[0].owner(), original_owners[1]);
+                    assert_eq!(rows[1].owner(), original_owners[0]);
+                    assert_eq!(rows[0].parameters(), original_parameters[1].as_slice());
+                    assert_eq!(rows[1].parameters(), original_parameters[0].as_slice());
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[1])
+                            .expect("the moved second owner index must remain coherent"),
+                        &rows[0],
+                    ));
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[0])
+                            .expect("the moved first owner index must remain coherent"),
+                        &rows[1],
+                    ));
+                }
+                LinkedGlobalParameterRowMutationForTest::DuplicateOwner => {
+                    let rows = program.registry().global_parameter_rows();
+                    assert_eq!(rows.len(), 2);
+                    assert_eq!(rows[0].owner(), original_owners[0]);
+                    assert_eq!(rows[1].owner(), original_owners[0]);
+                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
+                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[0])
+                            .expect("the first duplicate owner position must remain authoritative"),
+                        &rows[0],
+                    ));
+                    assert!(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[1])
+                            .is_none()
+                    );
+                }
+                LinkedGlobalParameterRowMutationForTest::ParameterIdentity => {
+                    let rows = program.registry().global_parameter_rows();
+                    assert_eq!(rows.len(), 2);
+                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
+                    let replacement = rows[0].parameters()[0];
+                    assert_ne!(replacement, original_parameters[0][0]);
+                    assert!(original_parameters[1].contains(&replacement));
+                    assert_eq!(
+                        program
+                            .registry()
+                            .type_variable(replacement)
+                            .expect("the replacement identity must remain canonical")
+                            .kind,
+                        program
+                            .registry()
+                            .type_variable(original_parameters[0][0])
+                            .expect("the replaced identity must remain canonical")
+                            .kind,
+                    );
+                    assert_eq!(&rows[0].parameters()[1..], &original_parameters[0][1..],);
+                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[0])
+                            .expect("the first owner index must remain coherent"),
+                        &rows[0],
+                    ));
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[1])
+                            .expect("the second owner index must remain coherent"),
+                        &rows[1],
+                    ));
+                }
+                LinkedGlobalParameterRowMutationForTest::ParameterOrder => {
+                    let rows = program.registry().global_parameter_rows();
+                    assert_eq!(rows.len(), 2);
+                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
+                    assert_eq!(
+                        rows[0].parameters(),
+                        [original_parameters[0][1], original_parameters[0][0]],
+                    );
+                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[0])
+                            .expect("the first owner index must remain coherent"),
+                        &rows[0],
+                    ));
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[1])
+                            .expect("the second owner index must remain coherent"),
+                        &rows[1],
+                    ));
+                }
+                LinkedGlobalParameterRowMutationForTest::OwnerPosition => {
+                    let rows = program.registry().global_parameter_rows();
+                    assert_eq!(rows.len(), 2);
+                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
+                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
+                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
+                    assert!(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[0])
+                            .is_none()
+                    );
+                    assert!(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[1])
+                            .is_none()
+                    );
+                }
+                LinkedGlobalParameterRowMutationForTest::MissingRow => {
+                    let rows = program.registry().global_parameter_rows();
+                    assert_eq!(rows.len(), 1);
+                    assert_eq!(rows[0].owner(), original_owners[0]);
+                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[0])
+                            .expect("the retained owner index must remain coherent"),
+                        &rows[0],
+                    ));
+                    assert!(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[1])
+                            .is_none()
+                    );
+                }
+                LinkedGlobalParameterRowMutationForTest::ExtraRow => {
+                    let rows = program.registry().global_parameter_rows();
+                    assert_eq!(rows.len(), 3);
+                    assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
+                    assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
+                    assert_eq!(rows[1].parameters(), original_parameters[1].as_slice());
+                    assert_eq!(rows[2].owner(), empty_owner);
+                    assert_eq!(rows[2].parameters(), [original_parameters[0][0]]);
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[0])
+                            .expect("the first owner index must remain coherent"),
+                        &rows[0],
+                    ));
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(original_owners[1])
+                            .expect("the second owner index must remain coherent"),
+                        &rows[1],
+                    ));
+                    assert!(std::ptr::eq(
+                        program
+                            .registry()
+                            .global_parameter_row(empty_owner)
+                            .expect("the surplus owner index must remain coherent"),
+                        &rows[2],
+                    ));
+                }
+            }
+            let failure = validate_interface_evidence(program)
+                .expect_err("every independent row mutation must fail before Core");
+            assert_eq!(
+                failure.reason(),
+                EvidenceValidationReason::UnknownIdentity,
+                "{mutation:?}",
+            );
+            assert_eq!(failure.primary(), expected_primary, "{mutation:?}");
+        }
+    }
+
+    #[test]
+    fn linked_registry_rows_have_exact_constraint_work_and_no_type_work() {
+        let program = linked_registry_row_program();
+        let row_count = program.registry().global_parameter_rows().len();
+        let parameter_count = program
+            .registry()
+            .global_parameter_rows()
+            .iter()
+            .map(|row| row.parameters().len())
+            .sum::<usize>();
+        let exact_row_work = row_count + parameter_count;
+        assert!(row_count > 1);
+        assert!(parameter_count > row_count);
+
+        let mut row_short = InterfaceConstraintBudget::with_limit(exact_row_work - 1);
+        assert_eq!(
+            authenticate_linked_global_parameter_rows(&program, &mut row_short)
+                .expect_err("one-short row authentication must fail")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(row_short.used(), exact_row_work - 1);
+
+        let retry = linked_registry_row_program();
+        let mut row_exact = InterfaceConstraintBudget::with_limit(exact_row_work);
+        authenticate_linked_global_parameter_rows(&retry, &mut row_exact)
+            .expect("a fresh exact-budget fixture must authenticate its rows");
+        assert_eq!(row_exact.used(), exact_row_work);
+
+        let mut authentication_measured = InterfaceConstraintBudget::default();
+        authenticate_linked_registry_facts(&retry, &mut authentication_measured)
+            .expect("the complete linked registry should authenticate");
+        let exact_authentication_work = authentication_measured.used();
+        let mut authentication_short =
+            InterfaceConstraintBudget::with_limit(exact_authentication_work - 1);
+        let mut untouched_type_work = TypeWorkBudget::with_limit(0);
+        let rejected = validate_interface_evidence_with_budget(
+            linked_registry_row_program(),
+            &mut authentication_short,
+            &mut untouched_type_work,
+        );
+        assert_eq!(
+            rejected
+                .expect_err("one-short registry authentication cannot publish a capability")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(authentication_short.used(), exact_authentication_work - 1);
+        assert_eq!(untouched_type_work.used(), 0);
+
+        let mut measured_constraint_work = InterfaceConstraintBudget::default();
+        let mut measured_type_work = TypeWorkBudget::default();
+        validate_interface_evidence_with_budget(
+            linked_registry_row_program(),
+            &mut measured_constraint_work,
+            &mut measured_type_work,
+        )
+        .expect("the complete linked program should validate with default budgets");
+        let exact_constraint_work = measured_constraint_work.used();
+        let exact_type_work = measured_type_work.used();
+
+        let mut exact_constraint = InterfaceConstraintBudget::with_limit(exact_constraint_work);
+        let mut exact_type = TypeWorkBudget::with_limit(exact_type_work);
+        validate_interface_evidence_with_budget(
+            linked_registry_row_program(),
+            &mut exact_constraint,
+            &mut exact_type,
+        )
+        .expect("a fresh fixture should publish its capability with both exact ledgers");
+        assert_eq!(exact_constraint.used(), exact_constraint_work);
+        assert_eq!(exact_type.used(), exact_type_work);
+    }
+
+    #[test]
+    fn linked_registry_canonical_malformation_precedes_a_later_row_mismatch() {
+        let (mut both, base) = linked_higher_kinded_diamond_program();
+        let canonical_span = both
+            .registry()
+            .nominals()
+            .first()
+            .and_then(|nominal| both.registry().nominal_parameters(nominal.id))
+            .and_then(|parameters| parameters.first())
+            .map(|parameter| parameter.origin.primary_span())
+            .expect("the fixture should retain a canonical nominal parameter");
+        let row_span = both
+            .groups()
+            .iter()
+            .flat_map(|group| group.schemes())
+            .find(|scheme| !scheme.scheme.type_parameters.is_empty())
+            .map(|scheme| scheme.origin.primary_span())
+            .expect("the fixture should retain a non-empty checked global scheme");
+        assert_ne!(canonical_span, row_span);
+        assert!(both.corrupt_linked_carrier_for_test(
+            base,
+            LinkedCarrierMutationForTest::NominalParameterKind(0),
+        ));
+        assert!(both.corrupt_linked_global_parameter_rows_for_test(
+            LinkedGlobalParameterRowMutationForTest::Owner,
+        ));
+        let found = validate_interface_evidence(both)
+            .expect_err("the earlier canonical failure must preempt row authentication");
+
+        assert_eq!(found.reason(), EvidenceValidationReason::UnknownIdentity);
+        assert_eq!(found.primary(), canonical_span);
+        assert_ne!(found.primary(), row_span);
     }
 
     #[test]
