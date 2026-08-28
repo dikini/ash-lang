@@ -783,6 +783,14 @@ and evaluator semantic or state-machine changes.
   Checkpoint 4 is complete in `652f74c`, `2bf317a`, `f027da9`, `a96e49a`,
   `35dce7d`, and `9e5aa3a`. Its reserved use is 12 units, cumulative reserved
   use is 38/70, 32 units remain unreserved, and Checkpoint 5 is not reserved.
+- Checkpoint 5 starts from the clean reviewed boundary `61e3d77` and reserves
+  its planned 14 units for authenticated polymorphic Core evidence, generated
+  adapters, independent validation, and transform preservation. Cumulative
+  reserved use is 52/70, 18 units remain unreserved, and Checkpoint 6 is not
+  reserved. This reservation does not authorize new Core interface nodes,
+  dictionaries, body specialization or copying, evaluator state or behavior,
+  general nested schemes, selection changes, specification reconciliation, or
+  a persistent representation choice outside AD-0007.
 
 ## Verification
 
