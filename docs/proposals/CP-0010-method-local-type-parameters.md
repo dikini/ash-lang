@@ -1,7 +1,7 @@
 # CP-0010: Method-Local Type Parameters
 
 - ID: `CP-0010`
-- Status: proposed
+- Status: accepted
 - Related: [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), [DN-0023: Interfaces and Implementations](../design/DN-0023-interfaces-and-implementations.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0009: Ordered Resolved-Global Binder Authority](../decisions/AD-0009-ordered-resolved-global-binder-authority.md), the [explicit-import evidence](../design/lib-ash/imports-evidence.md), and the [explicit-kind evidence](../design/lib-ash/kinds-evidence.md)
 
 > This proposal is not current Ash.

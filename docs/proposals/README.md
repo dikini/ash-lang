@@ -18,8 +18,8 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0010: Method-Local Type Parameters](CP-0010-method-local-type-parameters.md)
+No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-No accepted change proposal is currently awaiting implementation.
+- [CP-0010: Method-Local Type Parameters](CP-0010-method-local-type-parameters.md)
