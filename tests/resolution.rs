@@ -4,6 +4,7 @@ use std::{
 };
 
 use ash::{
+    elaborate::check_module,
     interface::RequirementOwner,
     module::{ModuleRoots, load_module_graph},
     parser::STRUCTURAL_DEPTH_LIMIT,
@@ -777,6 +778,138 @@ fn declaration_binder_defaults_and_legacy_order_are_fixed_at_type() {
             .collect::<Vec<_>>(),
         [("B", &Kind::Type), ("A", &Kind::Type)],
     );
+}
+
+#[test]
+fn omitted_kinds_and_implicit_lists_preserve_exact_type_kinds_and_order() {
+    let program = resolve_valid(concat!(
+        "type ExplicitPair<Left, Right> = ExplicitPair(Left, Right)\n",
+        "type ImplicitPair<First, Second> = ImplicitPair(First, Second)\n\n",
+        "interface Witness<Subject> {\n",
+        "witness : Subject -> Bool\n",
+        "}\n\n",
+        "ordered<B, A> : A -> B -> A\n",
+        "ordered left right = left\n\n",
+        "fn operational<D, C>(left : C, right : D) -> C {\n",
+        "left\n",
+        "}\n\n",
+        "impl<F, E> Witness<ExplicitPair<E, F>> {\n",
+        "witness value = true\n",
+        "}\n\n",
+        "legacy : Y -> X -> Y\n",
+        "legacy left right = left\n\n",
+        "fn legacy_operational(left : W, right : V) -> W {\n",
+        "left\n",
+        "}\n\n",
+        "impl Witness<ImplicitPair<S, R>> {\n",
+        "witness value = true\n",
+        "}\n",
+    ));
+
+    let nominal_parameters = program
+        .registry()
+        .nominals()
+        .iter()
+        .map(|nominal| {
+            program
+                .registry()
+                .nominal_parameters(nominal.id)
+                .expect("each nominal should retain its omitted-kind binders")
+                .iter()
+                .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        nominal_parameters,
+        [
+            vec![("Left", &Kind::Type), ("Right", &Kind::Type)],
+            vec![("First", &Kind::Type), ("Second", &Kind::Type)],
+        ]
+    );
+
+    let [interface] = program.interfaces() else {
+        panic!("expected one interface");
+    };
+    assert_eq!(
+        (&*interface.parameter.spelling, &interface.parameter.kind),
+        ("Subject", &Kind::Type)
+    );
+
+    let [ordered, operational, legacy, legacy_operational] = program.definitions() else {
+        panic!("expected four globals");
+    };
+    let ResolvedDefinitionKind::Equational(ordered) = &ordered.kind else {
+        panic!("expected the explicit equational global");
+    };
+    let ResolvedDefinitionKind::InlineOperational(operational) = &operational.kind else {
+        panic!("expected the explicit inline global");
+    };
+    let ResolvedDefinitionKind::Equational(legacy) = &legacy.kind else {
+        panic!("expected the implicit equational global");
+    };
+    let ResolvedDefinitionKind::InlineOperational(legacy_operational) = &legacy_operational.kind
+    else {
+        panic!("expected the implicit inline global");
+    };
+    assert_eq!(
+        ordered
+            .interface
+            .type_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("B", &Kind::Type), ("A", &Kind::Type)]
+    );
+    assert_eq!(
+        operational
+            .header
+            .type_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("D", &Kind::Type), ("C", &Kind::Type)]
+    );
+    assert_eq!(
+        legacy
+            .interface
+            .type_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("Y", &Kind::Type), ("X", &Kind::Type)]
+    );
+    assert_eq!(
+        legacy_operational
+            .header
+            .type_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("W", &Kind::Type), ("V", &Kind::Type)]
+    );
+
+    let [explicit, implicit] = program.implementations() else {
+        panic!("expected explicit and implicit implementations");
+    };
+    assert_eq!(
+        explicit
+            .head_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("F", &Kind::Type), ("E", &Kind::Type)]
+    );
+    assert_eq!(
+        implicit
+            .head_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("S", &Kind::Type), ("R", &Kind::Type)]
+    );
+
+    check_module(program).expect("all predecessor-compatible binder forms should check");
 }
 
 #[test]

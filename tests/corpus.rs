@@ -85,6 +85,40 @@ struct InvalidCase {
     reason: ExpectedReason,
 }
 
+struct MigrationCase {
+    id: &'static str,
+    path: &'static str,
+    predecessor_outcome: &'static str,
+    implemented_outcome: &'static str,
+}
+
+const MIGRATION_CASES: &[MigrationCase] = &[
+    MigrationCase {
+        id: "unsaturated-nominal",
+        path: "tests/fixtures/explicit-kinds/migration-unsaturated-nominal.ash",
+        predecessor_outcome: "resolve.type-argument-count",
+        implemented_outcome: "kind.expected-type",
+    },
+    MigrationCase {
+        id: "applied-Type-binder",
+        path: "tests/fixtures/explicit-kinds/migration-applied-type-binder.ash",
+        predecessor_outcome: "resolve.type-kind",
+        implemented_outcome: "kind.not-applicable",
+    },
+    MigrationCase {
+        id: "lowercase-inline-binder",
+        path: "tests/fixtures/first-stratum/parse/excluded-polymorphism.ash",
+        predecessor_outcome: "parse.polymorphic-header",
+        implemented_outcome: "parse.expected-form",
+    },
+    MigrationCase {
+        id: "uppercase-inline-binder",
+        path: "tests/fixtures/explicit-kinds/migration-explicit-inline-binder.ash",
+        predecessor_outcome: "parse.polymorphic-header",
+        implemented_outcome: "accepted",
+    },
+];
+
 const VALID_CASES: &[ValidCase] = &[
     ValidCase {
         id: "V-001",
@@ -169,6 +203,20 @@ const VALID_CASES: &[ValidCase] = &[
         expected_value: "1",
         expected_type: "Int",
         expected_stdout: "1 : Int\n",
+    },
+    ValidCase {
+        id: "migration-explicit-inline-binder",
+        path: "tests/fixtures/explicit-kinds/migration-explicit-inline-binder.ash",
+        expected_value: "42",
+        expected_type: "Int",
+        expected_stdout: "42 : Int\n",
+    },
+    ValidCase {
+        id: "ordinary-Type-nominal",
+        path: "tests/fixtures/explicit-kinds/ordinary-type-nominal.ash",
+        expected_value: "Type",
+        expected_type: "Type",
+        expected_stdout: "Type : Type\n",
     },
 ];
 
@@ -352,7 +400,7 @@ fn every_valid_corpus_presentation_has_its_exact_library_and_cli_observation() {
             case.id
         );
         assert_eq!(
-            observation.ty().to_string(),
+            observation.type_display(),
             case.expected_type,
             "{}",
             case.id
@@ -384,6 +432,22 @@ fn every_invalid_corpus_case_stops_at_its_owning_stage_and_cli_boundary() {
         assert_eq!(output.status.code(), Some(1), "{}: {output:?}", case.id);
         assert!(output.stdout.is_empty(), "{}: {output:?}", case.id);
         assert!(!output.stderr.is_empty(), "{}: {output:?}", case.id);
+    }
+}
+
+#[test]
+fn explicit_kind_migration_matrix_records_every_predecessor_assertion_shift() {
+    for case in MIGRATION_CASES {
+        let actual = match run(case.path) {
+            Ok(_) => "accepted".to_owned(),
+            Err(failure) => failure.reason_code(),
+        };
+        assert_eq!(actual, case.implemented_outcome, "{}", case.id);
+        assert_ne!(
+            case.implemented_outcome, case.predecessor_outcome,
+            "{}",
+            case.id
+        );
     }
 }
 

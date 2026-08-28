@@ -6,89 +6,63 @@ use ash::{
         transform::{fold_literal_primitives, identity_traversal},
         validate,
     },
+    driver::{RunConfiguration, run_path},
     elaborate::{Elaborator, check_module, link_modules},
     eval::{Value, evaluate},
     evidence_validation::validate_interface_evidence,
     integer::Integer,
-    module::{ModuleGraph, ModuleRoots, load_module_graph},
+    interface::{EvidenceNode, ImplId, ImplMethodId, InterfaceId},
+    module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{
-        CheckedModule, ResolvedConstructor, ResolvedNominalType, ResolvedRegistry,
-        ResolvedTypeVariable,
+        BinderId, ResolvedConstructor, ResolvedDefinitionKind, ResolvedExprKind,
+        ResolvedNominalType, ResolvedRegistry, ResolvedTermName, ResolvedTypeVariable,
     },
     source::{ByteRange, GeneratedReason, Origin, SourceFile},
+    surface::SurfaceKindKind,
     types::{
         ConstructorId, InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, same_type,
     },
 };
 use std::{
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    collections::HashSet,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Arc,
 };
 
-static LINKED_CORE_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
-
-struct LinkedCoreFixture(PathBuf);
-
-impl LinkedCoreFixture {
-    fn create() -> Self {
-        loop {
-            let id = LINKED_CORE_TEMP_IDS.fetch_add(1, Ordering::Relaxed);
-            let directory = std::env::temp_dir().join(format!(
-                "ash-linked-core-validation-{}-{id}",
-                std::process::id(),
-            ));
-            match fs::create_dir(&directory) {
-                Ok(()) => return Self(directory),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => panic!("linked Core fixture should be creatable: {error}"),
-            }
-        }
-    }
-
-    fn write(&self, name: &str, source: &str) -> PathBuf {
-        let path = self.0.join(name);
-        fs::write(&path, source).expect("linked Core fixture should be writable");
-        path
-    }
+fn linked_product_entry() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/explicit-kinds/linked-product/entry.ash")
 }
 
-impl Drop for LinkedCoreFixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
+fn module_named<'a>(graph: &'a ModuleGraph, name: &str) -> &'a LoadedModule {
+    graph
+        .modules()
+        .iter()
+        .find(|module| module.canonical_path().file_name() == Some(name.as_ref()))
+        .expect("the static linked product module should load")
 }
 
-fn checked_linked_core_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
-    let mut checked = Vec::new();
-    for module in graph.modules() {
-        let dependencies = module
-            .dependencies()
-            .iter()
-            .map(|edge| {
-                let dependency = checked
-                    .iter()
-                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
-                    .expect("dependency order should check the target first");
-                DependencyExports::new(edge, dependency.exports())
-                    .expect("checked dependency exports should authenticate their edge")
-            })
-            .collect::<Vec<_>>();
-        let resolved = resolve_module(module, &dependencies)
-            .expect("the linked Core fixture graph should resolve");
-        checked.push(check_module(resolved).expect("the linked Core fixture graph should check"));
-    }
-    checked
+fn assert_type_to_type(kind: &Kind) {
+    assert_eq!(
+        kind,
+        &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+    );
+}
+
+fn assert_surface_type_to_type(kind: &SurfaceKindKind) {
+    let SurfaceKindKind::Function { domain, codomain } = kind else {
+        panic!("the projected kind should retain its source arrow");
+    };
+    assert!(matches!(domain.kind, SurfaceKindKind::Type));
+    assert!(matches!(codomain.kind, SurfaceKindKind::Type));
 }
 
 fn assert_higher_kinded_linked_core(
     program: &ValidatedProgram,
     option: NominalTypeId,
-    relay: ash::resolved::BinderId,
+    relay: BinderId,
     relay_parameter: TypeVariableId,
 ) {
     let mut work = vec![program.root()];
@@ -181,6 +155,44 @@ fn assert_higher_kinded_linked_core(
     assert!(same_type(&instantiation_node.ty, &substituted));
 }
 
+fn assert_primitive_profile(
+    program: &ValidatedProgram,
+    expected_additions: usize,
+    expected_folded_forty_twos: usize,
+) {
+    let forty_two = Integer::parse_decimal("42").expect("the folded result should parse");
+    let mut work = vec![program.root()];
+    let mut visited = HashSet::new();
+    let mut additions = 0;
+    let mut folded_forty_twos = 0;
+    while let Some(id) = work.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let node = program
+            .node(id)
+            .expect("every linked Core child should belong to the validated arena");
+        if matches!(
+            &node.kind,
+            PureExprKind::Computation(PureComputation::Primitive(operation))
+                if operation.primitive() == Primitive::Add
+        ) {
+            additions += 1;
+        }
+        if matches!(
+            &node.kind,
+            PureExprKind::Value(PureValue::Integer(integer))
+                if integer.value() == &forty_two
+                    && node.origin.generated_reason() == Some(GeneratedReason::ConstantFolding)
+        ) {
+            folded_forty_twos += 1;
+        }
+        work.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+    }
+    assert_eq!(additions, expected_additions);
+    assert_eq!(folded_forty_twos, expected_folded_forty_twos);
+}
+
 fn assert_integer_evaluation(program: &ValidatedProgram, expected: &str) {
     let evaluation = evaluate(program).expect("validated linked Core should erase and evaluate");
     let Value::Integer(value) = evaluation.value else {
@@ -194,54 +206,281 @@ fn assert_integer_evaluation(program: &ValidatedProgram, expected: &str) {
 
 #[test]
 fn linked_higher_kinded_core_revalidates_after_both_transforms() {
-    let fixture = LinkedCoreFixture::create();
-    fixture.write(
-        "dependency.ash",
-        concat!(
-            "pub type Option<A> =\nNone\n| Some(A)\n\n",
-            "pub interface Observe<F : Type -> Type> {\n",
-            "observe : F<Int> -> Int\n",
-            "}\n\n",
-            "pub impl Observe<Option> {\n",
-            "observe value = 42\n",
-            "}\n",
-            "\n",
-            "pub relay<F : Type -> Type> : F<Int> -> F<Int>\n",
-            "relay value = value\n",
-        ),
-    );
-    let entry = fixture.write(
-        "entry.ash",
-        concat!(
-            "import dependency (Option, Some, observe, relay, impl Observe)\n",
-            "main : Unit -> Int\n",
-            "main () = observe(relay(Some(1)))\n",
-        ),
-    );
+    let entry = linked_product_entry();
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("the linked higher-kinded Core graph should load");
-    let checked = checked_linked_core_graph(&graph);
-    let option = checked
-        .iter()
-        .flat_map(|module| module.registry().nominals())
-        .find(|nominal| nominal.spelling == "Option")
-        .expect("the defining Option identity should remain checked")
-        .id;
-    let relay_scheme = checked
-        .iter()
-        .flat_map(|module| module.schemes())
-        .find(|scheme| scheme.spelling == "relay")
-        .expect("the checked relay scheme should remain available");
-    let relay = relay_scheme.binder;
-    let [(relay_parameter, relay_kind)] = relay_scheme.scheme.type_parameters.as_ref() else {
-        panic!("relay should have one checked type parameter");
+    let dependency = module_named(&graph, "dependency.ash");
+    let [surface_observe] = dependency.surface().interfaces.as_slice() else {
+        panic!("the projected dependency should retain Observe");
     };
-    assert!(matches!(relay_kind, Kind::Arrow(_, _)));
-    let relay_parameter = *relay_parameter;
-    let linked =
-        link_modules(checked, graph.entry()).expect("the checked higher-kinded graph should link");
+    assert_eq!(surface_observe.name.text, "Observe");
+    assert_surface_type_to_type(
+        &surface_observe
+            .parameter
+            .kind
+            .as_ref()
+            .expect("Observe should retain its explicit kind")
+            .kind,
+    );
+    let surface_relay = dependency
+        .surface()
+        .definitions
+        .iter()
+        .find_map(|definition| match &definition.kind {
+            ash::surface::SurfaceDefinitionKind::Equational(global)
+                if global.interface.name.text == "relay" =>
+            {
+                Some(&global.interface)
+            }
+            ash::surface::SurfaceDefinitionKind::Equational(_)
+            | ash::surface::SurfaceDefinitionKind::InlineOperational(_) => None,
+        })
+        .expect("the projected dependency should retain relay");
+    let [surface_relay_parameter] = surface_relay
+        .type_parameters
+        .as_deref()
+        .expect("relay should retain its complete explicit binder list")
+    else {
+        panic!("relay should project exactly one explicit binder");
+    };
+    assert_surface_type_to_type(
+        &surface_relay_parameter
+            .kind
+            .as_ref()
+            .expect("relay should retain its explicit kind")
+            .kind,
+    );
+
+    let resolved_dependency = resolve_module(dependency, &[])
+        .expect("the dependency should resolve and kind-check without imports");
+    let option = resolved_dependency
+        .registry()
+        .nominals()
+        .iter()
+        .find(|nominal| nominal.spelling == "Option")
+        .expect("the defining Option identity should resolve")
+        .id;
+    let [option_parameter] = resolved_dependency
+        .registry()
+        .nominal_parameters(option)
+        .expect("Option should retain its canonical parameter")
+    else {
+        panic!("Option should have one canonical parameter");
+    };
+    assert_eq!(option_parameter.kind, Kind::Type);
+    let option_parameter = option_parameter.id;
+    let some = resolved_dependency
+        .registry()
+        .constructors()
+        .iter()
+        .find(|constructor| constructor.spelling == "Some")
+        .expect("the defining Some identity should resolve")
+        .id;
+    let [resolved_observe] = resolved_dependency.interfaces() else {
+        panic!("Observe should be the only resolved interface");
+    };
+    assert_eq!(resolved_observe.spelling, "Observe");
+    assert_type_to_type(&resolved_observe.parameter.kind);
+    let observe: InterfaceId = resolved_observe.id;
+    let [resolved_observe_method] = resolved_observe.methods.as_ref() else {
+        panic!("Observe should resolve exactly one method");
+    };
+    let observe_method = resolved_observe_method.id;
+    let [resolved_implementation] = resolved_dependency.implementations() else {
+        panic!("the dependency should retain one implementation");
+    };
+    assert_eq!(resolved_implementation.interface.id, observe);
+    let implementation: ImplId = resolved_implementation.id;
+    let resolved_relay = resolved_dependency
+        .definitions()
+        .iter()
+        .find_map(|definition| match &definition.kind {
+            ResolvedDefinitionKind::Equational(global)
+                if global.interface.name.spelling == "relay" =>
+            {
+                Some(&global.interface)
+            }
+            ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::InlineOperational(_) => None,
+        })
+        .expect("relay should retain its resolved global identity");
+    let relay = resolved_relay.name.id;
+    let [resolved_relay_parameter] = resolved_relay.type_parameters.as_ref() else {
+        panic!("relay should resolve exactly one binder");
+    };
+    assert_type_to_type(&resolved_relay_parameter.kind);
+    let relay_parameter = resolved_relay_parameter.id;
+
+    let checked_dependency = check_module(resolved_dependency)
+        .expect("the kinded dependency should complete ordinary type checking");
+    let [checked_observe] = checked_dependency.interface_facts() else {
+        panic!("the checked dependency should retain one interface fact");
+    };
+    assert_eq!(checked_observe.id, observe);
+    assert_type_to_type(&checked_observe.parameter.kind);
+    let [checked_implementation] = checked_dependency.implementation_facts() else {
+        panic!("the checked dependency should retain one implementation fact");
+    };
+    assert_eq!(checked_implementation.id, implementation);
+    assert_eq!(checked_implementation.interface, observe);
+    assert_eq!(checked_implementation.argument(), &Type::Nominal(option));
+    let checked_relay = checked_dependency
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.binder == relay)
+        .expect("the checked dependency should retain relay's scheme");
+    assert_eq!(
+        checked_relay.scheme.type_parameters.as_ref(),
+        [(
+            relay_parameter,
+            Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+        )],
+    );
+
+    let dependency_summary = checked_dependency.into_exports();
+    let entry_module = module_named(&graph, "entry.ash");
+    let [entry_edge] = entry_module.dependencies() else {
+        panic!("the entry should have one direct dependency");
+    };
+    let detached_dependency = DependencyExports::new(entry_edge, &dependency_summary)
+        .expect("the detached summary should authenticate its import edge");
+    let resolved_entry = resolve_module(entry_module, &[detached_dependency])
+        .expect("the entry should resolve and kind-check solely from the detached summary");
+    let imported = resolved_entry.imported_facts();
+    let imported_option = imported
+        .nominal(option)
+        .expect("the entry should import Option's canonical fact");
+    assert_eq!(imported_option.id, option);
+    let [imported_option_parameter] = imported_option.parameters.as_ref() else {
+        panic!("the imported Option fact should retain one parameter");
+    };
+    assert_eq!(imported_option_parameter.id, option_parameter);
+    assert_eq!(imported_option_parameter.kind, Kind::Type);
+    assert!(imported_option.constructors.contains(&some));
+    let imported_some = imported
+        .constructor(some)
+        .expect("the entry should import Some's physical constructor fact");
+    assert_eq!(imported_some.id, some);
+    assert_eq!(imported_some.spelling, "Some");
+    assert_eq!(
+        imported_some.payload.as_ref(),
+        Some(&Type::Variable(option_parameter)),
+    );
+    assert_eq!(
+        imported_some.scheme.type_parameters.as_ref(),
+        [(option_parameter, Kind::Type)],
+    );
+    assert!(imported_some.scheme.requirements.is_empty());
+    assert_eq!(
+        imported_some.scheme.value_type(),
+        &Type::Function(
+            Box::new(Type::Variable(option_parameter)),
+            Box::new(Type::Application(
+                Box::new(Type::Nominal(option)),
+                Box::new(Type::Variable(option_parameter)),
+            )),
+        ),
+    );
+    let imported_observe = imported
+        .interface(observe)
+        .expect("the entry should import Observe's canonical fact");
+    assert_eq!(imported_observe.id, observe);
+    assert_type_to_type(&imported_observe.parameter.kind);
+    let imported_relay = imported
+        .global(relay)
+        .expect("the entry should import relay's canonical scheme");
+    assert_eq!(
+        imported_relay.scheme.type_parameters.as_ref(),
+        [(
+            relay_parameter,
+            Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+        )],
+    );
+    let imported_implementation = imported
+        .implementation(implementation)
+        .expect("the entry should import the selected Observe<Option> implementation");
+    assert_eq!(imported_implementation.id, implementation);
+    assert_eq!(imported_implementation.interface, observe);
+    assert_eq!(imported_implementation.argument(), &Type::Nominal(option));
+    let checked_entry = check_module(resolved_entry)
+        .expect("the entry should type-check from detached imported facts");
+    let main = checked_entry
+        .definitions()
+        .iter()
+        .find_map(|definition| match definition.kind() {
+            ResolvedDefinitionKind::Equational(global)
+                if global.interface.name.spelling == "main" =>
+            {
+                Some(global)
+            }
+            ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::InlineOperational(_) => None,
+        })
+        .expect("the checked entry should retain main");
+    let [main_equation] = main.equations.as_slice() else {
+        panic!("main should retain exactly one equation");
+    };
+    let ResolvedExprKind::Apply(observe_application) = &main_equation.body.kind else {
+        panic!("main's body should apply observe");
+    };
+    let ResolvedExprKind::Occurrence(observe_occurrence) = &observe_application.function.kind
+    else {
+        panic!("main's outer function should be the observe occurrence");
+    };
+    assert_eq!(
+        observe_occurrence.term,
+        ResolvedTermName::Method(observe_method),
+    );
+    let [observe_slot] = observe_occurrence.evidence.as_ref() else {
+        panic!("observe should retain one occurrence-local evidence slot");
+    };
+    let observe_selection = observe_slot
+        .selection()
+        .expect("entry checking should fill observe's evidence slot");
+    assert_eq!(observe_selection.interface(), observe);
+    assert_eq!(observe_selection.argument(), &Type::Nominal(option));
+    assert_eq!(observe_selection.node_count(), 1);
+    let Some(EvidenceNode::Implementation {
+        implementation: selected_implementation,
+        substitution,
+        prerequisites,
+        methods,
+    }) = observe_selection.node(observe_selection.root())
+    else {
+        panic!("observe should select concrete implementation evidence");
+    };
+    assert_eq!(selected_implementation, implementation);
+    assert!(substitution.is_empty());
+    assert!(prerequisites.is_empty());
+    assert_eq!(
+        methods,
+        &[ImplMethodId::new(implementation, observe_method)]
+    );
+    drop(dependency_summary);
+
+    let rechecked_dependency = check_module(
+        resolve_module(dependency, &[])
+            .expect("the dependency should be re-resolved only to recover linkable bodies"),
+    )
+    .expect("the dependency bodies should recheck for final linking");
+    let linked = link_modules(vec![rechecked_dependency, checked_entry], graph.entry())
+        .expect("the checked higher-kinded graph should link");
     let linked = validate_interface_evidence(linked)
         .expect("linked higher-kinded evidence should authenticate");
+    let dependency_group = linked
+        .groups()
+        .iter()
+        .find(|group| group.module() == dependency.id())
+        .expect("linked evidence should retain the dependency group");
+    let [linked_observe] = dependency_group.interface_facts() else {
+        panic!("linked evidence should retain one interface fact");
+    };
+    assert_eq!(linked_observe.id, observe);
+    let [linked_implementation] = dependency_group.implementation_facts() else {
+        panic!("linked evidence should retain one implementation fact");
+    };
+    assert_eq!(linked_implementation.id, implementation);
+    assert_eq!(linked_implementation.interface, observe);
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("the linked binder namespace should fit");
     let typed = elaborator
@@ -265,11 +504,14 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .expect("linked higher-kinded Core should independently validate");
     let original_registry = Arc::clone(original.registry());
     assert_higher_kinded_linked_core(&original, option, relay, relay_parameter);
+    assert_primitive_profile(&original, 1, 0);
+    assert_integer_evaluation(&original, "42");
     let identity = identity_traversal(&original).expect("the identity transform should rebuild");
     let identity = ash::core::validate_modules(identity, &sources, &module_sources)
         .expect("the identity transform should independently revalidate");
     assert!(Arc::ptr_eq(identity.registry(), &original_registry));
     assert_higher_kinded_linked_core(&identity, option, relay, relay_parameter);
+    assert_primitive_profile(&identity, 1, 0);
     assert_integer_evaluation(&identity, "42");
     let folded =
         fold_literal_primitives(&original).expect("literal folding should independently rebuild");
@@ -277,7 +519,30 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .expect("literal folding should independently revalidate");
     assert!(Arc::ptr_eq(folded.registry(), &original_registry));
     assert_higher_kinded_linked_core(&folded, option, relay, relay_parameter);
+    assert_primitive_profile(&folded, 0, 1);
     assert_integer_evaluation(&folded, "42");
+
+    let observation = run_path(RunConfiguration {
+        entry: entry.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the static linked product should run through the public library path");
+    let Value::Integer(value) = observation.value() else {
+        panic!("the public library path should observe an integer");
+    };
+    assert_eq!(
+        value,
+        &Integer::parse_decimal("42").expect("42 should parse")
+    );
+    assert_eq!(observation.ty(), &Type::Int);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(&entry)
+        .output()
+        .expect("the Ash executable should run the static linked product");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : Int\n");
+    assert!(output.stderr.is_empty());
 }
 
 #[test]

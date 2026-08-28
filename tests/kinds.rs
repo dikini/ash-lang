@@ -251,6 +251,38 @@ fn applying_a_type_kinded_binder_reports_not_applicable() {
 }
 
 #[test]
+fn omitted_lists_do_not_infer_arrow_kinds_in_this_phase() {
+    // This is the current increment's compatibility boundary. It records no
+    // permanent language principle: a later proposal may add bounded,
+    // declaration-local kind inference.
+    for text in [
+        "legacy : F<Int> -> Unit\nlegacy value = ()\n",
+        "fn legacy(value : F<Int>) -> Unit {\n()\n}\n",
+        concat!(
+            "interface Witness<A> {\n",
+            "witness : A -> Bool\n",
+            "}\n\n",
+            "impl Witness<F<Int>> {\n",
+            "witness value = true\n",
+            "}\n",
+        ),
+    ] {
+        let fixture = KindFixture::new(text);
+        let error = kind_error(&fixture);
+
+        assert_eq!(error.reason, KindReason::NotApplicable, "source:\n{text}");
+        assert_eq!(
+            error.expectation(),
+            &KindExpectation::Function { domain: Kind::Type },
+            "source:\n{text}"
+        );
+        assert_eq!(error.expected_kind(), None, "source:\n{text}");
+        assert_eq!(error.found_kind(), Some(&Kind::Type), "source:\n{text}");
+        assert_primary(&error, fixture.span_of("F<Int>", 0));
+    }
+}
+
+#[test]
 fn application_domain_mismatch_reports_argument_kind_and_declaration() {
     let fixture = KindFixture::new(concat!(
         "type Box<F : Type -> Type> = Box\n",
