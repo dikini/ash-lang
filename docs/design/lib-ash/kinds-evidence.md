@@ -3,9 +3,9 @@
 This report records implementation evidence for the second bounded `lib-ash`
 increment: explicit kinds and higher-kinded declaration parameters. It is
 informative, not normative. The [Ash specification](../../../spec/README.md)
-alone defines the current language. The accepted proposal, task, design record,
-and execution plans remain transition artifacts until the reviewed product
-checkpoint retains their results and removes them.
+alone defines the current language. Git history retains the accepted proposal,
+task, design record, and execution plans removed after the reviewed product
+checkpoints retained their results.
 
 This report does not close the complete `lib-ash` milestone. Method-local type
 parameters, multi-parameter interfaces, determination, associated outputs,
@@ -35,13 +35,16 @@ principal unsigned product checkpoints are:
 - `41b98f7`, which closes diagnostic, public resource, and deep-disposal
   evidence;
 - `0af2350`, which proves predecessor migration and the linked product corpus;
-  and
 - `8c11cd3`, which restores the documented module-wide source order of resolved
-  type-binder identities across interleaved declaration families.
+  type-binder identities across interleaved declaration families;
+- `573bc57`, which retains AD-0009, the reconciled normative specification, and
+  the executable specification corpus; and
+- `7284551`, which retains the final independent reviews, corrections, exact
+  resource evidence, and 1,422-test verification inventory.
 
 These commits are implementation evidence, not independent language authority.
-The Task 12 specification checkpoint and Task 13 final review, retention, and
-lifecycle cleanup remain to be recorded when their gates finish.
+The current specification remains normative; this report and AD-0009 retain the
+completed evidence and non-language architecture after transition cleanup.
 
 ## Implemented boundary
 
@@ -331,8 +334,8 @@ its reviewed totals rather than duplicating 755 independently stale rows.
 Sixteen shared Kind-engine sites are phase-neutral: their caller supplies the
 phase-owned failure and budget. The inventory also rejects broad raw mutation
 of recursive type owners, stale manifest entries, unrecorded production fields,
-and Core or evaluator interface-evidence state. Task 13 must refresh these
-counts if review changes a production carrier.
+and Core or evaluator interface-evidence state. Final review changed no
+production carrier, so the retained counts remain current.
 
 ## Exact resources and disposal
 

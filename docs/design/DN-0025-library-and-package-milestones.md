@@ -67,12 +67,11 @@ The first bounded `lib-ash` increment is complete. Implementation availability
 is explicit, and targeted imports can re-export selected names and
 implementation authorizations. The retained
 [evidence report](lib-ash/imports-evidence.md) records its reviewed boundary.
-The second increment has implemented and specified explicit kinds and
-higher-kinded declaration parameters across checking, summaries, evidence, and
-independent Core validation. Its current
-[kind evidence](lib-ash/kinds-evidence.md) remains a checkpoint until final
-review, retention, and transition-artifact cleanup finish. The complete
-milestone remains open. Later proposals may add method-local type parameters,
+The second increment is complete. Its reviewed explicit kinds and higher-kinded
+declaration parameters across checking, summaries, evidence, and independent
+Core validation are retained by the
+[kind evidence](lib-ash/kinds-evidence.md). The complete milestone remains open.
+Later proposals may add method-local type parameters,
 multi-parameter interfaces, associated outputs or relational determination,
 and method and associated-type defaults.
 
@@ -104,9 +103,8 @@ narrow, reorder, or remove it.
    absence of kind inference is a phase-dependent semantic boundary, not a
    permanent language principle; later work may consider bounded
    declaration-local kind inference separately from kind polymorphism. The
-   implemented and specified checkpoint is recorded by the
-   [explicit-kind evidence report](lib-ash/kinds-evidence.md); final retention
-   remains pending.
+   completed second increment is retained by the
+   [explicit-kind evidence report](lib-ash/kinds-evidence.md).
 3. Add method-local type parameters. Keep ordinary source rank-1 and admit
    polymorphic term slots only as authenticated compiler-generated interface
    evidence.
@@ -697,14 +695,15 @@ type-class-like constraints rather than module APIs.
 ## Required authority transitions
 
 This note can guide comparison and proposal work but cannot authorize product
-implementation. The completed first increment followed the change-proposal and
-task workflow; the current specification and retained evidence record its
-result. Further language changes for `lib-ash` require one or more change
-proposals and tasks. Package, cache, and linker architecture that does not alter
-language semantics requires accepted architectural decisions and tasks. Any
-source-visible package or import semantic change also requires a change
-proposal. Current specification text changes only with retained implementation
-evidence.
+implementation. Both completed bounded increments followed the change-proposal
+and task workflow; the current specification and the retained
+[import](lib-ash/imports-evidence.md) and [kind](lib-ash/kinds-evidence.md)
+evidence reports record their results. Further language changes for `lib-ash`
+require one or more change proposals and tasks. Package, cache, and linker
+architecture that does not alter language semantics requires accepted
+architectural decisions and tasks. Any source-visible package or import
+semantic change also requires a change proposal. Current specification text
+changes only with retained implementation evidence.
 
 ## Open questions
 
