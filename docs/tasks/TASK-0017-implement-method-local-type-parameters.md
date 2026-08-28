@@ -405,6 +405,12 @@ and evaluator semantic or state-machine changes.
   also pass. Checkpoint 3 is complete in `a9d5812`, `8622daf`, `698b99a`, and
   `994ab9f`. Its reserved use is 12 units, cumulative reserved use is 26/70,
   44 units remain unreserved, and Checkpoint 4 is not reserved.
+- Checkpoint 4 starts from the clean reviewed boundary `23f35bd` and reserves
+  its planned 12 units for summary, import, route, and linked-evidence
+  authentication. Cumulative reserved use is 38/70, 32 units remain
+  unreserved, and Checkpoint 5 is not reserved. This reservation does not
+  authorize Core lowering, adapters, transformations, runtime changes, or
+  specification reconciliation from later checkpoints.
 
 ## Verification
 
