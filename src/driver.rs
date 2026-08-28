@@ -1234,7 +1234,9 @@ mod tests {
         // It does not repeat the 3W complete interface mirror owned by the
         // consuming evidence validator.
         const LINKED: usize = 65 * WIDTH + 24;
-        const VALIDATED: usize = 110 * WIDTH + 68;
+        // Validation ends by publishing one private method-evidence
+        // authentication capability after the complete graph succeeds.
+        const VALIDATED: usize = 110 * WIDTH + 69;
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
             "main : Unit -> Int\n",

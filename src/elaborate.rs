@@ -3071,7 +3071,8 @@ impl Elaborator {
                     MethodObligationMetadata::new(
                         retained_method_arguments.into_boxed_slice(),
                         method_rigidity,
-                    ),
+                    )
+                    .with_checked_value_type(self.clone_type(&ty)?),
                     SelectionSite::contextual(
                         occurrence.evidence[0].handle(),
                         span,

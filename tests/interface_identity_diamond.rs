@@ -5,6 +5,8 @@ use std::{
 };
 
 use ash::{
+    elaborate::link_modules,
+    evidence_validation::validate_interface_evidence,
     interface::{ImplId, ImplMethodId, InterfaceId, MethodId, RequirementId},
     module::{ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
@@ -96,22 +98,24 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
             "import right as Right\n",
             "import left (impl Transform)\n",
             "import right (impl Transform)\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
         ),
     );
     tree.write(
         "base.ash",
         concat!(
             "pub type Wrap<A> = Wrap(A)\n",
-            "pub interface Transform<A> {\ntransform : A -> A\n}\n",
+            "pub interface Transform<A> {\ntransform<B> : (A, B) -> A\n}\n",
             "pub impl Transform<Wrap<A>> where Transform<A> {\n",
-            "transform value = value\n}\n",
+            "transform (value, ignored) = value\n}\n",
         ),
     );
     tree.write(
         "left.ash",
         concat!(
             "import base as Base\n",
-            "pub import base (Transform, impl Transform)\n",
+            "pub import base (Transform, transform, impl Transform)\n",
             "pub left : A -> A where Base.Transform<A>\n",
             "left value = value\n",
         ),
@@ -120,7 +124,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
         "right.ash",
         concat!(
             "import base as Base\n",
-            "pub import base (Transform, impl Transform)\n",
+            "pub import base (Transform, transform, impl Transform)\n",
             "pub right : A -> A where Base.Transform<A>\n",
             "right value = value\n",
         ),
@@ -167,6 +171,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
                     .expect("each arm should directly import the base interface fact");
                 assert_eq!(imported_interface.id, identities.interface);
                 assert_eq!(imported_interface.methods[0].id, identities.method);
+                assert_eq!(imported_interface.methods[0].type_parameters().len(), 1);
 
                 let imported_implementation = resolved
                     .imported_facts()
@@ -206,6 +211,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
                     .expect("the constrained summaries should retain hidden interface metadata");
                 assert_eq!(imported_interface.id, identities.interface);
                 assert_eq!(imported_interface.methods[0].id, identities.method);
+                assert_eq!(imported_interface.methods[0].type_parameters().len(), 1);
                 let imported_nominal = resolved
                     .imported_facts()
                     .nominal(identities.nominal)
@@ -291,4 +297,10 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
         }
         checked.push(module_checked);
     }
+
+    let linked = link_modules(checked, graph.entry())
+        .expect("the generic identity diamond should authenticate while linking");
+    let validated = validate_interface_evidence(linked)
+        .expect("the generic identity diamond should authenticate before Core");
+    assert_eq!(validated.entry(), graph.entry());
 }

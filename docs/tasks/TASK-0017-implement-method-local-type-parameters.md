@@ -411,6 +411,51 @@ and evaluator semantic or state-machine changes.
   unreserved, and Checkpoint 5 is not reserved. This reservation does not
   authorize Core lowering, adapters, transformations, runtime changes, or
   specification reconciliation from later checkpoints.
+- Checkpoint 4 reaches its implementation review boundary. The detached
+  summary RED was
+  `cargo test --locked --test interface_generic_summary
+  detached_summary_preserves_complete_method_scheme -- --exact`: the consumer
+  failed kind checking because the imported method binders had been discarded.
+  The summary-tampering RED admitted an independently forged binder origin,
+  and the linked RED rejected every nonempty occurrence method-argument list
+  because the combined registry omitted method binders. The corresponding
+  GREEN witnesses cover the complete summary mutation matrix, exact private
+  binder authority, linked occurrence argument/type/identity tampering,
+  implementation head-then-method ordering, and the linked generic facade
+  diamond.
+- The new exact resource boundaries charge one graph fact per private
+  polymorphic-method authority row and `1 + K` type units per retained binder
+  record with a `K`-node kind. The two-`Type`-kind fixture therefore succeeds
+  at constraint/type limits `1/4` and fails atomically one short on either
+  ledger. Evidence publication charges `2 + 1 + 2 + 2 = 7` constraint units
+  for two method arguments, one checked-value carrier, two occurrence/slot
+  records, and the selected-goal comparison, plus two type units. Conditional
+  rigidity ingress charges the preceding eight units plus one checked-value
+  carrier and its two-cell walk, for `11/1` constraint/type units. All use
+  checked arithmetic, fallible pre-reservation, exact retry, and iterative
+  disposal.
+- One imported generic method with a five-cell monotype uses `1 + 3 + 2(5) +
+  3 = 17` constraint units for its route, retained facts, type traversals, and
+  binder authentication; its corresponding type retention uses `3 + 2(5) +
+  2(1 + 1) = 17` units. Adding one `Type`-kind method binder to the combined
+  registry adds four constraint units for uniqueness, the binder visit,
+  Source-Origin, and Type-Kind authentication, plus three type units for its
+  record, Kind, and canonical staging cell. Both boundaries reject one-short
+  attempts without publication and accept an exact retry.
+- Focused GREEN verification passes 40 evidence-selection, 80 summary and
+  combined-registry, 43 resolver, and 81 linked-validation library tests. The
+  planned integration bundle passes 21 architecture, 2 generic-summary, 1
+  linked identity-diamond, 20 interface-module, 14 library-import, 2
+  interface-validation, and 8 module-elaboration tests. The implementation
+  agent used `gpt-5.6-sol` at xhigh reasoning. Complete-diff self-review found
+  and corrected checked-value late-failure disposal and the driver's exact
+  one-unit capability prefix. The locked all-target/all-feature workspace
+  test passes 668 library tests and every integration and binary suite;
+  formatting, checking, strict Clippy, test listing, `cargo xtask verify`, task
+  Markdown lint, and diff hygiene pass. Independent semantic and Rust/resource
+  reviews remain pending. The Checkpoint 4 reservation remains 12 units,
+  cumulative reserved use is 38/70, 32 units remain unreserved, and Checkpoint
+  5 is not reserved.
 
 ## Verification
 

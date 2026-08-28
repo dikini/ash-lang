@@ -159,6 +159,7 @@ struct PendingObligation {
     interface: InterfaceId,
     argument: Type,
     method_arguments: Box<[Type]>,
+    checked_value_type: Option<Type>,
     method_rigidity: Option<MethodRigidityCondition>,
     slot: EvidenceSlotHandle,
     span: Span,
@@ -263,6 +264,7 @@ pub(crate) struct MethodRigidityCondition {
 #[derive(Debug)]
 pub(crate) struct MethodObligationMetadata {
     method_arguments: Box<[Type]>,
+    checked_value_type: Option<Type>,
     method_rigidity: Option<MethodRigidityCondition>,
 }
 
@@ -273,7 +275,34 @@ impl MethodObligationMetadata {
     ) -> Self {
         Self {
             method_arguments,
+            checked_value_type: None,
             method_rigidity,
+        }
+    }
+
+    pub(crate) fn with_checked_value_type(mut self, checked_value_type: Type) -> Self {
+        if let Some(displaced) = self.checked_value_type.replace(checked_value_type) {
+            discard_type_iteratively(displaced);
+        }
+        self
+    }
+
+    fn into_parts(mut self) -> (Box<[Type]>, Option<Type>, Option<MethodRigidityCondition>) {
+        (
+            std::mem::take(&mut self.method_arguments),
+            self.checked_value_type.take(),
+            self.method_rigidity.take(),
+        )
+    }
+}
+
+impl Drop for MethodObligationMetadata {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.method_arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
+        if let Some(checked_value_type) = self.checked_value_type.take() {
+            discard_type_iteratively(checked_value_type);
         }
     }
 }
@@ -375,6 +404,9 @@ impl Drop for PendingObligation {
         for argument in std::mem::take(&mut self.method_arguments).into_vec() {
             discard_type_iteratively(argument);
         }
+        if let Some(ty) = self.checked_value_type.take() {
+            discard_type_iteratively(ty);
+        }
     }
 }
 
@@ -382,6 +414,7 @@ impl Drop for PendingObligation {
 struct SelectedOccurrence {
     checked_argument: Type,
     method_arguments: Box<[Type]>,
+    checked_value_type: Option<Type>,
     selection: Option<EvidenceSelection>,
     slot: Option<EvidenceSlotHandle>,
 }
@@ -391,6 +424,9 @@ impl Drop for SelectedOccurrence {
         discard_type_iteratively(std::mem::replace(&mut self.checked_argument, Type::Unit));
         for argument in std::mem::take(&mut self.method_arguments).into_vec() {
             discard_type_iteratively(argument);
+        }
+        if let Some(ty) = self.checked_value_type.take() {
+            discard_type_iteratively(ty);
         }
     }
 }
@@ -434,6 +470,7 @@ impl PendingEvidencePublication {
         while let Some(mut occurrence) = self.occurrences.pop() {
             let checked_argument = std::mem::replace(&mut occurrence.checked_argument, Type::Unit);
             let method_arguments = std::mem::take(&mut occurrence.method_arguments);
+            let checked_value_type = occurrence.checked_value_type.take();
             let selection = occurrence
                 .selection
                 .take()
@@ -442,7 +479,12 @@ impl PendingEvidencePublication {
                 .slot
                 .take()
                 .expect("publication preflight authenticates every slot")
-                .fill_preflighted(checked_argument, method_arguments, selection);
+                .fill_preflighted(
+                    checked_argument,
+                    method_arguments,
+                    checked_value_type,
+                    selection,
+                );
         }
         Ok(())
     }
@@ -1205,6 +1247,7 @@ impl EvidenceSelector {
             interface,
             argument: argument.into_inner(),
             method_arguments: Box::new([]),
+            checked_value_type: None,
             method_rigidity: None,
             slot: site.slot,
             span: site.span,
@@ -1223,24 +1266,19 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
-        let MethodObligationMetadata {
-            method_arguments,
-            method_rigidity,
-        } = metadata;
-        if method_rigidity
-            .as_ref()
-            .is_some_and(|rigidity| rigidity.rigid_arguments.len() != method_arguments.len())
-        {
+        if metadata.method_rigidity.as_ref().is_some_and(|rigidity| {
+            rigidity.rigid_arguments.len() != metadata.method_arguments.len()
+        }) {
             return Err(SelectionFailure::InvalidState);
         }
-        let pending_method_rigidity_count = if method_rigidity.is_some() {
+        let pending_method_rigidity_count = if metadata.method_rigidity.is_some() {
             self.pending_method_rigidity_count
                 .checked_add(1)
                 .ok_or(SelectionFailure::ConstraintResource)?
         } else {
             self.pending_method_rigidity_count
         };
-        let rigidity_work = match &method_rigidity {
+        let rigidity_work = match &metadata.method_rigidity {
             Some(rigidity) => rigidity
                 .rigid_arguments
                 .len()
@@ -1248,18 +1286,25 @@ impl EvidenceSelector {
                 .ok_or(SelectionFailure::ConstraintResource)?,
             None => 0,
         };
-        let retained_work = method_arguments
+        let retained_work = metadata
+            .method_arguments
             .len()
             .checked_add(1)
             .and_then(|work| work.checked_add(rigidity_work))
+            .and_then(|work| work.checked_add(usize::from(metadata.checked_value_type.is_some())))
             .ok_or(SelectionFailure::ConstraintResource)?;
         constraint_work
             .charge(retained_work)
             .and_then(|()| constraint_work.charge_type(argument))
             .map_err(|()| SelectionFailure::ConstraintResource)?;
-        for method_argument in &method_arguments {
+        for method_argument in &metadata.method_arguments {
             constraint_work
                 .charge_type(method_argument)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+        }
+        if let Some(checked_value_type) = &metadata.checked_value_type {
+            constraint_work
+                .charge_type(checked_value_type)
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
         }
         let argument = IterativeTypeOwner::new(
@@ -1269,10 +1314,12 @@ impl EvidenceSelector {
         self.pending
             .try_reserve(1)
             .map_err(|_| SelectionFailure::ConstraintResource)?;
+        let (method_arguments, checked_value_type, method_rigidity) = metadata.into_parts();
         self.pending.push(PendingObligation {
             interface,
             argument: argument.into_inner(),
             method_arguments,
+            checked_value_type,
             method_rigidity,
             slot: site.slot,
             span: site.span,
@@ -1458,6 +1505,7 @@ impl EvidenceSelector {
         self.selected.push(SelectedOccurrence {
             checked_argument,
             method_arguments: std::mem::take(&mut obligation.method_arguments),
+            checked_value_type: obligation.checked_value_type.take(),
             selection: Some(selection),
             slot: Some(obligation.slot.clone()),
         });
@@ -1686,6 +1734,7 @@ impl EvidenceSelector {
             self.selected.push(SelectedOccurrence {
                 checked_argument,
                 method_arguments: std::mem::take(&mut obligation.method_arguments),
+                checked_value_type: obligation.checked_value_type.take(),
                 selection: Some(selection),
                 slot: Some(obligation.slot.clone()),
             });
@@ -1711,6 +1760,11 @@ impl EvidenceSelector {
         let method_argument_count = self.selected.iter().try_fold(0usize, |total, selected| {
             total.checked_add(selected.method_arguments.len())
         });
+        let checked_value_type_count = self
+            .selected
+            .iter()
+            .filter(|selected| selected.checked_value_type.is_some())
+            .count();
         let retained_work = method_argument_count
             .and_then(|count| {
                 self.selected
@@ -1718,6 +1772,7 @@ impl EvidenceSelector {
                     .checked_mul(2)
                     .and_then(|fixed| count.checked_add(fixed))
             })
+            .and_then(|count| count.checked_add(checked_value_type_count))
             .ok_or(SelectionFailure::ConstraintResource)?;
         constraint_work
             .charge(retained_work)
@@ -1766,9 +1821,24 @@ impl EvidenceSelector {
                     }
                 }
             }
+            let checked_value_type = match selected.checked_value_type.take() {
+                Some(checked_value_type) => match zonk(checked_value_type, type_work) {
+                    Ok(checked_value_type) => Some(checked_value_type),
+                    Err(failure) => {
+                        for argument in method_arguments {
+                            discard_type_iteratively(argument);
+                        }
+                        return Err(failure);
+                    }
+                },
+                None => None,
+            };
             let Some(slot) = selected.slot.take() else {
                 for argument in method_arguments {
                     discard_type_iteratively(argument);
+                }
+                if let Some(checked_value_type) = checked_value_type {
+                    discard_type_iteratively(checked_value_type);
                 }
                 return Err(SelectionFailure::InvalidState);
             };
@@ -1777,11 +1847,15 @@ impl EvidenceSelector {
                 for argument in method_arguments {
                     discard_type_iteratively(argument);
                 }
+                if let Some(checked_value_type) = checked_value_type {
+                    discard_type_iteratively(checked_value_type);
+                }
                 return Err(SelectionFailure::InvalidState);
             }
             occurrences.push(SelectedOccurrence {
                 checked_argument: checked_argument.into_inner(),
                 method_arguments: method_arguments.into_boxed_slice(),
+                checked_value_type,
                 selection: selected.selection.take(),
                 slot: Some(slot),
             });
@@ -3558,7 +3632,7 @@ mod tests {
         let first_handle = first.handle();
         let second_handle = second.handle();
         second_handle
-            .fill(Type::Int, Box::new([]), selection.clone())
+            .fill(Type::Int, Box::new([]), None, selection.clone())
             .expect("the second slot should begin filled for the invalid fixture");
         let mut slot_ids = HashSet::new();
         slot_ids
@@ -3571,12 +3645,14 @@ mod tests {
                 SelectedOccurrence {
                     checked_argument: Type::Int,
                     method_arguments: Box::new([Type::Bool]),
+                    checked_value_type: None,
                     selection: Some(selection.clone()),
                     slot: Some(first_handle),
                 },
                 SelectedOccurrence {
                     checked_argument: Type::Int,
                     method_arguments: Box::new([]),
+                    checked_value_type: None,
                     selection: Some(selection),
                     slot: Some(second_handle),
                 },
@@ -3592,9 +3668,10 @@ mod tests {
 
     #[test]
     fn pending_method_arguments_have_exact_atomic_publication_boundaries() {
-        // Two method arguments plus two occurrence/slot carrier records, then
-        // the exact two-unit comparison of the checked and selected Int goal.
-        const EXACT_CONSTRAINT_WORK: usize = 2 + 2 + 2;
+        // Two method arguments, the authenticated checked-value carrier, and
+        // two occurrence/slot records, then the exact two-unit comparison of
+        // the checked and selected Int goal.
+        const EXACT_CONSTRAINT_WORK: usize = 2 + 1 + 2 + 2;
         // The ordered method-argument vector owns two retained Type carriers;
         // the identity zonk fixture performs no additional Type cloning.
         const EXACT_TYPE_WORK: usize = 2;
@@ -3613,6 +3690,7 @@ mod tests {
             selector.selected.push(SelectedOccurrence {
                 checked_argument: Type::Int,
                 method_arguments: Box::new([Type::Bool, Type::Int]),
+                checked_value_type: Some(Type::Bool),
                 selection: Some(selection),
                 slot: Some(slot.handle()),
             });
@@ -3645,6 +3723,10 @@ mod tests {
         assert_eq!(constraints, EXACT_CONSTRAINT_WORK);
         assert_eq!(types, EXACT_TYPE_WORK);
         assert_eq!(slot.method_arguments(), &[Type::Bool, Type::Int]);
+        assert!(matches!(
+            slot.filled_method(),
+            Some((Type::Int, [Type::Bool, Type::Int], Type::Bool, _))
+        ));
         assert!(slot.selection().is_some());
     }
 
@@ -3652,8 +3734,9 @@ mod tests {
     fn conditional_method_rigidity_ingress_has_exact_atomic_retry_boundaries() {
         // One method argument, one occurrence record, one rigid argument, one
         // condition record, plus the two-record traversals of the retained
-        // interface Int and fresh method Bool arguments.
-        const EXACT_CONSTRAINT_WORK: usize = 8;
+        // interface Int and fresh method Bool arguments. The checked Unit
+        // value type owns one carrier plus the two-cell retained type walk.
+        const EXACT_CONSTRAINT_WORK: usize = 8 + 3;
         // Only the interface argument is cloned at this ownership boundary.
         const EXACT_TYPE_WORK: usize = 1;
         let (interface, _, _) = ids();
@@ -3677,7 +3760,8 @@ mod tests {
                         Box::new([Type::Bool]),
                         MethodRigiditySite::application(span, span, span),
                     )),
-                ),
+                )
+                .with_checked_value_type(Type::Unit),
                 SelectionSite::plain(slot.handle(), span),
                 &mut short_constraints,
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
@@ -3698,7 +3782,8 @@ mod tests {
                         Box::new([Type::Bool]),
                         MethodRigiditySite::application(span, span, span),
                     )),
-                ),
+                )
+                .with_checked_value_type(Type::Unit),
                 SelectionSite::plain(slot.handle(), span),
                 &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK),
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1),
@@ -3721,7 +3806,8 @@ mod tests {
                         Box::new([Type::Bool]),
                         MethodRigiditySite::application(span, span, span),
                     )),
-                ),
+                )
+                .with_checked_value_type(Type::Unit),
                 SelectionSite::plain(slot.handle(), span),
                 &mut exact_constraints,
                 &mut exact_types,
@@ -3851,6 +3937,7 @@ mod tests {
                 selector.selected.push(SelectedOccurrence {
                     checked_argument: Type::Int,
                     method_arguments: Box::new([Type::Bool]),
+                    checked_value_type: None,
                     selection: None,
                     slot: None,
                 });
@@ -4026,7 +4113,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_method_argument_zonk_failure_discards_staged_types_on_a_small_stack() {
+    fn pending_method_payload_zonk_failure_discards_staged_types_on_a_small_stack() {
         const DEPTH: usize = 32_768;
 
         std::thread::Builder::new()
@@ -4046,6 +4133,7 @@ mod tests {
                 selector.selected.push(SelectedOccurrence {
                     checked_argument: Type::Int,
                     method_arguments: Box::new([deep_value_type(DEPTH), Type::Bool]),
+                    checked_value_type: Some(Type::Unit),
                     selection: Some(selection),
                     slot: Some(slot.handle()),
                 });
@@ -4053,7 +4141,7 @@ mod tests {
                 let result = selector.prepare_publication(
                     |argument, _| {
                         zonk_calls += 1;
-                        if zonk_calls == 3 {
+                        if zonk_calls == 4 {
                             discard_type_iteratively(argument);
                             Err(SelectionFailure::TypeResource)
                         } else {
@@ -4064,7 +4152,7 @@ mod tests {
                     &mut TypeWorkBudget::default(),
                 );
                 assert!(matches!(result, Err(SelectionFailure::TypeResource)));
-                assert_eq!(zonk_calls, 3);
+                assert_eq!(zonk_calls, 4);
                 assert!(slot.selection().is_none());
             })
             .expect("the small-stack publication thread should start")

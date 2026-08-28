@@ -80,6 +80,45 @@ fn assert_option_of_parameter(ty: &Type, option: NominalTypeId, parameter: TypeV
 }
 
 #[test]
+fn detached_summary_preserves_complete_method_scheme() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency as Dependency\n",
+            "relay<F : Type -> Type, A, B> : (A -> B, F<A>) -> F<B> ",
+            "where Dependency.Functor<F>\n",
+            "relay pair = Dependency.map(pair)\n",
+        ),
+        concat!(
+            "type Secret<A> = Secret(A)\n",
+            "pub interface Functor<F : Type -> Type> {\n",
+            "map<A, B> : (A -> B, F<A>) -> F<B>\n",
+            "hide<A> : (F<A>, A) -> Secret<A>\n",
+            "}\n",
+        ),
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let dependency_summary =
+        check_module(resolve_module(dependency, &[]).expect("the dependency should resolve first"))
+            .expect("the polymorphic interface should check")
+            .into_exports();
+    let entry = module_named(&graph, "entry.ash");
+    let dependencies = entry
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            DependencyExports::new(edge, &dependency_summary)
+                .expect("the detached summary should authenticate its direct edge")
+        })
+        .collect::<Vec<_>>();
+    let resolved = resolve_module(entry, &dependencies)
+        .expect("the consumer should resolve solely from the detached summary");
+
+    check_module(resolved).expect("the consumer should check solely from the detached summary");
+}
+
+#[test]
 fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     let tree = ModuleTree::create();
     let graph = load(

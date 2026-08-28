@@ -2330,9 +2330,22 @@ fn authenticate_imported_environments<'a>(
 
     for imported_interface in imported.interface_imports() {
         let interface = &imported_interface.fact;
-        environments
-            .install_owner_parameters(std::slice::from_ref(&interface.parameter), budget)?;
         for method in &interface.methods {
+            authenticate_unique_parameter_ids(
+                method.type_parameters(),
+                method.origin.primary_span(),
+                budget,
+            )?;
+            environments
+                .install_owner_parameters(std::slice::from_ref(&interface.parameter), budget)?;
+            for parameter in method.type_parameters() {
+                environments.insert_declared(
+                    parameter.id,
+                    &parameter.kind,
+                    parameter.origin.primary_span(),
+                    budget,
+                )?;
+            }
             environments.expect_body_free_value_type(method.value_type(), method.span, budget)?;
         }
     }

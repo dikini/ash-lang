@@ -1954,6 +1954,186 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
+    pub(crate) fn replace_nth_direct_method_occurrence_arguments_for_test(
+        &mut self,
+        module: ModuleId,
+        ordinal: usize,
+        replacement: Box<[Type]>,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let mut seen = 0usize;
+        for definition in &mut group.definitions {
+            let Some(source) = definition.source.as_mut() else {
+                continue;
+            };
+            let ResolvedDefinitionKind::Equational(global) = &mut source.kind else {
+                continue;
+            };
+            for equation in &mut global.equations {
+                let occurrence = match &mut equation.body.kind {
+                    ResolvedExprKind::Occurrence(occurrence)
+                        if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                    {
+                        Some(occurrence)
+                    }
+                    ResolvedExprKind::Apply(application) => match &mut application.function.kind {
+                        ResolvedExprKind::Occurrence(occurrence)
+                            if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                        {
+                            Some(occurrence)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(occurrence) = occurrence else {
+                    continue;
+                };
+                if seen == ordinal {
+                    let Some(slot) = occurrence.evidence.first_mut() else {
+                        return false;
+                    };
+                    return slot.replace_method_arguments_for_test(replacement);
+                }
+                seen = match seen.checked_add(1) {
+                    Some(next) => next,
+                    None => return false,
+                };
+            }
+        }
+        false
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_nth_direct_method_occurrence_identity_for_test(
+        &mut self,
+        module: ModuleId,
+        ordinal: usize,
+        replacement: MethodId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let mut seen = 0usize;
+        for definition in &mut group.definitions {
+            let Some(source) = definition.source.as_mut() else {
+                continue;
+            };
+            let ResolvedDefinitionKind::Equational(global) = &mut source.kind else {
+                continue;
+            };
+            for equation in &mut global.equations {
+                let occurrence = match &mut equation.body.kind {
+                    ResolvedExprKind::Occurrence(occurrence)
+                        if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                    {
+                        Some(occurrence)
+                    }
+                    ResolvedExprKind::Apply(application) => match &mut application.function.kind {
+                        ResolvedExprKind::Occurrence(occurrence)
+                            if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                        {
+                            Some(occurrence)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(occurrence) = occurrence else {
+                    continue;
+                };
+                if seen == ordinal {
+                    occurrence.term = ResolvedTermName::Method(replacement);
+                    return true;
+                }
+                seen = match seen.checked_add(1) {
+                    Some(next) => next,
+                    None => return false,
+                };
+            }
+        }
+        false
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_nth_direct_method_occurrence_checked_type_for_test(
+        &mut self,
+        module: ModuleId,
+        ordinal: usize,
+        replacement: Type,
+    ) -> bool {
+        let replacement = IterativeTypeOwner::new(replacement);
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let mut seen = 0usize;
+        for definition in &mut group.definitions {
+            let Some(source) = definition.source.as_mut() else {
+                continue;
+            };
+            let ResolvedDefinitionKind::Equational(global) = &mut source.kind else {
+                continue;
+            };
+            for equation in &mut global.equations {
+                let occurrence = match &mut equation.body.kind {
+                    ResolvedExprKind::Occurrence(occurrence)
+                        if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                    {
+                        Some(occurrence)
+                    }
+                    ResolvedExprKind::Apply(application) => match &mut application.function.kind {
+                        ResolvedExprKind::Occurrence(occurrence)
+                            if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                        {
+                            Some(occurrence)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(occurrence) = occurrence else {
+                    continue;
+                };
+                if seen == ordinal {
+                    let Some(slot) = occurrence.evidence.first_mut() else {
+                        return false;
+                    };
+                    return slot.replace_checked_value_type_for_test(replacement.into_inner());
+                }
+                seen = match seen.checked_add(1) {
+                    Some(next) => next,
+                    None => return false,
+                };
+            }
+        }
+        false
+    }
+
+    #[cfg(test)]
+    pub(crate) fn swap_first_implementation_method_scheme_parameters_for_test(
+        &mut self,
+        module: ModuleId,
+    ) -> bool {
+        let Some(parameters) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == module)
+            .and_then(|group| group.implementation_facts.first_mut())
+            .and_then(|implementation| implementation.methods.first_mut())
+            .map(|method| &mut method.scheme.type_parameters)
+        else {
+            return false;
+        };
+        if parameters.len() < 2 {
+            return false;
+        }
+        parameters.swap(0, 1);
+        true
+    }
+
+    #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn replace_available_route_for_test(
         &mut self,
@@ -3502,18 +3682,18 @@ fn clone_checked_interface_fact(
         constraint_work
             .charge_type(&method.value_type)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        let value_type = IterativeTypeOwner::new(
+            clone_type_with_budget(&method.value_type, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+        );
+        let type_parameters =
+            clone_resolved_type_variable_buffer_with_budget(&method.type_parameters, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         methods.push(CheckedInterfaceMethodFact {
             id: method.id,
             spelling: method.spelling.clone(),
-            type_parameters: clone_resolved_type_variable_buffer_with_budget(
-                &method.type_parameters,
-                type_work,
-            )
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?
-            .into_vec()
-            .into_boxed_slice(),
-            value_type: clone_type_with_budget(&method.value_type, type_work)
-                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            type_parameters: type_parameters.into_vec().into_boxed_slice(),
+            value_type: value_type.into_inner(),
             origin: method.origin.clone(),
             span: method.span,
         });
@@ -4483,6 +4663,20 @@ fn canonical_constructor_scheme(
 
 /// Checked, body-free exports from one dependency module.
 #[derive(Debug, Eq, PartialEq)]
+struct MethodBinderAuthority {
+    method: MethodId,
+    parameters: Box<[ResolvedTypeVariable]>,
+}
+
+impl Drop for MethodBinderAuthority {
+    fn drop(&mut self) {
+        for parameter in std::mem::take(&mut self.parameters).into_vec() {
+            discard_resolved_type_variable(parameter);
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct ExportSummary {
     module: ModuleId,
     terms: HashMap<String, ExportedGlobal>,
@@ -4502,6 +4696,7 @@ pub struct ExportSummary {
     interfaces: Vec<CheckedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
     hidden_interfaces: Vec<CheckedInterfaceFact>,
+    method_binder_authorities: Vec<MethodBinderAuthority>,
     implementations: Vec<AuthorizedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
@@ -5593,6 +5788,11 @@ fn same_checked_interface_fact_with_optional_nominal_observer(
         if left.id != right.id
             || left.spelling != right.spelling
             || left.span != right.span
+            || !same_summary_resolved_type_variables_with_constraint_budget(
+                left.type_parameters(),
+                right.type_parameters(),
+                constraint_work,
+            )?
             || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
             || !match nominal_identities.as_deref_mut() {
                 Some(nominal_identities) => same_type_with_constraint_budget_observing_nominals(
@@ -6018,6 +6218,52 @@ fn retain_hidden_interface_reference(
     Ok(())
 }
 
+fn clone_method_binder_authorities(
+    public_interfaces: &[CheckedInterfaceFact],
+    hidden_interfaces: &[CheckedInterfaceFact],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<Vec<MethodBinderAuthority>, ResolvedBuildFailure> {
+    let authority_count = public_interfaces.iter().chain(hidden_interfaces).try_fold(
+        0usize,
+        |count, interface| {
+            interface.methods.iter().try_fold(count, |count, method| {
+                if method.type_parameters().is_empty() {
+                    Ok(count)
+                } else {
+                    count
+                        .checked_add(1)
+                        .ok_or(ResolvedBuildFailure::ConstraintResource)
+                }
+            })
+        },
+    )?;
+    constraint_work
+        .charge(authority_count)
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let mut authorities = Vec::new();
+    authorities
+        .try_reserve_exact(authority_count)
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    for interface in public_interfaces.iter().chain(hidden_interfaces) {
+        for method in &interface.methods {
+            if method.type_parameters().is_empty() {
+                continue;
+            }
+            let parameters = clone_resolved_type_variable_buffer_with_budget(
+                method.type_parameters(),
+                type_work,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            authorities.push(MethodBinderAuthority {
+                method: method.id,
+                parameters: parameters.into_boxed_slice(),
+            });
+        }
+    }
+    Ok(authorities)
+}
+
 impl ExportSummary {
     pub(crate) fn authenticate(
         &self,
@@ -6363,6 +6609,7 @@ impl ExportSummary {
         interface_facts
             .try_reserve(interface_fact_count)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        let mut method_authority_position = 0usize;
         for (position, interface) in self.interfaces.iter().enumerate() {
             if self.interface_positions.get(&interface.id) != Some(&position)
                 || interface_facts.insert(interface.id, interface).is_some()
@@ -6377,8 +6624,32 @@ impl ExportSummary {
                 type_work,
             )?;
             for method in &interface.methods {
+                let next_authority = self
+                    .method_binder_authorities
+                    .get(method_authority_position);
+                let authority = if next_authority
+                    .is_some_and(|authority| authority.method == method.id)
+                    || !method.type_parameters().is_empty()
+                {
+                    let authority = next_authority.ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if authority.method != method.id
+                        || !same_summary_resolved_type_variables_with_constraint_budget(
+                            &authority.parameters,
+                            method.type_parameters(),
+                            constraint_work,
+                        )?
+                    {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    method_authority_position = method_authority_position
+                        .checked_add(1)
+                        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                    authority.parameters.as_ref()
+                } else {
+                    &[]
+                };
                 register_summary_parameters(
-                    method.type_parameters(),
+                    authority,
                     SummaryBinderOwner::Method(method.id),
                     &mut canonical_variables,
                     &mut environments,
@@ -6408,8 +6679,32 @@ impl ExportSummary {
                 type_work,
             )?;
             for method in &interface.methods {
+                let next_authority = self
+                    .method_binder_authorities
+                    .get(method_authority_position);
+                let authority = if next_authority
+                    .is_some_and(|authority| authority.method == method.id)
+                    || !method.type_parameters().is_empty()
+                {
+                    let authority = next_authority.ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if authority.method != method.id
+                        || !same_summary_resolved_type_variables_with_constraint_budget(
+                            &authority.parameters,
+                            method.type_parameters(),
+                            constraint_work,
+                        )?
+                    {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    method_authority_position = method_authority_position
+                        .checked_add(1)
+                        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                    authority.parameters.as_ref()
+                } else {
+                    &[]
+                };
                 register_summary_parameters(
-                    method.type_parameters(),
+                    authority,
                     SummaryBinderOwner::Method(method.id),
                     &mut canonical_variables,
                     &mut environments,
@@ -6424,6 +6719,9 @@ impl ExportSummary {
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
+        }
+        if method_authority_position != self.method_binder_authorities.len() {
+            return Err(ResolvedBuildFailure::InvalidState);
         }
         constraint_work
             .charge(self.interface_names.len())
@@ -6939,6 +7237,7 @@ impl ExportSummary {
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
             hidden_interfaces: Vec::new(),
+            method_binder_authorities: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -7026,6 +7325,7 @@ impl ExportSummary {
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
             hidden_interfaces: Vec::new(),
+            method_binder_authorities: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -8059,6 +8359,13 @@ impl ExportSummary {
             summary.hidden_nominal_order.push(imported.id);
         }
 
+        summary.method_binder_authorities = clone_method_binder_authorities(
+            &summary.interfaces,
+            &summary.hidden_interfaces,
+            type_work,
+            constraint_work,
+        )?;
+
         Ok(summary)
     }
 
@@ -8416,6 +8723,7 @@ impl ExportSummary {
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
             hidden_interfaces: Vec::new(),
+            method_binder_authorities: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -10883,6 +11191,7 @@ impl Drop for ExportSummary {
         for fact in self.hidden_interfaces.drain(..) {
             drop(fact);
         }
+        self.method_binder_authorities.clear();
         for fact in self.implementations.drain(..) {
             drop(fact);
         }
@@ -11048,6 +11357,7 @@ struct CombinedRegistryCounts {
     constructors: usize,
     nominal_parameters: usize,
     interfaces: usize,
+    method_parameters: usize,
     schemes: usize,
     global_rows: usize,
     global_parameters: usize,
@@ -11308,6 +11618,14 @@ fn checked_registry_counts(
                 implementation.head_parameters.len(),
             )?;
         }
+        for interface in checked.interface_facts() {
+            for method in &interface.methods {
+                checked_accumulate(
+                    &mut counts.method_parameters,
+                    method.type_parameters().len(),
+                )?;
+            }
+        }
         // Retention clones canonical records from the registry map, not from
         // the independently retained interface, global, or implementation
         // mirrors. Price those exact sources so deferred mirror rejection
@@ -11322,6 +11640,7 @@ fn checked_registry_counts(
     counts.type_variables = counts
         .nominal_parameters
         .checked_add(counts.interfaces)
+        .and_then(|count| count.checked_add(counts.method_parameters))
         .and_then(|count| count.checked_add(counts.global_parameters))
         .and_then(|count| count.checked_add(counts.implementation_parameters))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
@@ -11477,6 +11796,11 @@ fn validate_checked_registries<'a>(
             local_variable_count = local_variable_count
                 .checked_add(1)
                 .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+            for method in &interface.methods {
+                local_variable_count = local_variable_count
+                    .checked_add(method.type_parameters().len())
+                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+            }
             if interface.id.module() != module {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -11574,6 +11898,32 @@ fn validate_checked_registries<'a>(
             // against this registry before it constructs Kind environments.
             // Combination owns only canonical existence and cross-owner
             // uniqueness for that independently retained carrier.
+            for method in &interface.methods {
+                let mut previous = None;
+                for parameter in method.type_parameters() {
+                    constraint_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                    if parameter.id.module() != Some(checked.module())
+                        || previous.is_some_and(|previous| parameter.id.local() <= previous)
+                        || !type_variable_ids.insert(parameter.id)
+                    {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                    previous = Some(parameter.id.local());
+                    let canonical = registry
+                        .type_variables
+                        .get(&parameter.id)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    if !same_checker_type_variable_after_base_charge(
+                        canonical,
+                        parameter,
+                        constraint_work,
+                    )? {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                }
+            }
         }
         for scheme in checked.schemes() {
             let mut previous = None;
@@ -11759,6 +12109,18 @@ fn retain_checked_registries(
                 .canonical_variables
                 .0
                 .push(clone_type_variable_after_combined_precharge(canonical)?);
+            for method in &interface.methods {
+                for parameter in method.type_parameters() {
+                    let canonical = registry
+                        .type_variables
+                        .get(&parameter.id)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    builder
+                        .canonical_variables
+                        .0
+                        .push(clone_type_variable_after_combined_precharge(canonical)?);
+                }
+            }
         }
         for scheme in checked.schemes() {
             if !scheme.scheme.type_parameters.is_empty() {
@@ -12084,6 +12446,11 @@ impl ResolvedRegistry {
         for imported_interface in imported.interface_imports() {
             registry
                 .try_insert_checker_type_variable(&imported_interface.fact.parameter, budget)?;
+            for method in &imported_interface.fact.methods {
+                for parameter in method.type_parameters() {
+                    registry.try_insert_checker_type_variable(parameter, budget)?;
+                }
+            }
         }
         for imported_implementation in imported.implementations() {
             for parameter in &imported_implementation.fact.head_parameters {
@@ -12724,7 +13091,7 @@ pub(crate) fn same_origin_with_budget(
     }
 }
 
-fn clone_resolved_type_variables_with_budget(
+pub(crate) fn clone_resolved_type_variables_with_budget(
     parameters: &[ResolvedTypeVariable],
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<ResolvedTypeVariable>, ()> {
@@ -14163,6 +14530,258 @@ mod tests {
             },
         );
         summary
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum PolymorphicMethodSummaryMutationForTest {
+        Missing,
+        Extra,
+        Duplicate,
+        Reordered,
+        WrongKind,
+        WrongOwner,
+        WrongOrigin,
+        WrongSpelling,
+        FreeBinder,
+        NestedNonMethodScheme,
+    }
+
+    fn polymorphic_method_summary(
+        mutation: Option<PolymorphicMethodSummaryMutationForTest>,
+    ) -> ExportSummary {
+        let source = SourceFile::new("method-summary.ash", "Functor F map A B")
+            .expect("the method-summary source should fit");
+        let interface_span = source
+            .span(ByteRange::new(0, 7).expect("the interface range should be ordered"))
+            .expect("the interface span should fit");
+        let method_span = source
+            .span(ByteRange::new(10, 13).expect("the method range should be ordered"))
+            .expect("the method span should fit");
+        let first_span = source
+            .span(ByteRange::new(14, 15).expect("the first binder range should be ordered"))
+            .expect("the first binder span should fit");
+        let second_span = source
+            .span(ByteRange::new(16, 17).expect("the second binder range should be ordered"))
+            .expect("the second binder span should fit");
+        let module = ModuleId::new(9_832);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let first = TypeVariableId::resolved(module, 1);
+        let second = TypeVariableId::resolved(module, 2);
+        let apply = |function, argument| Type::Application(Box::new(function), Box::new(argument));
+        let method_type = Type::Function(
+            Box::new(Type::Tuple(
+                vec![
+                    Type::Function(
+                        Box::new(Type::Variable(first)),
+                        Box::new(Type::Variable(second)),
+                    ),
+                    apply(Type::Variable(interface_parameter), Type::Variable(first)),
+                ]
+                .into_boxed_slice(),
+            )),
+            Box::new(apply(
+                Type::Variable(interface_parameter),
+                Type::Variable(second),
+            )),
+        );
+        let mut summary = ExportSummary::empty(module);
+        summary.interfaces.push(CheckedInterfaceFact {
+            id: interface,
+            spelling: "Functor".to_owned(),
+            parameter: ResolvedTypeVariable {
+                id: interface_parameter,
+                spelling: "F".to_owned(),
+                kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                origin: Origin::Source(interface_span),
+            },
+            methods: Box::new([CheckedInterfaceMethodFact {
+                id: method,
+                spelling: "map".to_owned(),
+                type_parameters: Box::new([
+                    ResolvedTypeVariable {
+                        id: first,
+                        spelling: "A".to_owned(),
+                        kind: Kind::Type,
+                        origin: Origin::Source(first_span),
+                    },
+                    ResolvedTypeVariable {
+                        id: second,
+                        spelling: "B".to_owned(),
+                        kind: Kind::Type,
+                        origin: Origin::Source(second_span),
+                    },
+                ]),
+                value_type: method_type,
+                origin: Origin::Source(method_span),
+                span: method_span,
+            }]),
+            origin: Origin::Source(interface_span),
+            span: interface_span,
+        });
+        summary.interface_positions.insert(interface, 0);
+        summary.interface_name_order.push("Functor".to_owned());
+        summary
+            .interface_names
+            .insert("Functor".to_owned(), interface);
+        summary.method_name_order.push("map".to_owned());
+        summary.method_names.insert("map".to_owned(), method);
+        summary.method_binder_authorities = clone_method_binder_authorities(
+            &summary.interfaces,
+            &summary.hidden_interfaces,
+            &mut TypeWorkBudget::unbounded(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect("the canonical method-binder authority should fit");
+
+        let method = &mut summary.interfaces[0].methods[0];
+        match mutation {
+            None => {}
+            Some(PolymorphicMethodSummaryMutationForTest::Missing) => {
+                let mut parameters = std::mem::take(&mut method.type_parameters).into_vec();
+                parameters.remove(0);
+                method.type_parameters = parameters.into_boxed_slice();
+            }
+            Some(PolymorphicMethodSummaryMutationForTest::Extra) => {
+                let mut parameters = std::mem::take(&mut method.type_parameters).into_vec();
+                parameters.push(ResolvedTypeVariable {
+                    id: TypeVariableId::resolved(module, 3),
+                    spelling: "C".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(second_span),
+                });
+                method.type_parameters = parameters.into_boxed_slice();
+            }
+            Some(PolymorphicMethodSummaryMutationForTest::Duplicate) => {
+                method.type_parameters[1].id = method.type_parameters[0].id;
+            }
+            Some(PolymorphicMethodSummaryMutationForTest::Reordered) => {
+                method.type_parameters.swap(0, 1);
+            }
+            Some(PolymorphicMethodSummaryMutationForTest::WrongKind) => {
+                method.type_parameters[0].kind =
+                    Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+            }
+            Some(PolymorphicMethodSummaryMutationForTest::WrongOwner) => {
+                method.type_parameters[0].id =
+                    TypeVariableId::resolved(ModuleId::new(u32::MAX - 1), 1);
+            }
+            Some(PolymorphicMethodSummaryMutationForTest::WrongOrigin) => {
+                method.type_parameters[0].origin = Origin::Generated {
+                    cause: Box::new(Origin::Source(first_span)),
+                    reason: crate::source::GeneratedReason::ConstantFolding,
+                };
+            }
+            Some(PolymorphicMethodSummaryMutationForTest::WrongSpelling) => {
+                method.type_parameters[0].spelling = "Forged".to_owned();
+            }
+            Some(PolymorphicMethodSummaryMutationForTest::FreeBinder) => {
+                discard_type_iteratively(std::mem::replace(
+                    &mut method.value_type,
+                    Type::Function(
+                        Box::new(Type::Variable(TypeVariableId::resolved(module, 99))),
+                        Box::new(Type::Unit),
+                    ),
+                ));
+            }
+            Some(PolymorphicMethodSummaryMutationForTest::NestedNonMethodScheme) => {
+                let binder = BinderId::resolved(module, 0);
+                summary.term_order.push("forged".to_owned());
+                summary.terms.insert(
+                    "forged".to_owned(),
+                    ExportedGlobal {
+                        binder,
+                        scheme: ConstrainedScheme {
+                            type_parameters: Box::new([]),
+                            requirements: Box::new([]),
+                            value_type: Type::Forall(
+                                Box::new([(TypeVariableId::resolved(module, 98), Kind::Type)]),
+                                Box::new(Type::Unit),
+                            ),
+                        },
+                        origin: Origin::Source(interface_span),
+                    },
+                );
+            }
+        }
+        summary
+    }
+
+    #[test]
+    fn polymorphic_method_summary_rejects_complete_binder_tampering_matrix() {
+        polymorphic_method_summary(None)
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the canonical polymorphic method summary should authenticate");
+
+        for mutation in [
+            PolymorphicMethodSummaryMutationForTest::Missing,
+            PolymorphicMethodSummaryMutationForTest::Extra,
+            PolymorphicMethodSummaryMutationForTest::Duplicate,
+            PolymorphicMethodSummaryMutationForTest::Reordered,
+            PolymorphicMethodSummaryMutationForTest::WrongKind,
+            PolymorphicMethodSummaryMutationForTest::WrongOwner,
+            PolymorphicMethodSummaryMutationForTest::WrongOrigin,
+            PolymorphicMethodSummaryMutationForTest::WrongSpelling,
+            PolymorphicMethodSummaryMutationForTest::FreeBinder,
+            PolymorphicMethodSummaryMutationForTest::NestedNonMethodScheme,
+        ] {
+            assert_eq!(
+                polymorphic_method_summary(Some(mutation)).authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                ),
+                Err(ResolvedBuildFailure::InvalidState),
+                "{mutation:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn method_binder_authority_retention_has_exact_independent_ledgers() {
+        // One private row is graph storage. Each of the two binder copies owns
+        // one record plus one `Type` Kind node in TypeWork.
+        const EXACT_CONSTRAINT_WORK: usize = 1;
+        const EXACT_TYPE_WORK: usize = 2 * (1 + 1);
+        let summary = polymorphic_method_summary(None);
+
+        assert_eq!(
+            clone_method_binder_authorities(
+                &summary.interfaces,
+                &summary.hidden_interfaces,
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+                &mut crate::interface::InterfaceConstraintBudget::with_limit(
+                    EXACT_CONSTRAINT_WORK - 1,
+                ),
+            ),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(
+            clone_method_binder_authorities(
+                &summary.interfaces,
+                &summary.hidden_interfaces,
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1),
+                &mut crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK,),
+            ),
+            Err(ResolvedBuildFailure::TypeResource),
+        );
+        let mut exact_type = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        let mut exact_constraint =
+            crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let authorities = clone_method_binder_authorities(
+            &summary.interfaces,
+            &summary.hidden_interfaces,
+            &mut exact_type,
+            &mut exact_constraint,
+        )
+        .expect("the exact authority-retention ledgers should fit");
+        assert_eq!(authorities.len(), 1);
+        assert_eq!(authorities[0].parameters.len(), 2);
+        assert_eq!(exact_type.used(), EXACT_TYPE_WORK);
+        assert_eq!(exact_constraint.used(), EXACT_CONSTRAINT_WORK);
     }
 
     #[test]
@@ -19640,6 +20259,7 @@ mod tests {
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
             hidden_interfaces: Vec::new(),
+            method_binder_authorities: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),

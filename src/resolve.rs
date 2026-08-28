@@ -36,11 +36,11 @@ use crate::{
         ResolvedRequirement, ResolvedTermName, ResolvedType, ResolvedTypeProvenance,
         ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern,
         ValidatedImportedNominalMerge, WithheldExport, WithheldExportKind, WithheldNamespace,
-        clone_resolved_type_variable_with_budget, discard_resolved_definition_iteratively,
-        discard_resolved_equation_iteratively, discard_resolved_expression_iteratively,
-        discard_resolved_implementation_iteratively, discard_resolved_interface_iteratively,
-        discard_resolved_local_declaration_iteratively, discard_resolved_pattern_iteratively,
-        discard_resolved_requirement,
+        clone_resolved_type_variable_with_budget, clone_resolved_type_variables_with_budget,
+        discard_resolved_definition_iteratively, discard_resolved_equation_iteratively,
+        discard_resolved_expression_iteratively, discard_resolved_implementation_iteratively,
+        discard_resolved_interface_iteratively, discard_resolved_local_declaration_iteratively,
+        discard_resolved_pattern_iteratively, discard_resolved_requirement,
         same_checked_implementation_fact_observing_nominals_with_budget,
         same_checked_interface_fact_observing_nominals_with_budget,
         same_imported_constructor_fact_observing_nominals_with_budget,
@@ -2499,8 +2499,33 @@ impl Resolver {
                 "imported interface storage exceeded its work budget",
             )
         })?;
+        let method_parameter_count = exported
+            .methods
+            .iter()
+            .try_fold(0usize, |count, method| {
+                count.checked_add(method.type_parameters().len()).ok_or(())
+            })
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported method-parameter accounting overflowed",
+                )
+            })?;
+        let retained_fact_count = exported
+            .methods
+            .len()
+            .checked_add(method_parameter_count)
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported interface retention accounting overflowed",
+                )
+            })?;
         self.constraint_work
-            .charge(exported.methods.len().saturating_add(1))
+            .charge(retained_fact_count)
             .map_err(|()| {
                 error(
                     ResolveReason::ConstraintResourceExhausted,
@@ -2508,15 +2533,13 @@ impl Resolver {
                     "imported interface retention exceeded its work budget",
                 )
             })?;
-        self.type_work
-            .charge(exported.methods.len().saturating_add(1))
-            .map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    span,
-                    "imported interface retention exceeded its type-work budget",
-                )
-            })?;
+        self.type_work.charge(retained_fact_count).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported interface retention exceeded its type-work budget",
+            )
+        })?;
         let mut methods = Vec::new();
         methods.try_reserve(exported.methods.len()).map_err(|_| {
             error(
@@ -2543,18 +2566,31 @@ impl Resolver {
                     )
                 })?;
             self.retain_type_nominals(&method.value_type, summary, span)?;
+            let value_type = IterativeTypeOwner::new(
+                clone_type_with_budget(&method.value_type, &mut self.type_work).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "imported method signature exceeded its type-work budget",
+                    )
+                })?,
+            );
+            let type_parameters = clone_resolved_type_variables_with_budget(
+                method.type_parameters(),
+                &mut self.type_work,
+            )
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported method parameters exceeded their type-work budget",
+                )
+            })?;
             methods.push(CheckedInterfaceMethodFact {
                 id: method.id,
                 spelling: method.spelling.clone(),
-                type_parameters: Box::new([]),
-                value_type: clone_type_with_budget(&method.value_type, &mut self.type_work)
-                    .map_err(|()| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "imported method signature exceeded its type-work budget",
-                        )
-                    })?,
+                type_parameters: type_parameters.into_boxed_slice(),
+                value_type: value_type.into_inner(),
                 origin: method.origin.clone(),
                 span: method.span,
             });
@@ -2892,16 +2928,33 @@ impl Resolver {
                 "imported implementation methods exceeded their work budget",
             )
         })?;
-        for (index, method) in fact.methods.iter().enumerate() {
-            self.constraint_work
-                .charge(
-                    method
-                        .scheme
-                        .type_parameters
-                        .len()
-                        .saturating_add(method.scheme.requirements.len())
-                        .saturating_add(1),
+        let defining_interface = summary
+            .interfaces()
+            .chain(summary.hidden_interfaces())
+            .find(|interface| interface.id == fact.interface)
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an implementation summary has no defining interface fact",
                 )
+            })?;
+        for (index, method) in fact.methods.iter().enumerate() {
+            let method_retention_work = method
+                .scheme
+                .type_parameters
+                .len()
+                .checked_add(method.scheme.requirements.len())
+                .and_then(|work| work.checked_add(1))
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported implementation method accounting overflowed",
+                    )
+                })?;
+            self.constraint_work
+                .charge(method_retention_work)
                 .map_err(|()| {
                     error(
                         ResolveReason::ConstraintResourceExhausted,
@@ -2909,12 +2962,32 @@ impl Resolver {
                         "imported implementation method exceeded its work budget",
                     )
                 })?;
+            let interface_method = defining_interface.methods.get(index).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an implementation summary has an incomplete method relation",
+                )
+            })?;
+            let expected_parameter_count = fact
+                .head_parameters
+                .len()
+                .checked_add(interface_method.type_parameters().len())
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported implementation method parameter accounting overflowed",
+                    )
+                })?;
             let method_identity_is_valid = method.id.implementation() == fact.id
                 && method.id.method() == method.method
                 && method.method.interface() == fact.interface
                 && usize::try_from(method.method.declaration()) == Ok(index)
+                && interface_method.id == method.method
                 && method.binder.module() == Some(fact.id.module())
-                && method.scheme.type_parameters.len() == fact.head_parameters.len();
+                && method.head_type_parameter_count() == fact.head_parameters.len()
+                && method.scheme.type_parameters.len() == expected_parameter_count;
             if !method_identity_is_valid {
                 return Err(error(
                     ResolveReason::InternalState,
@@ -2922,9 +2995,10 @@ impl Resolver {
                     "an implementation summary contains an unauthenticated method scheme",
                 ));
             }
-            let parameters_match = same_kinded_parameters_with_constraint_budget(
+            let parameters_match = same_kinded_parameters_with_two_binder_slices(
                 &method.scheme.type_parameters,
                 &fact.head_parameters,
+                interface_method.type_parameters(),
                 &mut self.constraint_work,
             )
             .map_err(|()| {
@@ -6495,6 +6569,7 @@ fn imported_fact_comparison_error(
     }
 }
 
+#[cfg(test)]
 fn same_kinded_parameters_with_constraint_budget(
     parameters: &[(TypeVariableId, Kind)],
     binders: &[ResolvedTypeVariable],
@@ -6504,6 +6579,28 @@ fn same_kinded_parameters_with_constraint_budget(
         return Ok(false);
     }
     for ((parameter, kind), binder) in parameters.iter().zip(binders) {
+        budget.charge(1)?;
+        if *parameter != binder.id {
+            return Ok(false);
+        }
+        if !same_kind_with_charge(kind, &binder.kind, || budget.charge(1))? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_kinded_parameters_with_two_binder_slices(
+    parameters: &[(TypeVariableId, Kind)],
+    first: &[ResolvedTypeVariable],
+    second: &[ResolvedTypeVariable],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    let expected = first.len().checked_add(second.len()).ok_or(())?;
+    if parameters.len() != expected {
+        return Ok(false);
+    }
+    for ((parameter, kind), binder) in parameters.iter().zip(first.iter().chain(second)) {
         budget.charge(1)?;
         if *parameter != binder.id {
             return Ok(false);
@@ -7991,13 +8088,13 @@ mod tests {
                             concat!(
                                 "import base as Base\n",
                                 "pub apply : Int -> Int where Base.Render<Int>\n",
-                                "apply value = Base.render(value)\n",
+                                "apply value = Base.render((value, true))\n",
                             ),
                         )
                         .expect("the hidden-interface intermediary should be writable");
                         fs::write(
                             directory.join("base.ash"),
-                            "pub interface Render<A> {\nrender : A -> Int\n}\n",
+                            "pub interface Render<A> {\nrender<B> : (A, B) -> Int\n}\n",
                         )
                         .expect("the hidden-interface owner should be writable");
                         return Self(directory);
@@ -8019,14 +8116,18 @@ mod tests {
 
     struct HiddenInterfaceImportOutcome {
         result: Result<(), ResolveError>,
-        used: usize,
+        constraint_used: usize,
+        type_used: usize,
         interface: InterfaceId,
         middle: ModuleId,
         import_span: crate::source::Span,
         retained: Option<(InterfaceId, ModuleId, crate::source::Span)>,
     }
 
-    fn retain_hidden_interface_import_with_limit(limit: usize) -> HiddenInterfaceImportOutcome {
+    fn retain_hidden_interface_import_with_limits(
+        constraint_limit: usize,
+        type_limit: usize,
+    ) -> HiddenInterfaceImportOutcome {
         let fixture = HiddenInterfaceBudgetFixture::create();
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the hidden-interface import graph should load");
@@ -8077,8 +8178,8 @@ mod tests {
         let import_span = entry.surface().imports[0].span;
         let mut resolver = Resolver::with_budgets(
             entry.id(),
-            TypeWorkBudget::default(),
-            InterfaceConstraintBudget::with_limit(limit),
+            TypeWorkBudget::with_limit(type_limit),
+            InterfaceConstraintBudget::with_limit(constraint_limit),
         );
         let result = resolver.retain_imported_interface_fact(
             interface,
@@ -8100,7 +8201,8 @@ mod tests {
             });
         HiddenInterfaceImportOutcome {
             result,
-            used: resolver.constraint_work.used(),
+            constraint_used: resolver.constraint_work.used(),
+            type_used: resolver.type_work.used(),
             interface: interface.id,
             middle,
             import_span,
@@ -9198,19 +9300,42 @@ mod tests {
 
     #[test]
     fn hidden_interface_import_route_uses_its_exact_constraint_budget() {
-        let short = retain_hidden_interface_import_with_limit(8);
-        let error = short
+        // ConstraintWork owns one route visit, three interface/method/binder
+        // retained facts, two traversals of the five-cell method type, and the
+        // method binder's record, Source-Origin, and Type-Kind authentication.
+        // TypeWork owns the same three retained carriers, two five-cell type
+        // traversals, and two records plus Type Kinds for the interface and
+        // method binders.
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 3 + 2 * 5 + 3;
+        const EXACT_TYPE_WORK: usize = 3 + 2 * 5 + 2 * (1 + 1);
+
+        let constraint_short =
+            retain_hidden_interface_import_with_limits(EXACT_CONSTRAINT_WORK - 1, EXACT_TYPE_WORK);
+        let error = constraint_short
             .result
             .expect_err("one missing unit should reject hidden interface retention");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
-        assert_eq!(short.used, 8);
-        assert!(short.retained.is_none());
+        assert_eq!(constraint_short.constraint_used, EXACT_CONSTRAINT_WORK - 1,);
+        assert_eq!(constraint_short.type_used, 3);
+        assert!(constraint_short.retained.is_none());
 
-        let exact = retain_hidden_interface_import_with_limit(9);
+        let type_short =
+            retain_hidden_interface_import_with_limits(EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK - 1);
+        let error = type_short
+            .result
+            .expect_err("one missing type unit should reject hidden interface retention");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(type_short.constraint_used, EXACT_CONSTRAINT_WORK);
+        assert_eq!(type_short.type_used, EXACT_TYPE_WORK - 1);
+        assert!(type_short.retained.is_none());
+
+        let exact =
+            retain_hidden_interface_import_with_limits(EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK);
         exact
             .result
             .expect("the exact route-and-shape budget should retain hidden interface metadata");
-        assert_eq!(exact.used, 9);
+        assert_eq!(exact.constraint_used, EXACT_CONSTRAINT_WORK);
+        assert_eq!(exact.type_used, EXACT_TYPE_WORK);
         let (retained_interface, direct_dependency, available_at) = exact
             .retained
             .expect("one hidden interface fact should cross the constrained summary");

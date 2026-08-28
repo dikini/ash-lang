@@ -1715,6 +1715,7 @@ fn try_copy_slice<T: Copy>(values: &[T]) -> Result<Box<[T]>, ()> {
 struct FilledEvidenceSlot {
     checked_argument: Type,
     method_arguments: Box<[Type]>,
+    checked_value_type: Option<Type>,
     selection: EvidenceSelection,
 }
 
@@ -1723,6 +1724,9 @@ impl Drop for FilledEvidenceSlot {
         discard_type_iteratively(std::mem::replace(&mut self.checked_argument, Type::Unit));
         for argument in std::mem::take(&mut self.method_arguments).into_vec() {
             discard_type_iteratively(argument);
+        }
+        if let Some(ty) = self.checked_value_type.take() {
+            discard_type_iteratively(ty);
         }
     }
 }
@@ -1761,6 +1765,16 @@ impl EvidenceSlot {
             .map(|filled| (&filled.checked_argument, &filled.selection))
     }
 
+    pub(crate) fn filled_method(&self) -> Option<(&Type, &[Type], &Type, &EvidenceSelection)> {
+        let filled = self.filled.get()?;
+        Some((
+            &filled.checked_argument,
+            &filled.method_arguments,
+            filled.checked_value_type.as_ref()?,
+            &filled.selection,
+        ))
+    }
+
     pub(crate) fn storage_id(&self) -> usize {
         Arc::as_ptr(&self.filled) as usize
     }
@@ -1778,6 +1792,29 @@ impl EvidenceSlot {
             return false;
         };
         filled.selection = replacement;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_method_arguments_for_test(&mut self, replacement: Box<[Type]>) -> bool {
+        let Some(filled) = Arc::get_mut(&mut self.filled).and_then(OnceLock::get_mut) else {
+            return false;
+        };
+        for argument in std::mem::replace(&mut filled.method_arguments, replacement).into_vec() {
+            discard_type_iteratively(argument);
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_checked_value_type_for_test(&mut self, replacement: Type) -> bool {
+        let Some(filled) = Arc::get_mut(&mut self.filled).and_then(OnceLock::get_mut) else {
+            discard_type_iteratively(replacement);
+            return false;
+        };
+        if let Some(previous) = filled.checked_value_type.replace(replacement) {
+            discard_type_iteratively(previous);
+        }
         true
     }
 }
@@ -1820,6 +1857,11 @@ impl PartialEq for EvidenceSlot {
                         .iter()
                         .zip(&right.method_arguments)
                         .all(|(left, right)| same_type(left, right))
+                    && match (&left.checked_value_type, &right.checked_value_type) {
+                        (Some(left), Some(right)) => same_type(left, right),
+                        (None, None) => true,
+                        _ => false,
+                    }
                     && left.selection == right.selection
             }
             _ => false,
@@ -1853,12 +1895,14 @@ impl EvidenceSlotHandle {
         &self,
         checked_argument: Type,
         method_arguments: Box<[Type]>,
+        checked_value_type: Option<Type>,
         selection: EvidenceSelection,
     ) -> Result<(), ()> {
         self.filled
             .set(FilledEvidenceSlot {
                 checked_argument,
                 method_arguments,
+                checked_value_type,
                 selection,
             })
             .map_err(drop)
@@ -1868,11 +1912,17 @@ impl EvidenceSlotHandle {
         &self,
         checked_argument: Type,
         method_arguments: Box<[Type]>,
+        checked_value_type: Option<Type>,
         selection: EvidenceSelection,
     ) {
         assert!(
-            self.fill(checked_argument, method_arguments, selection)
-                .is_ok(),
+            self.fill(
+                checked_argument,
+                method_arguments,
+                checked_value_type,
+                selection,
+            )
+            .is_ok(),
             "a preflighted evidence occurrence must remain one-shot empty"
         );
     }
@@ -2137,14 +2187,18 @@ mod tests {
         ));
 
         pending
-            .fill(Type::Int, Box::new([]), selection.clone())
+            .fill(Type::Int, Box::new([]), None, selection.clone())
             .expect("the original empty slot should accept one selection");
 
         assert_eq!(slot.selection(), Some(&selection));
         assert_eq!(handle.selection(), Some(&selection));
         assert!(matches!(slot.filled(), Some((Type::Int, _))));
         assert!(clone.selection().is_none());
-        assert!(handle.fill(Type::Bool, Box::new([]), selection).is_err());
+        assert!(
+            handle
+                .fill(Type::Bool, Box::new([]), None, selection)
+                .is_err()
+        );
         assert!(matches!(slot.filled(), Some((Type::Int, _))));
     }
 
@@ -2156,7 +2210,7 @@ mod tests {
             0,
         ));
         slot.handle()
-            .fill(Type::Int, Box::new([]), selection)
+            .fill(Type::Int, Box::new([]), None, selection)
             .expect("the empty slot should accept one selection");
 
         let clone = slot.clone();
@@ -2995,7 +3049,7 @@ mod tests {
                         .expect("the checked occurrence argument should fit");
                 let slot = EvidenceSlot::empty();
                 slot.handle()
-                    .fill(checked_argument, Box::new([]), selection.clone())
+                    .fill(checked_argument, Box::new([]), None, selection.clone())
                     .expect("the deep checked evidence should fill atomically");
                 let slot_clone = slot.clone();
                 drop(selection);
