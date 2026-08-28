@@ -1283,6 +1283,21 @@ struct PendingImplementation {
     method_groups: Vec<PendingImplementationMethodGroup>,
 }
 
+struct NominalDeclarationIdentity {
+    id: NominalTypeId,
+    constructors: Vec<ConstructorId>,
+}
+
+struct InterfaceDeclarationIdentity {
+    id: InterfaceId,
+    methods: Vec<MethodId>,
+}
+
+struct PendingInterfaceTypeParameters {
+    parameter: ResolvedTypeVariable,
+    methods: Vec<Vec<ResolvedTypeVariable>>,
+}
+
 struct PendingImplementationMethodGroup {
     equations: Range<usize>,
     binder: Option<Binder>,
@@ -1615,10 +1630,10 @@ impl Resolver {
         Ok(())
     }
 
-    fn resolve_interface_declarations(
+    fn install_interface_identities(
         &mut self,
         declarations: &[SurfaceInterfaceDeclaration],
-    ) -> Result<(Vec<ResolvedInterfaceDeclaration>, Vec<ResolvedTypeVariable>), ResolveError> {
+    ) -> Result<Vec<InterfaceDeclarationIdentity>, ResolveError> {
         let mut identities = Vec::with_capacity(declarations.len());
         for (index, declaration) in declarations.iter().enumerate() {
             let index = u32::try_from(index).map_err(|_| {
@@ -1647,40 +1662,95 @@ impl Resolver {
                 );
                 methods.push(method_id);
             }
-            identities.push((id, methods));
+            identities.push(InterfaceDeclarationIdentity { id, methods });
+        }
+        Ok(identities)
+    }
+
+    fn prepare_interface_type_parameters(
+        &mut self,
+        declaration: &SurfaceInterfaceDeclaration,
+    ) -> Result<PendingInterfaceTypeParameters, ResolveError> {
+        let parameter = self.allocate_type_variable(
+            &declaration.parameter.name,
+            declaration.parameter.kind.as_ref(),
+        )?;
+        let mut methods = Vec::new();
+        methods
+            .try_reserve_exact(declaration.methods.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    declaration.span,
+                    "interface type-parameter preparation storage could not be reserved",
+                )
+            })?;
+        for method in &declaration.methods {
+            let mut names = Vec::new();
+            let mut seen = HashSet::from([declaration.parameter.name.text.as_str()]);
+            let declared = HashSet::from([declaration.parameter.name.text.as_str()]);
+            collect_free_type_names(
+                &method.annotation,
+                &self.type_names,
+                &self.interface_names,
+                &declared,
+                &mut seen,
+                &mut names,
+                &mut self.type_work,
+            )?;
+            let type_parameters = names
+                .into_iter()
+                .map(|name| self.allocate_type_variable(&name, None))
+                .collect::<Result<Vec<_>, _>>()?;
+            methods.push(type_parameters);
+        }
+        Ok(PendingInterfaceTypeParameters { parameter, methods })
+    }
+
+    fn resolve_interface_declarations(
+        &mut self,
+        declarations: &[SurfaceInterfaceDeclaration],
+        identities: Vec<InterfaceDeclarationIdentity>,
+        parameters: Vec<PendingInterfaceTypeParameters>,
+        module_span: crate::source::Span,
+    ) -> Result<(Vec<ResolvedInterfaceDeclaration>, Vec<ResolvedTypeVariable>), ResolveError> {
+        if declarations.len() != identities.len() || declarations.len() != parameters.len() {
+            return Err(error(
+                ResolveReason::InternalState,
+                declarations
+                    .last()
+                    .map_or(module_span, |declaration| declaration.span),
+                "the resolver retained mismatched interface preparation records",
+            ));
         }
 
         let mut resolved = ResolvedInterfaceBuffer(Vec::with_capacity(declarations.len()));
         let mut retained_type_variables = Vec::new();
-        for (declaration, (id, method_ids)) in declarations.iter().zip(identities) {
-            let parameter = self.allocate_type_variable(
-                &declaration.parameter.name,
-                declaration.parameter.kind.as_ref(),
-            )?;
+        for ((declaration, identity), pending) in
+            declarations.iter().zip(identities).zip(parameters)
+        {
+            if declaration.methods.len() != identity.methods.len()
+                || declaration.methods.len() != pending.methods.len()
+            {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    declaration.span,
+                    "the resolver retained mismatched interface method preparation records",
+                ));
+            }
             retained_type_variables.push(self.clone_type_variable_for_retention(
-                &parameter,
+                &pending.parameter,
                 declaration.parameter.name.span,
                 "interface parameter retention exceeded its type-work budget",
             )?);
             let mut methods =
                 ResolvedInterfaceMethodBuffer(Vec::with_capacity(declaration.methods.len()));
-            for (method, method_id) in declaration.methods.iter().zip(method_ids) {
-                let mut names = Vec::new();
-                let mut seen = HashSet::from([declaration.parameter.name.text.as_str()]);
-                let declared = HashSet::from([declaration.parameter.name.text.as_str()]);
-                collect_free_type_names(
-                    &method.annotation,
-                    &self.type_names,
-                    &self.interface_names,
-                    &declared,
-                    &mut seen,
-                    &mut names,
-                    &mut self.type_work,
-                )?;
-                let type_parameters = names
-                    .into_iter()
-                    .map(|name| self.allocate_type_variable(&name, None))
-                    .collect::<Result<Vec<_>, _>>()?;
+            for ((method, method_id), type_parameters) in declaration
+                .methods
+                .iter()
+                .zip(identity.methods)
+                .zip(pending.methods)
+            {
                 for type_parameter in &type_parameters {
                     retained_type_variables.push(self.clone_type_variable_for_retention(
                         type_parameter,
@@ -1689,7 +1759,7 @@ impl Resolver {
                     )?);
                 }
                 self.type_scopes.push(
-                    std::iter::once((parameter.spelling.clone(), parameter.id))
+                    std::iter::once((pending.parameter.spelling.clone(), pending.parameter.id))
                         .chain(
                             type_parameters
                                 .iter()
@@ -1709,10 +1779,10 @@ impl Resolver {
                 });
             }
             resolved.0.push(ResolvedInterfaceDeclaration {
-                id,
+                id: identity.id,
                 public: declaration.public,
                 spelling: declaration.name.text.clone(),
-                parameter,
+                parameter: pending.parameter,
                 methods: methods.into_vec().into_boxed_slice(),
                 origin: Origin::Source(declaration.span),
                 span: declaration.span,
@@ -1721,92 +1791,79 @@ impl Resolver {
         Ok((resolved.into_vec(), retained_type_variables))
     }
 
-    fn prepare_implementations(
+    fn prepare_implementation(
         &mut self,
-        declarations: &[SurfaceImplementation],
-    ) -> Result<(Vec<PendingImplementation>, Vec<ResolvedTypeVariable>), ResolveError> {
-        let mut pending = Vec::with_capacity(declarations.len());
-        let mut retained_type_variables = Vec::new();
+        index: usize,
+        implementation: &SurfaceImplementation,
+    ) -> Result<PendingImplementation, ResolveError> {
+        let index = u32::try_from(index).map_err(|_| {
+            error(
+                ResolveReason::InternalState,
+                implementation.span,
+                "the file contains too many implementation declarations",
+            )
+        })?;
+        let id = ImplId::new(self.module, index);
 
-        for (index, implementation) in declarations.iter().enumerate() {
-            let index = u32::try_from(index).map_err(|_| {
-                error(
-                    ResolveReason::InternalState,
-                    implementation.span,
-                    "the file contains too many implementation declarations",
-                )
-            })?;
-            let id = ImplId::new(self.module, index);
+        let declared =
+            validate_explicit_type_parameters(implementation.type_parameters.as_deref())?;
+        let mut seen = HashSet::new();
+        let mut head_names = Vec::new();
+        collect_free_type_names(
+            &implementation.argument,
+            &self.type_names,
+            &self.interface_names,
+            &declared,
+            &mut seen,
+            &mut head_names,
+            &mut self.type_work,
+        )?;
+        let head_parameters = self.allocate_declaration_type_parameters(
+            implementation.type_parameters.as_deref(),
+            &head_names,
+        )?;
 
-            let declared =
-                validate_explicit_type_parameters(implementation.type_parameters.as_deref())?;
-            let mut seen = HashSet::new();
-            let mut head_names = Vec::new();
+        let mut prerequisite_only_names = Vec::new();
+        for prerequisite in &implementation.prerequisites {
             collect_free_type_names(
-                &implementation.argument,
+                &prerequisite.argument,
                 &self.type_names,
                 &self.interface_names,
                 &declared,
                 &mut seen,
-                &mut head_names,
+                &mut prerequisite_only_names,
                 &mut self.type_work,
             )?;
-            let head_parameters = self.allocate_declaration_type_parameters(
-                implementation.type_parameters.as_deref(),
-                &head_names,
-            )?;
+        }
+        let prerequisite_only_parameters = prerequisite_only_names
+            .into_iter()
+            .map(|name| self.allocate_type_variable(&name, None))
+            .collect::<Result<Vec<_>, _>>()?;
 
-            let mut prerequisite_only_names = Vec::new();
-            for prerequisite in &implementation.prerequisites {
-                collect_free_type_names(
-                    &prerequisite.argument,
-                    &self.type_names,
-                    &self.interface_names,
-                    &declared,
-                    &mut seen,
-                    &mut prerequisite_only_names,
-                    &mut self.type_work,
-                )?;
+        let mut method_groups = Vec::new();
+        let mut start = 0;
+        while let Some(first) = implementation.equations.get(start) {
+            let mut end = start + 1;
+            while implementation
+                .equations
+                .get(end)
+                .is_some_and(|equation| equation.name.text == first.name.text)
+            {
+                end += 1;
             }
-            let prerequisite_only_parameters = prerequisite_only_names
-                .into_iter()
-                .map(|name| self.allocate_type_variable(&name, None))
-                .collect::<Result<Vec<_>, _>>()?;
-            for parameter in head_parameters.iter().chain(&prerequisite_only_parameters) {
-                retained_type_variables.push(self.clone_type_variable_for_retention(
-                    parameter,
-                    implementation.span,
-                    "implementation parameter retention exceeded its type-work budget",
-                )?);
-            }
-
-            let mut method_groups = Vec::new();
-            let mut start = 0;
-            while let Some(first) = implementation.equations.get(start) {
-                let mut end = start + 1;
-                while implementation
-                    .equations
-                    .get(end)
-                    .is_some_and(|equation| equation.name.text == first.name.text)
-                {
-                    end += 1;
-                }
-                method_groups.push(PendingImplementationMethodGroup {
-                    equations: start..end,
-                    binder: None,
-                });
-                start = end;
-            }
-
-            pending.push(PendingImplementation {
-                id,
-                head_parameters,
-                prerequisite_only_parameters,
-                method_groups,
+            method_groups.push(PendingImplementationMethodGroup {
+                equations: start..end,
+                binder: None,
             });
+            start = end;
         }
 
-        Ok((pending, retained_type_variables))
+        Ok(PendingImplementation {
+            id,
+            head_parameters,
+            prerequisite_only_parameters,
+            method_groups,
+        })
     }
 
     fn install_imports(
@@ -4243,18 +4300,229 @@ impl Resolver {
         &mut self,
         surface: &SurfaceModule,
     ) -> Result<ResolvedDeclarations, ResolveError> {
-        let (registry, constructor_payload_provenance) =
-            self.resolve_registry(&surface.type_declarations)?;
-        let (interfaces, interface_type_parameters) =
-            self.resolve_interface_declarations(&surface.interfaces)?;
+        let nominal_identities = self.install_nominal_identities(&surface.type_declarations)?;
+        let interface_identities = self.install_interface_identities(&surface.interfaces)?;
+
+        let mut nominal_type_parameters = Vec::new();
+        nominal_type_parameters
+            .try_reserve_exact(surface.type_declarations.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "nominal type-parameter preparation storage could not be reserved",
+                )
+            })?;
+        let mut interface_type_parameters = Vec::new();
+        interface_type_parameters
+            .try_reserve_exact(surface.interfaces.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "interface type-parameter preparation storage could not be reserved",
+                )
+            })?;
+        let mut global_type_parameters = Vec::new();
+        global_type_parameters
+            .try_reserve_exact(surface.definitions.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "global type-parameter preparation storage could not be reserved",
+                )
+            })?;
+        let mut pending_implementations = Vec::new();
+        pending_implementations
+            .try_reserve_exact(surface.implementations.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "implementation type-parameter preparation storage could not be reserved",
+                )
+            })?;
+
+        for declaration in &surface.declaration_order {
+            match *declaration {
+                SurfaceDeclarationIndex::Type(index) => {
+                    let source = surface.type_declarations.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid type index",
+                        )
+                    })?;
+                    if index < nominal_type_parameters.len() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the surface declaration order repeats or reorders a nominal declaration",
+                        ));
+                    }
+                    if index > nominal_type_parameters.len() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the surface declaration order skips or reorders a nominal declaration",
+                        ));
+                    }
+                    let identity = nominal_identities.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the resolver lost a nominal declaration identity",
+                        )
+                    })?;
+                    nominal_type_parameters
+                        .push((identity.id, self.allocate_nominal_type_parameters(source)?));
+                }
+                SurfaceDeclarationIndex::Interface(index) => {
+                    let source = surface.interfaces.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid interface index",
+                        )
+                    })?;
+                    if index < interface_type_parameters.len() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the surface declaration order repeats or reorders an interface declaration",
+                        ));
+                    }
+                    if index > interface_type_parameters.len() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the surface declaration order skips or reorders an interface declaration",
+                        ));
+                    }
+                    interface_type_parameters.push(self.prepare_interface_type_parameters(source)?);
+                }
+                SurfaceDeclarationIndex::Global(index) => {
+                    let source = surface.definitions.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid global index",
+                        )
+                    })?;
+                    if index < global_type_parameters.len() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the surface declaration order repeats or reorders a global declaration",
+                        ));
+                    }
+                    if index > global_type_parameters.len() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the surface declaration order skips or reorders a global declaration",
+                        ));
+                    }
+                    global_type_parameters.push(self.allocate_global_type_parameters(source)?);
+                }
+                SurfaceDeclarationIndex::Implementation(index) => {
+                    let source = surface.implementations.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid impl index",
+                        )
+                    })?;
+                    if index < pending_implementations.len() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the surface declaration order repeats or reorders an implementation declaration",
+                        ));
+                    }
+                    if index > pending_implementations.len() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the surface declaration order skips or reorders an implementation declaration",
+                        ));
+                    }
+                    pending_implementations.push(self.prepare_implementation(index, source)?);
+                }
+            }
+        }
+
+        if nominal_type_parameters.len() != surface.type_declarations.len() {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface
+                    .type_declarations
+                    .get(nominal_type_parameters.len())
+                    .map_or(surface.span, |declaration| declaration.span),
+                "the surface declaration order omits a nominal declaration",
+            ));
+        }
+        if interface_type_parameters.len() != surface.interfaces.len() {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface
+                    .interfaces
+                    .get(interface_type_parameters.len())
+                    .map_or(surface.span, |declaration| declaration.span),
+                "the surface declaration order omits an interface declaration",
+            ));
+        }
+        if global_type_parameters.len() != surface.definitions.len() {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface
+                    .definitions
+                    .get(global_type_parameters.len())
+                    .map_or(surface.span, |declaration| declaration.span),
+                "the surface declaration order omits a global declaration",
+            ));
+        }
+        if pending_implementations.len() != surface.implementations.len() {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface
+                    .implementations
+                    .get(pending_implementations.len())
+                    .map_or(surface.span, |declaration| declaration.span),
+                "the surface declaration order omits an implementation declaration",
+            ));
+        }
+
+        let (registry, constructor_payload_provenance) = self.resolve_registry_with_prepared(
+            &surface.type_declarations,
+            nominal_identities,
+            nominal_type_parameters,
+        )?;
+        let (interfaces, interface_type_parameters) = self.resolve_interface_declarations(
+            &surface.interfaces,
+            interface_identities,
+            interface_type_parameters,
+            surface.span,
+        )?;
         let interfaces = ResolvedInterfaceBuffer(interfaces);
         let surface_definitions = &surface.definitions;
-        let mut global_type_parameters = Vec::with_capacity(surface_definitions.len());
-        for definition in surface_definitions {
-            global_type_parameters.push(self.allocate_global_type_parameters(definition)?);
+        let mut implementation_type_parameters = Vec::new();
+        for (implementation, pending) in
+            surface.implementations.iter().zip(&pending_implementations)
+        {
+            for parameter in pending
+                .head_parameters
+                .iter()
+                .chain(&pending.prerequisite_only_parameters)
+            {
+                implementation_type_parameters.push(self.clone_type_variable_for_retention(
+                    parameter,
+                    implementation.span,
+                    "implementation parameter retention exceeded its type-work budget",
+                )?);
+            }
         }
-        let (mut pending_implementations, implementation_type_parameters) =
-            self.prepare_implementations(&surface.implementations)?;
         let global_registry_type_parameters =
             self.clone_global_type_parameters_for_registry(&global_type_parameters, surface.span)?;
         let registry = Arc::new(
@@ -4670,10 +4938,10 @@ impl Resolver {
         Ok(implementations.into_vec())
     }
 
-    fn resolve_registry(
+    fn install_nominal_identities(
         &mut self,
         type_declarations: &[SurfaceTypeDeclaration],
-    ) -> Result<(ResolvedRegistry, Vec<Vec<ConstructorPayloadProvenance>>), ResolveError> {
+    ) -> Result<Vec<NominalDeclarationIdentity>, ResolveError> {
         let mut first_types = HashMap::new();
         let mut nominal_ids = Vec::with_capacity(type_declarations.len());
         for (index, declaration) in type_declarations.iter().enumerate() {
@@ -4714,7 +4982,7 @@ impl Resolver {
         }
 
         let mut first_constructors = HashMap::new();
-        let mut constructor_ids = Vec::with_capacity(type_declarations.len());
+        let mut identities = Vec::with_capacity(type_declarations.len());
         for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
             let mut owned = Vec::with_capacity(declaration.constructors.len());
             for (index, constructor) in declaration.constructors.iter().enumerate() {
@@ -4758,19 +5026,61 @@ impl Resolver {
                     .insert(constructor.name.text.clone(), id);
                 owned.push(id);
             }
-            constructor_ids.push(owned);
+            identities.push(NominalDeclarationIdentity {
+                id: *owner,
+                constructors: owned,
+            });
         }
+        Ok(identities)
+    }
 
-        let mut nominal_parameters = Vec::with_capacity(type_declarations.len());
-        for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
-            validate_explicit_type_parameters(Some(&declaration.parameters))?;
-            let mut parameters = Vec::with_capacity(declaration.parameters.len());
-            for parameter in &declaration.parameters {
-                parameters
-                    .push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
-            }
-            nominal_parameters.push((*owner, parameters));
+    fn allocate_nominal_type_parameters(
+        &mut self,
+        declaration: &SurfaceTypeDeclaration,
+    ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
+        validate_explicit_type_parameters(Some(&declaration.parameters))?;
+        let mut parameters = Vec::with_capacity(declaration.parameters.len());
+        for parameter in &declaration.parameters {
+            parameters.push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
         }
+        Ok(parameters)
+    }
+
+    #[cfg(test)]
+    fn resolve_registry(
+        &mut self,
+        type_declarations: &[SurfaceTypeDeclaration],
+    ) -> Result<(ResolvedRegistry, Vec<Vec<ConstructorPayloadProvenance>>), ResolveError> {
+        let identities = self.install_nominal_identities(type_declarations)?;
+        let mut parameters = Vec::new();
+        if let Some(last) = type_declarations.last() {
+            parameters
+                .try_reserve_exact(type_declarations.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        last.span,
+                        "nominal type-parameter preparation storage could not be reserved",
+                    )
+                })?;
+        }
+        for (declaration, identity) in type_declarations.iter().zip(&identities) {
+            parameters.push((
+                identity.id,
+                self.allocate_nominal_type_parameters(declaration)?,
+            ));
+        }
+        self.resolve_registry_with_prepared(type_declarations, identities, parameters)
+    }
+
+    fn resolve_registry_with_prepared(
+        &mut self,
+        type_declarations: &[SurfaceTypeDeclaration],
+        identities: Vec<NominalDeclarationIdentity>,
+        nominal_parameters: Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>,
+    ) -> Result<(ResolvedRegistry, Vec<Vec<ConstructorPayloadProvenance>>), ResolveError> {
+        debug_assert_eq!(type_declarations.len(), identities.len());
+        debug_assert_eq!(type_declarations.len(), nominal_parameters.len());
         self.nominal_parameter_counts.extend(
             nominal_parameters
                 .iter()
@@ -4779,12 +5089,11 @@ impl Resolver {
 
         let nominals = type_declarations
             .iter()
-            .zip(&nominal_ids)
-            .zip(&constructor_ids)
-            .map(|((declaration, id), constructors)| ResolvedNominalType {
-                id: *id,
+            .zip(&identities)
+            .map(|(declaration, identity)| ResolvedNominalType {
+                id: identity.id,
                 spelling: declaration.name.text.clone(),
-                constructors: constructors.clone().into_boxed_slice(),
+                constructors: identity.constructors.clone().into_boxed_slice(),
                 origin: Origin::Source(declaration.span),
             })
             .collect::<Vec<_>>();
@@ -4810,10 +5119,9 @@ impl Resolver {
                     )
                 })?;
         }
-        for (((declaration, owner), ids), (_, parameters)) in type_declarations
+        for ((declaration, identity), (_, parameters)) in type_declarations
             .iter()
-            .zip(&nominal_ids)
-            .zip(&constructor_ids)
+            .zip(&identities)
             .zip(&nominal_parameters)
         {
             let mut nominal_payload_provenance = Vec::new();
@@ -4842,7 +5150,8 @@ impl Resolver {
                     .collect(),
             );
             let result = (|| -> Result<(), ResolveError> {
-                for (constructor, id) in declaration.constructors.iter().zip(ids) {
+                for (constructor, id) in declaration.constructors.iter().zip(&identity.constructors)
+                {
                     let mut field_provenance = Vec::new();
                     self.type_work
                         .charge(constructor.fields.len())
@@ -4913,7 +5222,7 @@ impl Resolver {
                     };
                     constructors.0.push(ResolvedConstructor {
                         id: *id,
-                        owner: *owner,
+                        owner: identity.id,
                         spelling: constructor.name.text.clone(),
                         payload: payload.map(IterativeTypeOwner::into_inner),
                         origin: Origin::Source(constructor.span),

@@ -760,6 +760,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::ImportedConstructorFactBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ImportedTypeCloneBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ImportedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::PendingInterfaceTypeParameters.methods", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::PendingInterfaceTypeParameters.parameter", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::PendingImplementation.head_parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::PendingImplementation.prerequisite_only_parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolveTaskBuffer.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),

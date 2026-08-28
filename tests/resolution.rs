@@ -781,6 +781,62 @@ fn declaration_binder_defaults_and_legacy_order_are_fixed_at_type() {
 }
 
 #[test]
+fn declaration_type_binder_identities_follow_source_order_across_interface_and_nominal_families() {
+    let program = resolve_valid(
+        "interface Project<A> {\nproject : B -> A\n}\n\ntype Pair<C, D> = Pair(C, D)\n\nidentity<E> : E -> E\nidentity value = value\n",
+    );
+
+    let [interface] = program.interfaces() else {
+        panic!("expected one interface");
+    };
+    let [method_parameter] = interface.methods[0].type_parameters.as_ref() else {
+        panic!("expected one method-local type candidate");
+    };
+    let nominal = program
+        .registry()
+        .nominal_parameters(program.registry().nominals()[0].id)
+        .expect("the nominal should retain its parameters");
+    let ResolvedDefinitionKind::Equational(identity) = &program.definitions()[0].kind else {
+        panic!("expected the equational global");
+    };
+
+    assert_eq!(interface.parameter.id.local(), 0);
+    assert_eq!(method_parameter.id.local(), 1);
+    assert_eq!(nominal[0].id.local(), 2);
+    assert_eq!(nominal[1].id.local(), 3);
+    assert_eq!(identity.interface.type_parameters[0].id.local(), 4);
+}
+
+#[test]
+fn declaration_type_binder_identities_follow_source_order_across_impl_and_global_families() {
+    let program = resolve_valid(
+        "interface Witness<Value> {\nwitness : Value -> Bool\n}\n\nimpl<A> Witness<A> where Witness<B> {\nwitness value = true\n}\n\nlater<C, D> : C -> D -> C\nlater first second = first\n",
+    );
+
+    let [interface] = program.interfaces() else {
+        panic!("expected one interface");
+    };
+    let [implementation] = program.implementations() else {
+        panic!("expected one implementation");
+    };
+    let [head_parameter] = implementation.head_parameters.as_ref() else {
+        panic!("expected one implementation head parameter");
+    };
+    let [prerequisite_parameter] = implementation.prerequisite_only_parameters.as_ref() else {
+        panic!("expected one prerequisite-only parameter");
+    };
+    let ResolvedDefinitionKind::Equational(later) = &program.definitions()[0].kind else {
+        panic!("expected the later equational global");
+    };
+
+    assert_eq!(interface.parameter.id.local(), 0);
+    assert_eq!(head_parameter.id.local(), 1);
+    assert_eq!(prerequisite_parameter.id.local(), 2);
+    assert_eq!(later.interface.type_parameters[0].id.local(), 3);
+    assert_eq!(later.interface.type_parameters[1].id.local(), 4);
+}
+
+#[test]
 fn omitted_kinds_and_implicit_lists_preserve_exact_type_kinds_and_order() {
     let program = resolve_valid(concat!(
         "type ExplicitPair<Left, Right> = ExplicitPair(Left, Right)\n",
