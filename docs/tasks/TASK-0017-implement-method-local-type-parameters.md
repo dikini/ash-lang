@@ -294,6 +294,47 @@ and evaluator semantic or state-machine changes.
   Rust/resource re-reviews remain pending. The Checkpoint 3 reservation remains
   12 units, cumulative reserved use remains 26/70, and 44 units remain
   unreserved.
+- Checkpoint 3 semantic re-review rejected correction `8622daf` on a failed-body
+  ordering case. The exact RED `cargo test --locked --test interface_selection
+  unrelated_selection_failure_does_not_mask_matching_polymorphic_recursion --
+  --exact --nocapture` exited 101 with `type.definition-result`, expected `A`,
+  found `(A, A)`, instead of the required `type.polymorphic-recursion`. The
+  failing body had staged an earlier unsatisfied `Missing<Int>` occurrence and
+  a later exact-current `Repeat<Int>` recursive occurrence at the failure site.
+  Full suffix closure visited the earlier obligation first, failed selection,
+  and never selected or enforced the matching conditional rigidity relation;
+  the failed-body path then intentionally preserved the original body error.
+- Failed-body correction now performs an isolated close authenticated by the
+  body evidence marker and exact application or argument span. It scans the
+  pending suffix for one matching conditional occurrence, rejects duplicate
+  matches, and clones, zonks, and selects only that interface argument. Only an
+  exact-current selected root transfers the matching rigidity relation for
+  enforcement. Earlier unrelated obligations remain pending in source order,
+  method arguments remain outside candidate choice, normal successful suffix
+  closure is unchanged, and no occurrence slot is published on any path.
+- For pending suffix length `P` and `S` pending records after the matching
+  obligation, isolated close charges
+  `P + S + 2 + C_select(I)` constraint units and
+  `|I| + T_zonk(I) + T_select(I)` type units. The exact two-obligation fixture
+  uses 25 constraint and 3 type units; adding one trailing record makes
+  `S = 1` and uses 27/3 exactly. Constraint and type one-short failures, an
+  invalid marker, and duplicate matching sites preserve pending order and
+  counts, selected and rigidity buffers, and every empty public slot; exact
+  retry succeeds. The no-condition fast path consumes zero work. Focused
+  evidence also proves that an earlier unrelated selection failure is not
+  visited and that a remaining pending obligation prevents publication.
+- Second-correction verification passes 21 architecture tests, 44
+  implementation tests, 24 interface-selection tests, 33 interface tests, and
+  40 polymorphism tests; 64 `interface`-filtered, 115 `elaborate`-filtered, and
+  130 `evidence`-filtered library tests also pass. Formatting, locked all-target
+  checking, strict locked workspace/all-target/all-feature Clippy, Markdown
+  task lint, diff hygiene, and intended-path status inspection pass. The
+  correction agent used `gpt-5.6-sol` at xhigh reasoning. Self-review found no
+  selection-precedence, Core, evaluator, higher-rank, polymorphic-recursion
+  admission, resource-limit, or specification change. The specification is
+  unchanged; independent semantic and Rust/resource re-reviews remain pending.
+  The Checkpoint 3 reservation remains 12 units, cumulative reserved use
+  remains 26/70, and 44 units remain unreserved.
 
 ## Verification
 

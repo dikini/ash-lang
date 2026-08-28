@@ -16,8 +16,8 @@ use crate::{
     diagnostic::{Diagnostic, SourceLabel},
     evidence::{
         EvidenceSelector, MethodObligationMetadata, MethodRigidityCheck, MethodRigidityCondition,
-        MethodRigiditySite, PendingEvidencePublication, SelectionCauseKind, SelectionError,
-        SelectionFailure, SelectionSite,
+        MethodRigiditySite, MethodRigidityTarget, PendingEvidencePublication, SelectionCauseKind,
+        SelectionError, SelectionFailure, SelectionSite,
     },
     evidence_audit::{EvidenceAuditFailure, audit_checked_body_evidence},
     evidence_validation::ValidatedInterfaceProgram,
@@ -2218,28 +2218,18 @@ impl Elaborator {
                         TypeError::Mismatch(mismatch) => Some(mismatch.span),
                         TypeError::Internal(_) => None,
                     };
-                    let has_matching_rigidity = match failure_span {
-                        Some(failure_span) => self
-                            .selection
-                            .as_ref()
-                            .ok_or_else(invalid_state)?
-                            .pending_method_rigidity_matches(
-                                evidence_marker,
-                                failure_span,
-                                &mut self.constraint_work,
-                            )
-                            .map_err(|failure| selection_failure(failure, Some(failure_span)))?,
-                        None => false,
-                    };
-                    if has_matching_rigidity {
-                        let close_result = self.close_evidence_obligations_for_failed_body(
-                            evidence_marker,
-                            failure_span.ok_or_else(invalid_state)?,
-                        );
-                        if let Err(close_error) = close_result
-                            && is_polymorphic_recursion_error(&close_error)
+                    if let Some(failure_span) = failure_span {
+                        match self
+                            .close_method_rigidity_for_failed_body(evidence_marker, failure_span)
                         {
-                            return Err(close_error);
+                            Ok(_) => {}
+                            Err(close_error)
+                                if is_polymorphic_recursion_error(&close_error)
+                                    || matches!(close_error, TypeError::Internal(_)) =>
+                            {
+                                return Err(close_error);
+                            }
+                            Err(_) => {}
                         }
                     }
                     return Err(body_error);
@@ -2692,22 +2682,6 @@ impl Elaborator {
     }
 
     fn close_evidence_obligations(&mut self, marker: usize) -> Result<(), TypeError> {
-        self.close_evidence_obligations_matching(marker, None)
-    }
-
-    fn close_evidence_obligations_for_failed_body(
-        &mut self,
-        marker: usize,
-        failure_span: Span,
-    ) -> Result<(), TypeError> {
-        self.close_evidence_obligations_matching(marker, Some(failure_span))
-    }
-
-    fn close_evidence_obligations_matching(
-        &mut self,
-        marker: usize,
-        failure_span: Option<Span>,
-    ) -> Result<(), TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -2750,9 +2724,6 @@ impl Elaborator {
         }
         for index in 0..selector.method_rigidity_count() {
             let check = selector.method_rigidity(index).ok_or_else(invalid_state)?;
-            if failure_span.is_some_and(|span| !check.site().matches_failure_span(span)) {
-                continue;
-            }
             if let Err(error) = self.enforce_selected_method_rigidity(check) {
                 self.selection = Some(selector);
                 return Err(error);
@@ -2761,6 +2732,66 @@ impl Elaborator {
         selector.clear_method_rigidities();
         self.selection = Some(selector);
         Ok(())
+    }
+
+    fn close_method_rigidity_for_failed_body(
+        &mut self,
+        marker: usize,
+        failure_span: Span,
+    ) -> Result<bool, TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return Err(invalid_state());
+        }
+        let mut selector = self.selection.take().ok_or_else(invalid_state)?;
+        let solutions = &self.inference_solutions;
+        let inference_variables = &self.inference_variables;
+        let authenticated_solutions = &self.authenticated_inference_solutions;
+        let result = selector.close_method_rigidity_with_registry(
+            &self.registry,
+            MethodRigidityTarget::new(marker, failure_span),
+            |argument, type_work| {
+                let zonked =
+                    zonk_type_with_status_and_inference(&argument, solutions, |work| match work {
+                        ZonkWork::TypeCells(cells) => type_work
+                            .charge(cells)
+                            .map_err(|()| SelectionFailure::TypeResource),
+                        ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                            identity,
+                            inference_variables,
+                            solutions,
+                            authenticated_solutions,
+                            type_work,
+                        )
+                        .map_err(|failure| match failure {
+                            UnificationFailure::Resource => SelectionFailure::TypeResource,
+                            UnificationFailure::Mismatch
+                            | UnificationFailure::Infinite
+                            | UnificationFailure::Invariant => SelectionFailure::InvalidState,
+                        }),
+                    });
+                discard_type_iteratively(argument);
+                zonked.map(|(ty, _)| ty)
+            },
+            &mut self.constraint_work,
+            &mut self.type_work,
+        );
+        let found = match result {
+            Ok(found) => found,
+            Err(error) => {
+                self.selection = Some(selector);
+                return Err(selected_obligation_error(error));
+            }
+        };
+        for index in 0..selector.method_rigidity_count() {
+            let check = selector.method_rigidity(index).ok_or_else(invalid_state)?;
+            if let Err(error) = self.enforce_selected_method_rigidity(check) {
+                self.selection = Some(selector);
+                return Err(error);
+            }
+        }
+        selector.clear_method_rigidities();
+        self.selection = Some(selector);
+        Ok(found)
     }
 
     fn enforce_selected_method_rigidity(

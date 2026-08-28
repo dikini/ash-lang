@@ -1014,6 +1014,31 @@ fn failed_body_rigidity_diagnostic_matches_the_same_recursive_application() {
 }
 
 #[test]
+fn unrelated_selection_failure_does_not_mask_matching_polymorphic_recursion() {
+    let text = concat!(
+        "interface Missing<I> {\nmissing : I -> I\n}\n",
+        "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n",
+        "impl Repeat<Int> {\n",
+        "repeat (owner, value) = {\n",
+        "let ignored = missing(owner)\n",
+        "repeat((owner, (value, value)))\n",
+        "}\n",
+        "}\n",
+        "main : Unit -> Unit\n",
+        "main () = ()\n",
+    );
+    let TypeError::Source(diagnostic) = check(text).expect_err(
+        "the matching exact-current recursion should be diagnosed before unrelated evidence",
+    ) else {
+        panic!("the matching recursive application should retain a source diagnostic");
+    };
+
+    assert_eq!(diagnostic.reason.to_string(), "type.polymorphic-recursion");
+    assert_eq!(diagnostic.expected.as_deref(), Some("A"));
+    assert_eq!(diagnostic.found.as_deref(), Some("(A, A)"));
+}
+
+#[test]
 fn polymorphic_method_arguments_never_influence_candidate_selection() {
     let checked = check(concat!(
         "interface Choose<I> {\nchoose<A> : (I, A) -> I\n}\n\n",
