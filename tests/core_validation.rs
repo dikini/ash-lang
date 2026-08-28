@@ -69,6 +69,10 @@ impl Drop for InterfaceCoreFixture {
 }
 
 fn validated_interface_core(text: &str) -> ValidatedProgram {
+    validated_interface_core_with_graph(text).0
+}
+
+fn validated_interface_core_with_graph(text: &str) -> (ValidatedProgram, ModuleGraph) {
     let fixture = InterfaceCoreFixture::create(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the Core interface fixture should load");
@@ -99,8 +103,9 @@ fn validated_interface_core(text: &str) -> ValidatedProgram {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    ash::core::validate_modules(unchecked, &sources, &module_sources)
-        .expect("the authenticated interface Core should independently validate")
+    let program = ash::core::validate_modules(unchecked, &sources, &module_sources)
+        .expect("the authenticated interface Core should independently validate");
+    (program, graph)
 }
 
 fn reachable_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
@@ -564,6 +569,114 @@ fn exact_current_polymorphic_adapter_reuses_abstract_prerequisites() {
         abstract_prerequisite_adapters >= 1,
         "the exact-current adapter must reuse its active abstract prerequisite"
     );
+}
+
+#[test]
+fn nested_same_implementation_selections_keep_distinct_polymorphic_adapters() {
+    let (program, graph) = validated_interface_core_with_graph(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "interface Score<A> {\n",
+        "score<X> : (A, X) -> Int\n",
+        "}\n\n",
+        "impl Score<Int> {\n",
+        "score (value, ignored) = value\n",
+        "}\n\n",
+        "impl Score<Option<A>> where Score<A> {\n",
+        "score (None, ignored) = 4\n",
+        "score (Some(value), ignored) = {\n",
+        "let empty : Option<A> = None\n",
+        "score((empty, ignored)) * 10 + score((value, ignored))\n",
+        "}\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = score((Some(Some(2)), true))\n",
+    ));
+
+    let recursive_initializers = reachable_nodes(&program)
+        .into_iter()
+        .filter_map(|id| {
+            let node = program.node(id)?;
+            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+            else {
+                return None;
+            };
+            Some(
+                group
+                    .members()
+                    .iter()
+                    .map(|member| member.initializer())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect::<HashSet<_>>();
+    let mut adapter_heads = Vec::new();
+    for id in reachable_nodes(&program) {
+        if recursive_initializers.contains(&id) {
+            continue;
+        }
+        let Some(node) = program.node(id) else {
+            continue;
+        };
+        let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) = &node.kind
+        else {
+            continue;
+        };
+        let mut current = abstraction.body();
+        while let Some(node) = program.node(current) {
+            match &node.kind {
+                PureExprKind::Computation(PureComputation::Apply(application)) => {
+                    current = application.function();
+                }
+                PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+                    if let Some(head) = application
+                        .arguments()
+                        .first()
+                        .filter(|head| !matches!(head, Type::Variable(_)))
+                        && let Some(function) = program.node(application.function())
+                        && let PureExprKind::Variable(variable) = &function.kind
+                    {
+                        adapter_heads.push((variable.binder(), head.clone()));
+                    }
+                    break;
+                }
+                _ => break,
+            }
+        }
+    }
+    assert_eq!(
+        adapter_heads.len(),
+        2,
+        "both selected evidence nodes need adapters"
+    );
+    assert!(
+        adapter_heads[0].0 == adapter_heads[1].0,
+        "both adapters must apply the same implementation method binder",
+    );
+    assert!(
+        !same_type(&adapter_heads[0].1, &adapter_heads[1].1),
+        "the same implementation identity must retain distinct head substitutions",
+    );
+    assert_integer_evaluation(&program, "82");
+
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let identity = identity_traversal(&program).expect("identity must preserve both adapters");
+    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+        .expect("identity output must freshly validate both adapters");
+    assert_integer_evaluation(&identity, "82");
+    let folded = fold_literal_primitives(&program).expect("folding must preserve both adapters");
+    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+        .expect("fold output must freshly validate both adapters");
+    assert_integer_evaluation(&folded, "82");
 }
 
 #[test]

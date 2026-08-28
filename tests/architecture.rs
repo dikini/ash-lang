@@ -4181,6 +4181,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "method_evidence"
                     | "method_evidence_adapter_interface_matches"
                     | "method_evidence_anchor_matches_expectation"
+                    | "method_evidence_anchor_identity_work"
                     | "method_evidence_anchors"
                     | "method_evidence_expected_producer_matches"
                     | "method_evidence_producer_matches"
@@ -4205,6 +4206,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "method_evidence_anchor_matches_expectation"
                     | "method_evidence_anchors"
                     | "method_evidence_producer_matches"
+                    | "method_evidence_scope_binder"
                     | "validate_implementation_owner_anchor"
                     | "validate_method_evidence_authority"
                     | "validate_method_evidence_carrier_incoming"
@@ -4215,7 +4217,8 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
             ),
             "src/core/transform.rs" => matches!(
                 identifier,
-                "authenticate_method_evidence"
+                "MethodEvidenceAnchorRole"
+                    | "authenticate_method_evidence"
                     | "interface_argument"
                     | "method_evidence"
                     | "method_evidence_anchors"

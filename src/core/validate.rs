@@ -556,6 +556,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                     Some(anchor.node),
                 ));
             }
+            let exact_identity_work = match anchor.role {
+                MethodEvidenceAnchorRole::Adapter { .. } => 1,
+                MethodEvidenceAnchorRole::AdapterEdge { .. } => 4,
+                _ => 0,
+            };
+            self.charge_type_work(exact_identity_work)?;
             let role_matches = match (expected.role, anchor.role) {
                 (
                     MethodEvidenceExpectedRole::ImplementationOwner { owner },
@@ -612,21 +618,36 @@ impl<'program, 'source> Validator<'program, 'source> {
                     MethodEvidenceExpectedRole::Adapter { adapter },
                     MethodEvidenceAnchorRole::Adapter {
                         implementation: actual,
+                        selection_node,
                     },
                 ) => catalog
                     .adapters()
                     .get(adapter)
-                    .is_some_and(|row| actual == row.implementation),
+                    .is_some_and(|row| {
+                        actual == row.implementation && selection_node == row.selection_node
+                    }),
                 (
                     MethodEvidenceExpectedRole::AdapterEdge { adapter, ordinal },
                     MethodEvidenceAnchorRole::AdapterEdge {
                         adapter: actual,
+                        adapter_selection_node,
                         ordinal: actual_ordinal,
+                        producer_node,
+                        producer_selection_node,
+                        producer_binder,
                         producer: actual_producer,
                     },
                 ) => catalog.adapters().get(adapter).is_some_and(|row| {
                     actual == row.implementation
+                        && adapter_selection_node == row.selection_node
                         && ordinal == actual_ordinal
+                        && matches!(
+                            self.program.nodes.get(anchor.node.index().unwrap_or(usize::MAX)),
+                            Some(StoredNode {
+                                kind: PureExprKind::Computation(PureComputation::Apply(application)),
+                                ..
+                            }) if application.argument() == producer_node
+                        )
                         && row.prerequisites.get(ordinal).is_some_and(|edge| {
                             Some(edge.owner) == anchor.owner
                                 && Some(edge.requirement) == anchor.requirement
@@ -639,9 +660,35 @@ impl<'program, 'source> Validator<'program, 'source> {
                                         producer,
                                         actual_producer,
                                     ),
-                                    super::dialect::MethodEvidenceExpectedProducer::Monomorphic(
-                                        expected,
-                                    ) => expected == actual_producer,
+                                    super::dialect::MethodEvidenceExpectedProducer::Monomorphic {
+                                        selection_node,
+                                        producer_scope_position: _,
+                                        producer,
+                                    } => {
+                                        selection_node == producer_selection_node
+                                            && producer == actual_producer
+                                            && match (producer, producer_binder) {
+                                                (
+                                                    MethodEvidenceProducer::Abstract { .. },
+                                                    Some(binder),
+                                                ) => matches!(
+                                                    self.program.nodes.get(
+                                                        producer_node
+                                                            .index()
+                                                            .unwrap_or(usize::MAX)
+                                                    ),
+                                                    Some(StoredNode {
+                                                        kind: PureExprKind::Variable(variable),
+                                                        ..
+                                                    }) if variable.binder() == binder
+                                                ),
+                                                (
+                                                    MethodEvidenceProducer::Adapter { .. },
+                                                    None,
+                                                ) => true,
+                                                _ => false,
+                                            }
+                                    }
                                 }
                         })
                 }),
@@ -1885,7 +1932,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             ));
         };
         let producer_matches = match source.role {
-            MethodEvidenceAnchorRole::Adapter { implementation } => {
+            MethodEvidenceAnchorRole::Adapter { implementation, .. } => {
                 source.node == application.argument()
                     && actual_producer == MethodEvidenceProducer::Adapter { implementation }
             }
@@ -1930,7 +1977,11 @@ impl<'program, 'source> Validator<'program, 'source> {
     ) -> Result<(), ValidationError> {
         let MethodEvidenceAnchorRole::AdapterEdge {
             adapter,
+            adapter_selection_node,
             ordinal,
+            producer_node,
+            producer_selection_node,
+            producer_binder,
             producer,
         } = anchor.role
         else {
@@ -1939,6 +1990,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                 Some(anchor.node),
             ));
         };
+        // Rechecking the exact adapter selection, argument node, producer
+        // selection, and generated-binder identity is separate from retaining
+        // those four anchor fields during Core construction.
+        self.charge_type_work(4)?;
         let Some(MethodEvidenceExpectedRole::AdapterEdge {
             adapter: adapter_index,
             ordinal: expected_ordinal,
@@ -1984,7 +2039,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             .values()
             .find(|candidate| {
                 candidate.occurrence == anchor.occurrence
-                    && matches!(candidate.role, MethodEvidenceAnchorRole::Adapter { implementation } if implementation == row.implementation)
+                    && matches!(candidate.role, MethodEvidenceAnchorRole::Adapter { implementation, selection_node } if implementation == row.implementation && selection_node == row.selection_node)
             })
             .copied();
         let adapter_anchor = adapter_anchor.ok_or_else(|| {
@@ -2118,7 +2173,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                             }),
                             self.same_type_charged(&argument.ty, &expected_domain)?,
                         ),
-                        MethodEvidenceAnchorRole::Adapter { implementation } => (
+                        MethodEvidenceAnchorRole::Adapter { implementation, .. } => (
                             source.node == application.argument()
                                 && producer == MethodEvidenceProducer::Adapter { implementation },
                             self.adapter_scheme_matches(&expected_domain, &argument.ty)?,
@@ -2129,12 +2184,42 @@ impl<'program, 'source> Validator<'program, 'source> {
                     (false, false)
                 }
             }
-            super::dialect::MethodEvidenceExpectedProducer::Monomorphic(expected) => (
-                expected == producer,
-                self.same_type_charged(&argument.ty, &expected_domain)?,
-            ),
+            super::dialect::MethodEvidenceExpectedProducer::Monomorphic {
+                selection_node,
+                producer_scope_position,
+                producer: expected,
+            } => {
+                let exact_scope_binder = match (expected, producer_scope_position) {
+                    (MethodEvidenceProducer::Abstract { .. }, Some(producer_scope_position)) => {
+                        Some(self.method_evidence_scope_binder(anchor, producer_scope_position)?)
+                    }
+                    (MethodEvidenceProducer::Adapter { .. }, None) => None,
+                    _ => {
+                        return Err(ValidationError::new(
+                            ValidationReason::ApplicationType,
+                            Some(anchor.node),
+                        ));
+                    }
+                };
+                (
+                    selection_node == producer_selection_node
+                        && expected == producer
+                        && producer_node == application.argument()
+                        && producer_binder == exact_scope_binder,
+                    self.same_type_charged(&argument.ty, &expected_domain)?,
+                )
+            }
         };
         if adapter != row.implementation
+            || adapter_selection_node != row.selection_node
+            || match (producer, producer_binder) {
+                (MethodEvidenceProducer::Abstract { .. }, Some(binder)) => !matches!(
+                    argument.kind,
+                    PureExprKind::Variable(variable) if variable.binder() == binder
+                ),
+                (MethodEvidenceProducer::Adapter { .. }, None) => false,
+                _ => true,
+            }
             || ordinal != expected_ordinal
             || !source_matches
             || !argument_type_matches
@@ -2147,6 +2232,80 @@ impl<'program, 'source> Validator<'program, 'source> {
             ));
         }
         Ok(())
+    }
+
+    fn method_evidence_scope_binder(
+        &self,
+        anchor: &MethodEvidenceAnchor,
+        position: usize,
+    ) -> Result<BinderId, ValidationError> {
+        let occurrence = anchor
+            .occurrence
+            .and_then(|slot| self.program.method_evidence.occurrence(slot))
+            .ok_or_else(|| {
+                ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+            })?;
+        let scope_binder = occurrence.scope_binder.ok_or_else(|| {
+            ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+        })?;
+        if !matches!(
+            occurrence.scope,
+            Some(MethodEvidenceOwner::Global(owner)) if owner == scope_binder
+        ) && !matches!(
+            occurrence.scope,
+            Some(MethodEvidenceOwner::Implementation(_))
+        ) {
+            return Err(ValidationError::new(
+                ValidationReason::ApplicationType,
+                Some(anchor.node),
+            ));
+        }
+        self.charge_type_work(self.program.nodes.len())?;
+        let mut initializer = None;
+        for node in &self.program.nodes {
+            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+            else {
+                continue;
+            };
+            self.charge_type_work(group.members().len())?;
+            for member in group.members() {
+                if member.binder().id() == scope_binder
+                    && initializer.replace(member.initializer()).is_some()
+                {
+                    return Err(ValidationError::new(
+                        ValidationReason::ApplicationType,
+                        Some(anchor.node),
+                    ));
+                }
+            }
+        }
+        let mut current = initializer.ok_or_else(|| {
+            ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+        })?;
+        if let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+            &self.node(current)?.kind
+        {
+            current = abstraction.body();
+        }
+        for _ in 0..position {
+            self.charge_type_work(1)?;
+            let PureExprKind::Value(PureValue::Function(function)) = &self.node(current)?.kind
+            else {
+                return Err(ValidationError::new(
+                    ValidationReason::ApplicationType,
+                    Some(anchor.node),
+                ));
+            };
+            current = function.body();
+        }
+        self.charge_type_work(1)?;
+        let PureExprKind::Value(PureValue::Function(function)) = &self.node(current)?.kind else {
+            return Err(ValidationError::new(
+                ValidationReason::ApplicationType,
+                Some(anchor.node),
+            ));
+        };
+        Ok(function.parameter().id())
     }
 
     fn validate_adapter_prerequisite_sequence(
@@ -2206,7 +2365,11 @@ impl<'program, 'source> Validator<'program, 'source> {
             actual.push(current);
             current = application.function();
         }
-        self.charge_type_work(actual.len())?;
+        let exact_sequence_work = actual
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resource, Some(adapter.node)))?;
+        self.charge_type_work(exact_sequence_work)?;
         if actual.len() == expected.prerequisites.len()
             && actual.iter().rev().enumerate().all(|(ordinal, node)| {
                 anchors.get(node).is_some_and(|anchor| {
@@ -2214,9 +2377,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                         anchor.role,
                         MethodEvidenceAnchorRole::AdapterEdge {
                             adapter: implementation,
+                            adapter_selection_node,
                             ordinal: actual,
                             ..
-                        } if implementation == expected.implementation && actual == ordinal
+                        } if implementation == expected.implementation
+                            && adapter_selection_node == expected.selection_node
+                            && actual == ordinal
                     )
                 })
             })
@@ -4979,7 +5145,7 @@ mod tests {
         core::{
             CoreBuilder, PureValue,
             binding::BindingNode,
-            function::FunctionNode,
+            function::{ApplicationNode, FunctionNode},
             transform::{fold_literal_primitives, identity_traversal},
             type_ops::{TypeAbstractionNode, TypeApplicationNode},
         },
@@ -5150,6 +5316,219 @@ mod tests {
         )
     }
 
+    fn monomorphic_adapter_edge_fixture() -> LinkedCoreValidationFixture {
+        LinkedCoreValidationFixture::compile(
+            "pub seed : Unit -> Unit\nseed value = value\n",
+            concat!(
+                "type Wrap<A> = Wrap(A)\n\n",
+                "interface Base<I> {\nbase : I -> I\n}\n\n",
+                "interface Spare<I> {\nspare : I -> I\n}\n\n",
+                "interface Convert<I> {\nconvert<X> : (I, X) -> I\n}\n\n",
+                "impl Base<Int> {\nbase value = value\n}\n\n",
+                "impl Spare<Int> {\nspare value = value\n}\n\n",
+                "impl<A> Convert<Wrap<A>> where Base<A> {\n",
+                "convert (Wrap(value), ignored) = Wrap(base(value))\n",
+                "}\n\n",
+                "probe : Wrap<Int> -> Wrap<Int> where Base<Int>, Spare<Int>\n",
+                "probe value = {\nlet ignored = spare(0)\nconvert((value, true))\n}\n\n",
+                "main : Unit -> Wrap<Int>\n",
+                "main () = probe(Wrap(42))\n",
+            ),
+            &[],
+        )
+    }
+
+    fn replace_monomorphic_adapter_edge_with_same_typed_wrong_producer(
+        program: &mut UnvalidatedProgram,
+        coordinate_anchor_source: bool,
+    ) {
+        let edge = program
+            .method_evidence_anchors
+            .iter()
+            .find(|anchor| {
+                let Some(MethodEvidenceExpectedRole::AdapterEdge { adapter, ordinal }) = program
+                    .method_evidence
+                    .expectations()
+                    .get(anchor.expectation)
+                    .map(|expected| expected.role)
+                else {
+                    return false;
+                };
+                matches!(
+                    program.method_evidence.adapters()[adapter].prerequisites[ordinal].producer,
+                    super::super::dialect::MethodEvidenceExpectedProducer::Monomorphic { .. }
+                )
+            })
+            .expect("the fixture has a monomorphic adapter edge")
+            .node;
+        let edge_index = edge.index().expect("the edge belongs to the fixture");
+        let PureExprKind::Computation(PureComputation::Apply(application)) =
+            program.nodes[edge_index].kind
+        else {
+            panic!("the authenticated edge is an application")
+        };
+        let original_argument = application.argument();
+        let original = &program.nodes[original_argument.index().expect("argument index")];
+        let PureExprKind::Variable(original_variable) = original.kind else {
+            panic!("the monomorphic concrete producer is a variable")
+        };
+        let wrong_argument = program
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| match node.kind {
+                PureExprKind::Variable(variable)
+                    if variable.binder() != original_variable.binder()
+                        && matches!(variable.binder(), BinderId::Generated(_))
+                        && crate::types::same_type(&node.ty, &original.ty) =>
+                {
+                    Some(NodeId::new(
+                        program.arena,
+                        u32::try_from(index).expect("fixture index"),
+                    ))
+                }
+                _ => None,
+            })
+            .expect("the fixture has a same-typed wrong global producer");
+        let swapped_use = program
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| {
+                let PureExprKind::Computation(PureComputation::Apply(other)) = node.kind else {
+                    return None;
+                };
+                (other.function() == wrong_argument && index != edge_index)
+                    .then_some((index, other.argument()))
+            })
+            .expect("the wrong global producer has an ordinary same-typed use");
+        program.nodes[swapped_use.0].kind = PureExprKind::Computation(PureComputation::Apply(
+            ApplicationNode::new(original_argument, swapped_use.1),
+        ));
+        program.nodes[edge_index].kind = PureExprKind::Computation(PureComputation::Apply(
+            ApplicationNode::new(application.function(), wrong_argument),
+        ));
+        if coordinate_anchor_source {
+            let wrong_binder =
+                match program.nodes[wrong_argument.index().expect("wrong argument index")].kind {
+                    PureExprKind::Variable(variable) => variable.binder(),
+                    _ => unreachable!(),
+                };
+            let anchor = program
+                .method_evidence_anchors
+                .iter_mut()
+                .find(|anchor| anchor.node == edge)
+                .expect("the exact edge anchor is retained");
+            let MethodEvidenceAnchorRole::AdapterEdge {
+                adapter,
+                adapter_selection_node,
+                ordinal,
+                producer_selection_node,
+                producer,
+                ..
+            } = anchor.role
+            else {
+                unreachable!()
+            };
+            anchor.role = MethodEvidenceAnchorRole::AdapterEdge {
+                adapter,
+                adapter_selection_node,
+                ordinal,
+                producer_node: wrong_argument,
+                producer_selection_node,
+                producer_binder: Some(wrong_binder),
+                producer,
+            };
+        }
+    }
+
+    #[test]
+    fn monomorphic_adapter_edges_reject_same_typed_wrong_producers_after_every_rebuild() {
+        for (rebuild, coordinate_anchor_source) in
+            (0..3).flat_map(|rebuild| [(rebuild, false), (rebuild, true)])
+        {
+            let fixture = monomorphic_adapter_edge_fixture();
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                mut program,
+                module_sources,
+                globals: _,
+            } = fixture;
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            if rebuild != 0 {
+                let validated = validate_modules(program, &sources, &module_sources)
+                    .expect("the original monomorphic adapter edge validates");
+                program = if rebuild == 1 {
+                    identity_traversal(&validated).expect("identity rebuild")
+                } else {
+                    fold_literal_primitives(&validated).expect("literal-fold rebuild")
+                };
+            }
+            replace_monomorphic_adapter_edge_with_same_typed_wrong_producer(
+                &mut program,
+                coordinate_anchor_source,
+            );
+            assert!(
+                validate_modules(program, &sources, &module_sources).is_err(),
+                "same-typed wrong producer must reject after rebuild {rebuild} with coordinated anchor {coordinate_anchor_source}",
+            );
+            drop(directory);
+        }
+    }
+
+    #[test]
+    fn monomorphic_adapter_edge_identity_has_an_exact_validation_boundary() {
+        let fixture = monomorphic_adapter_edge_fixture();
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let measured = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the monomorphic source relation is canonical");
+        measured
+            .validate_method_evidence_authority()
+            .expect("the exact monomorphic producer identity validates");
+        let exact_work = measured.type_work.get();
+        // The fixed authenticated graph costs 646 units. The exact abstract
+        // producer adds one owner-envelope pass: N=49 nodes, R=5 recursive
+        // members, p=0 preceding evidence functions, and one selected binder.
+        const EXACT_SOURCE_ENVELOPE_WORK: usize = 49 + 5 + 1;
+        const EXACT_WORK: usize = 646 + EXACT_SOURCE_ENVELOPE_WORK;
+        assert_eq!(exact_work, EXACT_WORK);
+
+        let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the one-short monomorphic source relation is canonical");
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+            .expect("the one-short prefix fits");
+        assert_eq!(
+            short
+                .validate_method_evidence_authority()
+                .expect_err("one missing exact-producer unit rejects")
+                .reason(),
+            ValidationReason::Resource,
+        );
+
+        for _ in 0..2 {
+            let exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the exact monomorphic source relation is canonical");
+            exact
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                .expect("the exact prefix fits");
+            exact
+                .validate_method_evidence_authority()
+                .expect("a fresh exact producer stage retries reproducibly");
+        }
+        drop(fixture);
+    }
+
     #[test]
     fn independent_method_evidence_authority_has_an_exact_retry_boundary() {
         let fixture = method_evidence_validation_fixture();
@@ -5169,9 +5548,12 @@ mod tests {
         // The predecessor authority walk costs 2,197 units. This fixture then
         // exercises 22 independently retained replacement-map, fresh-ID-set,
         // source-map, and parameter-vector capacity rows which must be admitted
-        // before their respective reserves.
+        // before their respective reserves. Its A=3 adapters and Q=2 edges add
+        // 28 exact-identity units: matcher A+2Q, initial role A+4Q,
+        // detailed-edge 4Q, and prerequisite-sequence Q.
         const PRECHARGED_CARRIER_ROWS: usize = 22;
-        const EXACT_WORK: usize = 2_197 + PRECHARGED_CARRIER_ROWS;
+        const EXACT_IDENTITY_WORK: usize = 28;
+        const EXACT_WORK: usize = 2_197 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK;
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -5307,7 +5689,11 @@ mod tests {
                         .expect("the fixture has an adapter prerequisite");
                     let MethodEvidenceAnchorRole::AdapterEdge {
                         adapter,
+                        adapter_selection_node,
                         ordinal,
+                        producer_node,
+                        producer_selection_node,
+                        producer_binder,
                         producer,
                     } = anchor.role
                     else {
@@ -5315,7 +5701,11 @@ mod tests {
                     };
                     anchor.role = MethodEvidenceAnchorRole::AdapterEdge {
                         adapter,
+                        adapter_selection_node,
                         ordinal: ordinal.saturating_add(1),
+                        producer_node,
+                        producer_selection_node,
+                        producer_binder,
                         producer,
                     };
                 }
@@ -5371,7 +5761,11 @@ mod tests {
                         .expect("the fixture has an adapter edge");
                     let MethodEvidenceAnchorRole::AdapterEdge {
                         adapter,
+                        adapter_selection_node,
                         ordinal,
+                        producer_node,
+                        producer_selection_node,
+                        producer_binder,
                         producer,
                     } = anchor.role
                     else {
@@ -5392,7 +5786,11 @@ mod tests {
                     };
                     anchor.role = MethodEvidenceAnchorRole::AdapterEdge {
                         adapter,
+                        adapter_selection_node,
                         ordinal,
+                        producer_node,
+                        producer_selection_node,
+                        producer_binder,
                         producer,
                     };
                 }

@@ -848,6 +848,57 @@ and evaluator semantic or state-machine changes.
   cumulative reserved use remains 52/70, 18 units remain unreserved, and
   Checkpoint 6 is not reserved. Independent semantic and final root review are
   still pending, so Checkpoint 5 is not marked complete.
+- CP5 semantic review rejected `cf93de7` with two important authority gaps.
+  The first focused RED,
+  `nested_same_implementation_selections_keep_distinct_polymorphic_adapters`,
+  selected one generic `Score<Option<A>>` implementation at two distinct
+  evidence nodes but failed linked catalog construction with
+  `InvalidEvidenceRoot`; the catalog had collapsed both nodes to one
+  occurrence-and-implementation key. The second focused RED,
+  `monomorphic_adapter_edges_reject_same_typed_wrong_producers_after_every_rebuild`,
+  replaced one adapter prerequisite with a distinct same-typed producer while
+  preserving the edge node, ordinal, type, and semantic producer tag;
+  independent Core validation admitted the original tamper. These were local
+  CP5 authority failures, not missing language or selection rules.
+- The correction retains exact selection-node identity in every adapter row,
+  expectation key, producer relation, Builder event, anchor, transform replay,
+  and independent comparison. A nested `Score<Option<Option<Int>>>` witness
+  now retains two adapters for the same `ImplMethodId` with distinct head
+  substitutions, evaluates to 82, and freshly validates and evaluates after
+  identity and literal folding. Adapter edges also retain their exact argument
+  node and selection identity. Monomorphic abstract producers additionally
+  retain the linked flattened position in the occurrence owner's evidence
+  function envelope; validation derives the generated binder from the exact
+  linked owner and Core initializer rather than trusting copied anchor data.
+  Distinct `Base<Int>` and `Spare<Int>` requirements provide same-typed
+  generated binders: swapping the argument alone or coordinating the argument,
+  producer-node, and binder anchor is rejected before and after both
+  transforms.
+- Correction resource accounting charges the two occurrence-owner rows and
+  each adapter selection identity before reserve/publication. The catalog
+  boundary moves from 87 to 91 constraint units while type work remains 74.
+  For the independent polymorphic fixture, `A = 3` and `Q = 2` add 28 exact
+  matcher, role, detailed-edge, and prerequisite-sequence units, moving 2,219
+  to 2,247. The monomorphic fixture's exact owner-envelope term is
+  `N + R + p + 1 = 49 + 5 + 0 + 1 = 55` within its 701-unit boundary. Exact
+  adapter-node lookup is exact. The replacement one-edge transform probe costs
+  678 units for both identity and fold: 673 fixed reconstruction/Builder units,
+  `X = 4` source-anchor traversal units, and `G = 1` exact producer-node remap
+  unit. Every boundary has one-short rejection and fresh retry;
+  semantic producer tampering is repeated after both transforms. The CP5
+  reservation remains 14 units, cumulative reserved use remains 52/70, 18
+  units remain unreserved, and Checkpoint 6 is not reserved. Semantic
+  re-review and final root verification remain pending, so Checkpoint 5 is not
+  marked complete.
+- Correction verification passes 704 library tests, all 62 Core-validation
+  integration tests, all 21 architecture tests, and the complete 1,511-test
+  locked workspace/all-target/all-feature matrix. The nested-selection and
+  monomorphic-producer focused tests pass after their final assertions. Locked
+  all-target/all-feature checking, strict Clippy with warnings denied, `cargo
+  xtask verify` including rustdoc, Markdown lint, and diff hygiene pass. The
+  evaluator tree remains byte-identical to `5ce71d1`; no specification file or
+  production resource-limit assignment changed. CP5 remains open for semantic
+  re-review and final root verification.
 
 ## Verification
 

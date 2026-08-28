@@ -244,6 +244,29 @@ fn rebuild_with_initial_type_work(
     builder.charge_rebuild_work(program.method_evidence_anchors().len())?;
     for anchor in program.method_evidence_anchors() {
         let node = remap(&remapped, anchor.node)?;
+        let role = match anchor.role {
+            super::dialect::MethodEvidenceAnchorRole::AdapterEdge {
+                adapter,
+                adapter_selection_node,
+                ordinal,
+                producer_node,
+                producer_selection_node,
+                producer_binder,
+                producer,
+            } => {
+                builder.charge_rebuild_work(1)?;
+                super::dialect::MethodEvidenceAnchorRole::AdapterEdge {
+                    adapter,
+                    adapter_selection_node,
+                    ordinal,
+                    producer_node: remap(&remapped, producer_node)?,
+                    producer_selection_node,
+                    producer_binder,
+                    producer,
+                }
+            }
+            role => role,
+        };
         let interface_argument = builder.clone_type_for_rebuild(&anchor.interface_argument)?;
         builder.authenticate_method_evidence(
             node,
@@ -251,7 +274,7 @@ fn rebuild_with_initial_type_work(
             anchor.requirement,
             anchor.method,
             interface_argument,
-            anchor.role,
+            role,
             anchor.occurrence,
         )?;
     }
@@ -787,14 +810,21 @@ mod tests {
         let entry = directory.write(
             "entry.ash",
             concat!(
-                "interface Score<A> {\n",
-                "score<X> : (A, X) -> Int\n",
+                "type Wrap<A> = Wrap(A)\n\n",
+                "interface Base<A> {\n",
+                "base : A -> A\n",
                 "}\n\n",
-                "impl Score<Int> {\n",
-                "score (value, ignored) = value + 1\n",
+                "interface Convert<A> {\n",
+                "convert<X> : (A, X) -> A\n",
                 "}\n\n",
-                "main : Unit -> Int\n",
-                "main () = 1 + 2 + score((1, true))\n",
+                "impl Base<Int> {\n",
+                "base value = value\n",
+                "}\n\n",
+                "impl<A> Convert<Wrap<A>> where Base<A> {\n",
+                "convert (Wrap(value), ignored) = Wrap(base(value))\n",
+                "}\n\n",
+                "main : Unit -> Wrap<Int>\n",
+                "main () = convert((Wrap(42), true))\n",
             ),
         );
         let graph = load_module_graph(&entry, &ModuleRoots::empty())
@@ -835,18 +865,31 @@ mod tests {
 
     #[test]
     fn linked_method_transforms_have_exact_anchor_remap_and_arc_lifecycle_boundaries() {
-        // Node reconstruction, anchor Type cloning/Builder replay, and finish
-        // consume the fixed Core terms. Reading/remapping the immutable source
-        // sidecar is a separate one-cell term for each of X=3 anchors.
-        const IDENTITY_CORE_WORK: usize = 304;
-        const FOLD_CORE_WORK: usize = 300;
-        const ANCHOR_REPLAY_WORK: usize = 3;
-        const IDENTITY_WORK: usize = IDENTITY_CORE_WORK + ANCHOR_REPLAY_WORK;
-        const FOLD_WORK: usize = FOLD_CORE_WORK + ANCHOR_REPLAY_WORK;
+        // This one-edge fixture consumes 673 fixed node-reconstruction,
+        // anchor Type-clone/Builder-replay, and finish units. Reading the
+        // immutable sidecar costs X=4, and remapping the exact prerequisite
+        // producer costs G=1 before the embedded NodeId lookup.
+        const CORE_WORK: usize = 673;
+        const ANCHOR_REPLAY_WORK: usize = 4;
+        const PRODUCER_REMAP_WORK: usize = 1;
+        const IDENTITY_WORK: usize = CORE_WORK + ANCHOR_REPLAY_WORK + PRODUCER_REMAP_WORK;
+        const FOLD_WORK: usize = CORE_WORK + ANCHOR_REPLAY_WORK + PRODUCER_REMAP_WORK;
         let fixture = linked_method_transform_fixture();
         assert_eq!(
             fixture.program.method_evidence_anchors().len(),
             ANCHOR_REPLAY_WORK,
+        );
+        assert_eq!(
+            fixture
+                .program
+                .method_evidence_anchors()
+                .iter()
+                .filter(|anchor| matches!(
+                    anchor.role,
+                    super::super::dialect::MethodEvidenceAnchorRole::AdapterEdge { .. }
+                ))
+                .count(),
+            PRODUCER_REMAP_WORK,
         );
         let registry = Arc::clone(fixture.program.registry());
         let catalog = Arc::clone(fixture.program.method_evidence());

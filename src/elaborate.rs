@@ -417,8 +417,15 @@ struct LoweredEvidenceMethod {
 
 #[derive(Clone, Copy, Debug)]
 enum PolymorphicEvidenceProducer {
-    Abstract { requirement: RequirementId },
-    Adapter { implementation: ImplMethodId },
+    Abstract {
+        requirement: RequirementId,
+        selection_node: crate::interface::EvidenceNodeId,
+        binder: BinderId,
+    },
+    Adapter {
+        implementation: ImplMethodId,
+        selection_node: crate::interface::EvidenceNodeId,
+    },
 }
 
 impl Drop for LoweredEvidenceMethod {
@@ -3723,7 +3730,7 @@ impl Elaborator {
         target: &LoweredRequirementMethod,
         target_interface_argument: &Type,
         canonical_method: &LoweredInterfaceMethod,
-        adapter_edge: Option<(ImplMethodId, usize)>,
+        adapter_edge: Option<(ImplMethodId, crate::interface::EvidenceNodeId, usize)>,
         origin: &Origin,
         occurrence: usize,
     ) -> Result<TypedNode, TypeError> {
@@ -3757,7 +3764,7 @@ impl Elaborator {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?
                 }
-                PolymorphicEvidenceProducer::Adapter { implementation } => {
+                PolymorphicEvidenceProducer::Adapter { implementation, .. } => {
                     let Some(interface_argument) = argument.adapter_interface_argument.as_ref()
                     else {
                         return Err(invalid_state());
@@ -3810,20 +3817,37 @@ impl Elaborator {
                 .application(function.node, argument.node, core_ty, origin.clone())?;
         if polymorphic || adapter_edge.is_some() {
             let interface_argument = self.zonk(target_interface_argument)?;
-            let producer = match argument.producer {
-                PolymorphicEvidenceProducer::Abstract { requirement, .. } => {
-                    CoreMethodEvidenceProducer::Abstract { requirement }
-                }
-                PolymorphicEvidenceProducer::Adapter { implementation } => {
-                    CoreMethodEvidenceProducer::Adapter { implementation }
-                }
+            let (producer, producer_selection_node, producer_binder) = match argument.producer {
+                PolymorphicEvidenceProducer::Abstract {
+                    requirement,
+                    selection_node,
+                    binder,
+                } => (
+                    CoreMethodEvidenceProducer::Abstract { requirement },
+                    selection_node,
+                    Some(binder),
+                ),
+                PolymorphicEvidenceProducer::Adapter {
+                    implementation,
+                    selection_node,
+                } => (
+                    CoreMethodEvidenceProducer::Adapter { implementation },
+                    selection_node,
+                    None,
+                ),
             };
             let role = adapter_edge.map_or(
                 MethodEvidenceAnchorRole::Application { producer },
-                |(adapter, ordinal)| MethodEvidenceAnchorRole::AdapterEdge {
-                    adapter,
-                    ordinal,
-                    producer,
+                |(adapter, adapter_selection_node, ordinal)| {
+                    MethodEvidenceAnchorRole::AdapterEdge {
+                        adapter,
+                        adapter_selection_node,
+                        ordinal,
+                        producer_node: argument.node,
+                        producer_selection_node,
+                        producer_binder,
+                        producer,
+                    }
                 },
             );
             self.builder.authenticate_method_evidence(
@@ -4046,15 +4070,19 @@ impl Elaborator {
                                     .ok_or_else(invalid_state)?;
                                 let ty = IterativeTypeOwner::new(self.clone_type(&active.ty)?);
                                 let core_ty = self.clone_type(&ty)?;
-                                let node = self.builder.variable(
+                                let core_node = self.builder.variable(
                                     active.binder,
                                     core_ty,
                                     origin.clone(),
                                 )?;
                                 results.push(LoweredEvidenceMethod {
                                     method: *method,
-                                    node,
-                                    producer: PolymorphicEvidenceProducer::Abstract { requirement },
+                                    node: core_node,
+                                    producer: PolymorphicEvidenceProducer::Abstract {
+                                        requirement,
+                                        selection_node: node,
+                                        binder: active.binder,
+                                    },
                                     adapter_interface_argument: Some(
                                         self.clone_type(&active.interface_argument)?,
                                     ),
@@ -4248,7 +4276,11 @@ impl Elaborator {
                                                 &target_interface_argument,
                                                 canonical_method,
                                                 (!interface_method.type_parameters.is_empty())
-                                                    .then_some((*method, adapter_edge_ordinal)),
+                                                    .then_some((
+                                                        *method,
+                                                        node,
+                                                        adapter_edge_ordinal,
+                                                    )),
                                                 origin,
                                                 occurrence,
                                             )?,
@@ -4309,6 +4341,7 @@ impl Elaborator {
                                         interface_argument,
                                         MethodEvidenceAnchorRole::Adapter {
                                             implementation: *method,
+                                            selection_node: node,
                                         },
                                         Some(occurrence),
                                     )?;
@@ -4321,6 +4354,7 @@ impl Elaborator {
                                     node: current.node,
                                     producer: PolymorphicEvidenceProducer::Adapter {
                                         implementation: *method,
+                                        selection_node: node,
                                     },
                                     adapter_interface_argument,
                                     ty: current.ty,

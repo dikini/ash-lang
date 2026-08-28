@@ -122,6 +122,7 @@ impl Drop for MethodEvidenceDomain {
 pub(crate) struct MethodEvidenceOccurrence {
     pub(crate) slot: usize,
     pub(crate) scope: Option<MethodEvidenceOwner>,
+    pub(crate) scope_binder: Option<BinderId>,
     pub(crate) target_owner: Option<MethodEvidenceOwner>,
     pub(crate) target_requirement: Option<RequirementId>,
     pub(crate) checked_method: Option<MethodId>,
@@ -150,6 +151,7 @@ pub(crate) enum MethodEvidenceExpectedRole {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceAdapter {
+    pub(crate) selection_node: EvidenceNodeId,
     pub(crate) implementation: ImplMethodId,
     pub(crate) binder: BinderId,
     pub(crate) source_parameters: Box<[TypeVariableId]>,
@@ -173,7 +175,11 @@ pub(crate) struct MethodEvidenceAdapterEdge {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceExpectedProducer {
     Authenticated(usize),
-    Monomorphic(MethodEvidenceProducer),
+    Monomorphic {
+        selection_node: EvidenceNodeId,
+        producer_scope_position: Option<usize>,
+        producer: MethodEvidenceProducer,
+    },
 }
 
 impl Drop for MethodEvidenceAdapter {
@@ -571,12 +577,17 @@ pub(super) fn method_evidence_anchor_matches_expectation(
         }
         (
             MethodEvidenceExpectedRole::Adapter { adapter },
-            MethodEvidenceAnchorRole::Adapter { implementation },
+            MethodEvidenceAnchorRole::Adapter {
+                implementation,
+                selection_node,
+            },
         ) => {
+            type_work.charge(1)?;
             let Some(expected) = catalog.adapters().get(adapter) else {
                 return Ok(false);
             };
             Ok(expected.implementation == implementation
+                && expected.selection_node == selection_node
                 && method_evidence_adapter_interface_matches(
                     catalog,
                     expected,
@@ -588,23 +599,31 @@ pub(super) fn method_evidence_anchor_matches_expectation(
             MethodEvidenceExpectedRole::AdapterEdge { adapter, ordinal },
             MethodEvidenceAnchorRole::AdapterEdge {
                 adapter: implementation,
+                adapter_selection_node,
                 ordinal: actual_ordinal,
+                producer_selection_node,
                 producer,
+                ..
             },
-        ) => Ok(catalog.adapters().get(adapter).is_some_and(|adapter_row| {
-            adapter_row.implementation == implementation
-                && ordinal == actual_ordinal
-                && adapter_row.prerequisites.get(ordinal).is_some_and(|edge| {
-                    Some(edge.owner) == owner
-                        && Some(edge.requirement) == requirement
-                        && edge.method == expected.method
-                        && method_evidence_expected_producer_matches(
-                            catalog,
-                            edge.producer,
-                            producer,
-                        )
-                })
-        })),
+        ) => {
+            type_work.charge(2)?;
+            Ok(catalog.adapters().get(adapter).is_some_and(|adapter_row| {
+                adapter_row.implementation == implementation
+                    && adapter_row.selection_node == adapter_selection_node
+                    && ordinal == actual_ordinal
+                    && adapter_row.prerequisites.get(ordinal).is_some_and(|edge| {
+                        Some(edge.owner) == owner
+                            && Some(edge.requirement) == requirement
+                            && edge.method == expected.method
+                            && method_evidence_expected_producer_matches(
+                                catalog,
+                                edge.producer,
+                                producer_selection_node,
+                                producer,
+                            )
+                    })
+            }))
+        }
         _ => Ok(false),
     }
 }
@@ -650,13 +669,18 @@ fn method_evidence_adapter_interface_matches(
 fn method_evidence_expected_producer_matches(
     catalog: &MethodEvidenceCatalog,
     expected: MethodEvidenceExpectedProducer,
+    actual_selection_node: EvidenceNodeId,
     actual: MethodEvidenceProducer,
 ) -> bool {
     match expected {
         MethodEvidenceExpectedProducer::Authenticated(expectation) => {
             method_evidence_producer_matches(catalog, expectation, actual)
         }
-        MethodEvidenceExpectedProducer::Monomorphic(expected) => expected == actual,
+        MethodEvidenceExpectedProducer::Monomorphic {
+            selection_node,
+            producer_scope_position: _,
+            producer,
+        } => selection_node == actual_selection_node && producer == actual,
     }
 }
 
@@ -700,17 +724,6 @@ fn selection_contains_method(
         EvidenceNode::Implementation { methods, .. } => {
             methods.iter().any(|candidate| candidate.method() == method)
         }
-    })
-}
-
-fn selection_contains_implementation_method(
-    selection: &EvidenceSelection,
-    method: ImplMethodId,
-    type_work: &mut TypeWorkBudget,
-) -> Result<bool, ()> {
-    selection_contains(selection, type_work, |node| match node {
-        EvidenceNode::Implementation { methods, .. } => methods.contains(&method),
-        EvidenceNode::Abstract { .. } => false,
     })
 }
 
@@ -772,12 +785,28 @@ pub(crate) enum MethodEvidenceAnchorRole {
     },
     Adapter {
         implementation: ImplMethodId,
+        selection_node: EvidenceNodeId,
     },
     AdapterEdge {
         adapter: ImplMethodId,
+        adapter_selection_node: EvidenceNodeId,
         ordinal: usize,
+        producer_node: NodeId,
+        producer_selection_node: EvidenceNodeId,
+        producer_binder: Option<BinderId>,
         producer: MethodEvidenceProducer,
     },
+}
+
+const fn method_evidence_anchor_identity_work(role: MethodEvidenceAnchorRole) -> usize {
+    match role {
+        MethodEvidenceAnchorRole::Adapter { .. } => 1,
+        MethodEvidenceAnchorRole::AdapterEdge { .. } => 4,
+        MethodEvidenceAnchorRole::ImplementationOwner { .. }
+        | MethodEvidenceAnchorRole::Domain { .. }
+        | MethodEvidenceAnchorRole::Application { .. }
+        | MethodEvidenceAnchorRole::Instantiation { .. } => 0,
+    }
 }
 
 #[derive(Debug)]
@@ -1516,30 +1545,49 @@ impl CoreBuilder {
                 .transpose()
                 .map_err(|()| BuildError::TypeWorkExceeded)?
                 .unwrap_or(false),
-            (MethodEvidenceAnchorRole::Adapter { implementation }, Some(slot)) => self
+            (
+                MethodEvidenceAnchorRole::Adapter {
+                    implementation,
+                    selection_node,
+                },
+                Some(slot),
+            ) => self
                 .method_evidence
                 .occurrence(slot)
                 .map(|expected| expected.selection.clone())
                 .map(|selection| {
-                    selection_contains_implementation_method(
-                        &selection,
-                        implementation,
-                        &mut self.type_work,
-                    )
+                    let Some(node) = selection.node(selection_node) else {
+                        return Ok(false);
+                    };
+                    let EvidenceNode::Implementation { methods, .. } = node else {
+                        return Ok(false);
+                    };
+                    self.type_work.charge(methods.len())?;
+                    Ok(methods.contains(&implementation))
                 })
                 .transpose()
                 .map_err(|()| BuildError::TypeWorkExceeded)?
                 .unwrap_or(false),
-            (MethodEvidenceAnchorRole::AdapterEdge { adapter, .. }, Some(slot)) => self
+            (
+                MethodEvidenceAnchorRole::AdapterEdge {
+                    adapter,
+                    adapter_selection_node,
+                    ..
+                },
+                Some(slot),
+            ) => self
                 .method_evidence
                 .occurrence(slot)
                 .map(|expected| expected.selection.clone())
                 .map(|selection| {
-                    selection_contains_implementation_method(
-                        &selection,
-                        adapter,
-                        &mut self.type_work,
-                    )
+                    let Some(node) = selection.node(adapter_selection_node) else {
+                        return Ok(false);
+                    };
+                    let EvidenceNode::Implementation { methods, .. } = node else {
+                        return Ok(false);
+                    };
+                    self.type_work.charge(methods.len())?;
+                    Ok(methods.contains(&adapter))
                 })
                 .transpose()
                 .map_err(|()| BuildError::TypeWorkExceeded)?
@@ -1559,6 +1607,44 @@ impl CoreBuilder {
                         Some(_)
                     )
             );
+        let source_identity_matches = match role {
+            MethodEvidenceAnchorRole::AdapterEdge {
+                producer_node,
+                producer_binder,
+                producer,
+                ..
+            } => {
+                self.type_work
+                    .charge(method_evidence_anchor_identity_work(role))
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                let application_argument = node
+                    .index()
+                    .ok()
+                    .and_then(|index| self.nodes.get(index))
+                    .and_then(|stored| match &stored.kind {
+                        PureExprKind::Computation(PureComputation::Apply(application)) => {
+                            Some(application.argument())
+                        }
+                        _ => None,
+                    });
+                application_argument == Some(producer_node)
+                    && match (producer, producer_binder) {
+                        (MethodEvidenceProducer::Abstract { .. }, Some(binder)) => producer_node
+                            .index()
+                            .ok()
+                            .and_then(|index| self.nodes.get(index))
+                            .is_some_and(|stored| {
+                                matches!(
+                                    stored.kind,
+                                    PureExprKind::Variable(variable) if variable.binder() == binder
+                                )
+                            }),
+                        (MethodEvidenceProducer::Adapter { .. }, None) => true,
+                        _ => false,
+                    }
+            }
+            _ => true,
+        };
         if self.arena != Some(node.arena())
             || (!matches!(
                 role,
@@ -1566,6 +1652,7 @@ impl CoreBuilder {
                     | MethodEvidenceAnchorRole::ImplementationOwner { .. }
             ) && self.method_evidence.method(method).is_none())
             || !authority_matches
+            || !source_identity_matches
         {
             return Err(BuildError::InvalidPayload);
         }
@@ -1603,8 +1690,11 @@ impl CoreBuilder {
         let Some(expectation) = expectation else {
             return Err(BuildError::InvalidPayload);
         };
+        let retained_anchor_work = 7usize
+            .checked_add(method_evidence_anchor_identity_work(role))
+            .ok_or(BuildError::TypeWorkExceeded)?;
         self.type_work
-            .charge(7)
+            .charge(retained_anchor_work)
             .map_err(|()| BuildError::TypeWorkExceeded)?;
         self.method_evidence_anchors
             .try_reserve(1)
