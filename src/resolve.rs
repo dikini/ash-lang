@@ -2499,33 +2499,13 @@ impl Resolver {
                 "imported interface storage exceeded its work budget",
             )
         })?;
-        let method_parameter_count = exported
-            .methods
-            .iter()
-            .try_fold(0usize, |count, method| {
-                count
-                    .checked_add(method.authoritative_type_parameters().len())
-                    .ok_or(())
-            })
-            .map_err(|()| {
-                error(
-                    ResolveReason::ConstraintResourceExhausted,
-                    span,
-                    "imported method-parameter accounting overflowed",
-                )
-            })?;
-        let retained_fact_count = exported
-            .methods
-            .len()
-            .checked_add(method_parameter_count)
-            .and_then(|count| count.checked_add(1))
-            .ok_or_else(|| {
-                error(
-                    ResolveReason::ConstraintResourceExhausted,
-                    span,
-                    "imported interface retention accounting overflowed",
-                )
-            })?;
+        let retained_fact_count = exported.methods.len().checked_add(1).ok_or_else(|| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported interface retention accounting overflowed",
+            )
+        })?;
         self.constraint_work
             .charge(retained_fact_count)
             .map_err(|()| {
@@ -2543,6 +2523,7 @@ impl Resolver {
             )
         })?;
         let mut methods = Vec::new();
+        let mut authority_method_indices: Vec<usize> = Vec::new();
         methods.try_reserve(exported.methods.len()).map_err(|_| {
             error(
                 ResolveReason::ConstraintResourceExhausted,
@@ -2558,6 +2539,37 @@ impl Resolver {
                     "an interface summary contains a method from another interface",
                 ));
             }
+            let authority_work = method.authoritative_type_parameters().len();
+            if authority_work != 0 {
+                self.constraint_work.charge(1).map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported method authority index exceeded its work budget",
+                    )
+                })?;
+                authority_method_indices.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported method authority index exceeded its work budget",
+                    )
+                })?;
+            }
+            self.constraint_work.charge(authority_work).map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported method authority exceeded its work budget",
+                )
+            })?;
+            self.type_work.charge(authority_work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported method authority exceeded its type-work budget",
+                )
+            })?;
             self.constraint_work
                 .charge_type(&method.value_type)
                 .map_err(|()| {
@@ -2614,6 +2626,9 @@ impl Resolver {
                     ),
                 })?,
             );
+            if authority_work != 0 {
+                authority_method_indices.push(methods.len() - 1);
+            }
         }
         let parameter = self.clone_type_variable_for_retention(
             &exported.parameter,
@@ -2628,8 +2643,9 @@ impl Resolver {
             origin: exported.origin.clone(),
             span: exported.span,
         };
-        self.imported.insert_interface(
+        self.imported.insert_interface_with_authority_indices(
             retained,
+            authority_method_indices.into_boxed_slice(),
             direct_dependency,
             span,
             access == ImportedInterfaceAccess::PublicExport,
@@ -9325,11 +9341,14 @@ mod tests {
         // ConstraintWork owns one route visit, three interface/method/binder
         // retained facts, two traversals of the five-cell method type, and the
         // method binder's record, Source-Origin, and Type-Kind authentication,
-        // plus one private canonical method-authority row.
+        // plus one private canonical method-authority row and its poly-only
+        // checker-view ordinal index. The binder record moves from the removed
+        // aggregate pre-scan into the canonical method pass; the new ordinal
+        // index is one additional graph slot only for this polymorphic method.
         // TypeWork owns the same three retained carriers, two five-cell type
         // traversals, and two records plus Type Kinds for the interface and
         // method binders, plus one independent retained canonical method binder.
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 3 + 2 * 5 + 3 + 1;
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 3 + 2 * 5 + 3 + 1 + 1;
         const EXACT_TYPE_WORK: usize = 3 + 2 * 5 + 2 * (1 + 1) + (1 + 1);
 
         let constraint_short =

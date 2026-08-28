@@ -145,12 +145,19 @@ impl LinkedInterfaceRegistry {
             &mut type_work,
             program.result().span,
         )?;
-        Self::build_with_kinds(program, &mut kind_environments, budget, &mut type_work)
+        Self::build_with_kinds(
+            program,
+            &mut kind_environments,
+            None,
+            budget,
+            &mut type_work,
+        )
     }
 
     fn build_with_kinds<'a>(
         program: &'a ResolvedModuleProgram,
         kind_environments: &mut KindEnvironments<'a>,
+        mut binder_owners: Option<&mut HashMap<TypeVariableId, LinkedBinderOwner>>,
         budget: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<Self, EvidenceValidationFailure> {
@@ -242,6 +249,26 @@ impl LinkedInterfaceRegistry {
                             .is_some()
                     {
                         return Err(unknown(method.span));
+                    }
+                    if let Some(owners) = binder_owners.as_deref_mut() {
+                        for parameter in method.authoritative_type_parameters() {
+                            charge(budget, 1, parameter.origin.primary_span())?;
+                            let canonical = program
+                                .registry()
+                                .type_variable(parameter.id)
+                                .ok_or_else(|| unknown(method.span))?;
+                            if !same_binders_charged(
+                                std::slice::from_ref(canonical),
+                                std::slice::from_ref(parameter),
+                                budget,
+                                method.span,
+                            )? || owners
+                                .insert(parameter.id, LinkedBinderOwner::Method(method.id))
+                                .is_some()
+                            {
+                                return Err(unknown(method.span));
+                            }
+                        }
                     }
                 }
             }
@@ -2021,7 +2048,7 @@ pub(crate) fn validate_interface_evidence_with_budget(
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure> {
-    authenticate_linked_registry_facts(&program, constraint_work)?;
+    let mut binder_owners = authenticate_linked_registry_facts(&program, constraint_work)?;
     let mut kind_environments =
         build_linked_kind_environments(program.registry(), type_work, program.result().span)?;
     authenticate_linked_constructor_payloads(
@@ -2033,9 +2060,11 @@ pub(crate) fn validate_interface_evidence_with_budget(
     let linked_interfaces = LinkedInterfaceRegistry::build_with_kinds(
         &program,
         &mut kind_environments,
+        Some(&mut binder_owners),
         constraint_work,
         type_work,
     )?;
+    finalize_linked_registry_authentication(&program, &binder_owners, constraint_work)?;
     validate_linked_value_schemes(&program, &mut kind_environments, constraint_work, type_work)?;
     validate_occurrences(
         &program,
@@ -2140,7 +2169,7 @@ fn reserve_linked_registry_authentication_indexes(
 fn authenticate_linked_registry_facts(
     program: &ResolvedModuleProgram,
     budget: &mut InterfaceConstraintBudget,
-) -> Result<(), EvidenceValidationFailure> {
+) -> Result<HashMap<TypeVariableId, LinkedBinderOwner>, EvidenceValidationFailure> {
     let span = program.result().span;
     charge(budget, 1, span)?;
     let registry = program.registry();
@@ -2224,25 +2253,6 @@ fn authenticate_linked_registry_facts(
             {
                 return Err(unknown(interface.span));
             }
-            for method in &interface.methods {
-                for parameter in method.authoritative_type_parameters() {
-                    charge(budget, 1, parameter.origin.primary_span())?;
-                    let canonical = registry
-                        .type_variable(parameter.id)
-                        .ok_or_else(|| unknown(method.span))?;
-                    if !same_binders_charged(
-                        std::slice::from_ref(canonical),
-                        std::slice::from_ref(parameter),
-                        budget,
-                        method.span,
-                    )? || owners
-                        .insert(parameter.id, LinkedBinderOwner::Method(method.id))
-                        .is_some()
-                    {
-                        return Err(unknown(method.span));
-                    }
-                }
-            }
         }
         for scheme in group.schemes() {
             charge(budget, 1, scheme.origin.primary_span())?;
@@ -2269,14 +2279,20 @@ fn authenticate_linked_registry_facts(
             }
         }
     }
+    Ok(owners)
+}
+
+fn finalize_linked_registry_authentication(
+    program: &ResolvedModuleProgram,
+    owners: &HashMap<TypeVariableId, LinkedBinderOwner>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let span = program.result().span;
     charge(budget, 1, span)?;
-    if owners.len() != registry.type_variable_count() {
+    if owners.len() != program.registry().type_variable_count() {
         return Err(unknown(span));
     }
-    // Preserve canonical-fact precedence, then authenticate the ordered row
-    // carrier before the validated capability can be constructed.
-    authenticate_linked_global_parameter_rows(program, budget)?;
-    Ok(())
+    authenticate_linked_global_parameter_rows(program, budget)
 }
 
 fn authenticate_linked_global_parameter_rows(
@@ -2639,6 +2655,20 @@ fn validate_pending_expressions<'a>(
     Ok(())
 }
 
+/// Authenticates one already-canonical method relation without searching or
+/// reselecting. Linked registry construction has established that a MethodId's
+/// declaration ordinal is the exact position in every method relation.
+fn method_relation_slot_matches<T: PartialEq>(
+    methods: &[T],
+    method: MethodId,
+    expected: &T,
+) -> bool {
+    usize::try_from(method.declaration())
+        .ok()
+        .and_then(|index| methods.get(index))
+        == Some(expected)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn validate_occurrence<'a>(
     program: &'a ResolvedModuleProgram,
@@ -2706,12 +2736,18 @@ fn validate_occurrence<'a>(
                 span,
             )?;
             let authentic_method_relation = match selection.node(selection.root()) {
-                Some(EvidenceNode::Abstract { methods, .. }) => methods.contains(&checked_method),
+                Some(EvidenceNode::Abstract { methods, .. }) => {
+                    method_relation_slot_matches(methods, checked_method, &checked_method)
+                }
                 Some(EvidenceNode::Implementation {
                     implementation,
                     methods,
                     ..
-                }) => methods.contains(&ImplMethodId::new(implementation, checked_method)),
+                }) => method_relation_slot_matches(
+                    methods,
+                    checked_method,
+                    &ImplMethodId::new(implementation, checked_method),
+                ),
                 None => false,
             };
             if !authentic_method_relation {
@@ -4009,6 +4045,7 @@ const fn type_resource(span: Span) -> EvidenceValidationFailure {
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::Cell,
         fs,
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
@@ -5065,6 +5102,101 @@ mod tests {
     }
 
     #[test]
+    fn final_method_relation_reads_one_declaration_ordinal_slot() {
+        const WIDTH: usize = 32_768;
+
+        #[derive(Clone)]
+        struct CountedIdentity<'a> {
+            value: MethodId,
+            comparisons: &'a Cell<usize>,
+        }
+
+        impl PartialEq for CountedIdentity<'_> {
+            fn eq(&self, other: &Self) -> bool {
+                self.comparisons
+                    .set(self.comparisons.get().saturating_add(1));
+                self.value == other.value
+            }
+        }
+
+        let interface = InterfaceId::new(ModuleId::new(71), 0);
+        let comparisons = Cell::new(0);
+        let methods = (0..WIDTH)
+            .map(|ordinal| CountedIdentity {
+                value: MethodId::new(interface, u32::try_from(ordinal).expect("test ordinal")),
+                comparisons: &comparisons,
+            })
+            .collect::<Vec<_>>();
+        let final_method =
+            MethodId::new(interface, u32::try_from(WIDTH - 1).expect("final ordinal"));
+        let expected = CountedIdentity {
+            value: final_method,
+            comparisons: &comparisons,
+        };
+
+        assert!(method_relation_slot_matches(
+            &methods,
+            final_method,
+            &expected
+        ));
+        assert_eq!(
+            comparisons.get(),
+            1,
+            "the final method must use one indexed comparison"
+        );
+
+        comparisons.set(0);
+        let wrong = CountedIdentity {
+            value: MethodId::new(interface, 0),
+            comparisons: &comparisons,
+        };
+        assert!(!method_relation_slot_matches(
+            &methods,
+            final_method,
+            &wrong
+        ));
+        assert_eq!(
+            comparisons.get(),
+            1,
+            "a wrong final slot must not trigger a fallback scan"
+        );
+
+        comparisons.set(0);
+        let out_of_range = MethodId::new(interface, u32::MAX);
+        assert!(!method_relation_slot_matches(
+            &methods,
+            out_of_range,
+            &expected
+        ));
+        assert_eq!(
+            comparisons.get(),
+            0,
+            "an out-of-range ordinal must read no slot"
+        );
+
+        let actual_methods = methods
+            .iter()
+            .map(|method| method.value)
+            .collect::<Vec<_>>();
+        assert!(method_relation_slot_matches(
+            &actual_methods,
+            final_method,
+            &final_method,
+        ));
+        let implementation = ImplId::new(interface.module(), 0);
+        let implementation_methods = actual_methods
+            .iter()
+            .copied()
+            .map(|method| ImplMethodId::new(implementation, method))
+            .collect::<Vec<_>>();
+        assert!(method_relation_slot_matches(
+            &implementation_methods,
+            final_method,
+            &ImplMethodId::new(implementation, final_method),
+        ));
+    }
+
+    #[test]
     fn rejects_same_shaped_method_occurrence_identity_substitution() {
         let mut program = same_shaped_method_program();
         let group = &program.groups()[0];
@@ -5792,6 +5924,8 @@ mod tests {
             + GLOBAL_OWNER_IDENTITY_WORK
             + OWNER_COVERAGE_WORK
             + ROW_AUTHENTICATION_WORK;
+        const AUTHENTICATION_PREFIX_WORK: usize =
+            EXACT_AUTHENTICATION_WORK - OWNER_COVERAGE_WORK - ROW_AUTHENTICATION_WORK;
 
         let program = linked_registry_row_program();
         let row_count = program.registry().global_parameter_rows().len();
@@ -5850,10 +5984,10 @@ mod tests {
         assert_eq!(untouched_type_work.used(), 0);
 
         let mut authentication_exact =
-            InterfaceConstraintBudget::with_limit(EXACT_AUTHENTICATION_WORK);
+            InterfaceConstraintBudget::with_limit(AUTHENTICATION_PREFIX_WORK);
         authenticate_linked_registry_facts(&retry, &mut authentication_exact)
-            .expect("the immutable fixture must retry with the exact authentication formula");
-        assert_eq!(authentication_exact.used(), EXACT_AUTHENTICATION_WORK);
+            .expect("the immutable fixture must retry with the exact pre-method prefix");
+        assert_eq!(authentication_exact.used(), AUTHENTICATION_PREFIX_WORK);
 
         let mut measured_constraint_work = InterfaceConstraintBudget::default();
         let mut measured_type_work = TypeWorkBudget::default();
@@ -5984,7 +6118,7 @@ mod tests {
 
         let mut measured = InterfaceConstraintBudget::default();
         authenticate_linked_registry_facts(&program, &mut measured)
-            .expect("the all-owner linked registry should authenticate");
+            .expect("the all-owner linked registry prefix should authenticate");
         let exact_work = measured.used();
         assert!(exact_work > index_boundary);
         let mut one_short = InterfaceConstraintBudget::with_limit(exact_work - 1);
@@ -5992,7 +6126,7 @@ mod tests {
         for _ in 0..2 {
             let mut exact = InterfaceConstraintBudget::with_limit(exact_work);
             authenticate_linked_registry_facts(&program, &mut exact)
-                .expect("the immutable all-owner registry should remain reusable");
+                .expect("the immutable all-owner registry prefix should remain reusable");
             assert_eq!(exact.used(), exact_work);
         }
     }
@@ -6574,6 +6708,20 @@ mod tests {
         assert_eq!(
             validate_interface_evidence(implementation)
                 .expect_err("an implementation binder record must match registry metadata")
+                .reason(),
+            EvidenceValidationReason::UnknownIdentity,
+        );
+    }
+
+    #[test]
+    fn rejects_surplus_canonical_variable_at_linked_owner_boundary() {
+        let mut program = polymorphic_method_program();
+        let module = program.groups()[0].module();
+        assert!(program.add_surplus_registry_type_variable_for_test(module));
+
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("an unowned canonical binder must publish no capability")
                 .reason(),
             EvidenceValidationReason::UnknownIdentity,
         );
@@ -8633,12 +8781,12 @@ mod tests {
         // The ordinary link prefix is seven cells. The one-interface local
         // registry contributes five fixed module/interface/global/
         // implementation inventory cells. Its interface binder contributes
-        // one uniqueness cell. The method binder contributes its uniqueness,
-        // binder visit, Source-Origin, and Type-Kind cells. The consuming
-        // linked-evidence boundary owns the full interface mirror. TypeWork
+        // one uniqueness cell. The method binder's canonical record is retained
+        // here, while its owner/mirror visit is fused into the consuming linked
+        // method-index pass. TypeWork
         // owns each binder's retained record, Type Kind, and canonical-variable
         // staging cell.
-        const CONSTRAINT_WORK: usize = 7 + 6 + 4;
+        const CONSTRAINT_WORK: usize = 7 + 6 + 1;
         const TYPE_WORK: usize = 2 * 3;
         let fixture = ValidationFixture::create(concat!(
             "interface Equal<A> {\nequal<B> : (A, B) -> Bool\n}\n\n",
@@ -8662,7 +8810,11 @@ mod tests {
                 crate::elaborate::ElaborationFailure::ConstraintResourceExhausted,
             ),
         );
-        assert_eq!(constraint_short.used(), CONSTRAINT_WORK - 1);
+        assert_eq!(
+            constraint_short.used(),
+            CONSTRAINT_WORK - 2,
+            "the final two-cell combined precharge is atomic",
+        );
         assert_eq!(untouched_type.used(), 0);
 
         let mut constraint = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);

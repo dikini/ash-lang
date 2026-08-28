@@ -692,6 +692,61 @@ and evaluator semantic or state-machine changes.
   re-reviews remain pending. The Checkpoint 4 reservation remains 12 units,
   cumulative reserved use remains 38/70, 32 units remain unreserved, and
   Checkpoint 5 is not reserved.
+- Checkpoint 4 quality/resource re-review rejected correction `35dce7d` with
+  two important findings and one minor finding. Seven authority-discovery
+  loops traversed every method while charging only nonempty binder slices;
+  charging those hidden visits would have raised the 2,800-interface witness
+  to `117W + 69 = 327,669`, leaving only 11 units below the production limit.
+  Linked occurrence authentication also searched every selected method row,
+  making final-method occurrences linear in interface width. Finally, the
+  `Forall` branch of exact type comparison delegated Kind equality to an
+  infallibly allocated and grown paired worklist.
+- The fifth correction removes the method-derived combined-registry count,
+  owner-authentication, and retention prepasses. Combination counts and clones
+  the canonical registry map once; nominal and global ordered mirrors remain
+  independent. Exact method-owner/cardinality authentication moves to the
+  linked boundary's already-charged canonical method-index pass, before any
+  validation capability or Core can publish. A surplus canonical variable is
+  now rejected at that boundary. Imported interface retention charges binder
+  work in its existing canonical method pass and records only the ordinals of
+  polymorphic authority-bearing methods. The checker view follows that private
+  index, so monomorphic interfaces retain an empty allocation-free index and
+  perform no separate method discovery. The wide phase witness asserts both
+  the empty index and unchanged cumulative boundaries. One polymorphic hidden
+  import now owns the additional discovery-index graph slot at exact
+  constraint/type limits `19/19`; monomorphic accounting has no delta.
+- Occurrence authentication now converts the retained `MethodId` declaration
+  ordinal and performs one bounds-checked indexed read. The abstract relation
+  requires the exact `MethodId`; concrete and exact-current relations require
+  `ImplMethodId::new(selected_impl, checked_method)`. A 32,768-wide final-slot
+  witness observes one identity comparison for success and wrong-slot
+  rejection, zero for an out-of-range ordinal, and no fallback search. The
+  host comparison bound is at most one per method occurrence, with zero
+  allocation, ConstraintWork, TypeWork, candidate selection, or formula delta.
+- `InterfaceConstraintBudget` now owns a fallible iterative paired-Kind
+  worklist for exact `Forall` comparison. The root and each child are charged
+  before `try_reserve` and push. Successful work remains one unit per Kind node
+  and exactly matches `charge_type`: a three-element tuple uses 12 units, one
+  binder with a five-node nested-arrow Kind uses 10, and depth `D = 32,768`
+  uses `2D + 6` on a 64 KiB stack. Tuple, `Forall`, and nested-arrow Kind
+  success, mismatch, one-short rejection, and clean retry are covered. The new
+  borrowed paired-Kind worklist is recorded in the closed architecture
+  inventory.
+- The original hidden-loop review witness is GREEN without charging the seven
+  monomorphic scans: cumulative work remains `37W`, `52W + 1`, `62W + 12`,
+  `65W + 24`, and `110W + 69`. The default `W = 2,800` program succeeds at
+  308,069 and retains 19,611 units of headroom under the unchanged 327,680
+  limit. Focused verification passes 687 library tests, the planned 47 product
+  tests with counts 2/20/1/14/2/8, all 21 architecture tests, and all four
+  cross-stage resource tests. Complete locked workspace verification passes
+  all 1,488 listed tests. Formatting, locked all-target compilation, strict
+  locked workspace/all-target/all-feature Clippy, test listing, `cargo xtask
+  verify`, documentation generation, Markdown lint, and diff hygiene pass. The
+  correction agent used `gpt-5.6-sol` at xhigh reasoning; read-only
+  authority-loop and method-lookup audits used xhigh and high reasoning. The
+  Checkpoint 4 reservation remains 12 units, cumulative reserved use remains
+  38/70, 32 units remain unreserved, independent semantic and Rust/resource
+  re-reviews remain pending, and Checkpoint 5 is not reserved.
 
 ## Verification
 

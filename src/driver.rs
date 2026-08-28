@@ -1271,6 +1271,23 @@ mod tests {
                 &mut measured,
             )
             .expect("the unbounded resolution stage should fit");
+            if !dependencies.is_empty() {
+                let imported_interfaces = resolved.imported_facts().interface_imports();
+                let (interface_count, authority_method_count) = imported_interfaces.fold(
+                    (0usize, 0usize),
+                    |(interfaces, authority_methods), imported| {
+                        (
+                            interfaces + 1,
+                            authority_methods + imported.authority_methods().count(),
+                        )
+                    },
+                );
+                assert_eq!(interface_count, WIDTH);
+                assert_eq!(
+                    authority_method_count, 0,
+                    "monomorphic imports must expose no checker-view authority-discovery work",
+                );
+            }
             phase_boundaries.push(measured.used());
             let checked_module = check_module_with_budget(
                 resolved,

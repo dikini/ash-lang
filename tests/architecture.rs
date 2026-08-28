@@ -737,6 +737,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_equal_types::Task.Compare.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_equal_types::Task.Compare.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_equal_types::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
+    kind_site!("src/interface.rs::$local.charge_equal_kinds.pending", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/interface.rs::CheckedRequirement.argument", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::ConstrainedScheme.requirements", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::ConstrainedScheme.type_parameters", FieldCheckedDeclaredKindDeclaredInterfaceValidationInterfaceTypeCheckedTree),
@@ -1273,6 +1274,10 @@ const TRANSIENT_SITE_SOURCE_ANCHORS: &[(&str, &str)] = &[
     (
         "src/types.rs::$local.arrows_with_budget.retained_domains",
         "arrows_with_budget",
+    ),
+    (
+        "src/interface.rs::$local.charge_equal_kinds.pending",
+        "charge_equal_kinds",
     ),
     (
         "src/types.rs::$local.charge_kind_nodes.work",

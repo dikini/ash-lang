@@ -127,6 +127,33 @@ impl InterfaceConstraintBudget {
         Ok(())
     }
 
+    /// Authenticates Kind equality with one fallible paired worklist. Each
+    /// child is charged before the worklist can grow, so success consumes the
+    /// same one-unit-per-node boundary as a single Kind traversal.
+    fn charge_equal_kinds(&mut self, left: &Kind, right: &Kind) -> Result<bool, ()> {
+        self.charge(1)?;
+        let mut pending: Vec<(&Kind, &Kind)> = Vec::new();
+        pending.try_reserve(1).map_err(|_| ())?;
+        pending.push((left, right));
+        while let Some((left, right)) = pending.pop() {
+            match (left, right) {
+                (Kind::Type, Kind::Type) => {}
+                (
+                    Kind::Arrow(left_domain, left_codomain),
+                    Kind::Arrow(right_domain, right_codomain),
+                ) => {
+                    self.charge(1)?;
+                    self.charge(1)?;
+                    pending.try_reserve(2).map_err(|_| ())?;
+                    pending.push((left_codomain, right_codomain));
+                    pending.push((left_domain, right_domain));
+                }
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
     /// Authenticates exact equality during one already-required structural
     /// traversal. Successful work is identical to [`Self::charge_type`] for
     /// `left`; the paired worklist remains fallible and charges before growth.
@@ -180,12 +207,13 @@ impl InterfaceConstraintBudget {
                 (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
                     if left_parameters.len() == right_parameters.len() =>
                 {
-                    if !same_kinded_type_parameters_with_charge(
-                        left_parameters,
-                        right_parameters,
-                        |work| self.charge(work),
-                    )? {
-                        return Ok(false);
+                    for ((left_id, left_kind), (right_id, right_kind)) in
+                        left_parameters.iter().zip(right_parameters)
+                    {
+                        self.charge(1)?;
+                        if left_id != right_id || !self.charge_equal_kinds(left_kind, right_kind)? {
+                            return Ok(false);
+                        }
                     }
                     self.charge(1)?;
                     pending.try_reserve(1).map_err(|_| ())?;
@@ -3210,6 +3238,128 @@ mod tests {
         let mut mismatch = InterfaceConstraintBudget::with_limit(EXACT_WORK);
         assert_eq!(mismatch.charge_equal_types(&left, &different), Ok(false));
         assert_eq!(mismatch.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn constraint_kind_and_structural_type_equality_have_exact_parity_and_retry() {
+        const TUPLE_WORK: usize = 12;
+        const FORALL_WORK: usize = 10;
+        const KIND_WORK: usize = 5;
+
+        let tuple = Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice());
+        let equal_tuple = Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice());
+        let different_tuple =
+            Type::Tuple(vec![Type::Int, Type::Bool, Type::Bool].into_boxed_slice());
+        let parameter = TypeVariableId::new(0);
+        let nested_kind = Kind::Arrow(
+            Box::new(Kind::Type),
+            Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))),
+        );
+        let different_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        let forall = Type::Forall(
+            vec![(parameter, nested_kind.clone())].into_boxed_slice(),
+            Box::new(Type::Unit),
+        );
+        let equal_forall = Type::Forall(
+            vec![(parameter, nested_kind.clone())].into_boxed_slice(),
+            Box::new(Type::Unit),
+        );
+        let different_forall = Type::Forall(
+            vec![(parameter, different_kind.clone())].into_boxed_slice(),
+            Box::new(Type::Unit),
+        );
+
+        for (left, right, exact_work) in [
+            (&tuple, &equal_tuple, TUPLE_WORK),
+            (&forall, &equal_forall, FORALL_WORK),
+        ] {
+            let mut traversal = InterfaceConstraintBudget::with_limit(exact_work);
+            traversal
+                .charge_type(left)
+                .expect("the exact structural traversal must fit");
+            assert_eq!(traversal.used(), exact_work);
+
+            let mut short = InterfaceConstraintBudget::with_limit(exact_work - 1);
+            assert_eq!(short.charge_equal_types(left, right), Err(()));
+            assert_eq!(short.used(), exact_work - 1);
+            for _ in 0..2 {
+                let mut exact = InterfaceConstraintBudget::with_limit(exact_work);
+                assert_eq!(exact.charge_equal_types(left, right), Ok(true));
+                assert_eq!(exact.used(), exact_work);
+            }
+        }
+
+        let mut mismatch = InterfaceConstraintBudget::with_limit(TUPLE_WORK);
+        assert_eq!(
+            mismatch.charge_equal_types(&tuple, &different_tuple),
+            Ok(false)
+        );
+        assert_eq!(mismatch.used(), TUPLE_WORK);
+
+        let mut forall_mismatch = InterfaceConstraintBudget::with_limit(6);
+        assert_eq!(
+            forall_mismatch.charge_equal_types(&forall, &different_forall),
+            Ok(false)
+        );
+        assert_eq!(forall_mismatch.used(), 6);
+
+        let mut kind_mismatch = InterfaceConstraintBudget::with_limit(3);
+        assert_eq!(
+            kind_mismatch.charge_equal_kinds(&nested_kind, &different_kind),
+            Ok(false)
+        );
+        assert_eq!(kind_mismatch.used(), 3);
+
+        let mut kind_short = InterfaceConstraintBudget::with_limit(KIND_WORK - 1);
+        assert_eq!(
+            kind_short.charge_equal_kinds(&nested_kind, &nested_kind),
+            Err(())
+        );
+        assert_eq!(kind_short.used(), KIND_WORK - 1);
+        for _ in 0..2 {
+            let mut kind_exact = InterfaceConstraintBudget::with_limit(KIND_WORK);
+            assert_eq!(
+                kind_exact.charge_equal_kinds(&nested_kind, &nested_kind),
+                Ok(true)
+            );
+            assert_eq!(kind_exact.used(), KIND_WORK);
+        }
+    }
+
+    #[test]
+    fn constraint_forall_kind_equality_is_fallible_and_small_stack_safe() {
+        const DEPTH: usize = 32_768;
+        const EXACT_WORK: usize = 2 * DEPTH + 6;
+
+        std::thread::Builder::new()
+            .name("deep-constraint-kind-equality".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let deep_forall = || {
+                    let mut kind = Kind::Type;
+                    for _ in 0..DEPTH {
+                        kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
+                    }
+                    IterativeTypeOwner::new(Type::Forall(
+                        vec![(TypeVariableId::new(0), kind)].into_boxed_slice(),
+                        Box::new(Type::Unit),
+                    ))
+                };
+                let left = deep_forall();
+                let right = deep_forall();
+
+                let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+                assert_eq!(short.charge_equal_types(&left, &right), Err(()));
+                assert_eq!(short.used(), EXACT_WORK - 1);
+                for _ in 0..2 {
+                    let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+                    assert_eq!(exact.charge_equal_types(&left, &right), Ok(true));
+                    assert_eq!(exact.used(), EXACT_WORK);
+                }
+            })
+            .expect("the deep paired-kind worker should spawn")
+            .join()
+            .expect("deep paired-kind comparison and teardown must remain stack-safe");
     }
 
     #[test]

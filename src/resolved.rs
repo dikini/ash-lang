@@ -1158,6 +1158,27 @@ impl ResolvedModuleProgram {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn add_surplus_registry_type_variable_for_test(&mut self, module: ModuleId) -> bool {
+        let span = self.result.span;
+        let Some(registry) = Arc::get_mut(&mut self.registry) else {
+            return false;
+        };
+        let id = TypeVariableId::resolved(module, u32::MAX);
+        registry
+            .type_variables
+            .insert(
+                id,
+                ResolvedTypeVariable {
+                    id,
+                    spelling: "surplus".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+            )
+            .is_none()
+    }
+
     /// Returns the combined full defining registries.
     #[must_use]
     pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
@@ -3400,9 +3421,36 @@ impl ImportedFacts {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_interface(
         &mut self,
         fact: CheckedInterfaceFact,
+        direct_dependency: ModuleId,
+        available_at: Span,
+        publicly_available: bool,
+    ) {
+        let authority_method_indices = fact
+            .methods
+            .iter()
+            .enumerate()
+            .filter_map(|(index, method)| {
+                (!method.authoritative_type_parameters().is_empty()).then_some(index)
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        self.insert_interface_with_authority_indices(
+            fact,
+            authority_method_indices,
+            direct_dependency,
+            available_at,
+            publicly_available,
+        );
+    }
+
+    pub(crate) fn insert_interface_with_authority_indices(
+        &mut self,
+        fact: CheckedInterfaceFact,
+        authority_method_indices: Box<[usize]>,
         direct_dependency: ModuleId,
         available_at: Span,
         publicly_available: bool,
@@ -3411,6 +3459,7 @@ impl ImportedFacts {
         self.interface_positions.insert(fact.id, position);
         self.interfaces.push(ImportedInterfaceFact {
             fact,
+            authority_method_indices,
             direct_dependency,
             available_at,
             publicly_available,
@@ -3590,9 +3639,20 @@ pub struct CheckedInterfaceFact {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ImportedInterfaceFact {
     pub(crate) fact: CheckedInterfaceFact,
+    // Only polymorphic methods have entries. Monomorphic checker views can
+    // therefore skip authority discovery without another all-method pass.
+    authority_method_indices: Box<[usize]>,
     pub(crate) direct_dependency: ModuleId,
     pub(crate) available_at: Span,
     pub(crate) publicly_available: bool,
+}
+
+impl ImportedInterfaceFact {
+    pub(crate) fn authority_methods(&self) -> impl Iterator<Item = &CheckedInterfaceMethodFact> {
+        self.authority_method_indices
+            .iter()
+            .filter_map(|index| self.fact.methods.get(*index))
+    }
 }
 
 impl CheckedInterfaceFact {
@@ -11828,6 +11888,7 @@ fn checked_registry_counts(
             &mut counts.implementations,
             checked.implementation_facts().len(),
         )?;
+        checked_accumulate(&mut counts.type_variables, registry.type_variables.len())?;
         for nominal in registry.nominals() {
             checked_accumulate(&mut counts.family_entries, nominal.constructors.len())?;
             if let Some(parameters) = registry.nominal_parameters.get(&nominal.id) {
@@ -11863,14 +11924,6 @@ fn checked_registry_counts(
                 implementation.head_parameters.len(),
             )?;
         }
-        for interface in checked.interface_facts() {
-            for method in &interface.methods {
-                checked_accumulate(
-                    &mut counts.method_parameters,
-                    method.authoritative_type_parameters().len(),
-                )?;
-            }
-        }
         // Retention clones canonical records from the registry map, not from
         // the independently retained interface, global, or implementation
         // mirrors. Price those exact sources so deferred mirror rejection
@@ -11882,13 +11935,16 @@ fn checked_registry_counts(
             )?;
         }
     }
-    counts.type_variables = counts
+    let non_method_type_variables = counts
         .nominal_parameters
         .checked_add(counts.interfaces)
-        .and_then(|count| count.checked_add(counts.method_parameters))
         .and_then(|count| count.checked_add(counts.global_parameters))
         .and_then(|count| count.checked_add(counts.implementation_parameters))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+    counts.method_parameters = counts
+        .type_variables
+        .checked_sub(non_method_type_variables)
+        .ok_or(ResolvedBuildFailure::InvalidState)?;
     let builder_storage = counts
         .family_entries
         .checked_add(
@@ -12041,11 +12097,6 @@ fn validate_checked_registries<'a>(
             local_variable_count = local_variable_count
                 .checked_add(1)
                 .ok_or(ResolvedBuildFailure::ConstraintResource)?;
-            for method in &interface.methods {
-                local_variable_count = local_variable_count
-                    .checked_add(method.authoritative_type_parameters().len())
-                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
-            }
             if interface.id.module() != module {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -12069,7 +12120,7 @@ fn validate_checked_registries<'a>(
                 .checked_add(implementation.head_parameters.len())
                 .ok_or(ResolvedBuildFailure::ConstraintResource)?;
         }
-        if local_variable_count != registry.type_variables.len() {
+        if local_variable_count > registry.type_variables.len() {
             return Err(ResolvedBuildFailure::InvalidState);
         }
     }
@@ -12092,6 +12143,11 @@ fn validate_checked_registries<'a>(
     for checked in modules {
         let registry = checked.registry();
         let local_variable_start = type_variable_ids.len();
+        for (identity, parameter) in &registry.type_variables {
+            if *identity != parameter.id || identity.module() != Some(checked.module()) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
         for nominal in registry.nominals() {
             let parameters = registry
                 .nominal_parameters
@@ -12143,32 +12199,6 @@ fn validate_checked_registries<'a>(
             // against this registry before it constructs Kind environments.
             // Combination owns only canonical existence and cross-owner
             // uniqueness for that independently retained carrier.
-            for method in &interface.methods {
-                let mut previous = None;
-                for parameter in method.authoritative_type_parameters() {
-                    constraint_work
-                        .charge(1)
-                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                    if parameter.id.module() != Some(checked.module())
-                        || previous.is_some_and(|previous| parameter.id.local() <= previous)
-                        || !type_variable_ids.insert(parameter.id)
-                    {
-                        return Err(ResolvedBuildFailure::InvalidState);
-                    }
-                    previous = Some(parameter.id.local());
-                    let canonical = registry
-                        .type_variables
-                        .get(&parameter.id)
-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
-                    if !same_checker_type_variable_after_base_charge(
-                        canonical,
-                        parameter,
-                        constraint_work,
-                    )? {
-                        return Err(ResolvedBuildFailure::InvalidState);
-                    }
-                }
-            }
         }
         for scheme in checked.schemes() {
             let mut previous = None;
@@ -12224,11 +12254,15 @@ fn validate_checked_registries<'a>(
             .len()
             .checked_sub(local_variable_start)
             .ok_or(ResolvedBuildFailure::InvalidState)?;
-        if local_variable_count != registry.type_variables.len() {
+        if local_variable_count > registry.type_variables.len() {
             return Err(ResolvedBuildFailure::InvalidState);
         }
     }
-    if type_variable_ids.len() != counts.type_variables {
+    let expected_non_method_count = counts
+        .type_variables
+        .checked_sub(counts.method_parameters)
+        .ok_or(ResolvedBuildFailure::InvalidState)?;
+    if type_variable_ids.len() != expected_non_method_count {
         return Err(ResolvedBuildFailure::InvalidState);
     }
     Ok(ValidatedCheckedRegistries { modules })
@@ -12311,16 +12345,6 @@ fn retain_checked_registries(
                 nominal.id,
                 clone_type_variable_row_after_combined_precharge(parameters)?,
             ));
-            for parameter in parameters {
-                let canonical = registry
-                    .type_variables
-                    .get(&parameter.id)
-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
-                builder
-                    .canonical_variables
-                    .0
-                    .push(clone_type_variable_after_combined_precharge(canonical)?);
-            }
         }
         for constructor in registry.constructors() {
             let position = builder.constructors.0.len();
@@ -12345,28 +12369,6 @@ fn retain_checked_registries(
             debug_assert!(displaced.is_none());
             builder.constructors.0.push(retained);
         }
-        for interface in checked.interface_facts() {
-            let canonical = registry
-                .type_variables
-                .get(&interface.parameter.id)
-                .ok_or(ResolvedBuildFailure::InvalidState)?;
-            builder
-                .canonical_variables
-                .0
-                .push(clone_type_variable_after_combined_precharge(canonical)?);
-            for method in &interface.methods {
-                for parameter in method.authoritative_type_parameters() {
-                    let canonical = registry
-                        .type_variables
-                        .get(&parameter.id)
-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
-                    builder
-                        .canonical_variables
-                        .0
-                        .push(clone_type_variable_after_combined_precharge(canonical)?);
-                }
-            }
-        }
         for scheme in checked.schemes() {
             if !scheme.scheme.type_parameters.is_empty() {
                 builder.retain_global_parameter_row(
@@ -12375,28 +12377,12 @@ fn retain_checked_registries(
                     &scheme.scheme.type_parameters,
                 )?;
             }
-            for (identity, _) in &scheme.scheme.type_parameters {
-                let canonical = registry
-                    .type_variables
-                    .get(identity)
-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
-                builder
-                    .canonical_variables
-                    .0
-                    .push(clone_type_variable_after_combined_precharge(canonical)?);
-            }
         }
-        for implementation in checked.implementation_facts() {
-            for parameter in &implementation.head_parameters {
-                let canonical = registry
-                    .type_variables
-                    .get(&parameter.id)
-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
-                builder
-                    .canonical_variables
-                    .0
-                    .push(clone_type_variable_after_combined_precharge(canonical)?);
-            }
+        for canonical in registry.type_variables.values() {
+            builder
+                .canonical_variables
+                .0
+                .push(clone_type_variable_after_combined_precharge(canonical)?);
         }
     }
     Ok(builder.finish())
@@ -12691,7 +12677,7 @@ impl ResolvedRegistry {
         for imported_interface in imported.interface_imports() {
             registry
                 .try_insert_checker_type_variable(&imported_interface.fact.parameter, budget)?;
-            for method in &imported_interface.fact.methods {
+            for method in imported_interface.authority_methods() {
                 for parameter in method.authoritative_type_parameters() {
                     registry.try_insert_checker_type_variable(parameter, budget)?;
                 }
@@ -16896,7 +16882,6 @@ mod tests {
             MissingImplementationCanonical,
             ForeignZeroParameterGlobal,
             ForeignZeroHeadImplementation,
-            ExtraCanonicalVariable,
             CanonicalMirrorSpelling,
             CanonicalMirrorOrigin,
             CanonicalMirrorKind,
@@ -16931,14 +16916,13 @@ mod tests {
             (Mutation::ExtraParameterRow, 13, 0),
             (Mutation::AbstractName, 13, 0),
             (Mutation::AbstractKind, 13, 0),
-            (Mutation::CanonicalValueIdentity, 18, 0),
-            (Mutation::MissingNominalCanonical, 13, 0),
-            (Mutation::MissingInterfaceCanonical, 13, 0),
-            (Mutation::MissingGlobalCanonical, 13, 0),
-            (Mutation::MissingImplementationCanonical, 13, 0),
+            (Mutation::CanonicalValueIdentity, 17, 0),
+            (Mutation::MissingNominalCanonical, 0, 0),
+            (Mutation::MissingInterfaceCanonical, 0, 0),
+            (Mutation::MissingGlobalCanonical, 0, 0),
+            (Mutation::MissingImplementationCanonical, 0, 0),
             (Mutation::ForeignZeroParameterGlobal, 12, 0),
             (Mutation::ForeignZeroHeadImplementation, 13, 0),
-            (Mutation::ExtraCanonicalVariable, 13, 0),
             (Mutation::CanonicalMirrorSpelling, 18, 0),
             (Mutation::CanonicalMirrorOrigin, 19, 0),
             (Mutation::CanonicalMirrorKind, 20, 0),
@@ -17093,18 +17077,6 @@ mod tests {
                     modules[0].implementation_facts[0].id = ImplId::new(ModuleId::new(99), 0);
                     modules[0].implementation_facts[0].head_parameters = Box::new([]);
                 }
-                Mutation::ExtraCanonicalVariable => {
-                    let id = TypeVariableId::resolved(module, u32::MAX);
-                    registry.type_variables.insert(
-                        id,
-                        ResolvedTypeVariable {
-                            id,
-                            spelling: "extra".to_owned(),
-                            kind: Kind::Type,
-                            origin: Origin::Source(span),
-                        },
-                    );
-                }
                 Mutation::CanonicalMirrorSpelling => {
                     let id = registry.nominal_parameters[&registry.nominals[0].id][0].id;
                     registry.type_variables.get_mut(&id).unwrap().spelling = "forged".to_owned();
@@ -17240,16 +17212,22 @@ mod tests {
                     "{mutation:?}",
                 );
             }
-            let mut type_work = TypeWorkBudget::with_limit(expected_type_work);
-            let mut constraint_work = crate::interface::InterfaceConstraintBudget::with_limit(
-                expected_constraint_work - 1,
-            );
-            assert_eq!(
-                ResolvedRegistry::combine_checked(&modules, &mut type_work, &mut constraint_work,),
-                Err(ResolvedBuildFailure::ConstraintResource),
-                "{mutation:?}",
-            );
-            assert_eq!(type_work.used(), 0, "{mutation:?}");
+            if expected_constraint_work != 0 {
+                let mut type_work = TypeWorkBudget::with_limit(expected_type_work);
+                let mut constraint_work = crate::interface::InterfaceConstraintBudget::with_limit(
+                    expected_constraint_work - 1,
+                );
+                assert_eq!(
+                    ResolvedRegistry::combine_checked(
+                        &modules,
+                        &mut type_work,
+                        &mut constraint_work,
+                    ),
+                    Err(ResolvedBuildFailure::ConstraintResource),
+                    "{mutation:?}",
+                );
+                assert_eq!(type_work.used(), 0, "{mutation:?}");
+            }
         }
     }
 
