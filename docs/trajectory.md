@@ -46,11 +46,15 @@ corpus are retained by the
 second bounded increment is also complete; its reviewed explicit kinds and
 higher-kinded declaration parameters are retained by the
 [explicit-kind evidence report](design/lib-ash/kinds-evidence.md). Both
-completed bounded increments are integrated into current `main`. The complete
-`lib-ash` milestone remains exploratory. `effect-ash`, `proof-ash`, and
-`pack-ash` are named future milestones. `effect-ash` and `pack-ash` have no
-ordering between them. `effect-ash` and `proof-ash` remain separate, but their
-work may interleave through explicitly named synchronization checkpoints.
+completed bounded increments are integrated into current `main`. The third
+bounded increment is authorized by
+[CP-0010](proposals/CP-0010-method-local-type-parameters.md) and organized by
+[TASK-0017](tasks/TASK-0017-implement-method-local-type-parameters.md). It is
+prospective and absent from the current specification. The complete `lib-ash`
+milestone remains exploratory. `effect-ash`, `proof-ash`, and `pack-ash` are
+named future milestones. `effect-ash` and `pack-ash` have no ordering between
+them. `effect-ash` and `proof-ash` remain separate, but their work may
+interleave through explicitly named synchronization checkpoints.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
@@ -61,6 +65,7 @@ work may interleave through explicitly named synchronization checkpoints.
 | [Modular core-versus-library audit](design/modular-ash/core-library-evidence.md) | complete / implementation | implemented passive modules and method-only interfaces, their retained evidence, and the [Modular Ash closure report](design/modular-ash/closure.md) | Treat exploratory `lib-ash` pressure as separate work that requires its own authorization, not as the next authorized step in a sequential roadmap. |
 | [Explicit implementation imports and re-exports](design/lib-ash/imports-evidence.md) | complete / implementation | completed `modular-ash` checkpoint, current [specification](../spec/README.md), stable module and interface identities, body-free summaries, scoped implementation evidence, and the prepared [library milestone sequence](design/DN-0025-library-and-package-milestones.md#prepared-lib-ash-sequence) | Preserve the explicit selection, identity, summary, authorization, validation, Core, runtime, and resource boundaries during separately authorized later `lib-ash` work. |
 | [Explicit kinds and higher-kinded parameters](design/lib-ash/kinds-evidence.md) | complete / implementation | integrated [explicit-import increment](design/lib-ash/imports-evidence.md), current [specification](../spec/README.md), accepted [ordered resolved-global authority](decisions/AD-0009-ordered-resolved-global-binder-authority.md), stable identities, body-free summaries, and independent Core validation | Preserve the phase-dependent inference boundary, authenticated ordered ownership, exact resource formulas, and runtime erasure during separately authorized later work. |
+| [Method-local type parameters](proposals/CP-0010-method-local-type-parameters.md) | implementation | integrated [explicit-kind increment](design/lib-ash/kinds-evidence.md), accepted semantic transition, [active task](tasks/TASK-0017-implement-method-local-type-parameters.md), stable method identities, body-free summaries, linked evidence validation, and typed Core validation | Execute the test-first plan within the fixed 70-unit budget; retain exact method-scheme and Core-authentication evidence without changing ordinary rank-1 source values or runtime behavior. |
 | [`effect-ash`: effects, handlers, and providers](design/DN-0009-effects-handlers-and-continuations.md) | speculative | current pure [specification](../spec/README.md), accepted [typed Core](decisions/AD-0007-typed-core-dialects.md) and [evaluator](decisions/AD-0008-explicit-evaluator-machine.md) boundaries, and exploratory [identity and lifetime](design/DN-0010-identities-and-resource-lifetimes.md) and [provider resolution](design/DN-0011-modules-providers-and-resolution.md) models; no ordering dependency on `pack-ash` | Reconstruct the explorations against current Ash and identify a first bounded semantic question. Treat existential packaging and dynamic composition as possible convergence pressure with later package work, not as a current dependency. |
 | [`proof-ash`: propositions, laws, program proofs, and law-derived testing](design/DN-0001-reboot-foundations.md#14-propositions-laws-and-proofs) | idea | current pure [specification](../spec/README.md), accepted [small-step semantic method](decisions/AD-0004-small-step-semantic-method.md) and [front-end](decisions/AD-0006-front-end-semantic-boundaries.md) and [typed Core](decisions/AD-0007-typed-core-dialects.md) boundaries, implemented [checked interface-evidence flow](../spec/elaboration.md#interface-evidence-lowering), and exploratory [runtime-established static evidence](design/DN-0018-runtime-established-static-evidence.md) | Define a bounded pure proposition-and-law corpus and compare proof-evidence and program-logic models before selecting a calculus. Any work that requires effect semantics must name a synchronization checkpoint with `effect-ash` and state its required inputs and retained outputs. |
 | [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Exercise the retained closed pure dialect and operation-family seam against the next proposed feature pressure. |
