@@ -380,6 +380,31 @@ and evaluator semantic or state-machine changes.
   unchanged; independent semantic and Rust/resource re-reviews remain pending.
   The Checkpoint 3 reservation remains 12 units, cumulative reserved use
   remains 26/70, and 44 units remain unreserved.
+- Independent semantic re-review approves `994ab9f` with no critical,
+  important, or minor findings. It independently exercised identity-equal and
+  generic prerequisites, exact-current recursion, an earlier unrelated
+  unsatisfied obligation, nested equal-boundary applications, ambiguity,
+  publication, and higher-order rejection. Ranked failure correlation retains
+  abstract-prerequisite priority and reports the nested exact-current witness
+  as `type.polymorphic-recursion`, expected `A`, found `Bool`; no temporary
+  review fixture remains.
+- Independent Rust/resource re-review also approves `994ab9f` with no critical,
+  important, or minor findings. It verified the complete `P + R` normal-close
+  preallocation boundary, ranked same-tier duplicate rejection, exact selected
+  order and rigidity indices, checked `2m` method-scheme ingress, one-short
+  atomic retry, private publication state, iterative disposal, and the absence
+  of dependency, production-limit, specification, Core, evaluator, Checkpoint
+  4, or Checkpoint 5 changes. Its fresh focused counts are 21 architecture, 44
+  implementation, 25 interface-selection, 33 interface, and 40 polymorphism
+  tests plus 64 `interface`-, 115 `elaborate`-, and 133 `evidence`-filtered
+  library tests.
+- Fresh root verification at the reviewed head passes all 663 library tests and
+  the five focused integration suites with counts 21/44/25/33/40. Formatting,
+  locked all-target checking, strict locked workspace/all-target/all-feature
+  Clippy, task Markdown lint, combined-diff hygiene, and clean-worktree status
+  also pass. Checkpoint 3 is complete in `a9d5812`, `8622daf`, `698b99a`, and
+  `994ab9f`. Its reserved use is 12 units, cumulative reserved use is 26/70,
+  44 units remain unreserved, and Checkpoint 4 is not reserved.
 
 ## Verification
 
