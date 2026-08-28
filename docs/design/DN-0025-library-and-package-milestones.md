@@ -2,7 +2,7 @@
 
 - ID: `DN-0025`
 - Status: exploring
-- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), the [explicit-import evidence](lib-ash/imports-evidence.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
+- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), the [explicit-import evidence](lib-ash/imports-evidence.md), the [explicit-kind evidence](lib-ash/kinds-evidence.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
 
 > This design note is informative. It does not define current Ash, accept
 > language semantics, or accept a package or artifact architecture.
@@ -15,15 +15,16 @@ capabilities require a later milestone?
 
 ## Current boundary
 
-The [current specification](../../spec/README.md) defines the first `lib-ash`
-increment on the completed Modular Ash base. It has passive acyclic source
+The [current specification](../../spec/README.md) defines the first two bounded
+`lib-ash` increments on the completed Modular Ash base. It has passive acyclic source
 modules, public and private declarations, opaque type exports, qualified and
 targeted imports, targeted public name and implementation re-exports,
 compiler-generated body-free export summaries, method-only single-parameter
 interfaces, explicit implementation selection, authenticated transitive
-authorization routes, explicit evidence lowering, and one linked typed Core
-program. Interfaces are not module signatures. Persistent compiled modules,
-package resolution, and separate object linking remain outside current Ash.
+authorization routes, explicit kinds, higher-kinded declaration parameters,
+kind-preserving evidence lowering, and one linked typed Core program.
+Interfaces are not module signatures. Persistent compiled modules, package
+resolution, and separate object linking remain outside current Ash.
 
 The `mini-ash` Git tag retains Mini-Ash as a historical runnable dialect.
 Current source does not carry a second grammar or compiler path for it.
@@ -62,14 +63,18 @@ that closure.
 
 ### `lib-ash`
 
-The first bounded `lib-ash` increment is complete: implementation
-availability is explicit, and targeted imports can re-export selected names and
+The first bounded `lib-ash` increment is complete. Implementation availability
+is explicit, and targeted imports can re-export selected names and
 implementation authorizations. The retained
 [evidence report](lib-ash/imports-evidence.md) records its reviewed boundary.
-The complete milestone remains open. Later proposals may add the language
-mechanisms needed to define stronger libraries: higher-kinded parameters,
-method-local type parameters, multi-parameter interfaces, associated outputs
-or relational determination, and method and associated-type defaults.
+The second increment has implemented and specified explicit kinds and
+higher-kinded declaration parameters across checking, summaries, evidence, and
+independent Core validation. Its current
+[kind evidence](lib-ash/kinds-evidence.md) remains a checkpoint until final
+review, retention, and transition-artifact cleanup finish. The complete
+milestone remains open. Later proposals may add method-local type parameters,
+multi-parameter interfaces, associated outputs or relational determination,
+and method and associated-type defaults.
 
 ### `pack-ash`
 
@@ -98,7 +103,10 @@ narrow, reorder, or remove it.
    summaries, substitution, and independent Core validation kind-aware. The
    absence of kind inference is a phase-dependent semantic boundary, not a
    permanent language principle; later work may consider bounded
-   declaration-local kind inference separately from kind polymorphism.
+   declaration-local kind inference separately from kind polymorphism. The
+   implemented and specified checkpoint is recorded by the
+   [explicit-kind evidence report](lib-ash/kinds-evidence.md); final retention
+   remains pending.
 3. Add method-local type parameters. Keep ordinary source rank-1 and admit
    polymorphic term slots only as authenticated compiler-generated interface
    evidence.
@@ -115,9 +123,10 @@ narrow, reorder, or remove it.
    program.
 
 The first increment establishes the visibility and coherence closure used by
-later multi-parameter and determination work. `pack-ash` remains separate
-until the complete `lib-ash` milestone stabilizes those summaries and
-identities.
+later multi-parameter and determination work. The second establishes fixed
+kinds, canonical applications, and authenticated polymorphic identities.
+`pack-ash` remains separate until the complete `lib-ash` milestone stabilizes
+those summaries and identities.
 
 ## `lib-ash` type and interface model
 
@@ -455,14 +464,21 @@ node inventory; and explicit migration of every imported implementation
 dependency. Neither complete nor ordinary targeted name imports make
 implementations available implicitly.
 
-The comparison corpus should cover kind-aware Core, authenticated polymorphic
-evidence slots, higher-kinded partial application, method-local parameters,
-method determinacy, multi-parameter improvement and selection, generic
+The second increment's current
+[kind evidence](lib-ash/kinds-evidence.md) covers explicit and omitted
+binder policies, fixed kinds through inference and first-order evidence,
+canonical unary type application, authenticated body-free facts, resolved and
+generated Core binder authority, exact resources, tampering, predecessor
+migration, and runtime erasure. The absence of kind inference in that increment
+is phase-dependent rather than a permanent library-language restriction.
+
+The remaining comparison corpus should cover method-local parameters, method
+determinacy, multi-parameter improvement and selection, generic
 determination conflicts, multi-parameter orphan ownership, direct and
 transitive determination, growing and cyclic projection rejection,
 prerequisite termination, default completion, overrides, mutually recursive
-method defaults, explicit implementation imports, re-exports, diamond
-identity, privacy, opacity, conflicts, and deterministic diagnostics.
+method defaults, re-export diamonds, privacy, opacity, conflicts, and
+deterministic diagnostics.
 
 The associated and relational forms should be compared for expressiveness,
 annotation burden, inference, ambiguity diagnostics, summary complexity, and

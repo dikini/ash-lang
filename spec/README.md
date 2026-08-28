@@ -38,6 +38,15 @@ implementations remain available only in their defining module; `pub impl`
 publishes a body-free fact that dependents or later facades may select
 explicitly.
 
+Ash's monomorphic kind language contains `Type` and right-associative function
+kinds such as `Type -> Type`. Declaration parameters may state their kinds.
+Every omitted declaration kind annotation, and every binder introduced by an
+omitted global or implementation binder list, is fixed to `Type`; Ash does not
+infer a function kind from use. This is a phase-dependent constraint, not a
+commitment against later bounded declaration-local kind inference. A type
+constructor or parameter may remain bare or partially applied when its
+resulting kind satisfies the context that owns the type.
+
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
 After checking every dependency, Ash links the module definition groups and
@@ -72,6 +81,42 @@ main () = Arithmetic.answer(())
 pub answer : Unit -> Int
 answer () = 42
 ```
+
+Kinds and higher-kinded parameters also cross module boundaries. This
+`dependency.ash` file exports a kinded interface, an implementation for the
+bare `Option` constructor, and a global whose explicit parameter has kind
+`Type -> Type`:
+
+```ash
+pub type Option<A> =
+None
+| Some(A)
+
+pub interface Observe<F : Type -> Type> {
+observe : F<Int> -> Int
+}
+
+pub impl Observe<Option> {
+observe value = 40 + 2
+}
+
+pub relay<F : Type -> Type> : F<Int> -> F<Int>
+relay value = value
+```
+
+The sibling entry imports the nominal, constructor, constrained method,
+polymorphic global, and selected implementation fact:
+
+```ash
+import dependency (Option, Some, observe, relay, impl Observe)
+main : Unit -> Int
+main () = observe(relay(Some(1)))
+```
+
+The dependency summary carries the defining identities and fixed kinds without
+the dependency body. Linking authenticates the selected `Observe<Option>`
+evidence before Core synthesis. The program observes `42 : Int`; kinds and
+selected interface evidence introduce no runtime lookup or module value.
 
 A targeted import can select and rename that export without introducing a
 module alias:

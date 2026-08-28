@@ -125,13 +125,20 @@ implementation closure.
 
 Resolution uses each already checked dependency's immutable export summary.
 The summary supplies public local and re-exported names under their selected
-spellings, checked constrained rank-1 schemes, accessible constructor facts,
-the public implementation closure with authorization routes, and hidden
-identity or interface-shape facts required to close those public facts. The
-compiler produces this body-free summary only after checking the complete
-module; Ash source does not declare it. It contains no dependency body,
-implementation body, forwarding declaration, or mutable dependency scope.
-Importing a scheme does not infer or generalize it again.
+spellings, checked constrained rank-1 schemes with kinded binders, accessible
+constructor facts, the public implementation closure with authorization
+routes, and hidden kind, identity, or interface-shape facts required to close
+those public facts. The compiler produces this body-free summary only after
+checking the complete module; Ash source does not declare it. It contains no
+dependency body, implementation body, forwarding declaration, or mutable
+dependency scope. Importing a scheme does not infer or generalize it again.
+
+Summary admission authenticates every retained type-variable identity against
+one defining kinded binder record and derives each nominal constructor kind
+from its ordered parameter records before the dependency facts enter local
+resolution. Resolution preserves those identities and kinds. Qualification,
+targeted renaming, opacity, re-export, and another path through a dependency
+diamond cannot recompute a kind or replace a defining record with a local one.
 
 A public constrained global, public implementation, or re-exported fact may
 refer to declarations defined by an earlier module. The summary retains the
@@ -195,9 +202,11 @@ The missing selector, not the implementation declaration, owns the absence
 from the entry's effective environment. Adding `impl Equal` to the targeted
 list makes that fact available without changing the two name bindings.
 
-Imports are installed in source order. Local nominal types, interfaces,
-implementations, and globals are each resolved in source order after their
-module-wide identities are allocated.
+Imports are installed in source order. Nominal types, interfaces,
+implementations, and globals share one interleaved local declaration order.
+Resolution allocates declaration identities before resolving bodies, and
+allocates local type-variable identities in that declaration order as
+described below.
 
 ## Interface, implementation, and requirement identities
 
@@ -236,6 +245,85 @@ with lowercase terms or constructors in their distinct syntactic namespaces.
 These conflicts use `resolve.duplicate-type`, `resolve.duplicate-global`, or
 `resolve.import-conflict` according to the declarations involved.
 
+## Type binder identity and scope
+
+The defining resolved binder record owns the spelling, source origin, and
+canonical kind of each `TypeVariableId`. A type occurrence retains that
+identity instead of copying an independently authoritative kind. Resolution
+allocates source-origin type-variable identities from one module-wide sequence
+in declaration source order, then in binder encounter order within each
+declaration. Interleaving a nominal type, interface, implementation, or global
+therefore does not regroup its binders by declaration family. Free type-name
+candidates later rejected by the interface method or implementation
+prerequisite rules retain the same encounter order, but their allocation does
+not make them valid binders.
+
+Nominal parameters use their written set and order and may be phantom. An
+interface has exactly one written parameter. A kind annotation fixes that
+binder's kind; an omitted annotation fixes it at `Type`.
+
+An explicit global parameter list is an ordered bijection with the free type
+variables of the global's value type and requirements. The written order is
+the outer scheme order and scopes over the complete header, patterns, and body.
+An explicit implementation parameter list is an ordered bijection with the
+free variables of its head argument. Its written order is the implementation
+head-parameter order and scopes over the head, prerequisites, and method
+bodies. Every prerequisite variable must belong to that head set; a variable
+that is unlisted and occurs only in a prerequisite remains
+`impl.prerequisite-variable`. Listing such a variable does not add it to the
+head's free-variable set and instead makes that explicit binder unused.
+
+A duplicate explicit binder is `resolve.duplicate-type-parameter`; a listed
+binder absent from the global's value type and requirements or from the
+implementation head is `resolve.unused-type-parameter`; and an unlisted free
+header name under an explicit list is `resolve.unknown-type`. An interface
+method has no local parameter list, so a free variable other than its interface
+parameter remains `interface.method-parameter`. The global determination rule
+still rejects a variable that occurs only in a requirement.
+
+When a global omits its parameter list, first occurrences in its value type
+come first, followed by first occurrences found only in its requirements. When
+an implementation omits its list, first occurrences in its head argument
+become its parameters. Every omitted declaration kind annotation, and every
+binder introduced by an omitted global or implementation binder list, is fixed
+to `Type`. Ash does not infer a kind for those binders. This is the current
+phase-dependent language constraint, not a commitment against a later bounded
+declaration-local inference rule.
+
+The executable test `resolution_binder_policies_are_executable_and_ordered`
+checks written order, first-occurrence order, omitted kinds, phantom nominal
+parameters, and both global presentations:
+
+```ash
+type Phantom<Unused, A> = Phantom(A)
+type Pair<Left, Right> = Pair(Left, Right)
+
+interface Witness<Value> {
+    witness : Value -> Bool
+}
+
+ordered<B, A> : A -> B -> A
+ordered left right = left
+
+fn operational<D, C>(left : C, right : D) -> C {
+    left
+}
+
+legacy : Y -> X -> Y
+legacy left right = left
+
+impl<F, E> Witness<Pair<E, F>> {
+    witness value = true
+}
+
+impl Witness<(S, R)> {
+    witness value = true
+}
+
+main : Unit -> Int
+main () = 42
+```
+
 ## Type and constructor scope
 
 All nominal type declarations in one module are mutually visible, including in
@@ -251,15 +339,21 @@ spelling. A type occurrence must name a local or imported nominal type, an
 in-scope type parameter, or one of `Int`, `Bool`, and `Unit`. An uppercase term
 or pattern occurrence must name an accessible local or imported constructor.
 
-A parameterized nominal declaration allocates distinct type-parameter
-identities in source order. Those parameters are visible throughout that
-declaration's constructor payloads and nowhere else. A declaration cannot
-repeat a parameter spelling. A parameter shadows a same-spelled unqualified
-nominal type inside its declaration. Because every parameter has kind `Type`,
-applying it as a type constructor is rejected with `resolve.type-kind`. A
-nominal type application must supply exactly the declaration's arity; bare and
-partially applied nominal constructors are rejected with
-`resolve.type-argument-count`.
+A parameterized nominal declaration makes its distinct kinded parameters
+visible throughout that declaration's constructor payloads and nowhere else.
+A declaration cannot repeat a parameter spelling. A parameter shadows a
+same-spelled unqualified nominal type inside its declaration.
+
+The source tree retains a named type application with its argument vector and
+spans. Resolution admits a nominal constructor or in-scope type parameter as
+the head, then folds the arguments left into repeated unary applications. For
+example, `F<A, B>` resolves as
+`Application(Application(F, A), B)`, with one provenance step and argument span
+per fold. A bare nominal constructor or type parameter remains its resolved
+identity; resolution does not require saturation and does not reject a
+parameter merely because it occurs in function position. [Static
+semantics](static-semantics.md) derives the kind of the bare, partial, or
+saturated result and owns any application-kind failure.
 
 ## Public, private, and opaque declarations
 
@@ -395,11 +489,12 @@ ordinary globals. A source method occurrence resolves to its interface
 binder preserves the body's stable identity for later phases without adding a
 source-visible name.
 
-Each global signature implicitly binds its free uppercase type names in
-first-occurrence order. Those type parameters scope over that global's header,
-patterns, and body. They do not enter another global signature. Thus
-`identity : A -> A` declares one rank-1 type parameter without adding source
-type-parameter punctuation to the function name.
+Each global uses either the complete explicit parameter list or the omitted
+list's first-occurrence rule defined in [Type binder identity and
+scope](#type-binder-identity-and-scope). Its type parameters do not enter
+another global signature. Thus `identity : A -> A` declares one rank-1
+kind-`Type` parameter without adding source type-parameter punctuation to the
+function name, while `identity<A> : A -> A` states the same binder explicitly.
 
 Two local globals cannot have the same name. In an equational definition, the
 name in the global signature must equal the name at every equation head.

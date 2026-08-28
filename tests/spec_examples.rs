@@ -6,12 +6,17 @@ use std::{
 };
 
 use ash::{
+    core::{PureComputation, PureExprKind, validate_modules},
     driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
-    elaborate::{TypeError, TypeReason},
+    elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
+    evidence_validation::validate_interface_evidence,
     interface::InterfaceReason,
+    kind::{KindExpectation, KindFailure, KindReason},
     lexer::LexReason,
-    module::{LoadGraphError, ModuleRoots},
-    resolve::ResolveReason,
+    module::{LoadGraphError, ModuleRoots, load_module_graph},
+    resolve::{ResolveReason, resolve_module},
+    resolved::ResolvedDefinitionKind,
+    types::{Kind, Type},
 };
 
 const V001: &str = include_str!("fixtures/first-stratum/valid/v001-precedence.ash");
@@ -177,6 +182,130 @@ const CONSTRAINED_PRESENTATIONS_MODULE: &str = concat!(
     "main : Unit -> (Bool, Bool)\n",
     "main () = (same_equational (1, 1), same_operational (1, 1))\n",
 );
+const CONTEXTUAL_TYPE_NOMINAL_MODULE: &str =
+    include_str!("fixtures/explicit-kinds/ordinary-type-nominal.ash");
+const LINKED_HIGHER_KINDED_ENTRY_MODULE: &str =
+    include_str!("fixtures/explicit-kinds/linked-product/entry.ash");
+const LINKED_HIGHER_KINDED_DEPENDENCY_MODULE: &str =
+    include_str!("fixtures/explicit-kinds/linked-product/dependency.ash");
+const BINDER_POLICY_MODULE: &str = concat!(
+    "type Phantom<Unused, A> = Phantom(A)\n",
+    "type Pair<Left, Right> = Pair(Left, Right)\n\n",
+    "interface Witness<Value> {\n",
+    "    witness : Value -> Bool\n",
+    "}\n\n",
+    "ordered<B, A> : A -> B -> A\n",
+    "ordered left right = left\n\n",
+    "fn operational<D, C>(left : C, right : D) -> C {\n",
+    "    left\n",
+    "}\n\n",
+    "legacy : Y -> X -> Y\n",
+    "legacy left right = left\n\n",
+    "impl<F, E> Witness<Pair<E, F>> {\n",
+    "    witness value = true\n",
+    "}\n\n",
+    "impl Witness<(S, R)> {\n",
+    "    witness value = true\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = 42\n",
+);
+const INTERLEAVED_BINDER_REGISTRY_MODULE: &str = concat!(
+    "type Pair<Left, Right> = Pair(Left, Right)\n\n",
+    "interface Witness<Value> {\n",
+    "    witness : Value -> Bool\n",
+    "}\n\n",
+    "impl<F, E> Witness<Pair<E, F>> {\n",
+    "    witness value = true\n",
+    "}\n\n",
+    "legacy : Y -> X -> Y\n",
+    "legacy left right = left\n\n",
+    "main : Unit -> Int\n",
+    "main () = 42\n",
+);
+const HIGHER_KINDED_INTERFACE_MODULE: &str = concat!(
+    "type Option<A> =\n",
+    "    None\n",
+    "    | Some(A)\n\n",
+    "interface Transform<F : Type -> Type> {\n",
+    "    transform : (Int -> Int, F<Int>) -> F<Int>\n",
+    "}\n\n",
+    "impl Transform<Option> {\n",
+    "    transform (function, None) = None\n",
+    "    transform (function, Some(value)) = Some(function(value))\n",
+    "}\n\n",
+    "increment : Int -> Int\n",
+    "increment value = value + 1\n\n",
+    "apply_transform<F : Type -> Type> : (Int -> Int, F<Int>) -> F<Int> where Transform<F>\n",
+    "apply_transform pair = transform pair\n\n",
+    "fn relay<F : Type -> Type, A>(value : F<A>) -> F<A> {\n",
+    "    value\n",
+    "}\n\n",
+    "main : Unit -> (Option<Int>, Bool, Unit)\n",
+    "main () = (relay(apply_transform((increment, Some(41)))), true, ())\n",
+);
+const EXPECTED_TYPE_KIND_REJECTION_MODULE: &str = concat!(
+    "type Option<A> =\n",
+    "    None\n",
+    "    | Some(A)\n\n",
+    "bad : Unit -> Option\n",
+    "bad () = None\n\n",
+    "main : Unit -> Unit\n",
+    "main () = ()\n",
+);
+const NO_KIND_INFERENCE_REJECTION_MODULE: &str = concat!(
+    "legacy : F<Int> -> Unit\n",
+    "legacy value = ()\n\n",
+    "main : Unit -> Unit\n",
+    "main () = ()\n",
+);
+const INTERFACE_KIND_ARGUMENT_REJECTION_MODULE: &str = concat!(
+    "interface Higher<F : Type -> Type> {\n",
+    "    higher : F<Int> -> Unit\n",
+    "}\n\n",
+    "bad : Unit -> Unit where Higher<Int>\n",
+    "bad value = value\n\n",
+    "main : Unit -> Unit\n",
+    "main () = ()\n",
+);
+const CORE_KIND_MODULE: &str = concat!(
+    "type Option<A> =\n",
+    "    None\n",
+    "    | Some(A)\n\n",
+    "keep<F : Type -> Type, A> : F<A> -> F<A>\n",
+    "keep value = value\n\n",
+    "main : Unit -> Option<Int>\n",
+    "main () = keep(Some(42))\n",
+);
+
+const PHASE_DEPENDENT_NO_KIND_INFERENCE: &str = "Every omitted declaration kind annotation, and every binder introduced by an omitted global or implementation binder list, is fixed to `Type`. Ash does not infer a kind for those binders. This is the current phase-dependent language constraint, not a commitment against a later bounded declaration-local inference rule.";
+
+const EXPLICIT_KIND_RULE_FRAGMENTS: &[(&str, &str)] = &[
+    (
+        "spec/syntax.md",
+        "type_parameter ::= upper_identifier [ \":\" kind ] ;",
+    ),
+    ("spec/syntax.md", "kind ::= kind_atom [ \"->\" kind ] ;"),
+    (
+        "spec/syntax.md",
+        "interface_parameter ::= \"<\" type_parameter \">\" ;",
+    ),
+    (
+        "spec/syntax.md",
+        "global_signature ::= identifier [ type_parameters ]",
+    ),
+    ("spec/syntax.md", "\"impl\" [ type_parameters ]"),
+    ("spec/static-semantics.md", "family kind-synthesis:"),
+    ("spec/static-semantics.md", "K-Primitive :="),
+    ("spec/static-semantics.md", "K-Variable :="),
+    ("spec/static-semantics.md", "K-Inference :="),
+    ("spec/static-semantics.md", "K-Nominal :="),
+    ("spec/static-semantics.md", "K-Application :="),
+    ("spec/static-semantics.md", "K-Tuple :="),
+    ("spec/static-semantics.md", "K-Function :="),
+    ("spec/static-semantics.md", "K-Value-Type :="),
+    ("spec/static-semantics.md", "K-Interface-Argument :="),
+];
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
@@ -287,6 +416,27 @@ fn assert_documented(path: &str, source: &str) {
         document.contains(source.trim_end()),
         "{path} must contain its executable source example"
     );
+}
+
+fn assert_normative_fragment(path: &str, fragment: &str) {
+    let document = fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("missing normative manifest data {path}: {error}"));
+    assert!(
+        document.contains(fragment),
+        "{path} must contain normative fragment {fragment:?}"
+    );
+}
+
+fn source_kind_error(name: &str, text: &str) -> Box<ash::kind::KindError> {
+    let failure = run(name, text).expect_err("the documented kind rejection should fail");
+    let PipelineFailure::Kind(KindFailure::Source(error)) = failure else {
+        panic!("the documented kind rejection should fail at kind checking: {failure:?}")
+    };
+    error
+}
+
+fn type_to_type_kind() -> Kind {
+    Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
 }
 
 fn assert_module_tree(
@@ -556,6 +706,19 @@ fn overview_three_module_implementation_facade_is_executable() {
 }
 
 #[test]
+fn overview_linked_higher_kinded_example_is_executable() {
+    let observation = assert_module_tree(
+        LINKED_HIGHER_KINDED_ENTRY_MODULE,
+        &[("app/dependency.ash", LINKED_HIGHER_KINDED_DEPENDENCY_MODULE)],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+    assert_documented("spec/README.md", LINKED_HIGHER_KINDED_ENTRY_MODULE);
+    assert_documented("spec/README.md", LINKED_HIGHER_KINDED_DEPENDENCY_MODULE);
+}
+
+#[test]
 fn static_semantics_generic_prerequisite_evidence_example_is_executable() {
     assert_observation(
         "generic-prerequisite-evidence.ash",
@@ -604,6 +767,258 @@ fn syntax_constrained_global_presentations_are_executable() {
         "(Bool, Bool)",
     );
     assert_documented("spec/syntax.md", CONSTRAINED_PRESENTATIONS_MODULE);
+}
+
+#[test]
+fn syntax_contextual_type_nominal_is_executable() {
+    assert_observation(
+        "contextual-type-nominal.ash",
+        CONTEXTUAL_TYPE_NOMINAL_MODULE,
+        "Type",
+        "Type",
+    );
+    assert_documented("spec/syntax.md", CONTEXTUAL_TYPE_NOMINAL_MODULE);
+}
+
+#[test]
+fn resolution_binder_policies_are_executable_and_ordered() {
+    let source = TempFile::write_named("binder-policy.ash", BINDER_POLICY_MODULE);
+    let graph = load_module_graph(source.path(), &ModuleRoots::empty())
+        .expect("the documented binder-policy module should load");
+    let resolved = resolve_module(&graph.modules()[0], &[])
+        .expect("the documented binder-policy module should resolve");
+
+    let phantom = resolved
+        .registry()
+        .nominals()
+        .iter()
+        .find(|nominal| nominal.spelling == "Phantom")
+        .expect("the phantom nominal should resolve");
+    assert_eq!(
+        resolved
+            .registry()
+            .nominal_parameters(phantom.id)
+            .expect("the phantom nominal should retain its parameters")
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("Unused", &Kind::Type), ("A", &Kind::Type)],
+    );
+
+    let [interface] = resolved.interfaces() else {
+        panic!("the binder-policy module should have one interface")
+    };
+    assert_eq!(
+        (
+            interface.parameter.spelling.as_str(),
+            &interface.parameter.kind
+        ),
+        ("Value", &Kind::Type),
+    );
+
+    let mut equational_parameters = Vec::new();
+    let mut operational_parameters = None;
+    for definition in resolved.definitions() {
+        match &definition.kind {
+            ResolvedDefinitionKind::Equational(global) => {
+                equational_parameters.push((
+                    global.interface.name.spelling.as_str(),
+                    global
+                        .interface
+                        .type_parameters
+                        .iter()
+                        .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+                        .collect::<Vec<_>>(),
+                ));
+            }
+            ResolvedDefinitionKind::InlineOperational(global) => {
+                operational_parameters = Some(
+                    global
+                        .header
+                        .type_parameters
+                        .iter()
+                        .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+    }
+    assert_eq!(
+        equational_parameters
+            .iter()
+            .find(|(name, _)| *name == "ordered")
+            .expect("ordered should resolve")
+            .1,
+        [("B", &Kind::Type), ("A", &Kind::Type)],
+    );
+    assert_eq!(
+        operational_parameters.expect("operational should resolve"),
+        [("D", &Kind::Type), ("C", &Kind::Type)],
+    );
+    assert_eq!(
+        equational_parameters
+            .iter()
+            .find(|(name, _)| *name == "legacy")
+            .expect("legacy should resolve")
+            .1,
+        [("Y", &Kind::Type), ("X", &Kind::Type)],
+    );
+
+    let [explicit, implicit] = resolved.implementations() else {
+        panic!("the binder-policy module should have two implementations")
+    };
+    assert_eq!(
+        explicit
+            .head_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("F", &Kind::Type), ("E", &Kind::Type)],
+    );
+    assert_eq!(
+        implicit
+            .head_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("S", &Kind::Type), ("R", &Kind::Type)],
+    );
+
+    assert_observation("binder-policy.ash", BINDER_POLICY_MODULE, "42", "Int");
+    assert_documented("spec/name-resolution.md", BINDER_POLICY_MODULE);
+}
+
+#[test]
+fn resolution_interleaved_explicit_implementation_and_implicit_global_reach_core() {
+    assert_observation(
+        "interleaved-binder-registry.ash",
+        INTERLEAVED_BINDER_REGISTRY_MODULE,
+        "42",
+        "Int",
+    );
+}
+
+#[test]
+fn static_semantics_kind_synthesis_and_interface_argument_are_executable() {
+    assert_observation(
+        "higher-kinded-interface.ash",
+        HIGHER_KINDED_INTERFACE_MODULE,
+        "(Some(42), true, ())",
+        "(Option<Int>, Bool, Unit)",
+    );
+    assert_documented("spec/static-semantics.md", HIGHER_KINDED_INTERFACE_MODULE);
+}
+
+#[test]
+fn static_semantics_kind_failures_are_structured_and_phase_scoped() {
+    let expected_type = source_kind_error(
+        "kind-expected-type.ash",
+        EXPECTED_TYPE_KIND_REJECTION_MODULE,
+    );
+    assert_eq!(expected_type.reason, KindReason::ExpectedType);
+    assert_eq!(
+        expected_type.expectation(),
+        &KindExpectation::Exact(Kind::Type),
+    );
+    assert_eq!(expected_type.found_kind(), Some(&type_to_type_kind()));
+    assert_eq!(
+        (
+            expected_type.primary.span().range().start(),
+            expected_type.primary.span().range().end(),
+        ),
+        exact_last_range(EXPECTED_TYPE_KIND_REJECTION_MODULE, "Option"),
+    );
+    let [expected_type_declaration] = expected_type.related.as_slice() else {
+        panic!("kind.expected-type should retain its nominal declaration")
+    };
+    assert_eq!(
+        expected_type_declaration.message(),
+        "the found kind is fixed by this declaration",
+    );
+    assert_eq!(
+        (
+            expected_type_declaration.span().range().start(),
+            expected_type_declaration.span().range().end(),
+        ),
+        exact_range(
+            EXPECTED_TYPE_KIND_REJECTION_MODULE,
+            "type Option<A> =\n    None\n    | Some(A)",
+        ),
+    );
+
+    let no_inference =
+        source_kind_error("no-kind-inference.ash", NO_KIND_INFERENCE_REJECTION_MODULE);
+    assert_eq!(no_inference.reason, KindReason::NotApplicable);
+    assert_eq!(
+        no_inference.expectation(),
+        &KindExpectation::Function { domain: Kind::Type },
+    );
+    assert_eq!(no_inference.found_kind(), Some(&Kind::Type));
+    assert_eq!(
+        (
+            no_inference.primary.span().range().start(),
+            no_inference.primary.span().range().end(),
+        ),
+        exact_range(NO_KIND_INFERENCE_REJECTION_MODULE, "F<Int>"),
+    );
+    let [implicit_binder] = no_inference.related.as_slice() else {
+        panic!("the implicit kind should retain its defining binder site")
+    };
+    assert_eq!(
+        implicit_binder.message(),
+        "the applied type's kind is fixed by this declaration",
+    );
+    assert_eq!(
+        (
+            implicit_binder.span().range().start(),
+            implicit_binder.span().range().end(),
+        ),
+        exact_range(NO_KIND_INFERENCE_REJECTION_MODULE, "F"),
+    );
+
+    let interface_argument = source_kind_error(
+        "interface-kind-argument.ash",
+        INTERFACE_KIND_ARGUMENT_REJECTION_MODULE,
+    );
+    assert_eq!(interface_argument.reason, KindReason::Argument);
+    assert_eq!(
+        interface_argument.expectation(),
+        &KindExpectation::Exact(type_to_type_kind()),
+    );
+    assert_eq!(interface_argument.found_kind(), Some(&Kind::Type));
+    assert_eq!(
+        (
+            interface_argument.primary.span().range().start(),
+            interface_argument.primary.span().range().end(),
+        ),
+        exact_last_range(INTERFACE_KIND_ARGUMENT_REJECTION_MODULE, "Int"),
+    );
+    let [interface_parameter] = interface_argument.related.as_slice() else {
+        panic!("kind.argument should retain its interface parameter")
+    };
+    assert_eq!(
+        interface_parameter.message(),
+        "the interface parameter kind is declared here",
+    );
+    assert_eq!(
+        (
+            interface_parameter.span().range().start(),
+            interface_parameter.span().range().end(),
+        ),
+        exact_range(INTERFACE_KIND_ARGUMENT_REJECTION_MODULE, "F"),
+    );
+
+    for source in [
+        EXPECTED_TYPE_KIND_REJECTION_MODULE,
+        NO_KIND_INFERENCE_REJECTION_MODULE,
+        INTERFACE_KIND_ARGUMENT_REJECTION_MODULE,
+    ] {
+        assert_documented("spec/static-semantics.md", source);
+    }
+    assert_normative_fragment(
+        "spec/static-semantics.md",
+        PHASE_DEPENDENT_NO_KIND_INFERENCE,
+    );
 }
 
 #[test]
@@ -799,6 +1214,151 @@ fn elaboration_payload_constructor_is_higher_order() {
 }
 
 #[test]
+fn elaboration_distinguishes_structural_application_from_simultaneous_instantiation() {
+    let source = TempFile::write_named("core-kinds.ash", CORE_KIND_MODULE);
+    let graph = load_module_graph(source.path(), &ModuleRoots::empty())
+        .expect("the documented Core kind module should load");
+    let resolved = resolve_module(&graph.modules()[0], &[])
+        .expect("the documented Core kind module should resolve");
+    let option = resolved
+        .registry()
+        .nominals()
+        .iter()
+        .find(|nominal| nominal.spelling == "Option")
+        .expect("Option should resolve")
+        .id;
+    let keep = resolved
+        .definitions()
+        .iter()
+        .find_map(|definition| match &definition.kind {
+            ResolvedDefinitionKind::Equational(global)
+                if global.interface.name.spelling == "keep" =>
+            {
+                Some(&global.interface)
+            }
+            ResolvedDefinitionKind::Equational(_)
+            | ResolvedDefinitionKind::InlineOperational(_) => None,
+        })
+        .expect("keep should resolve");
+    let keep_binder = keep.name.id;
+    let [f_parameter, a_parameter] = keep.type_parameters.as_ref() else {
+        panic!("keep should retain two ordered kinded parameters")
+    };
+    assert_eq!(f_parameter.kind, type_to_type_kind());
+    assert_eq!(a_parameter.kind, Kind::Type);
+    let f = f_parameter.id;
+    let a = a_parameter.id;
+
+    let checked = check_module(resolved).expect("the documented Core kind module should check");
+    let linked = link_modules(vec![checked], graph.entry())
+        .expect("the documented Core kind module should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("the documented Core kind module should authenticate evidence");
+    let mut elaborator = Elaborator::for_module_program(&linked)
+        .expect("the documented Core kind module should establish its binder namespace");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("the documented Core kind module should synthesize Core");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the documented Core kind module should finish Core construction");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let validated = validate_modules(unchecked, &sources, &module_sources)
+        .expect("the documented Core kind module should independently validate");
+
+    let mut work = vec![validated.root()];
+    let mut abstraction_id = None;
+    let mut simultaneous_arguments = None;
+    while let Some(id) = work.pop() {
+        let node = validated
+            .node(id)
+            .expect("every documented Core child should exist");
+        match &node.kind {
+            PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                for member in group.members() {
+                    if member.binder().id() == keep_binder {
+                        assert!(
+                            abstraction_id.replace(member.initializer()).is_none(),
+                            "keep should have one Core initializer",
+                        );
+                    }
+                }
+            }
+            PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+                let function = validated
+                    .node(application.function())
+                    .expect("the Core type-application function should exist");
+                if matches!(
+                    function.kind,
+                    PureExprKind::Variable(variable) if variable.binder() == keep_binder
+                ) {
+                    assert!(
+                        simultaneous_arguments
+                            .replace(application.arguments().to_vec())
+                            .is_none(),
+                        "keep should have one simultaneous Core instantiation",
+                    );
+                }
+            }
+            PureExprKind::Value(_)
+            | PureExprKind::Variable(_)
+            | PureExprKind::Computation(
+                PureComputation::Bind(_)
+                | PureComputation::Apply(_)
+                | PureComputation::Primitive(_)
+                | PureComputation::Tuple(_)
+                | PureComputation::Match(_)
+                | PureComputation::TypeAbstraction(_),
+            ) => {}
+        }
+        work.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+    }
+
+    let abstraction = validated
+        .node(abstraction_id.expect("keep should retain its Core abstraction"))
+        .expect("keep's Core abstraction should exist");
+    let PureExprKind::Computation(PureComputation::TypeAbstraction(type_abstraction)) =
+        &abstraction.kind
+    else {
+        panic!("keep's initializer should be one Core type abstraction")
+    };
+    assert_eq!(
+        type_abstraction.parameters(),
+        [(f, type_to_type_kind()), (a, Kind::Type)],
+    );
+    let Type::Forall(scheme_parameters, scheme_body) = &abstraction.ty else {
+        panic!("keep's abstraction should expose its outer scheme")
+    };
+    assert_eq!(scheme_parameters.as_ref(), type_abstraction.parameters());
+    let applied = Type::Application(Box::new(Type::Variable(f)), Box::new(Type::Variable(a)));
+    assert_eq!(
+        scheme_body.as_ref(),
+        &Type::Function(Box::new(applied.clone()), Box::new(applied)),
+    );
+    assert_eq!(
+        simultaneous_arguments.expect("keep should be instantiated"),
+        [Type::Nominal(option), Type::Int],
+    );
+
+    assert_observation(
+        "core-kinds.ash",
+        CORE_KIND_MODULE,
+        "Some(42)",
+        "Option<Int>",
+    );
+    assert_documented("spec/elaboration.md", CORE_KIND_MODULE);
+}
+
+#[test]
 fn dynamic_cyclic_data_observation_is_finite() {
     assert_observation(
         "spec-cyclic-stream.ash",
@@ -921,6 +1481,23 @@ fn tool_rank_one_example_has_exact_cli_observation() {
 }
 
 #[test]
+fn tool_higher_kinded_example_has_exact_cli_observation() {
+    let source = TempFile::write(HIGHER_KINDED_INTERFACE_MODULE);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented higher-kinded executable should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.stdout,
+        b"(Some(42), true, ()) : (Option<Int>, Bool, Unit)\n"
+    );
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", HIGHER_KINDED_INTERFACE_MODULE);
+}
+
+#[test]
 fn tool_source_rejection_uses_status_one_and_stderr() {
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
         .arg(Path::new(
@@ -951,5 +1528,12 @@ fn normative_document_manifest_is_complete() {
             Path::new(path).is_file(),
             "missing documentation harness datum {path}"
         );
+    }
+}
+
+#[test]
+fn explicit_kind_normative_rule_manifest_is_complete() {
+    for &(path, fragment) in EXPLICIT_KIND_RULE_FRAGMENTS {
+        assert_normative_fragment(path, fragment);
     }
 }

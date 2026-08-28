@@ -70,6 +70,15 @@ registries retain that identity so all compatible imported schemes continue to
 refer to the same type. Opaque constructor access has already been enforced and
 does not restrict the defining constructor facts needed by the linked program.
 
+A physical data-constructor scheme exists in a checked dependency summary and
+then in the authenticated imported constructor fact used to check its
+dependent. Linking consumes those body-free summary and import carriers before
+Core synthesis. The linked constructor registry retains the defining identity,
+owner, payload, and origin needed by Core, but it does not retain another copy
+of the physical constructor scheme. The scheme therefore has the lifecycle
+summary to imported fact to disposal before linked Core, rather than a
+redundant linked carrier.
+
 Each checked module also contributes its local implementation inventory, its
 effective imported implementation inventory, and a lightweight public
 authorization entry for every implementation fact in its public closure. An
@@ -120,8 +129,8 @@ The complete validation authenticates:
   equal Core types;
 - abstract requirement ownership, declaration order, lexical scope, and
   provenance;
-- checked global and implementation-method schemes, selected method types, and
-  binder mappings;
+- checked global and implementation-method schemes, their ordered kinded
+  binders, selected method types, and binder mappings;
 - equality between every checker-retained occurrence argument and its selected
   evidence goal; and
 - source and module provenance, complete linked definitions, and the absence of
@@ -210,26 +219,66 @@ and origin identities remain for ordinary Core validation.
 
 ## Explicit rank-1 operations
 
-Source type abstraction and application are implicit. Elaboration records both
-operations explicitly in Core. A generalized definition becomes
-`TypeAbstraction(parameters, body)` with type
-`forall parameters. body_type`. Each polymorphic occurrence becomes
-`TypeApplication(function, arguments)` with the monotype obtained by
-simultaneously substituting those arguments for the quantified parameters.
-Parameterized constructors use the same application form as polymorphic value
-names.
+Source type application is structural type formation. The semantic monotype
+form is unary: `F<A>` is one application of `F` to `A`, and a source application
+with several arguments folds left into nested unary applications. Each step
+checks that the function has an arrow kind and that the argument has its domain
+kind. This structural operation is distinct from Core expression-level scheme
+instantiation.
 
-Outer type variables from a global signature are abstracted in their
-first-occurrence order. An eligible unannotated local anonymous-function binding
-abstracts only inference variables that are not free in the incoming
-environment. Other local bindings remain monomorphic. A recursive global body
-checks its self-occurrences against the same rigid parameters; elaboration does
-not instantiate recursion at a different type.
+Source type abstraction and expression-level type application are implicit.
+Elaboration records both operations explicitly in Core. A generalized
+definition becomes `TypeAbstraction(parameters, body)` with type
+`forall parameters. body_type`; both lists retain the same ordered
+identity-kind pairs. Each polymorphic occurrence becomes
+`TypeApplication(function, arguments)`. It supplies one monotype argument per
+outer binder in order, checks each argument against that binder's kind, and
+obtains its result by simultaneous substitution into the scheme body. The Core
+operation is not a curried sequence of unary expression operations.
+Parameterized constructors use the same Core instantiation form as
+polymorphic value names.
 
-Core transformations preserve type abstractions, type applications, their
-ordered identities and arguments, types, and origins. The dynamic semantics
-erase the operations. They produce no runtime type value and change neither
-evaluation order nor heap contents.
+An explicit global binder list establishes abstraction order. A global that
+omits the list preserves implicit first-occurrence order, with every such
+binder fixed to kind `Type`. An eligible unannotated local anonymous-function
+binding abstracts only fixed-kinded inference variables that are not free in
+the incoming environment. Other local bindings remain monomorphic. A recursive
+global body checks its self-occurrences against the same rigid parameters;
+elaboration does not instantiate recursion at a different type.
+
+Resolved global abstraction parameters retain their resolved identities.
+Implementation-method abstractions and eligible local generalization instead
+use generated Core type-binder identities owned by their local abstraction and
+matching outer scheme. A complete capture-free renaming of one generated
+identity throughout that scope is equivalent Core. The original generated
+identity, binder span, and allocation ordinal are not external authority for
+later validation.
+
+The executable test
+`elaboration_distinguishes_structural_application_from_simultaneous_instantiation`
+checks both operations in one program:
+
+```ash
+type Option<A> =
+    None
+    | Some(A)
+
+keep<F : Type -> Type, A> : F<A> -> F<A>
+keep value = value
+
+main : Unit -> Option<Int>
+main () = keep(Some(42))
+```
+
+Within `keep`'s monotype, each `F<A>` is one unary structural application. At
+the occurrence in `main`, one Core type application simultaneously instantiates
+`F` with the bare `Option` constructor and `A` with `Int`, producing
+`Option<Int> -> Option<Int>`.
+
+Core transformations preserve type abstractions, type applications, binder
+kinds, ordered identities and arguments, structural types, and origins. The
+dynamic semantics erase the operations. They produce no runtime kind or type
+value and change neither evaluation order nor heap contents.
 
 ## Function presentations
 
@@ -329,17 +378,41 @@ group; it cannot silently treat the members as sequential bindings.
 Every semantic binder, pattern, and expression carries its type and causal
 source origin. After linked interface-evidence validation and erasure, the
 existing Core validator receives the produced program, its combined immutable
-nominal and constructor registry, the admitted source set, and each module's
-source identity. It independently checks registry closure and identities,
-module and source provenance, binder scope, node and branch types, constructor
-ownership and payloads, pattern bindings, coverage, recursive groups,
-type-variable scope, rank-1 scheme shape, type-operation substitution, origins,
-child handles, reachability, and cumulative resource limits. A type application
-must supply exactly one kind-`Type` monotype per quantified parameter, and its
-annotated result must equal simultaneous substitution into the scheme body.
-Core validation applies once to the whole linked Core program, including every
-module group and the generated entry application. Failure of this boundary is
-an internal compiler failure, not a source-language typing result.
+nominal, constructor, and canonical type-binder facts, the admitted source set,
+and each module's source identity. It independently synthesizes monotype kinds,
+checks outer schemes, and checks registry closure and identities, module and
+source provenance, binder scope, node and branch types, constructor ownership
+and payloads, pattern bindings, coverage, recursive groups, type-variable
+scope, type-operation substitution, origins, child handles, and reachability.
+
+For every resolved global with a nonempty outer binder list, validation
+requires its `TypeAbstraction` to be the immediate initializer of exactly one
+matching `RecursiveBind` member. The abstraction parameters must match that
+global's canonical identities, kinds, and declaration order and must match the
+outer scheme in the same order. Every such resolved-global binder-list fact is
+authenticated exactly once. A sequential `Bind` is local Core and cannot claim
+this resolved-global ownership, and a shared initializer cannot authenticate a
+second owner.
+
+Generated type binders remain local structural facts. Validation checks their
+agreement with the matching outer scheme, fixed kinds, uniqueness, and lexical
+scope without capture, shadowing, or escape, while accepting a coherent
+capture-free alpha-renaming. It does not authenticate the elaborator's original
+generated identity, binder span, or allocation ordinal.
+
+Validation distinguishes unary structural monotype applications from Core
+type applications. A Core type application supplies one argument per quantified
+binder in order, each argument synthesizes that binder's kind, and the annotated
+result equals simultaneous substitution into the kind-`Type` scheme body.
+Inference variables and constructor-kinded ordinary value annotations cannot
+cross this boundary.
+
+One cumulative validator resource ledger covers the registry, envelope, graph,
+binder, node, term-scope, and type-scope passes. It is neither reset between
+passes nor supplemented by a separate kind allowance. Core validation applies
+once to the whole linked Core program, including every module group and the
+generated entry application. Failure of this boundary is an internal compiler
+failure, not a source-language typing result.
 
 This requirement does not prescribe a Rust representation, storage strategy,
 or evaluator mechanism.

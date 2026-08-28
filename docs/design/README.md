@@ -42,6 +42,10 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   — selector and facade behavior, identities, summaries, diagnostics,
   resources, linked authentication, Core locality, migration, and exclusions
   for the first `lib-ash` increment.
+- [Explicit kinds and higher-kinded parameter evidence](lib-ash/kinds-evidence.md)
+  — fixed kinds, canonical application, inference and evidence preservation,
+  body-free and linked authentication, Core authority, resources, migration,
+  and exclusions for the second bounded `lib-ash` increment.
 - [Passive-module evidence](modular-ash/evidence.md) — implementation,
   resource, locality, historical-comparison, and verification evidence for the
   first Modular Ash increment.

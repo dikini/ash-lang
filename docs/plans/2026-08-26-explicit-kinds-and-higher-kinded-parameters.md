@@ -752,11 +752,13 @@ proof unit; exact-current evidence costs 107 as `87 + 15 + 4 + 1`.
 For a Kind with `K = 2D + 1` nodes, deep matching and overlap cost `2K + 18`
 and `2K + 22` constraint units. The shared Kind engine admits a valid deep
 linked value in `6D + 3` units and rejects its residual mismatch in `6D - 1`.
-The full public linked-validation path costs `9D + 60`: registry 7; references
-`3D + 20`; pre-schemes `3D + 27`; wrapper and binder 2; judgment `6D + 3`;
-remaining scheme work 10; post-schemes `9D + 42`; and occurrences 18. At
-`D = 32,768`, the final 294,972-unit cost fits the production default on a
-256 KiB stack.
+The Task 7 public linked-validation checkpoint costs `9D + 60`: registry 7;
+references `3D + 20`; pre-schemes `3D + 27`; wrapper and binder 2; judgment
+`6D + 3`; remaining scheme work 10; post-schemes `9D + 42`; and occurrences
+18. Later retained origin and resolved-global authentication extend the current
+complete path to `9D + 63 + O + 2`, where `O` is generated-origin depth. At
+`D = 32,768` and `O = 16,384`, the final 311,361-unit cost fits the production
+default on a 256 KiB stack.
 
 Run:
 
@@ -1178,6 +1180,8 @@ git -c commit.gpgsign=false commit -m "docs: specify explicit kinds"
 - Remove: `docs/tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md`
 - Remove: `docs/plans/2026-08-26-explicit-kinds-and-higher-kinded-parameters.md`
 - Remove: `docs/plans/2026-08-26-explicit-kinds-design.md`
+- Remove: `docs/plans/2026-08-27-linked-core-resolved-binder-authority-design.md`
+- Remove: `docs/plans/2026-08-27-linked-core-resolved-binder-authority.md`
 
 ### Step 1: Run final independent reviews
 
@@ -1234,10 +1238,11 @@ transition artifact link.
 
 ### Step 4: Remove transition artifacts and repair indexes
 
-Remove CP-0009, TASK-0016, both temporary plans, their proposal/task index
-entries, and stale links. Retain the normative specification, implementation,
-tests, `kinds-evidence.md`, predecessor evidence, and the explicit statement
-that the complete `lib-ash` milestone remains open. Do not create a tag.
+Remove CP-0009, TASK-0016, all four task-owned design and execution plans,
+their proposal/task index entries, and stale links. Retain the normative
+specification, implementation, tests, `kinds-evidence.md`, AD-0009, predecessor
+evidence, and the explicit statement that the complete `lib-ash` milestone
+remains open. Do not create a tag.
 
 Use `apply_patch` for removals and link repairs, then run:
 

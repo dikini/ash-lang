@@ -13,9 +13,10 @@ intentional exclusions. Historical comparisons build that tag separately;
 current source contains no Mini-Ash dialect selector or compatibility grammar.
 
 The [current specification](../spec/README.md) defines the implemented first
-`lib-ash` increment on the completed Modular Ash base. It retains passive source
-modules and method-only type-class-like interfaces and adds explicit
-implementation selection and targeted name and implementation re-exports. The
+two bounded `lib-ash` increments on the completed Modular Ash base. It retains
+passive source modules and method-only type-class-like interfaces; adds explicit
+implementation selection and targeted name and implementation re-exports; and
+adds explicit kinds and higher-kinded declaration parameters. The
 [`ash` tool guide](tools/ash.md) documents entry-module execution, named module
 roots, and interface-related source failures. The
 [passive-module evidence](design/modular-ash/evidence.md) and
@@ -42,12 +43,14 @@ now gives `lib-ash` a dependency spine with decreasing planning detail. Its
 first bounded increment is complete; its reviewed implementation and evidence
 corpus are retained by the
 [explicit-import evidence report](design/lib-ash/imports-evidence.md). The
-second bounded increment is authorized by
-[CP-0009](proposals/CP-0009-explicit-kinds-and-higher-kinded-parameters.md) and
-organized by [TASK-0016](tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md).
-Its predecessor is integrated into `main`; the increment remains prospective
-and absent from the current specification. The complete `lib-ash` milestone
-and `pack-ash` remain exploratory.
+second bounded increment has implemented and specified explicit kinds and
+higher-kinded declaration parameters. Its current evidence checkpoint is the
+[explicit-kind evidence report](design/lib-ash/kinds-evidence.md); final
+independent review, retention, and transition-artifact cleanup remain organized
+by [TASK-0016](tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md).
+Its predecessor is integrated into `main`, and the product branch remains
+separate and unmerged. The complete `lib-ash` milestone and `pack-ash` remain
+exploratory.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
@@ -57,7 +60,7 @@ and `pack-ash` remain exploratory.
 | [Interfaces and `impl`](design/DN-0023-interfaces-and-implementations.md) | complete / implementation | implemented passive static modules, current [specification](../spec/README.md), retained interface design, and [implementation evidence](design/modular-ash/interfaces-evidence.md) | Preserve the method-only, authenticated-evidence, and unspecialized-trace boundaries during separately authorized later interface work. |
 | [Modular core-versus-library audit](design/modular-ash/core-library-evidence.md) | complete / implementation | implemented passive modules and method-only interfaces, their retained evidence, and the [Modular Ash closure report](design/modular-ash/closure.md) | Treat exploratory `lib-ash` pressure as separate work that requires its own authorization, not as the next authorized step in a sequential roadmap. |
 | [Explicit implementation imports and re-exports](design/lib-ash/imports-evidence.md) | complete / implementation | completed `modular-ash` checkpoint, current [specification](../spec/README.md), stable module and interface identities, body-free summaries, scoped implementation evidence, and the prepared [library milestone sequence](design/DN-0025-library-and-package-milestones.md#prepared-lib-ash-sequence) | Preserve the explicit selection, identity, summary, authorization, validation, Core, runtime, and resource boundaries during separately authorized later `lib-ash` work. |
-| [Explicit kinds and higher-kinded parameters](proposals/CP-0009-explicit-kinds-and-higher-kinded-parameters.md) | implementation | integrated [explicit-import increment](design/lib-ash/imports-evidence.md), accepted semantic transition, [active task](tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md), stable identities, body-free summaries, and independent Core validation | Execute the test-first plan, retain kind evidence, and keep the product branch separate until the increment closes. |
+| [Explicit kinds and higher-kinded parameters](design/lib-ash/kinds-evidence.md) | implementation | integrated [explicit-import increment](design/lib-ash/imports-evidence.md), accepted [semantic transition](proposals/CP-0009-explicit-kinds-and-higher-kinded-parameters.md), [active task](tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md), stable identities, body-free summaries, and independent Core validation | Complete final independent review, exact verification, evidence retention, and transition-artifact cleanup while keeping the product branch separate. |
 | [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Exercise the retained closed pure dialect and operation-family seam against the next proposed feature pressure. |
 | [Parser architecture](decisions/AD-0005-parser-architecture.md) | implementation | accepted event-producing recursive-descent boundary and current grammar | Measure locality, recovery, and source coverage when a later proposal adds syntax. |
 | [Front-end semantic boundaries](decisions/AD-0006-front-end-semantic-boundaries.md) | implementation | accepted resolved-surface and bidirectional typed-elaboration boundaries | Extend stage interfaces and structured diagnostics only with an authorized semantic increment. |

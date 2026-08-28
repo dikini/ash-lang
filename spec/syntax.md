@@ -42,7 +42,10 @@ type_declaration ::=
   "type" upper_identifier [ type_parameters ] "=" [ line_end ] constructor_declaration
   { line_end "|" constructor_declaration } ;
 type_parameters ::=
-  "<" upper_identifier { "," upper_identifier } ">" ;
+  "<" type_parameter { "," type_parameter } ">" ;
+type_parameter ::= upper_identifier [ ":" kind ] ;
+kind ::= kind_atom [ "->" kind ] ;
+kind_atom ::= "Type" | "(" kind ")" ;
 constructor_declaration ::=
   upper_identifier [ "(" type { "," type } ")" ] ;
 
@@ -51,11 +54,12 @@ interface_declaration ::=
   "{" line_end
   interface_method { line_end interface_method } [ line_end ]
   "}" ;
-interface_parameter ::= "<" upper_identifier ">" ;
+interface_parameter ::= "<" type_parameter ">" ;
 interface_method ::= identifier ":" type ;
 
 implementation_declaration ::=
-  [ "pub" ] "impl" interface_application [ where_clause ]
+  [ "pub" ] "impl" [ type_parameters ]
+  interface_application [ where_clause ]
   "{" line_end
   [ impl_equation { line_end impl_equation } [ line_end ] ]
   "}" ;
@@ -64,10 +68,12 @@ impl_equation ::= identifier pattern { pattern } "=" expression ;
 global_definition ::= equational_global | inline_operational_global ;
 equational_global ::=
   [ "pub" ] global_signature line_end equation { line_end equation } ;
-global_signature ::= identifier ":" type [ where_clause ] ;
+global_signature ::= identifier [ type_parameters ]
+  ":" type [ where_clause ] ;
 equation ::= identifier pattern { pattern } "=" expression ;
 inline_operational_global ::=
-  [ "pub" ] "fn" identifier "(" typed_pattern { "," typed_pattern } ")"
+  [ "pub" ] "fn" identifier [ type_parameters ]
+  "(" typed_pattern { "," typed_pattern } ")"
   "->" type [ where_clause ] block ;
 
 where_clause ::= "where" constraint { "," constraint } ;
@@ -205,6 +211,26 @@ grammar as equational-global clauses, and the body may be empty. The grammar
 provides no associated declaration, default method, named implementation, or
 runtime dictionary form.
 
+Every declaration-level type binder uses `type_parameter`. Its optional kind
+annotation contains `Type`, a function kind, or a parenthesized kind. The
+spelling `Type` is contextual: it denotes the kind only inside a kind
+annotation and remains an ordinary `upper_identifier` elsewhere. For example,
+this complete entry module declares and uses a nominal type named `Type`:
+
+```ash
+type Type = Type
+
+main : Unit -> Type
+main () = Type
+```
+
+Nominal declarations always write a parameter list when they have parameters.
+An interface always writes its one parameter. Either global presentation may
+place an optional parameter list after the global name, and an implementation
+may place one after `impl`. [Name
+resolution](name-resolution.md#type-binder-identity-and-scope) defines the
+explicit and omitted-list binder policies.
+
 A `where` clause contains one or more comma-separated interface applications
 and has no trailing comma. It remains on its declaration header's logical line.
 It follows the complete value type in either global presentation and the
@@ -223,12 +249,13 @@ arbitrary initializer expression so static semantics can distinguish safe
 function- or constructor-rooted initialization from malformed syntax.
 
 A nominal declaration binds its ordered type parameters only in its
-constructor payload types. Every source nominal occurrence is saturated:
-`Option<Int>` is a type, while `Option` is rejected when `Option` declares one
-parameter. Type parameters and nominal arguments use the same uppercase lexical
-class as nominal names. Resolution distinguishes them by scope. Source
-expressions have no explicit type abstraction or type-application form;
-`value<Type>` is not an expression.
+constructor payload types. A named source type may occur without arguments or
+with one or more comma-separated arguments. Syntax does not require a nominal
+constructor to be saturated and does not distinguish nominal constructors from
+type parameters. Resolution distinguishes them by identity; static semantics
+checks each resulting application against its kinds. Source expressions have
+no explicit type abstraction or type-application form; `value<Type>` is not an
+expression.
 
 The executable test `syntax_local_recursive_group_example_is_executable`
 checks a complete entry module containing a two-member recursive group. The
@@ -258,6 +285,10 @@ multiplication, addition, and equality. Application, multiplication, and
 addition associate to the left. Equality is non-associative, so `a == b == c`
 is invalid. Function arrows associate to the right, so `Int -> Int -> Int`
 means `Int -> (Int -> Int)`.
+
+Kind arrows also associate to the right, so `Type -> Type -> Type` means
+`Type -> (Type -> Type)`. Parentheses may instead group a kind on either side
+of an arrow.
 
 Commas construct a tuple expression or tuple type with at least two elements.
 `(value)` remains grouping and `()` remains unit. A constructor has zero or one

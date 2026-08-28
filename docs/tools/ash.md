@@ -148,6 +148,54 @@ instantiates its outer scheme. The unannotated local anonymous function is the
 only local initializer form that generalizes. These type operations are erased
 before producing runtime values.
 
+Declaration parameters may state monomorphic kinds. `Type -> Type` admits a
+unary type constructor such as bare `Option`; omitted kind annotations remain
+fixed at `Type`, and the current language does not infer function kinds from
+use. This is a phase-dependent language constraint rather than a permanent
+restriction on future declaration-local inference.
+
+The executable test `tool_higher_kinded_example_has_exact_cli_observation`
+runs a higher-kinded interface, implementation, constrained global, and
+operational global through the same command-line path:
+
+```ash
+type Option<A> =
+    None
+    | Some(A)
+
+interface Transform<F : Type -> Type> {
+    transform : (Int -> Int, F<Int>) -> F<Int>
+}
+
+impl Transform<Option> {
+    transform (function, None) = None
+    transform (function, Some(value)) = Some(function(value))
+}
+
+increment : Int -> Int
+increment value = value + 1
+
+apply_transform<F : Type -> Type> : (Int -> Int, F<Int>) -> F<Int> where Transform<F>
+apply_transform pair = transform pair
+
+fn relay<F : Type -> Type, A>(value : F<A>) -> F<A> {
+    value
+}
+
+main : Unit -> (Option<Int>, Bool, Unit)
+main () = (relay(apply_transform((increment, Some(41)))), true, ())
+```
+
+Its exact standard output is:
+
+```text
+(Some(42), true, ()) : (Option<Int>, Bool, Unit)
+```
+
+Kinds, scheme instantiation, and selected interface evidence erase before
+evaluation. They add no CLI configuration, runtime lookup, value, or output
+field.
+
 Interfaces, implementations, and global requirements do not add invocation
 options or runtime configuration. The compiler selects method evidence during
 checking, validates it before Core construction, and lowers it to ordinary Core
@@ -222,6 +270,13 @@ implementation is reported without exposing that declaration's metadata.
 Entry failures include `entry.missing-main`, `entry.main-polymorphic`,
 `entry.main-domain`, `entry.main-open-result`, and
 `entry.main-constrained`.
+
+Kind failures use `kind.not-applicable` when an applied type does not have a
+function kind, `kind.argument` when a type or interface argument has the wrong
+kind, and `kind.expected-type` when a value-type position receives a residual
+function kind. The structured diagnostic retains expected and found kinds and
+labels the causal type occurrence and the declaration that fixed its kind when
+one exists.
 
 The executable test `tool_source_rejection_uses_status_one_and_stderr` checks
 that this module reports `type.operator-operand` on standard error:

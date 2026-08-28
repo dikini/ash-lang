@@ -2,7 +2,7 @@
 
 - ID: `TASK-0016`
 - Status: active
-- Related: [CP-0009: Explicit Kinds and Higher-Kinded Parameters](../proposals/CP-0009-explicit-kinds-and-higher-kinded-parameters.md), [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), the [approved design record](../plans/2026-08-26-explicit-kinds-design.md), the [approved Task 9 binder-authority design](../plans/2026-08-27-linked-core-resolved-binder-authority-design.md), the [detailed Task 9 execution plan](../plans/2026-08-27-linked-core-resolved-binder-authority.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), and the [execution plan](../plans/2026-08-26-explicit-kinds-and-higher-kinded-parameters.md)
+- Related: [CP-0009: Explicit Kinds and Higher-Kinded Parameters](../proposals/CP-0009-explicit-kinds-and-higher-kinded-parameters.md), [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), the [approved design record](../plans/2026-08-26-explicit-kinds-design.md), the [approved Task 9 binder-authority design](../plans/2026-08-27-linked-core-resolved-binder-authority-design.md), the [detailed Task 9 execution plan](../plans/2026-08-27-linked-core-resolved-binder-authority.md), [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), [AD-0009: Ordered Resolved-Global Binder Authority](../decisions/AD-0009-ordered-resolved-global-binder-authority.md), and the [execution plan](../plans/2026-08-26-explicit-kinds-and-higher-kinded-parameters.md)
 
 > This task organizes work. It does not define Ash semantics.
 
@@ -227,7 +227,7 @@ permanent language principle.
   `9C - 3D + 8`, where `C` is the candidate's type-cell count and `D` is its
   function depth. Generalizing `n` variables costs
   `3n + sum(3 + 2|K_i|) + Z(T)`. Linked validation separates 18 structural
-  units, 31 Kind-judgment units, and four owner-`DELTA` type units for the
+  units, 20 Kind-judgment units, and four owner-`DELTA` type units for the
   higher-kinded `keep` scheme. After Task 7's shared-worklist refinement, its
   deep Kind judgment costs `6D + 3`, and
   graph-lifetime nominal retention costs
@@ -277,13 +277,81 @@ permanent language principle.
   107 as `87 + 15 + 4 + 1`.
 - Deep matching and overlap over `K = 2D + 1` Kind nodes cost `2K + 18` and
   `2K + 22` constraint units. The shared Kind engine costs `6D + 3` for a valid
-  deep linked value and `6D - 1` for the residual mismatch. The complete public
-  linked-validation path costs `9D + 60`: registry 7; references `3D + 20`;
-  pre-schemes `3D + 27`; wrapper and binder 2; judgment `6D + 3`; remaining
-  scheme work 10; post-schemes `9D + 42`; and occurrences 18. At `D = 32,768`,
-  294,972 units fit the production default on a 256 KiB stack. Exact and
-  one-short failures publish no partial selection, substitution, candidate, or
-  linked capability.
+  deep linked value and `6D - 1` for the residual mismatch. After retained
+  origin and registry-row authentication, the complete public linked path costs
+  `9D + 63 + O + 2`, where `O` is generated-origin depth and the final two
+  units visit the resolved-global identity row and parameter. At `D = 32,768`
+  and `O = 16,384`, 311,361 units fit the production default on a 256 KiB
+  stack. Exact and one-short failures publish no partial selection,
+  substitution, candidate, or linked capability.
+- Task 8 authenticates every kind-bearing checked, summary, imported, hidden,
+  selected, and linked fact before publication. Transparent constructor
+  families retain their physical schemes only through the checked-summary to
+  imported-fact transfer; those schemes are disposed before linked Core, which
+  retains no redundant scheme carrier. Hidden and opaque nominal kinds remain
+  frozen body-free facts rather than materialized private declarations.
+- Task 8 tampering covers canonical binders, nominal families, interface and
+  implementation facts, global and method schemes, prerequisites, selected
+  roots, substitutions, route identities, post-body mirrors, and occurrence
+  evidence. Each malformed fact fails at linked evidence validation before
+  Core. Exact, one-short, retry, deep, wide, and 256 KiB-stack probes preserve
+  the graph-wide budgets and dispose accepted and rejected states.
+- Task 9 retains one private ordered resolved-global owner fact for each
+  non-empty checked global scheme. The shared registry carries only the stable
+  term owner and ordered resolved parameter identities; canonical variable
+  records remain the only kind, spelling, and origin authority. Linked Core
+  validation derives the owner only from an immediate `RecursiveBind` member
+  initializer, requires exact owner and parameter order once, and rejects a
+  sequential `Bind` or an unconsumed fact.
+- Task 9 keeps generated Core type binders local. Complete capture-free
+  generated identity substitution across one abstraction, its outer `Forall`,
+  body, and applications is valid alpha-renaming. The original generated
+  identity, span, and allocation ordinal are not external authority. Identity
+  traversal and literal folding rebuild independently from the original
+  validated program, share the immutable registry, and pass fresh module-aware
+  validation.
+- Ordered resolved-global retention costs `2S + R` type-work units for `S`
+  non-empty owners and `R` identities, plus the charged owner-uniqueness index.
+  Core matching costs `2R + K_R + S`, including canonical Kind comparison.
+  Empty, missing, extra, duplicate, reordered, wrong-owner, wrong-position,
+  nominal, interface-only, and unconsumed mutations reject without raising or
+  resetting a limit.
+- User approval of the converged Task 9 design is retained as
+  [AD-0009](../decisions/AD-0009-ordered-resolved-global-binder-authority.md).
+  The decision governs the compiler authentication boundary while the
+  specification states only its observable validation relationship.
+- Task 10 closes the diagnostic and public resource matrix. Structured library
+  and CLI failures retain exact primary spans, expected and found kinds,
+  declaration and route labels, stage ownership, and deterministic reason
+  codes. Deep and wide public witnesses cover parsing, resolution, kinding,
+  inference, matching, evidence, Core, observation, and accepted or rejected
+  teardown on 256 KiB stacks. No production limit or evaluator behavior
+  changes.
+- Task 11 proves predecessor migration and the linked product corpus. Every
+  predecessor-valid omitted kind annotation and absent global or
+  implementation binder list remains valid without edits. Explicit `Type`,
+  explicit list order, contextual nominal `Type`, partial higher-kinded
+  application, exact linked implementation selection, imported constructor
+  scheme transfer, summary disposal, Core transformations, independent
+  validation, library observation, and CLI observation all have direct tests.
+  Three repeat `gpt-5.6-sol`/`xhigh` reviews passed with no unresolved finding.
+- Task 12 executable examples exposed a pre-specification resolver defect:
+  parameterized declaration families were allocated in category order rather
+  than the documented module-wide source order. `8c11cd3` installs declaration
+  identities first, allocates every source type binder once through the
+  cross-family declaration order, and then resumes the established
+  dependency-safe family phases. Exact resolver, linked Core, architecture,
+  resource, teardown, formatting, and Clippy gates pass; independent semantic
+  and resource reviews pass. The ordered linked-owner design and strict Core
+  forgery check remain unchanged.
+- Task 12 now reconciles the specification and retains the informative
+  [explicit-kind evidence report](../design/lib-ash/kinds-evidence.md). The
+  report records 755 kind sites at `8c11cd3`: 697 physical fields, 33 contextual
+  uses, and 25 transient work owners. The no-kind-inference boundary is stated
+  as phase-dependent, not as a permanent language principle. The complete
+  `lib-ash` milestone remains open and untagged. Final independent review,
+  complete verification, retention, and lifecycle cleanup remain assigned to
+  Task 13.
 
 ## Verification
 
@@ -376,8 +444,10 @@ passes were counted. A continuation machine now reuses the current result and
 one continuation per composite node. Fusing checked-value structural admission
 with exact resolved-value comparison removes a duplicate traversal without
 skipping scope, identity, nominal, inference, scheme, tuple, or application
-checks. The resulting private `6D + 3` and public `9D + 60` formulas fit at
-depth 32,768 without changing a limit or witness depth.
+checks. The resulting private `6D + 3` formula fit at depth 32,768. Later
+origin and resolved-global authentication produce the current public
+`9D + 63 + O + 2` formula, which fits the same production limit at type and
+kind depth 32,768 and origin depth 16,384.
 
 Kind-aware matching does not reauthenticate complete heads that the resolved
 kind gate already admitted. Its semantic responsibility begins at a new
@@ -423,6 +493,21 @@ carrier inventory. The task does not modify `spec/`. It does not advance Task
 8's body-free or hidden closure, non-direct route coverage, exhaustive imported
 summary and evidence-carrier tampering, or remaining linked fields. It does not
 advance Task 9's linked Core boundary.
+
+Task 12 extends its specification-only file scope into `src/resolve.rs`,
+`tests/resolution.rs`, and `tests/architecture.rs`. A new executable
+specification witness found that interleaving an explicit implementation with
+a later polymorphic global assigned resolved type-binder identities out of
+module source order. The correction restores the existing identity contract
+across all declaration families and records its two new transient preparation
+fields. It does not change the ordered resolved-global carrier, Core
+validation, evaluator behavior, or a production limit.
+
+Task 12's independent architecture-decision, normative-authority, and
+evidence-lifecycle reviews pass without findings, each with `gpt-5.6-sol` at
+`xhigh` reasoning. All 57 executable specification tests, `cargo xtask verify`,
+Markdown lint, relative-link checks, formatting, and diff hygiene pass at this
+checkpoint. Task 13 retains the final all-target inventory and lifecycle gate.
 
 The malformed-Core resource fixture grows from width 700 to width 1,000 so its
 expanded work remains above the accepted validator-local `3 * TYPE_WORK_LIMIT`

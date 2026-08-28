@@ -2,7 +2,7 @@
 
 - Status: approved implementation design
 - Date: 2026-08-27
-- Related: [CP-0009: Explicit Kinds and Higher-Kinded Parameters](../proposals/CP-0009-explicit-kinds-and-higher-kinded-parameters.md), [TASK-0016: Implement Explicit Kinds and Higher-Kinded Parameters](../tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md), and the [explicit-kinds execution plan](2026-08-26-explicit-kinds-and-higher-kinded-parameters.md)
+- Related: [AD-0009: Ordered Resolved-Global Binder Authority](../decisions/AD-0009-ordered-resolved-global-binder-authority.md), [CP-0009: Explicit Kinds and Higher-Kinded Parameters](../proposals/CP-0009-explicit-kinds-and-higher-kinded-parameters.md), [TASK-0016: Implement Explicit Kinds and Higher-Kinded Parameters](../tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md), and the [explicit-kinds execution plan](2026-08-26-explicit-kinds-and-higher-kinded-parameters.md)
 
 > This document records an approved Task 9 implementation design. CP-0009
 > defines the proposed semantic transition, TASK-0016 authorizes the work, and

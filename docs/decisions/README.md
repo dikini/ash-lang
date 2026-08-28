@@ -14,3 +14,4 @@ Use [the template](template.md) and allocate the next `AD-NNNN` ID.
 - [AD-0006: Front-End Semantic Boundaries](AD-0006-front-end-semantic-boundaries.md)
 - [AD-0007: Typed Core Dialects](AD-0007-typed-core-dialects.md)
 - [AD-0008: Explicit Evaluator Machine](AD-0008-explicit-evaluator-machine.md)
+- [AD-0009: Ordered Resolved-Global Binder Authority](AD-0009-ordered-resolved-global-binder-authority.md)

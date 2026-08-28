@@ -15,6 +15,7 @@
 Read before editing:
 
 - `docs/proposals/CP-0009-explicit-kinds-and-higher-kinded-parameters.md`, especially **Core boundary**, **Resources and failure behavior**, and **Required evidence**;
+- `docs/decisions/AD-0009-ordered-resolved-global-binder-authority.md`;
 - `docs/tasks/TASK-0016-implement-explicit-kinds-and-higher-kinded-parameters.md`;
 - `docs/plans/2026-08-27-linked-core-resolved-binder-authority-design.md`;
 - Task 9 in `docs/plans/2026-08-26-explicit-kinds-and-higher-kinded-parameters.md`;
