@@ -112,8 +112,14 @@ and evaluator semantic or state-machine changes.
 - The isolated worktree starts from `e4fbc54`. The baseline build, complete
   all-target and all-feature test suite, and `cargo xtask verify` pass before
   production changes.
-- Checkpoint 1 reserves 4 units pending its lint, reviews, and authorization
-  commit. No later checkpoint is reserved; 66 units remain unallocated.
+- Checkpoint 1 completes at `9f90176` and consumes its reserved 4 units. No
+  production RED applies to this documentation-only checkpoint; the authority
+  RED was an accepted proposal with no active task or plan. GREEN evidence is
+  `cargo build --all-targets --all-features`,
+  `cargo test --all-targets --all-features`, `cargo xtask verify`, focused
+  Markdown lint, relative-link resolution, and diff hygiene. The repeated
+  semantic/authority and artifact/plan-quality reviews approve with no open
+  finding. No later checkpoint is reserved; 66 units remain.
 - The implementation topology audit identified existing carriers and red-first
   seams. In particular, evidence selection currently fills a slot before whole
   module inference closure; CP-0010 requires pending selection followed by one
