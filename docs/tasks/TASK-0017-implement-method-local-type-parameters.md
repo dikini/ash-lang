@@ -145,8 +145,8 @@ and evaluator semantic or state-machine changes.
   fixed kinds, parser recovery ownership, Rust ownership and error paths, and
   diff scope. It corrected the method-colon recovery label and the required
   all-target test-fixture initializers and found no remaining actionable issue.
-  Independent semantic and Rust/resource reviews remain pending. Cumulative
-  reserved use is 14/70; 56 units remain and Checkpoint 3 is not reserved.
+  The first semantic review approved this implementation; the first
+  Rust/resource review produced the correction findings recorded below.
 - The independent Rust/resource review of Checkpoint 2 reported two important
   findings and one minor finding. First, repeated interface-parameter
   installation charged an unchanged absent-list method once per method.
@@ -166,10 +166,23 @@ and evaluator semantic or state-machine changes.
   method binder identity published and an exact fresh retry succeeds. The new
   exact unit tests and the four focused integration suites pass, as do
   formatting, all-target checking, Clippy with warnings denied, and diff
-  hygiene. Self-review found no remaining correction issue. Independent
-  semantic and Rust/resource re-reviews remain pending. The correction does
-  not reserve more work: cumulative use remains 14/70, with 56 units remaining
-  and Checkpoint 3 unreserved.
+  hygiene. Self-review found no remaining correction issue.
+- Independent semantic re-review at `86e32dd` approves the combined Checkpoint
+  2 diff with no finding. Independent Rust/resource re-review confirms all
+  three original findings are closed and reports no new finding. The
+  implementation and correction agents used `gpt-5.6-sol` at high reasoning;
+  semantic review used `gpt-5.6-sol` at xhigh reasoning, and Rust/resource
+  review used `gpt-5.6-sol` at high reasoning.
+- Root verification after both reviews passes 646 library tests and all 136
+  tests in `interfaces_syntax`, `resolution`, `kinds`, and `diagnostics`, plus
+  `cargo fmt --check`, locked all-target checking, locked workspace all-target
+  and all-feature Clippy with warnings denied, and diff hygiene. The initial
+  diff-hygiene invocation named an incorrect expanded base hash after every
+  preceding command had passed; resolving `d415111` to its repository identity
+  and rerunning the failed hygiene tail passed without a code change.
+- Checkpoint 2 is complete in `faeb689` plus correction `86e32dd`. Its reserved
+  10 units do not change during correction and review: cumulative reserved use
+  is 14/70, 56 units remain, and Checkpoint 3 is not reserved.
 
 ## Verification
 
