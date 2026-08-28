@@ -771,6 +771,33 @@ fn inferred_polymorphic_recursion_is_rejected() {
 }
 
 #[test]
+fn unresolved_polymorphic_method_argument_is_type_ambiguous() {
+    assert_eq!(
+        reason(concat!(
+            "interface Project<I> {\n",
+            "project<A> : I -> (I, A)\n",
+            "}\n\n",
+            "probe : Int -> Unit where Project<Int>\n",
+            "probe value = {\nlet _ = project value\n()\n}\n",
+        )),
+        "type.ambiguous"
+    );
+}
+
+#[test]
+fn polymorphic_recursive_method_self_use_is_rejected() {
+    assert_eq!(
+        reason(concat!(
+            "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n\n",
+            "impl Repeat<Int> {\n",
+            "repeat (owner, value) = repeat((owner, (value, value)))\n",
+            "}\n",
+        )),
+        "type.polymorphic-recursion"
+    );
+}
+
+#[test]
 fn recursive_global_self_uses_apply_the_same_rigid_parameters() {
     let observation =
         run("repeat : A -> A\nrepeat value = repeat value\n\nmain : Unit -> Int\nmain () = 0\n");

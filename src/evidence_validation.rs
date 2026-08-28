@@ -1576,6 +1576,7 @@ fn validate_linked_value_schemes<'a>(
                     .expect_body_free_interface_method_with_ledger(
                         method.value_type(),
                         fact.parameter.id,
+                        &[],
                         method.span,
                         constraint_work,
                     )

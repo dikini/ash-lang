@@ -3316,6 +3316,8 @@ pub struct CheckedInterfaceMethodFact {
     pub id: MethodId,
     /// Exact defining source spelling.
     pub spelling: String,
+    /// Ordered canonical method-local type binders retained separately from the value type.
+    pub(crate) type_parameters: Box<[ResolvedTypeVariable]>,
     /// Checked source value type before evidence lowering.
     pub(crate) value_type: Type,
     /// Causal method provenance.
@@ -3326,6 +3328,9 @@ pub struct CheckedInterfaceMethodFact {
 
 impl Drop for CheckedInterfaceMethodFact {
     fn drop(&mut self) {
+        for parameter in std::mem::take(&mut self.type_parameters).into_vec() {
+            discard_resolved_type_variable(parameter);
+        }
         discard_type_iteratively(std::mem::replace(&mut self.value_type, Type::Unit));
         discard_origin_iteratively(std::mem::replace(
             &mut self.origin,
@@ -3335,6 +3340,12 @@ impl Drop for CheckedInterfaceMethodFact {
 }
 
 impl CheckedInterfaceMethodFact {
+    /// Borrows the ordered canonical method-local binder records.
+    #[must_use]
+    pub const fn type_parameters(&self) -> &[ResolvedTypeVariable] {
+        &self.type_parameters
+    }
+
     /// Borrows the checked source value type before evidence lowering.
     #[must_use]
     pub const fn value_type(&self) -> &Type {
@@ -3424,6 +3435,8 @@ pub struct CheckedImplementationMethodFact {
     pub binder: BinderId,
     /// Checked conceptual scheme after rigid implementation-head substitution.
     pub scheme: ConstrainedScheme,
+    /// Number of leading scheme parameters owned by the implementation head.
+    pub(crate) head_type_parameter_count: usize,
     /// Causal method-body provenance.
     pub origin: Origin,
     /// Complete implementation-method group span.
@@ -3444,6 +3457,14 @@ impl Drop for CheckedImplementationMethodFact {
             &mut self.origin,
             Origin::Source(self.span),
         ));
+    }
+}
+
+impl CheckedImplementationMethodFact {
+    /// Returns the boundary between head parameters and method-local parameters.
+    #[must_use]
+    pub const fn head_type_parameter_count(&self) -> usize {
+        self.head_type_parameter_count
     }
 }
 
@@ -3484,6 +3505,13 @@ fn clone_checked_interface_fact(
         methods.push(CheckedInterfaceMethodFact {
             id: method.id,
             spelling: method.spelling.clone(),
+            type_parameters: clone_resolved_type_variable_buffer_with_budget(
+                &method.type_parameters,
+                type_work,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+            .into_vec()
+            .into_boxed_slice(),
             value_type: clone_type_with_budget(&method.value_type, type_work)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?,
             origin: method.origin.clone(),
@@ -3573,6 +3601,7 @@ fn clone_checked_implementation_fact(
                 .scheme
                 .clone_with_budget(type_work)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            head_type_parameter_count: method.head_type_parameter_count,
             origin: method.origin.clone(),
             span: method.span,
         });
@@ -4724,6 +4753,7 @@ fn map_summary_kind_failure(failure: KindFailure) -> ResolvedBuildFailure {
 enum SummaryBinderOwner {
     Nominal(NominalTypeId),
     Interface(InterfaceId),
+    Method(MethodId),
     Global(BinderId),
     Implementation(ImplId),
 }
@@ -4743,6 +4773,7 @@ fn register_summary_parameter<'a>(
     let expected_module = match owner {
         SummaryBinderOwner::Nominal(identity) => identity.module(),
         SummaryBinderOwner::Interface(identity) => identity.module(),
+        SummaryBinderOwner::Method(identity) => identity.interface().module(),
         SummaryBinderOwner::Global(identity) => identity
             .module()
             .ok_or(ResolvedBuildFailure::InvalidState)?,
@@ -5034,6 +5065,48 @@ fn authenticate_scheme_parameter_mirror(
         return Err(ResolvedBuildFailure::InvalidState);
     }
     for ((identity, kind), parameter) in scheme.type_parameters.iter().zip(parameters) {
+        constraint_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        if *identity != parameter.id
+            || !same_kind_with_constraint_budget(kind, &parameter.kind, constraint_work)?
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+    }
+    Ok(())
+}
+
+fn authenticate_implementation_method_parameter_mirror(
+    method: &CheckedImplementationMethodFact,
+    head_parameters: &[ResolvedTypeVariable],
+    method_parameters: &[ResolvedTypeVariable],
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    let expected_count = head_parameters
+        .len()
+        .checked_add(method_parameters.len())
+        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+    if method.head_type_parameter_count != head_parameters.len()
+        || method.scheme.type_parameters.len() != expected_count
+    {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    let (scheme_head, scheme_method) = method
+        .scheme
+        .type_parameters
+        .split_at(method.head_type_parameter_count);
+    for ((identity, kind), parameter) in scheme_head.iter().zip(head_parameters) {
+        constraint_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        if *identity != parameter.id
+            || !same_kind_with_constraint_budget(kind, &parameter.kind, constraint_work)?
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+    }
+    for ((identity, kind), parameter) in scheme_method.iter().zip(method_parameters) {
         constraint_work
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -6303,6 +6376,15 @@ impl ExportSummary {
                 &mut environments,
                 type_work,
             )?;
+            for method in &interface.methods {
+                register_summary_parameters(
+                    method.type_parameters(),
+                    SummaryBinderOwner::Method(method.id),
+                    &mut canonical_variables,
+                    &mut environments,
+                    type_work,
+                )?;
+            }
             environments
                 .insert_interface(
                     interface.id,
@@ -6325,6 +6407,15 @@ impl ExportSummary {
                 &mut environments,
                 type_work,
             )?;
+            for method in &interface.methods {
+                register_summary_parameters(
+                    method.type_parameters(),
+                    SummaryBinderOwner::Method(method.id),
+                    &mut canonical_variables,
+                    &mut environments,
+                    type_work,
+                )?;
+            }
             environments
                 .insert_interface(
                     interface.id,
@@ -6525,10 +6616,24 @@ impl ExportSummary {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
+                constraint_work
+                    .charge(method.type_parameters().len())
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                let mut method_parameters = Vec::new();
+                method_parameters
+                    .try_reserve(method.type_parameters().len())
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                method_parameters.extend(
+                    method
+                        .type_parameters()
+                        .iter()
+                        .map(|parameter| parameter.id),
+                );
                 environments
                     .expect_body_free_interface_method_with_ledger(
                         method.value_type(),
                         interface.parameter.id,
+                        &method_parameters,
                         method.span,
                         type_work,
                     )
@@ -6739,9 +6844,10 @@ impl ExportSummary {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                authenticate_scheme_parameter_mirror(
-                    &method.scheme,
+                authenticate_implementation_method_parameter_mirror(
+                    method,
                     &fact.head_parameters,
+                    interface_method.type_parameters(),
                     constraint_work,
                 )?;
                 if method.scheme.requirements.len() != fact.prerequisites.len() {
@@ -6759,9 +6865,29 @@ impl ExportSummary {
                         constraint_work,
                     )?;
                 }
+                let parameter_count = fact
+                    .head_parameters
+                    .len()
+                    .checked_add(interface_method.type_parameters().len())
+                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                constraint_work
+                    .charge(parameter_count)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                let mut method_parameter_ids = Vec::new();
+                method_parameter_ids
+                    .try_reserve(parameter_count)
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                method_parameter_ids
+                    .extend(fact.head_parameters.iter().map(|parameter| parameter.id));
+                method_parameter_ids.extend(
+                    interface_method
+                        .type_parameters()
+                        .iter()
+                        .map(|parameter| parameter.id),
+                );
                 authenticate_summary_type_variables(
                     method.scheme.value_type(),
-                    parameter_ids.clone(),
+                    method_parameter_ids.into_iter(),
                     type_work,
                 )?;
                 if !same_summary_type_after_single_substitution(
@@ -13880,6 +14006,7 @@ mod tests {
                 methods: Box::new([CheckedInterfaceMethodFact {
                     id: MethodId::new(id, 0),
                     spelling: format!("{spelling}Method"),
+                    type_parameters: Box::new([]),
                     value_type: Type::Function(
                         Box::new(Type::Variable(parameter)),
                         Box::new(Type::Variable(parameter)),
@@ -14098,6 +14225,7 @@ mod tests {
                             requirements: Box::new([]),
                             value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
                         },
+                        head_type_parameter_count: 0,
                         origin: Origin::Source(span),
                         span,
                     }]),
@@ -14800,6 +14928,7 @@ mod tests {
                     methods: vec![CheckedInterfaceMethodFact {
                         id: method,
                         spelling: "method".to_owned(),
+                        type_parameters: Box::new([]),
                         value_type: Type::Function(
                             Box::new(Type::Variable(parameter.id)),
                             Box::new(Type::Variable(parameter.id)),
@@ -14875,6 +15004,7 @@ mod tests {
                     requirements: Box::new([]),
                     value_type: Type::Function(Box::new(method_domain), Box::new(method_codomain)),
                 },
+                head_type_parameter_count: owner_count,
                 origin: Origin::Source(span),
                 span,
             }]),
@@ -16436,6 +16566,7 @@ mod tests {
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method_id,
                 spelling: "observe".to_owned(),
+                type_parameters: Box::new([]),
                 value_type: value_type(),
                 origin: Origin::Source(span),
                 span,
@@ -16475,6 +16606,7 @@ mod tests {
                         Box::new(head_argument()),
                     ),
                 },
+                head_type_parameter_count: 1,
                 origin: Origin::Source(span),
                 span,
             }]),
@@ -16878,6 +17010,7 @@ mod tests {
                     methods: Box::new([CheckedInterfaceMethodFact {
                         id: method,
                         spelling: "deep".to_owned(),
+                        type_parameters: Box::new([]),
                         value_type: public_value_type(),
                         origin: Origin::Source(span),
                         span,
@@ -16941,6 +17074,7 @@ mod tests {
                                 )),
                             ),
                         },
+                        head_type_parameter_count: 1,
                         origin: Origin::Source(span),
                         span,
                     }]),
@@ -17135,6 +17269,7 @@ mod tests {
                         methods.push(CheckedInterfaceMethodFact {
                             id: MethodId::new(interface, ordinal as u32),
                             spelling: format!("method{ordinal}"),
+                            type_parameters: Box::new([]),
                             value_type: Type::Function(
                                 Box::new(Type::Variable(parameter)),
                                 Box::new(Type::Variable(parameter)),
@@ -17232,6 +17367,7 @@ mod tests {
                                     Box::new(function_type()),
                                 ),
                             },
+                            head_type_parameter_count: 1,
                             origin: Origin::Source(span),
                             span,
                         }]),
@@ -17313,6 +17449,7 @@ mod tests {
                                         Box::new(Type::Unit),
                                     ),
                                 },
+                                head_type_parameter_count: 0,
                                 origin: Origin::Source(span),
                                 span,
                             });
@@ -19774,6 +19911,7 @@ mod tests {
                     requirements: Box::new([]),
                     value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
                 },
+                head_type_parameter_count: 0,
                 origin: Origin::Source(span),
                 span,
             }]
@@ -20825,6 +20963,7 @@ mod tests {
                 methods: vec![CheckedInterfaceMethodFact {
                     id: method,
                     spelling: "render".into(),
+                    type_parameters: Box::new([]),
                     value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
                     origin: Origin::Source(interface_span),
                     span: interface_span,

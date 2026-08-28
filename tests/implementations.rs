@@ -475,10 +475,10 @@ fn invalid_header_precedes_missing_method_membership() {
 }
 
 #[test]
-fn checked_membership_uses_interface_order_and_authenticates_source_groups() {
+fn polymorphic_method_membership_uses_interface_order_and_authenticates_source_groups() {
     let checked = checked_valid(concat!(
-        "interface Pair<A> {\nfirst : A -> A\nsecond : A -> A\n}\n\n",
-        "impl Pair<Int> {\nsecond value = value\nfirst value = value\n}\n",
+        "interface Pair<A> {\nfirst<X> : (A, X) -> A\nsecond<Y> : (A, Y) -> A\n}\n\n",
+        "impl Pair<Int> {\nsecond (value, ignored) = value\nfirst (value, ignored) = value\n}\n",
     ));
     let module = checked
         .last()
@@ -489,6 +489,18 @@ fn checked_membership_uses_interface_order_and_authenticates_source_groups() {
     assert_eq!(implementation.methods.len(), 2);
     assert_eq!(implementation.methods[0].source_group, 1);
     assert_eq!(implementation.methods[1].source_group, 0);
+    assert_eq!(
+        module.interface_facts()[0].methods[0]
+            .type_parameters()
+            .len(),
+        1
+    );
+    assert_eq!(
+        module.interface_facts()[0].methods[1]
+            .type_parameters()
+            .len(),
+        1
+    );
     assert_eq!(
         implementation.methods[0].id.method(),
         implementation.methods[0].method
@@ -568,6 +580,59 @@ fn checked_impl_method_scheme_retains_declared_function_kind() {
     assert_eq!(
         kind,
         &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+    );
+}
+
+#[test]
+fn implementation_method_scheme_orders_head_then_method_parameters() {
+    let checked = checked_valid(concat!(
+        "type Holder<H> = Holder(H)\n\n",
+        "interface Keep<I> {\n",
+        "keep<A, F : Type -> Type> : (I, A, F<A>) -> F<A>\n",
+        "}\n\n",
+        "impl<H> Keep<Holder<H>> {\n",
+        "keep (owner, key, value) = value\n",
+        "}\n",
+    ));
+    let module = checked
+        .last()
+        .expect("the fixture should retain its module");
+    let [interface] = module.interface_facts() else {
+        panic!("the module should retain one checked interface fact");
+    };
+    let [interface_method] = interface.methods.as_ref() else {
+        panic!("the interface should retain one checked method scheme");
+    };
+    let [implementation] = module.implementation_facts() else {
+        panic!("the module should retain one checked implementation fact");
+    };
+    let [implementation_method] = implementation.methods.as_ref() else {
+        panic!("the implementation should retain one checked method fact");
+    };
+    let [head] = implementation.head_parameters.as_ref() else {
+        panic!("the implementation should retain one rigid head parameter");
+    };
+    let [method_argument, method_constructor] = interface_method.type_parameters() else {
+        panic!("the interface method should retain its two ordered local parameters");
+    };
+    let [
+        (first, first_kind),
+        (second, second_kind),
+        (third, third_kind),
+    ] = implementation_method.scheme.type_parameters.as_ref()
+    else {
+        panic!("the implementation scheme should retain head then method parameters");
+    };
+
+    assert_eq!(implementation_method.head_type_parameter_count(), 1);
+    assert_eq!((*first, first_kind), (head.id, &head.kind));
+    assert_eq!(
+        (*second, second_kind),
+        (method_argument.id, &method_argument.kind)
+    );
+    assert_eq!(
+        (*third, third_kind),
+        (method_constructor.id, &method_constructor.kind)
     );
 }
 

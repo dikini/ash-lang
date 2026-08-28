@@ -183,6 +183,69 @@ and evaluator semantic or state-machine changes.
 - Checkpoint 2 is complete in `faeb689` plus correction `86e32dd`. Its reserved
   10 units do not change during correction and review: cumulative reserved use
   is 14/70, 56 units remain, and Checkpoint 3 is not reserved.
+- Checkpoint 3 reaches its implementation boundary with its reserved 12 units.
+  The primary RED command `cargo test --locked --test interfaces
+  polymorphic_method_occurrence_instantiates_all_binders_once -- --exact`
+  exited 101 with `interface.method-parameter`: the predecessor rejected the
+  nonempty list and could quantify only the interface parameter. The exact
+  implementation-scheme witness failed for the same reason. The unresolved
+  interface argument, unresolved method argument, and higher-order occurrence
+  witnesses consequently reported `interface.method-parameter` instead of,
+  respectively, `constraint.ambiguous`, `type.ambiguous`, and `type.argument`.
+  The rigid-recursion and exact-current witnesses likewise stopped at the
+  rejected method list. The atomic-publication RED `cargo test --locked --lib
+  -- elaborate::tests::module_failure_publishes_no_earlier_occurrence_selection
+  --exact` exited 101 because an earlier occurrence slot was filled before a
+  later module-body failure.
+- Checked method facts now retain their ordered fixed-kind binder records
+  separately from the monotype. Each ordinary occurrence freshens the
+  interface binder followed by all method binders, creates exactly one
+  interface obligation, and privately retains the ordered method arguments.
+  A same-method recursive occurrence keeps the method-local binders rigid but
+  still infers its interface argument normally. Implementation checking runs
+  once under rigid head then method binders and publishes that explicit scheme
+  boundary. Selection closes into private staged state; complete module
+  inference then zonks all occurrence arguments and atomically preflights every
+  exact slot identity before any one-shot fill. Ambiguity, earlier module
+  failure, and preflight failure publish no slot state.
+- Resource evidence covers the new carriers and disposal routes. For
+  `q = 1 + m` occurrence binders, retained resolved and Core parameter copies
+  charge `2q + 1 + 2 sum(K)` type work; the two-binder exact witness is
+  `2K + 7` and rejects one short. Selector method ingress charges `m` retained
+  binder records plus canonical kind comparisons in the constraint ledger and
+  `m + sum(K)` type work. For `O` staged occurrences and `M` total method
+  arguments, publication precharges `M + 2O` carrier units plus exact goal
+  comparisons and `M` type carriers plus zonking; exact evidence for one
+  two-argument occurrence is constraint 6 and type 2, with both one-short
+  failures leaving the slot empty. Publication consumes its already-owned
+  slot-identity set during preflight, so it creates no second proportional
+  index. Checked-interface binder cloning charges and reserves `m` records
+  before publication. Pending, current-method, and filled-slot owners dispose
+  every retained method-argument type iteratively on all success and failure
+  paths; a 32,768-deep, 256 KiB-stack witness covers a failure after one method
+  argument has already zonked.
+- Final GREEN evidence is 21 architecture tests, 44 implementation tests, 20
+  interface-selection tests, 33 interface tests, and 39 polymorphism tests in
+  one locked invocation; 64 `interface`-filtered library tests; 114
+  `elaborate`-filtered library tests; and 122 `evidence`-filtered library tests.
+  `cargo fmt --check`, `cargo check --locked --all-targets`, locked workspace
+  all-target/all-feature Clippy with warnings denied, and `git diff --check`
+  also pass. The implementation agent used `gpt-5.6-sol` at high reasoning.
+  Self-review found no proposal semantic gap, persistent Core choice, resource
+  limit change, selection change, evaluator change, or admitted higher-rank or
+  polymorphic-recursive behavior. It corrected an over-rigid interface
+  argument at recursive occurrences, made current-method scope restoration
+  transactional, removed an uncharged duplicate publication index, replaced
+  binder `collect` with explicit precharge and reservation, and found no new
+  saturating cardinality arithmetic.
+- The causally required supporting edits are limited to body-free method-binder
+  kind authentication, imported fixture propagation, staged evidence auditing,
+  and the extended kind-call seam in `kind.rs`, `resolve.rs`,
+  `evidence_audit.rs`, and `evidence_validation.rs`. `types.rs` needs no change
+  because its existing bounded type operations suffice. The specification is
+  unchanged. Independent semantic and Rust/resource reviews remain pending.
+  Cumulative reserved use is 26/70 and 44 units remain unreserved; Checkpoint 4
+  is not reserved.
 
 ## Verification
 

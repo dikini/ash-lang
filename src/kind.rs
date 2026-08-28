@@ -699,6 +699,7 @@ impl<'a> KindEnvironments<'a> {
         &self,
         ty: &Type,
         parameter: TypeVariableId,
+        method_parameters: &[TypeVariableId],
         span: Span,
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
@@ -708,22 +709,42 @@ impl<'a> KindEnvironments<'a> {
                 "a checked body-free interface method is not a function",
             ));
         }
-        budget.charge(2).map_err(|()| {
+        let parameter_count = method_parameters.len().checked_add(1).ok_or_else(|| {
+            KindFailure::resource(
+                span,
+                "body-free interface-method variable count exceeded its owning work budget",
+            )
+        })?;
+        let retained_work = parameter_count.checked_mul(2).ok_or_else(|| {
+            KindFailure::resource(
+                span,
+                "body-free interface-method variable work exceeded its owning budget",
+            )
+        })?;
+        budget.charge(retained_work).map_err(|()| {
             KindFailure::resource(
                 span,
                 "body-free interface-method variable storage exceeded its owning work budget",
             )
         })?;
         let mut allowed = HashSet::new();
-        allowed.try_reserve(1).map_err(|_| {
+        allowed.try_reserve(parameter_count).map_err(|_| {
             KindFailure::resource(
                 span,
                 "body-free interface-method variable storage could not reserve capacity",
             )
         })?;
         allowed.insert(parameter);
+        for method_parameter in method_parameters {
+            if !allowed.insert(*method_parameter) {
+                return Err(KindFailure::internal(
+                    span,
+                    "a checked body-free interface method repeats a type parameter",
+                ));
+            }
+        }
         let mut visited = HashSet::new();
-        visited.try_reserve(1).map_err(|_| {
+        visited.try_reserve(parameter_count).map_err(|_| {
             KindFailure::resource(
                 span,
                 "body-free interface-method coverage could not reserve capacity",
@@ -740,10 +761,15 @@ impl<'a> KindEnvironments<'a> {
             span,
             &mut ledger,
         )?;
-        if visited.len() != 1 || !visited.contains(&parameter) {
+        if visited.len() != parameter_count
+            || !visited.contains(&parameter)
+            || method_parameters
+                .iter()
+                .any(|method_parameter| !visited.contains(method_parameter))
+        {
             return Err(KindFailure::internal(
                 span,
-                "a checked body-free interface method does not use exactly its owner parameter",
+                "a checked body-free interface method does not use exactly its declared parameters",
             ));
         }
         let equal =

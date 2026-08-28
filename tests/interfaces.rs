@@ -10,10 +10,13 @@ use ash::{
     elaborate::{Elaborator, TypeError, check_module, link_modules},
     eval::{TraceEvent, evaluate},
     evidence_validation::validate_interface_evidence,
-    interface::RequirementOwner,
+    interface::{EvidenceSlot, InterfaceId, MethodId, RequirementOwner},
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
-    resolved::CheckedModule,
+    resolved::{
+        CheckedDefinition, CheckedModule, ResolvedExpr, ResolvedExprKind, ResolvedLocalDeclaration,
+        ResolvedTermName,
+    },
     types::{Kind, Type},
 };
 
@@ -145,6 +148,81 @@ fn validated_interface_core(text: &str) -> ValidatedProgram {
         .expect("the interface Core should independently validate")
 }
 
+fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&EvidenceSlot> {
+    let mut expressions = Vec::new();
+    match definition.kind() {
+        ash::resolved::ResolvedDefinitionKind::Equational(global) => {
+            expressions.extend(global.equations.iter().map(|equation| &equation.body));
+        }
+        ash::resolved::ResolvedDefinitionKind::InlineOperational(global) => {
+            expressions.push(global.body.result.as_ref());
+            for declaration in &global.body.declarations {
+                schedule_local_expressions(declaration, &mut expressions);
+            }
+        }
+    }
+
+    let mut slots = Vec::new();
+    while let Some(expression) = expressions.pop() {
+        match &expression.kind {
+            ResolvedExprKind::Occurrence(occurrence)
+                if occurrence.term == ResolvedTermName::Method(method) =>
+            {
+                let [slot] = occurrence.evidence.as_ref() else {
+                    panic!("one method occurrence should own one interface obligation");
+                };
+                slots.push(slot);
+            }
+            ResolvedExprKind::Occurrence(_)
+            | ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Constructor(_) => {}
+            ResolvedExprKind::Tuple(elements) => expressions.extend(elements),
+            ResolvedExprKind::Apply(application) => {
+                expressions.push(application.argument.as_ref());
+                expressions.push(application.function.as_ref());
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                expressions.push(binary.right.as_ref());
+                expressions.push(binary.left.as_ref());
+            }
+            ResolvedExprKind::Block(block) => {
+                expressions.push(block.result.as_ref());
+                for declaration in &block.declarations {
+                    schedule_local_expressions(declaration, &mut expressions);
+                }
+            }
+            ResolvedExprKind::Function(function) => {
+                expressions.push(function.body.result.as_ref());
+                for declaration in &function.body.declarations {
+                    schedule_local_expressions(declaration, &mut expressions);
+                }
+            }
+            ResolvedExprKind::Match(matched) => {
+                expressions.push(matched.scrutinee.as_ref());
+                expressions.extend(matched.arms.iter().map(|arm| &arm.body));
+            }
+        }
+    }
+    slots.reverse();
+    slots
+}
+
+fn schedule_local_expressions<'a>(
+    declaration: &'a ResolvedLocalDeclaration,
+    expressions: &mut Vec<&'a ResolvedExpr>,
+) {
+    match declaration {
+        ResolvedLocalDeclaration::Binding(binding) => expressions.push(&binding.initializer),
+        ResolvedLocalDeclaration::Recursive(group) => {
+            expressions.extend(group.members.iter().map(|member| &member.initializer));
+        }
+    }
+}
+
 #[test]
 fn rejects_interface_method_without_parameter_occurrence() {
     let error = check_error("interface Equal<A> {\nequal : (Int, Int) -> Bool\n}\n");
@@ -211,10 +289,41 @@ fn top_level_function_with_nested_function_domain_completes_the_pipeline() {
 }
 
 #[test]
-fn rejects_interface_method_local_type_variable() {
+fn absent_method_list_rejects_interface_method_local_type_variable() {
     let error = check_error("interface Combine<A> {\ncombine : (A, B) -> A\n}\n");
 
     assert_eq!(reason(&error), "interface.method-parameter");
+}
+
+#[test]
+fn polymorphic_method_occurrence_instantiates_all_binders_once() {
+    let checked = checked_module(concat!(
+        "interface Pairing<I> {\n",
+        "pair<A, B> : (I, A, B) -> (A, B)\n",
+        "}\n\n",
+        "use_pairing<I> : I -> ((Int, Bool), (Bool, Int)) where Pairing<I>\n",
+        "use_pairing value = (pair((value, 1, true)), pair((value, false, 2)))\n",
+    ));
+    let method = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let definition = checked
+        .definitions()
+        .iter()
+        .find(|definition| match definition.kind() {
+            ash::resolved::ResolvedDefinitionKind::Equational(global) => {
+                global.interface.name.spelling == "use_pairing"
+            }
+            ash::resolved::ResolvedDefinitionKind::InlineOperational(_) => false,
+        })
+        .expect("the checked constrained global should remain available");
+    let occurrences = method_occurrences(definition, method);
+    let [first, second] = occurrences.as_slice() else {
+        panic!("the body should retain two occurrences of one method scheme");
+    };
+
+    assert!(first.selection().is_some());
+    assert!(second.selection().is_some());
+    assert_eq!(first.method_arguments(), &[Type::Int, Type::Bool]);
+    assert_eq!(second.method_arguments(), &[Type::Bool, Type::Int]);
 }
 
 #[test]

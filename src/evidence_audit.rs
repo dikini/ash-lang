@@ -1,7 +1,7 @@
 //! Structural evidence validation at the checked-body transition.
 
 use crate::{
-    interface::{ConstrainedScheme, InterfaceConstraintBudget, MethodId},
+    interface::{ConstrainedScheme, EvidenceSlot, InterfaceConstraintBudget, MethodId},
     resolved::{
         BinderId, ResolvedBlock, ResolvedDefinition, ResolvedDefinitionKind, ResolvedExpr,
         ResolvedExprKind, ResolvedImplementation, ResolvedLocalDeclaration, ResolvedOccurrence,
@@ -24,16 +24,18 @@ pub(crate) enum EvidenceAuditFailure {
 /// lexical or unconstrained global is absent from `global_scheme` and owns no
 /// slots. A known interface method owns exactly one slot. Every expected slot
 /// must already contain a selection.
-pub(crate) fn audit_checked_body_evidence<'a, G, M>(
+pub(crate) fn audit_checked_body_evidence<'a, G, M, S>(
     definitions: &[ResolvedDefinition],
     implementations: &[ResolvedImplementation],
     mut global_scheme: G,
     mut method_known: M,
+    mut slot_ready: S,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<(), EvidenceAuditFailure>
 where
     G: FnMut(BinderId) -> Option<&'a ConstrainedScheme>,
     M: FnMut(MethodId) -> bool,
+    S: FnMut(&EvidenceSlot) -> bool,
 {
     let mut pending = Vec::new();
 
@@ -72,7 +74,13 @@ where
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Constructor(_) => {}
             ResolvedExprKind::Occurrence(occurrence) => {
-                audit_occurrence(occurrence, &mut global_scheme, &mut method_known, budget)?;
+                audit_occurrence(
+                    occurrence,
+                    &mut global_scheme,
+                    &mut method_known,
+                    &mut slot_ready,
+                    budget,
+                )?;
             }
             ResolvedExprKind::Tuple(elements) => {
                 reserve_and_extend(&mut pending, elements.iter(), budget)?;
@@ -112,15 +120,17 @@ where
     Ok(())
 }
 
-fn audit_occurrence<'a, G, M>(
+fn audit_occurrence<'a, G, M, S>(
     occurrence: &ResolvedOccurrence,
     global_scheme: &mut G,
     method_known: &mut M,
+    slot_ready: &mut S,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<(), EvidenceAuditFailure>
 where
     G: FnMut(BinderId) -> Option<&'a ConstrainedScheme>,
     M: FnMut(MethodId) -> bool,
+    S: FnMut(&EvidenceSlot) -> bool,
 {
     budget
         .charge(1)
@@ -140,10 +150,7 @@ where
         .charge(expected)
         .map_err(|()| EvidenceAuditFailure::ConstraintResource)?;
     if occurrence.evidence.len() != expected
-        || occurrence
-            .evidence
-            .iter()
-            .any(|slot| slot.selection().is_none())
+        || occurrence.evidence.iter().any(|slot| !slot_ready(slot))
     {
         return Err(EvidenceAuditFailure::InvalidState);
     }
@@ -260,7 +267,7 @@ mod tests {
             .finish(root, InterfaceId::new(module, 0), Type::Int)
             .expect("the root should exist");
         slot.handle()
-            .fill(Type::Int, selection)
+            .fill(Type::Int, Box::new([]), selection)
             .expect("the fresh slot should accept evidence");
         slot
     }
@@ -419,6 +426,7 @@ mod tests {
                 &[],
                 |binder| (binder == constrained).then_some(&scheme),
                 |candidate| candidate == method,
+                |slot| slot.selection().is_some(),
                 &mut InterfaceConstraintBudget::default(),
             ),
             Ok(())
@@ -460,6 +468,7 @@ mod tests {
                 &[],
                 |binder| (binder == constrained).then_some(&scheme),
                 |_| index != 2,
+                |slot| slot.selection().is_some(),
                 &mut InterfaceConstraintBudget::default(),
             );
             assert_eq!(result, Err(EvidenceAuditFailure::InvalidState));
@@ -489,6 +498,7 @@ mod tests {
                 &implementations,
                 |binder| (binder == constrained).then_some(&scheme),
                 |_| false,
+                |slot| slot.selection().is_some(),
                 &mut InterfaceConstraintBudget::default(),
             ),
             Err(EvidenceAuditFailure::InvalidState)
@@ -522,6 +532,7 @@ mod tests {
                     &[],
                     |_| None,
                     |_| false,
+                    |slot| slot.selection().is_some(),
                     &mut InterfaceConstraintBudget::default(),
                 )
                 .expect("the deep checked body should authenticate iteratively");
@@ -551,6 +562,7 @@ mod tests {
                 &[],
                 |_| None,
                 |_| false,
+                |slot| slot.selection().is_some(),
                 &mut InterfaceConstraintBudget::with_limit(3),
             ),
             Err(EvidenceAuditFailure::ConstraintResource)
@@ -567,6 +579,7 @@ mod tests {
                 &[],
                 |_| None,
                 |_| false,
+                |slot| slot.selection().is_some(),
                 &mut InterfaceConstraintBudget::with_limit(4),
             ),
             Ok(())

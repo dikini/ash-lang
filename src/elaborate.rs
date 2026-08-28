@@ -15,7 +15,8 @@ use crate::{
     },
     diagnostic::{Diagnostic, SourceLabel},
     evidence::{
-        EvidenceSelector, SelectionCauseKind, SelectionError, SelectionFailure, SelectionSite,
+        EvidenceSelector, PendingEvidencePublication, SelectionCauseKind, SelectionError,
+        SelectionFailure, SelectionSite,
     },
     evidence_audit::{EvidenceAuditFailure, audit_checked_body_evidence},
     evidence_validation::ValidatedInterfaceProgram,
@@ -1338,6 +1339,7 @@ pub struct Elaborator {
     inference_solutions: InferenceSolutionMap,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     monomorphic_recursive: HashSet<BinderId>,
+    current_implementation_method: Option<CurrentImplementationMethod>,
     method_binders: HashMap<MethodId, BinderId>,
     selection: Option<EvidenceSelector>,
     evidence_lowering: Option<EvidenceLowering>,
@@ -1345,6 +1347,20 @@ pub struct Elaborator {
     constraint_work: InterfaceConstraintBudget,
     coverage_work: UsefulnessBudget,
     base_context: TypeContext,
+}
+
+#[derive(Debug)]
+struct CurrentImplementationMethod {
+    method: MethodId,
+    method_arguments: Box<[Type]>,
+}
+
+impl Drop for CurrentImplementationMethod {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.method_arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1377,6 +1393,7 @@ impl Elaborator {
             inference_solutions: InferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
+            current_implementation_method: None,
             method_binders: HashMap::new(),
             selection: None,
             evidence_lowering: None,
@@ -1463,6 +1480,7 @@ impl Elaborator {
             inference_solutions: InferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
+            current_implementation_method: None,
             method_binders: HashMap::new(),
             selection: None,
             evidence_lowering: None,
@@ -1513,6 +1531,7 @@ impl Elaborator {
             inference_solutions: InferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
+            current_implementation_method: None,
             method_binders: HashMap::new(),
             selection: None,
             evidence_lowering: None,
@@ -1825,6 +1844,7 @@ impl Elaborator {
             inference_solutions: InferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
+            current_implementation_method: None,
             method_binders: HashMap::new(),
             selection: None,
             evidence_lowering: None,
@@ -1958,7 +1978,7 @@ impl Elaborator {
         checked_interfaces: &[CheckedInterface],
         checked_implementations: &[CheckedImplementation],
         constraint_work: &mut InterfaceConstraintBudget,
-    ) -> Result<Box<[CheckedImplementationFact]>, TypeError> {
+    ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -1979,7 +1999,7 @@ impl Elaborator {
         checked_schemes: &[CheckedGlobalScheme],
         checked_interfaces: &[CheckedInterface],
         checked_implementations: &[CheckedImplementation],
-    ) -> Result<Box<[CheckedImplementationFact]>, TypeError> {
+    ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
         let base_context = self.base_context.clone();
         let mut globals = self.prepare_definition_views(
             module.definitions().iter(),
@@ -2049,7 +2069,8 @@ impl Elaborator {
             span: module.span(),
         };
         self.elaborate_result(&result, &mut context)?;
-        Ok(facts.into_boxed_slice())
+        let publication = self.prepare_evidence_publication()?;
+        Ok((facts.into_boxed_slice(), publication))
     }
 
     fn check_implementation_body(
@@ -2138,7 +2159,33 @@ impl Elaborator {
                 method.span(),
                 method.annotation_span(),
             );
+            if self.current_implementation_method.is_some() {
+                return Err(invalid_state());
+            }
+            let current_method_work = method
+                .type_parameters()
+                .len()
+                .checked_add(1)
+                .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.type_work
+                .charge(current_method_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut rigid_method_arguments = Vec::new();
+            rigid_method_arguments
+                .try_reserve(method.type_parameters().len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            rigid_method_arguments.extend(
+                method
+                    .type_parameters()
+                    .iter()
+                    .map(|parameter| Type::Variable(parameter.id)),
+            );
+            let current_method = CurrentImplementationMethod {
+                method: method.id(),
+                method_arguments: rigid_method_arguments.into_boxed_slice(),
+            };
             let evidence_marker = self.enter_implementation_evidence_scope(implementation.id)?;
+            self.current_implementation_method = Some(current_method);
             let body_result = self.elaborate_equations(
                 &group.equations,
                 ProvenancedType {
@@ -2149,6 +2196,14 @@ impl Elaborator {
                 group.span,
                 &presentation,
             );
+            let current_method = self
+                .current_implementation_method
+                .take()
+                .ok_or_else(invalid_state)?;
+            if current_method.method != method.id() {
+                return Err(invalid_state());
+            }
+            drop(current_method);
             let close_result = if body_result.is_ok() {
                 self.close_evidence_obligations(evidence_marker)
             } else {
@@ -2158,13 +2213,17 @@ impl Elaborator {
             let checked_body = TypedNodeOwner::new(body_result?);
             close_result?;
             leave_result?;
-            let scheme =
-                self.checked_implementation_method_scheme(implementation, &checked_body.ty)?;
+            let scheme = self.checked_implementation_method_scheme(
+                implementation,
+                method.type_parameters(),
+                &checked_body.ty,
+            )?;
             method_facts.push(CheckedImplementationMethodFact {
                 id: checked_method.id,
                 method: checked_method.method,
                 binder: checked_method.binder,
                 scheme,
+                head_type_parameter_count: implementation.head_parameters.len(),
                 origin: presentation,
                 span: group.span,
             });
@@ -2200,28 +2259,39 @@ impl Elaborator {
     fn checked_implementation_method_scheme(
         &mut self,
         implementation: &crate::resolved::ResolvedImplementation,
+        method_parameters: &[crate::resolved::ResolvedTypeVariable],
         value_type: &Type,
     ) -> Result<ConstrainedScheme, TypeError> {
+        let parameter_count = implementation
+            .head_parameters
+            .len()
+            .checked_add(method_parameters.len())
+            .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let retained_work = parameter_count
+            .checked_add(implementation.prerequisites.len())
+            .and_then(|work| work.checked_add(1))
+            .ok_or_else(constraint_resource)?;
         self.constraint_work
-            .charge(
-                implementation
-                    .head_parameters
-                    .len()
-                    .saturating_add(implementation.prerequisites.len())
-                    .saturating_add(1),
-            )
+            .charge(retained_work)
             .map_err(|()| constraint_resource())?;
         self.constraint_work
             .charge_type(value_type)
             .map_err(|()| constraint_resource())?;
         self.type_work
-            .charge(implementation.head_parameters.len())
+            .charge(parameter_count)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut type_parameters = Vec::new();
         type_parameters
-            .try_reserve(implementation.head_parameters.len())
+            .try_reserve(parameter_count)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for parameter in &implementation.head_parameters {
+            type_parameters.push((
+                parameter.id,
+                clone_kind_with_budget(&parameter.kind, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            ));
+        }
+        for parameter in method_parameters {
             type_parameters.push((
                 parameter.id,
                 clone_kind_with_budget(&parameter.kind, &mut self.type_work)
@@ -2538,6 +2608,31 @@ impl Elaborator {
         result
     }
 
+    fn instantiate_with_arguments(
+        &mut self,
+        fact: &TypeFact,
+        arguments: Vec<Type>,
+    ) -> Result<(Type, Vec<Type>), TypeError> {
+        if fact.quantified.len() != arguments.len() {
+            return Err(invalid_state());
+        }
+        self.type_work
+            .charge(arguments.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut replacements = HashMap::new();
+        replacements
+            .try_reserve(arguments.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for ((binder, _), argument) in fact.quantified.iter().zip(arguments.iter()) {
+            replacements.insert(*binder, self.clone_type(argument)?);
+        }
+        let instantiated = substitute_type_variables_with(&fact.ty, &replacements, |cells| {
+            self.type_work.charge(cells)
+        })
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        Ok((instantiated, arguments))
+    }
+
     fn enter_global_evidence_scope(&mut self, binder: BinderId) -> Result<usize, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
@@ -2627,6 +2722,45 @@ impl Elaborator {
         );
         self.selection = Some(selector);
         result.map_err(selected_obligation_error)
+    }
+
+    fn prepare_evidence_publication(&mut self) -> Result<PendingEvidencePublication, TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return Err(invalid_state());
+        }
+        let mut selector = self.selection.take().ok_or_else(invalid_state)?;
+        let solutions = &self.inference_solutions;
+        let inference_variables = &self.inference_variables;
+        let authenticated_solutions = &self.authenticated_inference_solutions;
+        let result = selector.prepare_publication(
+            |argument, type_work| {
+                let zonked =
+                    zonk_type_with_status_and_inference(&argument, solutions, |work| match work {
+                        ZonkWork::TypeCells(cells) => type_work
+                            .charge(cells)
+                            .map_err(|()| SelectionFailure::TypeResource),
+                        ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                            identity,
+                            inference_variables,
+                            solutions,
+                            authenticated_solutions,
+                            type_work,
+                        )
+                        .map_err(|failure| match failure {
+                            UnificationFailure::Resource => SelectionFailure::TypeResource,
+                            UnificationFailure::Mismatch
+                            | UnificationFailure::Infinite
+                            | UnificationFailure::Invariant => SelectionFailure::InvalidState,
+                        }),
+                    });
+                discard_type_iteratively(argument);
+                zonked.map(|(ty, _)| ty)
+            },
+            &mut self.constraint_work,
+            &mut self.type_work,
+        );
+        self.selection = Some(selector);
+        result.map_err(|failure| selection_failure(failure, None))
     }
 
     fn record_global_obligations(
@@ -2737,6 +2871,7 @@ impl Elaborator {
             let (fact_parameters, scheme_parameters) = retain_method_occurrence_parameters(
                 parameter,
                 method_fact.interface_parameter_kind(),
+                method_fact.type_parameters(),
                 &mut self.type_work,
             )
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -2747,16 +2882,68 @@ impl Elaborator {
                 ty: value_type.into_inner(),
                 quantified: fact_parameters,
             });
-            let (ty, arguments) = self.instantiate(&fact, false, span)?;
+            let current_method = self.current_implementation_method.take();
+            let rigid_arguments = current_method
+                .as_ref()
+                .filter(|current| current.method == method)
+                .map(|current| {
+                    let count = current
+                        .method_arguments
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    self.type_work.charge(count).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let mut arguments = Vec::new();
+                    arguments.try_reserve(count).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    arguments.push(
+                        self.fresh_inference_reserved(
+                            method_fact.interface_parameter_kind(),
+                            span,
+                        )?,
+                    );
+                    for argument in &current.method_arguments {
+                        arguments.push(
+                            clone_type_with_budget(argument, &mut self.type_work).map_err(
+                                |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                            )?,
+                        );
+                    }
+                    Ok::<Vec<Type>, TypeError>(arguments)
+                })
+                .transpose();
+            self.current_implementation_method = current_method;
+            let rigid_arguments = rigid_arguments?;
+            let (ty, arguments) = if let Some(arguments) = rigid_arguments {
+                self.instantiate_with_arguments(&fact, arguments)?
+            } else {
+                self.instantiate(&fact, false, span)?
+            };
             let ty = IterativeTypeOwner::new(ty);
             let arguments = OwnedTypeBuffer(arguments);
-            let [argument] = arguments.as_slice() else {
+            let Some((argument, method_arguments)) = arguments.as_slice().split_first() else {
                 return Err(invalid_state());
             };
+            let mut retained_method_arguments = Vec::new();
+            self.type_work
+                .charge(method_arguments.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            retained_method_arguments
+                .try_reserve(method_arguments.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for method_argument in method_arguments {
+                retained_method_arguments.push(self.clone_type(method_argument)?);
+            }
             selector
                 .push_cloned_obligation(
                     interface,
                     argument,
+                    retained_method_arguments.into_boxed_slice(),
                     SelectionSite::contextual(
                         occurrence.evidence[0].handle(),
                         span,
@@ -4944,6 +5131,14 @@ impl Elaborator {
                             ResolvedExprKind::Occurrence(occurrence)
                                 if occurrence.global_binder().is_some_and(|binder|
                                     self.monomorphic_recursive.contains(&binder))
+                        ) || matches!(
+                            &application.function.kind,
+                            ResolvedExprKind::Occurrence(occurrence)
+                                if matches!(occurrence.term,
+                                    crate::resolved::ResolvedTermName::Method(method)
+                                        if self.current_implementation_method
+                                            .as_ref()
+                                            .is_some_and(|current| current.method == method))
                         );
                         tasks.push(ElaborationTask::AfterApplicationFunction {
                             whole_span: current.span,
@@ -6963,12 +7158,14 @@ fn check_interface_declarations(
             let parameter_occurs =
                 type_contains_variable(&method.annotation.ty, interface.parameter.id, budget)
                     .map_err(|()| constraint_resource())?;
-            if !method.type_parameters.is_empty() || !parameter_occurs {
+            if (!method.has_explicit_type_parameters && !method.type_parameters.is_empty())
+                || !parameter_occurs
+            {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::MethodParameter,
                     SourceLabel::new(
                         method.span,
-                        "this method signature must use only its interface parameter",
+                        "this method signature must use its interface parameter and only declared type parameters",
                     ),
                 );
                 diagnostic.related.push(SourceLabel::new(
@@ -7693,6 +7890,13 @@ impl<'a> CheckedInterfaceMethodRef<'a> {
         }
     }
 
+    const fn type_parameters(self) -> &'a [crate::resolved::ResolvedTypeVariable] {
+        match self {
+            Self::Local(method) => &method.type_parameters,
+            Self::Imported(method) => method.type_parameters(),
+        }
+    }
+
     const fn annotation_span(self) -> Span {
         match self {
             Self::Local(method) => method.annotation.span,
@@ -7964,7 +8168,7 @@ pub(crate) fn check_module_with_budget(
             &mut elaborator.type_work,
             constraint_work,
         )?);
-        let implementation_facts = elaborator.check_module_bodies(
+        let (implementation_facts, publication) = elaborator.check_module_bodies(
             &resolved,
             &schemes,
             &checked_interfaces,
@@ -7977,6 +8181,7 @@ pub(crate) fn check_module_with_budget(
             resolved.implementations(),
             |binder| selector.scheme(binder),
             |method| selector.method(method).is_some(),
+            |slot| publication.contains(slot),
             constraint_work,
         )
         .map_err(|failure| match failure {
@@ -7999,12 +8204,19 @@ pub(crate) fn check_module_with_budget(
             interface_facts,
             implementation_facts,
             exports,
+            publication,
         ))
     })();
     *type_work = std::mem::take(&mut elaborator.type_work);
     *coverage_work = std::mem::take(&mut elaborator.coverage_work);
-    let (schemes, checked_implementations, interface_facts, implementation_facts, exports) =
-        result?;
+    let (
+        schemes,
+        checked_implementations,
+        interface_facts,
+        implementation_facts,
+        exports,
+        publication,
+    ) = result?;
     let imported_implementation_count = resolved.imported_facts().implementations().count();
     let local_implementation_count = resolved.implementations().len();
     constraint_work
@@ -8041,6 +8253,9 @@ pub(crate) fn check_module_with_budget(
         resolved.definitions().len(),
         resolved.implementations().len(),
     )?;
+    publication
+        .publish()
+        .map_err(|failure| selection_failure(failure, None))?;
     definitions.extend(
         resolved
             .take_definitions()
@@ -8156,9 +8371,24 @@ fn checked_interface_facts(
             constraint_work
                 .charge_type(&method.annotation.ty)
                 .map_err(|()| constraint_resource())?;
+            constraint_work
+                .charge(method.type_parameters.len())
+                .map_err(|()| constraint_resource())?;
+            let mut method_parameters = Vec::new();
+            method_parameters
+                .try_reserve(method.type_parameters.len())
+                .map_err(|_| constraint_resource())?;
+            for parameter in &method.type_parameters {
+                method_parameters.push(
+                    clone_resolved_type_variable_with_budget(parameter, type_work).map_err(
+                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                    )?,
+                );
+            }
             methods.push(CheckedInterfaceMethodFact {
                 id: method.id,
                 spelling: method.spelling.clone(),
+                type_parameters: method_parameters.into_boxed_slice(),
                 value_type: clone_type_with_budget(&method.annotation.ty, type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
                 origin: method.origin.clone(),
@@ -10169,19 +10399,31 @@ fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type
 fn retain_method_occurrence_parameters(
     parameter: TypeVariableId,
     kind: &Kind,
+    method_parameters: &[(TypeVariableId, Kind)],
     budget: &mut TypeWorkBudget,
 ) -> Result<(KindedTypeParameters, KindedTypeParameters), ()> {
-    budget.charge(1)?;
+    let parameter_count = method_parameters.len().checked_add(1).ok_or(())?;
+    budget.charge(parameter_count)?;
     let mut fact_parameters = Vec::new();
-    fact_parameters.try_reserve(1).map_err(|_| ())?;
+    fact_parameters
+        .try_reserve(parameter_count)
+        .map_err(|_| ())?;
     fact_parameters.push((parameter, clone_kind_with_budget(kind, budget)?));
+    for (identity, kind) in method_parameters {
+        fact_parameters.push((*identity, clone_kind_with_budget(kind, budget)?));
+    }
 
     // The Core scheme retains a distinct Forall wrapper, binder record, and
     // Kind copy from the elaboration fact above.
-    budget.charge(2)?;
+    budget.charge(parameter_count.checked_add(1).ok_or(())?)?;
     let mut scheme_parameters = Vec::new();
-    scheme_parameters.try_reserve(1).map_err(|_| ())?;
+    scheme_parameters
+        .try_reserve(parameter_count)
+        .map_err(|_| ())?;
     scheme_parameters.push((parameter, clone_kind_with_budget(kind, budget)?));
+    for (identity, kind) in method_parameters {
+        scheme_parameters.push((*identity, clone_kind_with_budget(kind, budget)?));
+    }
 
     Ok((
         fact_parameters.into_boxed_slice(),
@@ -11035,6 +11277,45 @@ mod tests {
             .first()
             .expect("the module fixture should retain one result body")
             .body
+    }
+
+    #[test]
+    fn module_failure_publishes_no_earlier_occurrence_selection() {
+        let resolved = resolved_module_fixture(
+            "atomic-occurrence-publication.ash",
+            concat!(
+                "interface Convert<A> {\nconvert : A -> A\n}\n\n",
+                "impl Convert<Int> {\nconvert value = value\n}\n\n",
+                "first : Unit -> Int\nfirst () = convert 42\n",
+            ),
+            "Int",
+            "true",
+        );
+        let ResolvedDefinitionKind::Equational(first) = &resolved.definitions()[0].kind else {
+            panic!("the first definition should be equational");
+        };
+        let ResolvedExprKind::Apply(application) = &first.equations[0].body.kind else {
+            panic!("the first body should apply the interface method");
+        };
+        let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+            panic!("the application function should be the interface method occurrence");
+        };
+        let [slot] = occurrence.evidence.as_ref() else {
+            panic!("the method occurrence should own one evidence slot");
+        };
+        let handle = slot.handle();
+
+        let error = check_module(resolved)
+            .expect_err("the later main result mismatch should reject the complete module");
+
+        assert!(matches!(
+            error,
+            TypeError::Source(_) | TypeError::Mismatch(_)
+        ));
+        assert!(
+            handle.selection().is_none(),
+            "an earlier choice must remain private when a later body rejects the module"
+        );
     }
 
     #[test]
@@ -12323,9 +12604,10 @@ mod tests {
     fn method_occurrence_parameter_copies_are_exact_atomic_and_stack_safe() {
         const DEPTH: usize = 32_768;
         const KIND_NODES: usize = 2 * DEPTH + 1;
-        // One TypeFact binder record and K Kind nodes, followed by one Core
-        // Forall wrapper, one Core binder record, and the second K-node copy.
-        const EXACT_WORK: usize = 1 + KIND_NODES + 1 + 1 + KIND_NODES;
+        // Two TypeFact binder records and K + 1 Kind nodes, followed by one
+        // Core Forall wrapper, two Core binder records, and the second K + 1
+        // Kind-node copy.
+        const EXACT_WORK: usize = 2 + KIND_NODES + 1 + 1 + 2 + KIND_NODES + 1;
 
         fn deep_kind() -> Kind {
             let mut kind = Kind::Type;
@@ -12340,13 +12622,20 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(|| {
                 let parameter = TypeVariableId::new(0);
+                let method_parameter = TypeVariableId::new(1);
+                let method_parameters = [(method_parameter, Kind::Type)];
 
                 let mut short = TypeWorkBudget::default();
                 short
                     .charge(crate::types::TYPE_WORK_LIMIT - (EXACT_WORK - 1))
                     .expect("one-short method-occurrence precharge");
                 assert_eq!(
-                    retain_method_occurrence_parameters(parameter, &deep_kind(), &mut short),
+                    retain_method_occurrence_parameters(
+                        parameter,
+                        &deep_kind(),
+                        &method_parameters,
+                        &mut short,
+                    ),
                     Err(())
                 );
                 assert_eq!(short.used(), crate::types::TYPE_WORK_LIMIT);
@@ -12356,15 +12645,21 @@ mod tests {
                 exact
                     .charge(crate::types::TYPE_WORK_LIMIT - EXACT_WORK)
                     .expect("exact method-occurrence precharge");
-                let (fact, scheme) =
-                    retain_method_occurrence_parameters(parameter, &source_kind, &mut exact)
-                        .expect("both physical binder/Kind copies fit exactly");
-                assert_eq!(fact.len(), 1);
-                assert_eq!(scheme.len(), 1);
+                let (fact, scheme) = retain_method_occurrence_parameters(
+                    parameter,
+                    &source_kind,
+                    &method_parameters,
+                    &mut exact,
+                )
+                .expect("both physical binder/Kind sequences fit exactly");
+                assert_eq!(fact.len(), 2);
+                assert_eq!(scheme.len(), 2);
                 assert_eq!(fact[0].0, parameter);
                 assert_eq!(scheme[0].0, parameter);
                 assert_eq!(fact[0].1, source_kind);
                 assert_eq!(scheme[0].1, source_kind);
+                assert_eq!(fact[1], (method_parameter, Kind::Type));
+                assert_eq!(scheme[1], (method_parameter, Kind::Type));
                 assert_eq!(exact.used(), crate::types::TYPE_WORK_LIMIT);
             })
             .expect("small-stack method-occurrence thread")
@@ -16077,6 +16372,17 @@ mod tests {
         let schemes = elaborator
             .checked_module_schemes(program.definitions())
             .expect("the declared global schemes should fit");
+        let mut selector = EvidenceSelector::new();
+        for scheme in &schemes {
+            selector
+                .add_scheme(
+                    scheme,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut elaborator.type_work,
+                )
+                .expect("the unconstrained global scheme should fit the selector");
+        }
+        elaborator.selection = Some(selector);
         TYPE_CONTEXT_CLONES.with(|clones| clones.set(0));
 
         elaborator

@@ -1714,12 +1714,16 @@ fn try_copy_slice<T: Copy>(values: &[T]) -> Result<Box<[T]>, ()> {
 #[derive(Debug)]
 struct FilledEvidenceSlot {
     checked_argument: Type,
+    method_arguments: Box<[Type]>,
     selection: EvidenceSelection,
 }
 
 impl Drop for FilledEvidenceSlot {
     fn drop(&mut self) {
         discard_type_iteratively(std::mem::replace(&mut self.checked_argument, Type::Unit));
+        for argument in std::mem::take(&mut self.method_arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
     }
 }
 
@@ -1743,10 +1747,22 @@ impl EvidenceSlot {
         self.filled.get().map(|filled| &filled.selection)
     }
 
+    /// Returns the ordered inference-free method-local instantiation arguments.
+    #[must_use]
+    pub fn method_arguments(&self) -> &[Type] {
+        self.filled
+            .get()
+            .map_or(&[], |filled| &filled.method_arguments)
+    }
+
     pub(crate) fn filled(&self) -> Option<(&Type, &EvidenceSelection)> {
         self.filled
             .get()
             .map(|filled| (&filled.checked_argument, &filled.selection))
+    }
+
+    pub(crate) fn storage_id(&self) -> usize {
+        Arc::as_ptr(&self.filled) as usize
     }
 
     /// Returns a transient capability that fills this exact structural slot.
@@ -1798,6 +1814,12 @@ impl PartialEq for EvidenceSlot {
             (None, None) => true,
             (Some(left), Some(right)) => {
                 same_type(&left.checked_argument, &right.checked_argument)
+                    && left.method_arguments.len() == right.method_arguments.len()
+                    && left
+                        .method_arguments
+                        .iter()
+                        .zip(&right.method_arguments)
+                        .all(|(left, right)| same_type(left, right))
                     && left.selection == right.selection
             }
             _ => false,
@@ -1819,17 +1841,40 @@ impl EvidenceSlotHandle {
         self.filled.get().map(|filled| &filled.selection)
     }
 
+    pub(crate) fn storage_id(&self) -> usize {
+        Arc::as_ptr(&self.filled) as usize
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.filled.get().is_none()
+    }
+
     pub(crate) fn fill(
         &self,
         checked_argument: Type,
+        method_arguments: Box<[Type]>,
         selection: EvidenceSelection,
     ) -> Result<(), ()> {
         self.filled
             .set(FilledEvidenceSlot {
                 checked_argument,
+                method_arguments,
                 selection,
             })
             .map_err(drop)
+    }
+
+    pub(crate) fn fill_preflighted(
+        &self,
+        checked_argument: Type,
+        method_arguments: Box<[Type]>,
+        selection: EvidenceSelection,
+    ) {
+        assert!(
+            self.fill(checked_argument, method_arguments, selection)
+                .is_ok(),
+            "a preflighted evidence occurrence must remain one-shot empty"
+        );
     }
 }
 
@@ -2092,14 +2137,14 @@ mod tests {
         ));
 
         pending
-            .fill(Type::Int, selection.clone())
+            .fill(Type::Int, Box::new([]), selection.clone())
             .expect("the original empty slot should accept one selection");
 
         assert_eq!(slot.selection(), Some(&selection));
         assert_eq!(handle.selection(), Some(&selection));
         assert!(matches!(slot.filled(), Some((Type::Int, _))));
         assert!(clone.selection().is_none());
-        assert!(handle.fill(Type::Bool, selection).is_err());
+        assert!(handle.fill(Type::Bool, Box::new([]), selection).is_err());
         assert!(matches!(slot.filled(), Some((Type::Int, _))));
     }
 
@@ -2111,7 +2156,7 @@ mod tests {
             0,
         ));
         slot.handle()
-            .fill(Type::Int, selection)
+            .fill(Type::Int, Box::new([]), selection)
             .expect("the empty slot should accept one selection");
 
         let clone = slot.clone();
@@ -2950,7 +2995,7 @@ mod tests {
                         .expect("the checked occurrence argument should fit");
                 let slot = EvidenceSlot::empty();
                 slot.handle()
-                    .fill(checked_argument, selection.clone())
+                    .fill(checked_argument, Box::new([]), selection.clone())
                     .expect("the deep checked evidence should fill atomically");
                 let slot_clone = slot.clone();
                 drop(selection);

@@ -651,13 +651,14 @@ fn higher_kinded_concrete_candidate_retains_ordered_substitution_and_evidence() 
 }
 
 #[test]
-fn implementation_method_selects_exact_current_impl_and_retains_ordered_prerequisites() {
+fn polymorphic_implementation_method_selects_exact_current_impl_and_retains_ordered_prerequisites()
+{
     let checked = check(concat!(
         "interface First<A> {\nfirst : A -> A\n}\n\n",
         "interface Second<A> {\nsecond : A -> A\n}\n\n",
-        "interface Repeat<A> {\nrepeat : A -> A\n}\n\n",
+        "interface Repeat<A> {\nrepeat<Item> : (A, Item) -> A\n}\n\n",
         "impl Repeat<Int> where First<Int>, Second<Int> {\n",
-        "repeat value = repeat value\n",
+        "repeat (value, item) = repeat((value, item))\n",
         "}\n",
     ))
     .expect("the implementation method should use its exact current implementation evidence");
@@ -670,6 +671,9 @@ fn implementation_method_selects_exact_current_impl_and_retains_ordered_prerequi
         checked.implementation_facts()[0].prerequisites.as_ref()
     else {
         panic!("the current implementation should retain its ordered prerequisites");
+    };
+    let [method_parameter] = checked.interface_facts()[2].methods[0].type_parameters() else {
+        panic!("the polymorphic method should retain one rigid local parameter");
     };
     let occurrences = implementation_occurrence_selections(
         &checked.implementations()[0],
@@ -691,6 +695,11 @@ fn implementation_method_selects_exact_current_impl_and_retains_ordered_prerequi
         panic!("the recursive method occurrence should select its current implementation");
     };
     assert_eq!(actual_implementation, implementation);
+    assert_eq!(selection.argument(), &Type::Int);
+    assert_eq!(
+        occurrence.evidence[0].method_arguments(),
+        &[Type::Variable(method_parameter.id)]
+    );
     assert!(substitution.is_empty());
     assert_eq!(methods, &[ImplMethodId::new(implementation, repeat)]);
     let [first_prerequisite, second_prerequisite] = prerequisites else {
@@ -826,6 +835,135 @@ fn undetermined_obligation_reports_constraint_ambiguous_without_type_guessing() 
     .expect_err("an undetermined local obligation should not choose an implementation by guessing");
 
     assert_eq!(interface_reason(error), "constraint.ambiguous");
+}
+
+#[test]
+fn polymorphic_method_with_unresolved_interface_argument_remains_constraint_ambiguous() {
+    let error = check(concat!(
+        "interface Make<I> {\nmake<A> : A -> I\n}\n\n",
+        "probe : Unit -> Unit\n",
+        "probe () = {\nlet _ = make(42)\n()\n}\n",
+    ))
+    .expect_err("an unresolved interface argument must own constraint ambiguity");
+
+    assert_eq!(interface_reason(error), "constraint.ambiguous");
+}
+
+#[test]
+fn polymorphic_method_occurrence_does_not_add_higher_order_matching() {
+    let error = check(concat!(
+        "interface Keep<I> {\n",
+        "keep<F : Type -> Type, A> : (I, F<A>) -> I\n",
+        "}\n\n",
+        "probe : Int -> Int where Keep<Int>\n",
+        "probe value = keep((value, value))\n",
+    ))
+    .expect_err("matching F<A> with Int would require a type lambda");
+
+    assert_eq!(diagnostic_reason(error), "type.argument");
+}
+
+#[test]
+fn direct_recursive_polymorphic_method_reuses_rigid_arguments() {
+    let checked = check(concat!(
+        "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n\n",
+        "impl Repeat<Int> {\n",
+        "repeat (owner, value) = repeat((owner, value))\n",
+        "}\n\n",
+        "outside : Int -> Bool\n",
+        "outside owner = repeat((owner, true))\n",
+    ))
+    .expect("direct recursion should reuse its rigid local method argument");
+    let repeat = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let [interface] = checked.interface_facts() else {
+        panic!("the module should retain one interface");
+    };
+    let [method] = interface.methods.as_ref() else {
+        panic!("the interface should retain one method");
+    };
+    let [method_parameter] = method.type_parameters() else {
+        panic!("the method should retain one local type parameter");
+    };
+    let recursive = implementation_occurrence_selections(
+        &checked.implementations()[0],
+        ResolvedTermName::Method(repeat),
+    );
+    let outside = occurrence_selections(
+        checked_definition(&checked, "outside"),
+        ResolvedTermName::Method(repeat),
+    );
+    let [recursive] = recursive.as_slice() else {
+        panic!("the implementation method should retain one direct recursive occurrence");
+    };
+    let [outside] = outside.as_slice() else {
+        panic!("the ordinary global should retain one normally instantiated occurrence");
+    };
+    let [recursive_slot] = recursive.evidence.as_ref() else {
+        panic!("the recursive occurrence should retain one interface obligation");
+    };
+    let [outside_slot] = outside.evidence.as_ref() else {
+        panic!("the ordinary occurrence should retain one interface obligation");
+    };
+
+    assert_eq!(
+        recursive_slot.method_arguments(),
+        &[Type::Variable(method_parameter.id)]
+    );
+    assert_eq!(outside_slot.method_arguments(), &[Type::Bool]);
+    let recursive_selection = selection_for_occurrence(recursive);
+    let EvidenceNode::Implementation { implementation, .. } = recursive_selection
+        .node(recursive_selection.root())
+        .expect("direct recursion should retain exact-current evidence")
+    else {
+        panic!("direct recursion should select the exact current implementation");
+    };
+    assert_eq!(implementation, checked.implementation_facts()[0].id);
+}
+
+#[test]
+fn polymorphic_method_arguments_never_influence_candidate_selection() {
+    let checked = check(concat!(
+        "interface Choose<I> {\nchoose<A> : (I, A) -> I\n}\n\n",
+        "impl Choose<Int> {\nchoose (owner, ignored) = owner\n}\n\n",
+        "first : Int -> Int\nfirst owner = choose((owner, true))\n",
+        "second : Int -> Int\nsecond owner = choose((owner, 42))\n",
+    ))
+    .expect("one concrete implementation should serve unrelated method instantiations");
+    let choose = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let mut occurrences = Vec::new();
+    for spelling in ["first", "second"] {
+        occurrences.extend(occurrence_selections(
+            checked_definition(&checked, spelling),
+            ResolvedTermName::Method(choose),
+        ));
+    }
+    let [first, second] = occurrences.as_slice() else {
+        panic!("the globals should retain two polymorphic method occurrences");
+    };
+    let first_selection = selection_for_occurrence(first);
+    let second_selection = selection_for_occurrence(second);
+    let EvidenceNode::Implementation {
+        implementation: first_impl,
+        ..
+    } = first_selection
+        .node(first_selection.root())
+        .expect("the first occurrence should select concrete evidence")
+    else {
+        panic!("the first occurrence should select an implementation");
+    };
+    let EvidenceNode::Implementation {
+        implementation: second_impl,
+        ..
+    } = second_selection
+        .node(second_selection.root())
+        .expect("the second occurrence should select concrete evidence")
+    else {
+        panic!("the second occurrence should select an implementation");
+    };
+
+    assert_eq!(first_impl, second_impl);
+    assert_eq!(first.evidence[0].method_arguments(), &[Type::Bool]);
+    assert_eq!(second.evidence[0].method_arguments(), &[Type::Int]);
 }
 
 #[test]

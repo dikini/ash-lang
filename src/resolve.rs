@@ -2546,6 +2546,7 @@ impl Resolver {
             methods.push(CheckedInterfaceMethodFact {
                 id: method.id,
                 spelling: method.spelling.clone(),
+                type_parameters: Box::new([]),
                 value_type: clone_type_with_budget(&method.value_type, &mut self.type_work)
                     .map_err(|()| {
                         error(
@@ -2986,6 +2987,7 @@ impl Resolver {
                             "imported implementation method scheme exceeded its type-work budget",
                         )
                     })?,
+                head_type_parameter_count: method.head_type_parameter_count(),
                 origin: method.origin.clone(),
                 span: method.span,
             });
@@ -9810,6 +9812,7 @@ mod tests {
                                 Box::new(Type::Variable(parameter)),
                             ),
                         },
+                        head_type_parameter_count: 1,
                         origin: Origin::Source(source_span),
                         span: source_span,
                     }]),
