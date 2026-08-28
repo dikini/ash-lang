@@ -747,6 +747,42 @@ and evaluator semantic or state-machine changes.
   Checkpoint 4 reservation remains 12 units, cumulative reserved use remains
   38/70, 32 units remain unreserved, independent semantic and Rust/resource
   re-reviews remain pending, and Checkpoint 5 is not reserved.
+- Independent semantic re-review approves `9e5aa3a` with no critical,
+  important, or minor findings. It verified that canonical registry retention
+  no longer derives authority through method-mirror scans; linked method-owner
+  insertion, duplicate and surplus rejection, and final cardinality execute in
+  the charged canonical method-index pass before capability publication. It
+  also rechecked source/private/checked binder equality, body scope,
+  provenance, monotype, implementation partition, import ordinals, exact
+  `MethodId` and `ImplMethodId` relationships, fallible paired type and Kind
+  equality, atomic publication, and the absence of Core, evaluator,
+  specification, selection-policy, or Checkpoint 5 changes. Its fresh evidence
+  passes 91 evidence-validation-filtered and 102 resolved-filtered library
+  tests, the 68-test planned-plus-architecture bundle, all four resource tests,
+  formatting, focused and aggregate diff hygiene, and clean status.
+- Independent Rust/resource re-review also approves `9e5aa3a` with no critical,
+  important, or minor findings. It confirmed that all seven hidden
+  monomorphic method scans are removed or fused into charged canonical passes,
+  empty monomorphic authority indexes allocate no backing storage, and the
+  exact cumulative formula remains `110W + 69` because no proportional host
+  work is omitted. It verified one bounds-checked ordinal lookup and one exact
+  comparison per in-range method occurrence, with no fallback search, and
+  charge-before-reserve fallibility plus successful work parity for every Type
+  and Kind shape. Its fresh focused, resource, combined-registry,
+  linked-registry, deep-drop, and architecture tests pass, as do all 1,488
+  listed workspace tests, formatting, locked all-target checking, strict
+  Clippy, `cargo xtask verify`, documentation generation, Markdown lint,
+  aggregate diff hygiene, and clean status.
+- Fresh root verification at the reviewed head passes all 687 library tests,
+  all 21 architecture tests, the planned 47 product tests with counts
+  2/20/1/14/2/8, and all four cross-stage resource tests. The complete locked
+  workspace/all-target/all-feature run and `cargo xtask verify` pass all 1,488
+  listed tests. Formatting, locked workspace/all-target/all-feature checking,
+  strict Clippy with warnings denied, rustdoc, Markdown lint, aggregate diff
+  hygiene, exact head inspection, and clean-worktree status also pass.
+  Checkpoint 4 is complete in `652f74c`, `2bf317a`, `f027da9`, `a96e49a`,
+  `35dce7d`, and `9e5aa3a`. Its reserved use is 12 units, cumulative reserved
+  use is 38/70, 32 units remain unreserved, and Checkpoint 5 is not reserved.
 
 ## Verification
 
