@@ -430,6 +430,53 @@ impl Hash for Type {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static TYPE_DISCARD_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TYPE_DISCARD_PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TYPE_DISCARD_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_type_discard_observation() {
+    TYPE_DISCARD_VISITS.set(0);
+    TYPE_DISCARD_PENDING.set(0);
+    TYPE_DISCARD_PENDING_PEAK.set(0);
+}
+
+#[cfg(test)]
+fn type_discard_visits() -> usize {
+    TYPE_DISCARD_VISITS.get()
+}
+
+#[cfg(test)]
+fn type_discard_pending() -> usize {
+    TYPE_DISCARD_PENDING.get()
+}
+
+#[cfg(test)]
+fn type_discard_pending_peak() -> usize {
+    TYPE_DISCARD_PENDING_PEAK.get()
+}
+
+#[cfg(test)]
+fn begin_type_discard_observation() {
+    TYPE_DISCARD_PENDING.set(1);
+    TYPE_DISCARD_PENDING_PEAK.set(1);
+}
+
+#[cfg(test)]
+fn observe_type_discard_visit(children: usize) {
+    TYPE_DISCARD_VISITS.set(TYPE_DISCARD_VISITS.get() + 1);
+    let pending = TYPE_DISCARD_PENDING
+        .get()
+        .checked_sub(1)
+        .and_then(|pending| pending.checked_add(children))
+        .expect("a visited Type node must be pending exactly once");
+    TYPE_DISCARD_PENDING.set(pending);
+    TYPE_DISCARD_PENDING_PEAK.set(TYPE_DISCARD_PENDING_PEAK.get().max(pending));
+}
+
 /// Destroys an owned type without following host-language recursion.
 ///
 /// Use this when consuming a potentially deep [`Type`] returned by a public
@@ -442,7 +489,24 @@ pub fn discard_type_iteratively(root: Type) {
     }
 
     let mut work = vec![Task::Visit(root)];
+    #[cfg(test)]
+    begin_type_discard_observation();
     while let Some(task) = work.pop() {
+        #[cfg(test)]
+        if let Task::Visit(ty) = &task {
+            let children = match ty {
+                Type::Tuple(elements) => elements.len(),
+                Type::Application(_, _) | Type::Function(_, _) => 2,
+                Type::Forall(_, _) => 1,
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_) => 0,
+            };
+            observe_type_discard_visit(children);
+        }
         match task {
             Task::Visit(Type::Tuple(elements)) => {
                 work.push(Task::Sequence(elements.into_vec().into_iter()));
@@ -1017,6 +1081,12 @@ pub(crate) fn clone_arrows_with_budget<'a>(
 thread_local! {
     static KIND_NODE_CHARGE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static KIND_RENDER_MAX_LIVE_STATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    // 0 is idle, 1 arms the next root, 2 observes that root's iterative
+    // teardown, and 3 suppresses the sentinel field drops that follow it.
+    static KIND_DISCARD_STATE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static KIND_DISCARD_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static KIND_DISCARD_PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static KIND_DISCARD_PENDING_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -1042,6 +1112,59 @@ fn kind_render_max_live_states() -> usize {
 #[cfg(test)]
 fn observe_kind_render_live_states(states: usize) {
     KIND_RENDER_MAX_LIVE_STATES.set(KIND_RENDER_MAX_LIVE_STATES.get().max(states));
+}
+
+#[cfg(test)]
+fn reset_kind_discard_observation() {
+    KIND_DISCARD_VISITS.set(0);
+    KIND_DISCARD_PENDING.set(0);
+    KIND_DISCARD_PENDING_PEAK.set(0);
+    KIND_DISCARD_STATE.set(1);
+}
+
+#[cfg(test)]
+fn begin_kind_discard_observation() -> bool {
+    if KIND_DISCARD_STATE.get() == 1 {
+        KIND_DISCARD_STATE.set(2);
+        KIND_DISCARD_PENDING.set(1);
+        KIND_DISCARD_PENDING_PEAK.set(1);
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+fn finish_kind_discard_observation() {
+    assert_eq!(KIND_DISCARD_PENDING.get(), 0);
+    KIND_DISCARD_STATE.set(3);
+}
+
+#[cfg(test)]
+fn observe_kind_discard_visit(children: usize) {
+    KIND_DISCARD_VISITS.set(KIND_DISCARD_VISITS.get() + 1);
+    let pending = KIND_DISCARD_PENDING
+        .get()
+        .checked_sub(1)
+        .and_then(|pending| pending.checked_add(children))
+        .expect("a visited Kind node must be pending exactly once");
+    KIND_DISCARD_PENDING.set(pending);
+    KIND_DISCARD_PENDING_PEAK.set(KIND_DISCARD_PENDING_PEAK.get().max(pending));
+}
+
+#[cfg(test)]
+fn kind_discard_visits() -> usize {
+    KIND_DISCARD_VISITS.get()
+}
+
+#[cfg(test)]
+fn kind_discard_pending() -> usize {
+    KIND_DISCARD_PENDING.get()
+}
+
+#[cfg(test)]
+fn kind_discard_pending_peak() -> usize {
+    KIND_DISCARD_PENDING_PEAK.get()
 }
 
 pub(crate) fn charge_kind_nodes(kind: &Kind, budget: &mut TypeWorkBudget) -> Result<(), ()> {
@@ -1321,10 +1444,28 @@ impl fmt::Debug for Kind {
 
 impl Drop for Kind {
     fn drop(&mut self) {
+        #[cfg(test)]
+        let observing = begin_kind_discard_observation();
+
         let Self::Arrow(domain, codomain) = self else {
+            #[cfg(test)]
+            if observing {
+                observe_kind_discard_visit(0);
+                finish_kind_discard_observation();
+            }
             return;
         };
+        #[cfg(test)]
+        if observing {
+            observe_kind_discard_visit(2);
+        }
         if matches!(domain.as_ref(), Self::Type) && matches!(codomain.as_ref(), Self::Type) {
+            #[cfg(test)]
+            if observing {
+                observe_kind_discard_visit(0);
+                observe_kind_discard_visit(0);
+                finish_kind_discard_observation();
+            }
             return;
         }
 
@@ -1332,10 +1473,18 @@ impl Drop for Kind {
         work.push(std::mem::replace(codomain.as_mut(), Self::Type));
         work.push(std::mem::replace(domain.as_mut(), Self::Type));
         while let Some(mut kind) = work.pop() {
+            #[cfg(test)]
+            if observing {
+                observe_kind_discard_visit(usize::from(matches!(&kind, Self::Arrow(_, _))) * 2);
+            }
             if let Self::Arrow(domain, codomain) = &mut kind {
                 work.push(std::mem::replace(codomain.as_mut(), Self::Type));
                 work.push(std::mem::replace(domain.as_mut(), Self::Type));
             }
+        }
+        #[cfg(test)]
+        if observing {
+            finish_kind_discard_observation();
         }
     }
 }
@@ -1531,6 +1680,130 @@ mod tests {
             .expect("deep-kind thread should start")
             .join()
             .expect("deep kind operations should remain within 256 KiB");
+    }
+
+    #[test]
+    fn left_heavy_kind_operations_have_exact_late_failure_boundaries() {
+        const DEPTH: usize = 32_768;
+        // D left-heavy Arrows retain one right Type each plus the base Type.
+        const KIND_NODES: usize = 2 * DEPTH + 1;
+
+        fn left_heavy(depth: usize) -> Kind {
+            let mut kind = Kind::Type;
+            for _ in 0..depth {
+                kind = Kind::Arrow(Box::new(kind), Box::new(Kind::Type));
+            }
+            kind
+        }
+
+        fn assert_left_heavy(kind: &Kind, depth: usize) {
+            let mut current = kind;
+            for level in 0..depth {
+                let Kind::Arrow(domain, codomain) = current else {
+                    panic!("left-heavy Arrow level {level} is missing");
+                };
+                assert!(matches!(codomain.as_ref(), Kind::Type));
+                current = domain;
+            }
+            assert!(matches!(current, Kind::Type));
+        }
+
+        // The equal left subtree contains 2(D-1)+1 nodes. Its owning Arrow
+        // and the final mismatched codomain pair make the comparison consume
+        // exactly 2D+1 pairs before returning false.
+        fn late_mismatch(depth: usize) -> Kind {
+            Kind::Arrow(
+                Box::new(left_heavy(depth - 1)),
+                Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))),
+            )
+        }
+
+        std::thread::Builder::new()
+            .name("left-heavy-kind-operations".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let kind = left_heavy(DEPTH);
+
+                let mut clone_short = TypeWorkBudget::with_limit(KIND_NODES - 1);
+                assert_eq!(clone_kind_with_budget(&kind, &mut clone_short), Err(()));
+                assert_eq!(clone_short.used(), KIND_NODES - 1);
+                let mut clone_exact = TypeWorkBudget::with_limit(KIND_NODES);
+                let cloned = clone_kind_with_budget(&kind, &mut clone_exact)
+                    .expect("the exact K-node left-heavy clone should fit");
+                assert_eq!(clone_exact.used(), KIND_NODES);
+
+                let mut equality_short = TypeWorkBudget::with_limit(KIND_NODES - 1);
+                assert_eq!(
+                    same_kind_with_budget(&kind, &cloned, &mut equality_short),
+                    Err(()),
+                );
+                assert_eq!(equality_short.used(), KIND_NODES - 1);
+                let mut equality_exact = TypeWorkBudget::with_limit(KIND_NODES);
+                assert_eq!(
+                    same_kind_with_budget(&kind, &cloned, &mut equality_exact),
+                    Ok(true),
+                );
+                assert_eq!(equality_exact.used(), KIND_NODES);
+
+                let mut short_hasher = DefaultHasher::new();
+                17_u8.hash(&mut short_hasher);
+                let untouched_hash = short_hasher.finish();
+                let mut hash_short = TypeWorkBudget::with_limit(KIND_NODES - 1);
+                assert_eq!(
+                    hash_kind_with_budget(&kind, &mut short_hasher, &mut hash_short),
+                    Err(()),
+                );
+                assert_eq!(hash_short.used(), KIND_NODES - 1);
+                assert_eq!(short_hasher.finish(), untouched_hash);
+                let mut exact_hasher = DefaultHasher::new();
+                let mut hash_exact = TypeWorkBudget::with_limit(KIND_NODES);
+                assert_eq!(
+                    hash_kind_with_budget(&kind, &mut exact_hasher, &mut hash_exact),
+                    Ok(()),
+                );
+                assert_eq!(hash_exact.used(), KIND_NODES);
+                let mut cloned_hasher = DefaultHasher::new();
+                cloned.hash(&mut cloned_hasher);
+                assert_eq!(exact_hasher.finish(), cloned_hasher.finish());
+
+                let mismatch = late_mismatch(DEPTH);
+                let mut mismatch_short = TypeWorkBudget::with_limit(KIND_NODES - 1);
+                assert_eq!(
+                    same_kind_with_budget(&kind, &mismatch, &mut mismatch_short),
+                    Err(()),
+                    "one short must fail before the final mismatched pair",
+                );
+                assert_eq!(mismatch_short.used(), KIND_NODES - 1);
+                let mut mismatch_exact = TypeWorkBudget::with_limit(KIND_NODES);
+                assert_eq!(
+                    same_kind_with_budget(&kind, &mismatch, &mut mismatch_exact),
+                    Ok(false),
+                );
+                assert_eq!(mismatch_exact.used(), KIND_NODES);
+                assert_left_heavy(&kind, DEPTH);
+                assert_left_heavy(&cloned, DEPTH);
+                let Kind::Arrow(mismatch_domain, mismatch_codomain) = &mismatch else {
+                    panic!("the late mismatch root must remain an Arrow");
+                };
+                assert_left_heavy(mismatch_domain, DEPTH - 1);
+                assert!(matches!(
+                    mismatch_codomain.as_ref(),
+                    Kind::Arrow(domain, codomain)
+                        if matches!(domain.as_ref(), Kind::Type)
+                            && matches!(codomain.as_ref(), Kind::Type)
+                ));
+
+                reset_kind_discard_observation();
+                drop(cloned);
+                assert_eq!(kind_discard_visits(), KIND_NODES);
+                assert_eq!(kind_discard_pending(), 0);
+                assert_eq!(kind_discard_pending_peak(), DEPTH + 1);
+                drop(mismatch);
+                drop(kind);
+            })
+            .expect("the left-heavy Kind thread should start")
+            .join()
+            .expect("all exact, one-short, mismatch, and teardown paths should fit 256 KiB");
     }
 
     #[test]
@@ -1824,6 +2097,90 @@ mod tests {
     }
 
     #[test]
+    fn type_and_kind_disposal_have_exact_visits_and_bounded_pending_ownership() {
+        const DEPTH: usize = 32_768;
+        const WIDTH: usize = 32_768;
+        // One nominal plus D Applications and D scalar arguments.
+        const TYPE_APPLICATION_NODES: usize = 2 * DEPTH + 1;
+        // One tuple wrapper plus W scalar elements.
+        const TYPE_TUPLE_NODES: usize = WIDTH + 1;
+        // D left-heavy Arrows plus D right Types and one base Type.
+        const KIND_NODES: usize = 2 * DEPTH + 1;
+
+        fn deep_application(depth: usize) -> Type {
+            let owner = NominalTypeId::new(ModuleId::new(0), 0);
+            Type::apply_arguments(Type::Nominal(owner), vec![Type::Unit; depth])
+        }
+
+        fn left_heavy_kind(depth: usize) -> Kind {
+            let mut kind = Kind::Type;
+            for _ in 0..depth {
+                kind = Kind::Arrow(Box::new(kind), Box::new(Kind::Type));
+            }
+            kind
+        }
+
+        fn reject_owned_type(ty: Type) -> Result<(), ()> {
+            let _partial = IterativeTypeOwner::new(ty);
+            Err(())
+        }
+
+        fn reject_owned_kind(kind: Kind) -> Result<(), ()> {
+            let _partial = kind;
+            Err(())
+        }
+
+        std::thread::Builder::new()
+            .name("exact-structural-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                reset_type_discard_observation();
+                discard_type_iteratively(deep_application(DEPTH));
+                assert_eq!(type_discard_visits(), TYPE_APPLICATION_NODES);
+                assert_eq!(type_discard_pending(), 0);
+                // Each visited left-spine Application leaves its argument pending.
+                assert_eq!(type_discard_pending_peak(), DEPTH + 1);
+
+                reset_type_discard_observation();
+                discard_type_iteratively(Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice()));
+                assert_eq!(type_discard_visits(), TYPE_TUPLE_NODES);
+                assert_eq!(type_discard_pending(), 0);
+                // The sequence iterator owns all W elements after consuming the wrapper.
+                assert_eq!(type_discard_pending_peak(), WIDTH);
+
+                reset_type_discard_observation();
+                assert_eq!(reject_owned_type(deep_application(DEPTH)), Err(()));
+                assert_eq!(type_discard_visits(), TYPE_APPLICATION_NODES);
+                assert_eq!(type_discard_pending(), 0);
+                assert_eq!(type_discard_pending_peak(), DEPTH + 1);
+
+                reset_type_discard_observation();
+                assert_eq!(
+                    reject_owned_type(Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice())),
+                    Err(()),
+                );
+                assert_eq!(type_discard_visits(), TYPE_TUPLE_NODES);
+                assert_eq!(type_discard_pending(), 0);
+                assert_eq!(type_discard_pending_peak(), WIDTH);
+
+                reset_kind_discard_observation();
+                drop(left_heavy_kind(DEPTH));
+                assert_eq!(kind_discard_visits(), KIND_NODES);
+                assert_eq!(kind_discard_pending(), 0);
+                assert_eq!(kind_discard_pending_peak(), DEPTH + 1);
+
+                reset_kind_discard_observation();
+                assert_eq!(reject_owned_kind(left_heavy_kind(DEPTH)), Err(()));
+                assert_eq!(kind_discard_visits(), KIND_NODES);
+                assert_eq!(kind_discard_pending(), 0);
+                assert_eq!(kind_discard_pending_peak(), DEPTH + 1);
+            })
+            .expect("the exact disposal thread should start")
+            .join()
+            .expect("accepted and rejected structural owners should dispose on 256 KiB");
+    }
+
+    #[test]
     fn retained_type_clones_charge_every_cell_before_rebuilding() {
         let ty = Type::Function(Box::new(Type::Unit), Box::new(Type::Bool));
         let mut exact = TypeWorkBudget {
@@ -1967,5 +2324,125 @@ mod tests {
 
         assert_eq!(result, Err(()));
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn deep_and_wide_substitution_resource_boundaries_are_exact_and_reusable() {
+        const DEPTH: usize = 32_768;
+        const WIDTH: usize = 32_768;
+        // Replacing the sole source variable retains every node of a left-deep
+        // unary application: one nominal, D applications, and D arguments.
+        const DEEP_RESULT_CELLS: usize = 2 * DEPTH + 1;
+        // The tuple wrapper plus one scalar replacement per source element.
+        const WIDE_RESULT_CELLS: usize = 1 + WIDTH;
+
+        fn assert_deep_application(ty: &Type, depth: usize, owner: NominalTypeId) {
+            let mut current = ty;
+            for argument_index in (0..depth).rev() {
+                let Type::Application(function, argument) = current else {
+                    panic!("application argument {argument_index} is missing");
+                };
+                assert!(
+                    matches!(argument.as_ref(), Type::Unit),
+                    "application argument {argument_index} must remain Unit",
+                );
+                current = function;
+            }
+            assert!(
+                matches!(current, Type::Nominal(found) if *found == owner),
+                "the application spine must end at its original nominal",
+            );
+        }
+
+        std::thread::Builder::new()
+            .name("deep-wide-substitution-budget".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let parameter = TypeVariableId::new(0);
+                let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                let source = Type::Variable(parameter);
+                let mut replacements = HashMap::from([(
+                    parameter,
+                    Type::apply_arguments(Type::Nominal(owner), vec![Type::Unit; DEPTH]),
+                )]);
+
+                let mut deep_short = DEEP_RESULT_CELLS - 1;
+                assert_eq!(
+                    substitute_type_variables_with(&source, &replacements, |cells| {
+                        deep_short = deep_short.checked_sub(cells).ok_or(())?;
+                        Ok::<(), ()>(())
+                    }),
+                    Err(()),
+                );
+                assert_eq!(deep_short, 0);
+                assert_deep_application(
+                    replacements
+                        .get(&parameter)
+                        .expect("one-short substitution must retain its borrowed replacement"),
+                    DEPTH,
+                    owner,
+                );
+
+                let mut deep_exact = DEEP_RESULT_CELLS;
+                let rebuilt = substitute_type_variables_with(
+                    &source,
+                    &replacements,
+                    |cells| {
+                        deep_exact = deep_exact.checked_sub(cells).ok_or(())?;
+                        Ok::<(), ()>(())
+                    },
+                )
+                .expect("the exact deep expanded-result budget should fit");
+                assert_eq!(deep_exact, 0);
+                assert_deep_application(&rebuilt, DEPTH, owner);
+                discard_type_iteratively(rebuilt);
+                discard_type_iteratively(
+                    replacements
+                        .remove(&parameter)
+                        .expect("the reusable deep replacement should remain immutable"),
+                );
+
+                let wide_source = Type::Tuple(
+                    vec![Type::Variable(parameter); WIDTH].into_boxed_slice(),
+                );
+                let wide_replacements = HashMap::from([(parameter, Type::Int)]);
+                let mut wide_short = WIDE_RESULT_CELLS - 1;
+                assert_eq!(
+                    substitute_type_variables_with(&wide_source, &wide_replacements, |cells| {
+                        wide_short = wide_short.checked_sub(cells).ok_or(())?;
+                        Ok::<(), ()>(())
+                    }),
+                    Err(()),
+                );
+                assert_eq!(wide_short, 0);
+                assert!(matches!(
+                    &wide_source,
+                    Type::Tuple(elements)
+                        if elements.len() == WIDTH
+                            && matches!(elements.first(), Some(Type::Variable(found)) if *found == parameter)
+                ));
+
+                let mut wide_exact = WIDE_RESULT_CELLS;
+                let rebuilt = substitute_type_variables_with(
+                    &wide_source,
+                    &wide_replacements,
+                    |cells| {
+                        wide_exact = wide_exact.checked_sub(cells).ok_or(())?;
+                        Ok::<(), ()>(())
+                    },
+                )
+                .expect("the exact wide expanded-result budget should fit");
+                assert_eq!(wide_exact, 0);
+                assert!(matches!(
+                    &rebuilt,
+                    Type::Tuple(elements)
+                        if elements.len() == WIDTH
+                            && elements.iter().all(|element| matches!(element, Type::Int))
+                ));
+                discard_type_iteratively(rebuilt);
+            })
+            .expect("the deep/wide substitution thread should start")
+            .join()
+            .expect("partial and complete substitution results should tear down on 256 KiB");
     }
 }

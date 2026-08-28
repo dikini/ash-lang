@@ -3330,8 +3330,11 @@ mod tests {
     }
 
     #[test]
-    fn deep_higher_kinded_head_match_accepts_and_rejects_with_default_work_on_a_small_stack() {
+    fn deep_higher_kinded_head_match_has_exact_atomic_small_stack_boundaries() {
         const DEPTH: usize = 32_768;
+        const KIND_NODES: usize = 2 * DEPTH + 1;
+        const MATCH_CONSTRAINT_WORK: usize = 2 * KIND_NODES + 18;
+        const MATCH_TYPE_WORK: usize = 2;
 
         std::thread::Builder::new()
             .name("deep-higher-kinded-head-match".into())
@@ -3382,8 +3385,36 @@ mod tests {
                 let accepted = Type::Variable(accepted_goal);
                 let rejected = Type::Variable(rejected_goal);
 
-                let mut constraint_work = InterfaceConstraintBudget::default();
-                let mut type_work = TypeWorkBudget::default();
+                let mut short_constraints =
+                    InterfaceConstraintBudget::with_limit(MATCH_CONSTRAINT_WORK - 1);
+                let mut short_types = TypeWorkBudget::with_limit(MATCH_TYPE_WORK);
+                assert_eq!(
+                    match_implementation_head(
+                        &registry,
+                        &[candidate_parameter],
+                        &candidate,
+                        &accepted,
+                        span,
+                        &mut short_constraints,
+                        &mut short_types,
+                    ),
+                    Err(HeadMatchFailure::ConstraintResource),
+                    "one-short matching must return no partial substitution"
+                );
+                assert_eq!(short_constraints.used(), MATCH_CONSTRAINT_WORK - 1);
+                assert_eq!(short_constraints.charge(1), Err(()));
+                assert_eq!(
+                    short_types.used(),
+                    MATCH_TYPE_WORK - 1,
+                    "the failed final constraint charge must precede substitution cloning"
+                );
+
+                // Reuse the same registry and heads after rejection. Matching
+                // borrows them, and a failed operation publishes no state that
+                // can affect this exact-budget retry.
+                let mut constraint_work =
+                    InterfaceConstraintBudget::with_limit(MATCH_CONSTRAINT_WORK);
+                let mut type_work = TypeWorkBudget::with_limit(MATCH_TYPE_WORK);
                 let substitutions = match_implementation_head(
                     &registry,
                     &[candidate_parameter],
@@ -3398,15 +3429,14 @@ mod tests {
                 assert_eq!(substitutions.len(), 1);
                 assert_eq!(substitutions[0].parameter(), candidate_parameter);
                 assert_eq!(substitutions[0].argument(), &accepted);
-                let kind_nodes = 2 * DEPTH + 1;
                 // Two complete deep-Kind traversals authenticate the binding;
                 // the constant covers canonical lookup, environment discovery,
                 // structural preflight/matching, binding-slot retention, and
                 // substitution retention.
-                assert_eq!(constraint_work.used(), 2 * kind_nodes + 18);
-                assert_eq!(type_work.used(), 2);
-                assert!(constraint_work.used() < INTERFACE_CONSTRAINT_WORK_LIMIT);
-                assert!(type_work.used() < crate::types::TYPE_WORK_LIMIT);
+                assert_eq!(constraint_work.used(), MATCH_CONSTRAINT_WORK);
+                assert_eq!(constraint_work.charge(1), Err(()));
+                assert_eq!(type_work.used(), MATCH_TYPE_WORK);
+                assert_eq!(type_work.charge(1), Err(()));
 
                 assert_eq!(
                     match_implementation_head(
@@ -3428,8 +3458,11 @@ mod tests {
     }
 
     #[test]
-    fn deep_higher_kinded_overlap_accepts_and_rejects_with_default_work_on_a_small_stack() {
+    fn deep_higher_kinded_overlap_has_exact_atomic_small_stack_boundaries() {
         const DEPTH: usize = 32_768;
+        const KIND_NODES: usize = 2 * DEPTH + 1;
+        const OVERLAP_CONSTRAINT_WORK: usize = 2 * KIND_NODES + 22;
+        const OVERLAP_TYPE_WORK: usize = 2;
 
         std::thread::Builder::new()
             .name("deep-higher-kinded-overlap".into())
@@ -3480,8 +3513,35 @@ mod tests {
                 let accepted = Type::Variable(accepted_right);
                 let rejected = Type::Variable(rejected_right);
 
-                let mut constraint_work = InterfaceConstraintBudget::default();
-                let mut type_work = TypeWorkBudget::default();
+                let mut short_constraints =
+                    InterfaceConstraintBudget::with_limit(OVERLAP_CONSTRAINT_WORK - 1);
+                let mut short_types = TypeWorkBudget::with_limit(OVERLAP_TYPE_WORK);
+                assert_eq!(
+                    implementation_heads_overlap(
+                        &registry,
+                        InterfaceOperationWork::new(
+                            span,
+                            &mut short_constraints,
+                            &mut short_types,
+                        ),
+                        &[left_parameter],
+                        &left,
+                        &[accepted_right],
+                        &accepted,
+                    ),
+                    Err(OverlapFailure::Resource),
+                    "one-short overlap must fail before caching its solution"
+                );
+                assert_eq!(short_constraints.used(), OVERLAP_CONSTRAINT_WORK - 1);
+                assert_eq!(short_constraints.charge(1), Err(()));
+                assert_eq!(short_types.used(), OVERLAP_TYPE_WORK);
+
+                // The overlap cache is operation-local. Reusing the same
+                // immutable registry and heads after failure must therefore
+                // produce the ordinary result at the exact boundary.
+                let mut constraint_work =
+                    InterfaceConstraintBudget::with_limit(OVERLAP_CONSTRAINT_WORK);
+                let mut type_work = TypeWorkBudget::with_limit(OVERLAP_TYPE_WORK);
                 assert_eq!(
                     implementation_heads_overlap(
                         &registry,
@@ -3494,14 +3554,13 @@ mod tests {
                     Ok(true),
                     "equal deep binder kinds should admit the cached solution"
                 );
-                let kind_nodes = 2 * DEPTH + 1;
                 // Two complete deep-Kind traversals authenticate the solution;
                 // the constant covers both parameter maps, shared environment
                 // discovery, unification/occurs work, and cached-solution storage.
-                assert_eq!(constraint_work.used(), 2 * kind_nodes + 22);
-                assert_eq!(type_work.used(), 2);
-                assert!(constraint_work.used() < INTERFACE_CONSTRAINT_WORK_LIMIT);
-                assert!(type_work.used() < crate::types::TYPE_WORK_LIMIT);
+                assert_eq!(constraint_work.used(), OVERLAP_CONSTRAINT_WORK);
+                assert_eq!(constraint_work.charge(1), Err(()));
+                assert_eq!(type_work.used(), OVERLAP_TYPE_WORK);
+                assert_eq!(type_work.charge(1), Err(()));
                 assert_eq!(
                     implementation_heads_overlap(
                         &registry,

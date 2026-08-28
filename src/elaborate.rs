@@ -11982,6 +11982,105 @@ mod tests {
     }
 
     #[test]
+    fn deep_application_and_wide_tuple_occurs_resource_boundaries_are_exact_and_atomic() {
+        const DEPTH: usize = 32_768;
+        const WIDTH: usize = 32_768;
+        // One scheduled root plus two scheduled children for every unary
+        // application. The root nominal and each argument are visited from
+        // those already charged tasks.
+        const APPLICATION_WORK: usize = 1 + 2 * DEPTH;
+        // One root task, one tuple-sequence task, then one resumed sequence
+        // and one element visit for every element.
+        const TUPLE_WORK: usize = 2 + 2 * WIDTH;
+
+        std::thread::Builder::new()
+            .name("exact-occurs-deep-wide".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("exact-occurs-deep-wide.ash", "()")
+                    .expect("the fixture source should fit");
+                let owner = crate::types::NominalTypeId::new(source.id(), 0);
+                let needle = InferenceVariableId::new(0);
+                let application = IterativeTypeOwner::new(Type::apply_arguments(
+                    Type::Nominal(owner),
+                    vec![Type::Int; DEPTH],
+                ));
+                let tuple = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+                let solutions = HashMap::new();
+                let registry = ResolvedRegistry::default();
+                let generated = GeneratedTypeVariableRegistry::default();
+                let inference = InferenceVariableRegistry::default();
+
+                let mut application_short = TypeWorkBudget::with_limit(APPLICATION_WORK - 1);
+                assert_eq!(
+                    type_contains_inference(
+                        &application,
+                        needle,
+                        &solutions,
+                        &registry,
+                        &generated,
+                        &inference,
+                        &mut application_short,
+                    ),
+                    Err(UnificationFailure::Resource),
+                );
+                assert_eq!(application_short.used(), APPLICATION_WORK - 1);
+                assert_eq!(application.outer_nominal(), Some(owner));
+
+                let mut application_exact = TypeWorkBudget::with_limit(APPLICATION_WORK);
+                assert_eq!(
+                    type_contains_inference(
+                        &application,
+                        needle,
+                        &solutions,
+                        &registry,
+                        &generated,
+                        &inference,
+                        &mut application_exact,
+                    ),
+                    Ok(false),
+                );
+                assert_eq!(application_exact.used(), APPLICATION_WORK);
+
+                let mut tuple_short = TypeWorkBudget::with_limit(TUPLE_WORK - 1);
+                assert_eq!(
+                    type_contains_inference(
+                        &tuple,
+                        needle,
+                        &solutions,
+                        &registry,
+                        &generated,
+                        &inference,
+                        &mut tuple_short,
+                    ),
+                    Err(UnificationFailure::Resource),
+                );
+                assert_eq!(tuple_short.used(), TUPLE_WORK - 1);
+                assert!(matches!(&tuple, Type::Tuple(elements) if elements.len() == WIDTH));
+
+                let mut tuple_exact = TypeWorkBudget::with_limit(TUPLE_WORK);
+                assert_eq!(
+                    type_contains_inference(
+                        &tuple,
+                        needle,
+                        &solutions,
+                        &registry,
+                        &generated,
+                        &inference,
+                        &mut tuple_exact,
+                    ),
+                    Ok(false),
+                );
+                assert_eq!(tuple_exact.used(), TUPLE_WORK);
+                assert!(solutions.is_empty());
+                assert!(inference.is_empty());
+            })
+            .expect("the exact occurs-check thread should start")
+            .join()
+            .expect("all occurs-check paths and inputs should tear down on 256 KiB");
+    }
+
+    #[test]
     fn occurs_check_visits_both_application_children() {
         let source =
             SourceFile::new("occurs-children.ash", "()").expect("the fixture source should fit");
@@ -13653,6 +13752,147 @@ mod tests {
             HashMap::from([(InferenceVariableId::new(0), Type::Int)])
         );
         assert_eq!(exact.type_work.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn wide_unification_resource_boundary_is_exact_and_rolls_back_a_late_mismatch() {
+        const WIDTH: usize = 32_768;
+        // Concrete-prefix comparison, both operand copies and zonks, the
+        // candidate environment and Kind synthesis, the solution copy,
+        // occurs tasks, and three transaction records total `8W + 19`.
+        const ACCEPTED_WORK: usize = 8 * WIDTH + 19;
+        // Two wide tuples with the first left element solved and the last
+        // element mismatched reach that stable failure at `6W + 20`.
+        const REJECTED_WORK: usize = 6 * WIDTH + 20;
+        const { assert!(ACCEPTED_WORK <= crate::types::TYPE_WORK_LIMIT) };
+
+        let source = SourceFile::new("wide-unification-budget.ash", "()")
+            .expect("the fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 2).expect("the range should be ordered"))
+            .expect("the fixture span should fit");
+
+        std::thread::Builder::new()
+            .name("wide-unification-budget".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let candidate = Type::Tuple(vec![Type::Int; WIDTH].into_boxed_slice());
+
+                let mut accepted_short = Elaborator::new();
+                let inference = accepted_short
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the inference should register");
+                accepted_short.type_work = TypeWorkBudget::with_limit(ACCEPTED_WORK - 1);
+                assert_eq!(
+                    accepted_short.unify(&inference, &candidate),
+                    Err(UnificationFailure::Resource),
+                );
+                assert_eq!(
+                    accepted_short.type_work.used(),
+                    ACCEPTED_WORK - 3,
+                    "the final three-record transaction charge is atomic",
+                );
+                assert!(accepted_short.inference_solutions.is_empty());
+                assert!(accepted_short.authenticated_inference_solutions.is_empty());
+
+                let mut accepted_exact = Elaborator::new();
+                let inference = accepted_exact
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the inference should register");
+                accepted_exact.type_work = TypeWorkBudget::with_limit(ACCEPTED_WORK);
+                assert_eq!(accepted_exact.unify(&inference, &candidate), Ok(()));
+                assert_eq!(accepted_exact.type_work.used(), ACCEPTED_WORK);
+                let solution = accepted_exact
+                    .inference_solutions
+                    .get(&InferenceVariableId::new(0))
+                    .expect("the accepted inference should retain its solution");
+                assert_eq!(solution, &candidate);
+                assert!(matches!(
+                    solution,
+                    Type::Tuple(elements)
+                        if elements.len() == WIDTH
+                            && elements.iter().all(|element| matches!(element, Type::Int))
+                ));
+                assert!(matches!(
+                    &candidate,
+                    Type::Tuple(elements)
+                        if elements.len() == WIDTH
+                            && elements.iter().all(|element| matches!(element, Type::Int))
+                ));
+                drop(accepted_exact);
+
+                let late_left = |inference| {
+                    let mut elements = vec![Type::Int; WIDTH];
+                    elements[0] = inference;
+                    Type::Tuple(elements.into_boxed_slice())
+                };
+                let mut right_elements = vec![Type::Int; WIDTH];
+                right_elements[WIDTH - 1] = Type::Bool;
+                let right = Type::Tuple(right_elements.into_boxed_slice());
+                assert!(matches!(
+                    &right,
+                    Type::Tuple(elements)
+                        if matches!(elements.first(), Some(Type::Int))
+                            && matches!(elements.last(), Some(Type::Bool))
+                ));
+
+                let mut rejected_short = Elaborator::new();
+                let inference = rejected_short
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the inference should register");
+                let left = late_left(inference);
+                assert!(matches!(
+                    &left,
+                    Type::Tuple(elements)
+                        if matches!(elements.first(), Some(Type::Inference(id)) if id.value() == 0)
+                            && matches!(elements.last(), Some(Type::Int))
+                ));
+                rejected_short.type_work = TypeWorkBudget::with_limit(REJECTED_WORK - 1);
+                assert_eq!(
+                    rejected_short.unify(&left, &right),
+                    Err(UnificationFailure::Resource),
+                );
+                assert_eq!(rejected_short.type_work.used(), REJECTED_WORK - 1);
+                assert!(rejected_short.inference_solutions.is_empty());
+                assert!(rejected_short.authenticated_inference_solutions.is_empty());
+
+                let mut rejected_exact = Elaborator::new();
+                let inference = rejected_exact
+                    .fresh_inference(&Kind::Type, span)
+                    .expect("the inference should register");
+                let left = late_left(inference);
+                assert!(matches!(
+                    &left,
+                    Type::Tuple(elements)
+                        if matches!(elements.first(), Some(Type::Inference(id)) if id.value() == 0)
+                            && matches!(elements.last(), Some(Type::Int))
+                ));
+                rejected_exact.type_work = TypeWorkBudget::with_limit(REJECTED_WORK);
+                assert_eq!(
+                    rejected_exact.unify(&left, &right),
+                    Err(UnificationFailure::Mismatch),
+                );
+                assert_eq!(rejected_exact.type_work.used(), REJECTED_WORK);
+                assert!(rejected_exact.inference_solutions.is_empty());
+                assert!(rejected_exact.authenticated_inference_solutions.is_empty());
+                assert!(matches!(
+                    &left,
+                    Type::Tuple(elements)
+                        if elements.len() == WIDTH
+                            && matches!(elements.first(), Some(Type::Inference(id)) if id.value() == 0)
+                            && matches!(elements.last(), Some(Type::Int))
+                ));
+                assert!(matches!(
+                    &right,
+                    Type::Tuple(elements)
+                        if elements.len() == WIDTH
+                            && matches!(elements.first(), Some(Type::Int))
+                            && matches!(elements.last(), Some(Type::Bool))
+                ));
+            })
+            .expect("the wide-unification thread should start")
+            .join()
+            .expect("accepted, rejected, and rollback paths should tear down on 256 KiB");
     }
 
     #[test]

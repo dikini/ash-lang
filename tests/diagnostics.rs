@@ -147,6 +147,104 @@ fn failure(name: &str, text: &str) -> PipelineFailure {
     run_module(name, text).expect_err("diagnostic fixture should be rejected")
 }
 
+fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
+    let start = text
+        .match_indices(needle)
+        .nth(occurrence)
+        .map(|(start, _)| start)
+        .unwrap_or_else(|| {
+            panic!("the diagnostic fixture should contain occurrence {occurrence} of {needle:?}")
+        });
+    (offset(start), offset(start + needle.len()))
+}
+
+#[derive(Clone, Copy)]
+enum KindExpectationShape {
+    Type,
+    TypeConstructor,
+    ApplicableToType,
+}
+
+struct KindDiagnosticCase {
+    name: &'static str,
+    source: String,
+    reason: KindReason,
+    primary: (&'static str, usize),
+    primary_message: &'static str,
+    related: (&'static str, usize),
+    related_message: &'static str,
+    expectation: KindExpectationShape,
+}
+
+fn assert_public_kind_diagnostic(case: &KindDiagnosticCase) {
+    let failure = failure(case.name, &case.source);
+    let PipelineFailure::Kind(KindFailure::Source(error)) = failure else {
+        panic!("{} should fail at the public kind boundary", case.name);
+    };
+    let diagnostic = error.diagnostic();
+
+    assert_eq!(diagnostic.reason, case.reason, "case: {}", case.name);
+    assert_eq!(
+        (
+            diagnostic.primary.span().range().start(),
+            diagnostic.primary.span().range().end(),
+        ),
+        occurrence_range(&case.source, case.primary.0, case.primary.1),
+        "primary span: {}",
+        case.name,
+    );
+    assert_eq!(
+        diagnostic.primary.message(),
+        case.primary_message,
+        "primary message: {}",
+        case.name,
+    );
+    assert_eq!(diagnostic.related.len(), 1, "case: {}", case.name);
+    assert_eq!(
+        (
+            diagnostic.related[0].span().range().start(),
+            diagnostic.related[0].span().range().end(),
+        ),
+        occurrence_range(&case.source, case.related.0, case.related.1),
+        "related span: {}",
+        case.name,
+    );
+    assert_eq!(
+        diagnostic.related[0].message(),
+        case.related_message,
+        "related message: {}",
+        case.name,
+    );
+
+    match case.expectation {
+        KindExpectationShape::Type => {
+            assert_eq!(error.expectation(), &KindExpectation::Exact(Kind::Type));
+            assert_eq!(
+                error.found_kind(),
+                Some(&Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)))
+            );
+            assert_eq!(diagnostic.expected.as_deref(), Some("Type"));
+            assert_eq!(diagnostic.found.as_deref(), Some("Type -> Type"));
+        }
+        KindExpectationShape::TypeConstructor => {
+            let constructor = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+            assert_eq!(error.expectation(), &KindExpectation::Exact(constructor));
+            assert_eq!(error.found_kind(), Some(&Kind::Type));
+            assert_eq!(diagnostic.expected.as_deref(), Some("Type -> Type"));
+            assert_eq!(diagnostic.found.as_deref(), Some("Type"));
+        }
+        KindExpectationShape::ApplicableToType => {
+            assert_eq!(
+                error.expectation(),
+                &KindExpectation::Function { domain: Kind::Type }
+            );
+            assert_eq!(error.found_kind(), Some(&Kind::Type));
+            assert_eq!(diagnostic.expected.as_deref(), Some("Type -> _"));
+            assert_eq!(diagnostic.found.as_deref(), Some("Type"));
+        }
+    }
+}
+
 #[test]
 fn syntax_failure_reason_and_rendering_follow_source_order_across_stages() {
     let text = concat!(
@@ -1026,6 +1124,235 @@ fn rank_one_resolution_and_kind_diagnostics_retain_exact_type_sites() {
         offset(unknown_site + 1)
     );
     assert_eq!(unknown.found.as_deref(), Some("B"));
+}
+
+#[test]
+fn public_kind_diagnostics_retain_complete_causal_rows() {
+    const OPTION: &str = "type Option<A> =\nNone\n| Some(A)\n";
+    const HIGHER: &str = concat!(
+        "interface Higher<F : Type -> Type> {\n",
+        "higher : F<Int> -> Unit\n",
+        "}\n",
+    );
+
+    let cases = [
+        KindDiagnosticCase {
+            name: "kind-not-applicable.ash",
+            source: "bad<A> : A<Int> -> Unit\nbad value = ()\n".to_owned(),
+            reason: KindReason::NotApplicable,
+            primary: ("A<Int>", 0),
+            primary_message: "this type does not have a function kind",
+            related: ("A", 0),
+            related_message: "the applied type's kind is fixed by this declaration",
+            expectation: KindExpectationShape::ApplicableToType,
+        },
+        KindDiagnosticCase {
+            name: "kind-application-argument.ash",
+            source: concat!(
+                "type Box<F : Type -> Type> = Box\n",
+                "bad : Box<Int> -> Unit\n",
+                "bad value = ()\n",
+            )
+            .to_owned(),
+            reason: KindReason::Argument,
+            primary: ("Int", 0),
+            primary_message: "this type argument has the wrong kind",
+            related: ("type Box<F : Type -> Type> = Box", 0),
+            related_message: "the applied type's parameter kind is declared here",
+            expectation: KindExpectationShape::TypeConstructor,
+        },
+        KindDiagnosticCase {
+            name: "kind-global-requirement.ash",
+            source: format!("{HIGHER}bad : Unit -> Unit where Higher<Int>\nbad value = value\n"),
+            reason: KindReason::Argument,
+            primary: ("Int", 1),
+            primary_message: "this interface argument has the wrong kind",
+            related: ("F", 0),
+            related_message: "the interface parameter kind is declared here",
+            expectation: KindExpectationShape::TypeConstructor,
+        },
+        KindDiagnosticCase {
+            name: "kind-implementation-head.ash",
+            source: format!("{HIGHER}impl Higher<Int> {{\n}}\n"),
+            reason: KindReason::Argument,
+            primary: ("Int", 1),
+            primary_message: "this interface argument has the wrong kind",
+            related: ("F", 0),
+            related_message: "the interface parameter kind is declared here",
+            expectation: KindExpectationShape::TypeConstructor,
+        },
+        KindDiagnosticCase {
+            name: "kind-implementation-prerequisite.ash",
+            source: format!("{OPTION}{HIGHER}impl Higher<Option> where Higher<Int> {{\n}}\n"),
+            reason: KindReason::Argument,
+            primary: ("Int", 1),
+            primary_message: "this interface argument has the wrong kind",
+            related: ("F", 0),
+            related_message: "the interface parameter kind is declared here",
+            expectation: KindExpectationShape::TypeConstructor,
+        },
+        KindDiagnosticCase {
+            name: "kind-constructor-payload.ash",
+            source: format!("{OPTION}type Bad = Bad(Option)\n"),
+            reason: KindReason::ExpectedType,
+            primary: ("Option", 1),
+            primary_message: "this value type must have kind Type",
+            related: ("type Option<A> =\nNone\n| Some(A)", 0),
+            related_message: "the found kind is fixed by this declaration",
+            expectation: KindExpectationShape::Type,
+        },
+        KindDiagnosticCase {
+            name: "kind-interface-method.ash",
+            source: format!("{OPTION}interface Bad<A> {{\nmethod : Option\n}}\n"),
+            reason: KindReason::ExpectedType,
+            primary: ("Option", 1),
+            primary_message: "this value type must have kind Type",
+            related: ("type Option<A> =\nNone\n| Some(A)", 0),
+            related_message: "the found kind is fixed by this declaration",
+            expectation: KindExpectationShape::Type,
+        },
+        KindDiagnosticCase {
+            name: "kind-equational-global.ash",
+            source: format!("{OPTION}bad : Unit -> Option\nbad value = None\n"),
+            reason: KindReason::ExpectedType,
+            primary: ("Option", 1),
+            primary_message: "this function codomain must have kind Type",
+            related: ("type Option<A> =\nNone\n| Some(A)", 0),
+            related_message: "the found kind is fixed by this declaration",
+            expectation: KindExpectationShape::Type,
+        },
+        KindDiagnosticCase {
+            name: "kind-inline-parameter.ash",
+            source: format!("{OPTION}fn bad(value : Option) -> Unit {{\n()\n}}\n"),
+            reason: KindReason::ExpectedType,
+            primary: ("Option", 1),
+            primary_message: "this value type must have kind Type",
+            related: ("type Option<A> =\nNone\n| Some(A)", 0),
+            related_message: "the found kind is fixed by this declaration",
+            expectation: KindExpectationShape::Type,
+        },
+        KindDiagnosticCase {
+            name: "kind-inline-result.ash",
+            source: format!("{OPTION}fn bad(value : Unit) -> Option {{\nvalue\n}}\n"),
+            reason: KindReason::ExpectedType,
+            primary: ("Option", 1),
+            primary_message: "this value type must have kind Type",
+            related: ("type Option<A> =\nNone\n| Some(A)", 0),
+            related_message: "the found kind is fixed by this declaration",
+            expectation: KindExpectationShape::Type,
+        },
+        KindDiagnosticCase {
+            name: "kind-sequential-let.ash",
+            source: format!(
+                "{OPTION}main : Unit -> Unit\nmain () = {{\nlet value : Option = None\n()\n}}\n"
+            ),
+            reason: KindReason::ExpectedType,
+            primary: ("Option", 1),
+            primary_message: "this value type must have kind Type",
+            related: ("type Option<A> =\nNone\n| Some(A)", 0),
+            related_message: "the found kind is fixed by this declaration",
+            expectation: KindExpectationShape::Type,
+        },
+        KindDiagnosticCase {
+            name: "kind-recursive-member.ash",
+            source: format!(
+                "{OPTION}main : Unit -> Unit\nmain () = {{\nlet rec value : Option = None\n()\n}}\n"
+            ),
+            reason: KindReason::ExpectedType,
+            primary: ("Option", 1),
+            primary_message: "this value type must have kind Type",
+            related: ("type Option<A> =\nNone\n| Some(A)", 0),
+            related_message: "the found kind is fixed by this declaration",
+            expectation: KindExpectationShape::Type,
+        },
+    ];
+
+    for case in &cases {
+        assert_public_kind_diagnostic(case);
+    }
+}
+
+#[test]
+fn public_kind_failure_precedence_follows_causal_and_owner_order() {
+    const OPTION: &str = "type Option<A> =\nNone\n| Some(A)\n";
+    const HIGHER: &str = concat!(
+        "interface Higher<F : Type -> Type> {\n",
+        "higher : F<Int> -> Unit\n",
+        "}\n",
+    );
+    let cases = vec![
+        (
+            "kind-precedence-inner-argument.ash",
+            concat!(
+                "type Box<F : Type -> Type> = Box\n",
+                "bad<A> : A<Box<Int>> -> Unit\n",
+                "bad value = ()\n",
+            )
+            .to_owned(),
+            KindReason::Argument,
+            ("Int", 0),
+        ),
+        (
+            "kind-precedence-global-value.ash",
+            format!("{OPTION}{HIGHER}bad : Option where Higher<Int>\nbad value = None\n"),
+            KindReason::ExpectedType,
+            ("Option", 1),
+        ),
+        (
+            "kind-precedence-implementation-head.ash",
+            format!("{HIGHER}impl Higher<Int> where Higher<Bool> {{\n}}\n"),
+            KindReason::Argument,
+            ("Int", 1),
+        ),
+        (
+            "kind-precedence-inline-parameter.ash",
+            format!(
+                "{OPTION}{HIGHER}fn bad(value : Option) -> Option where Higher<Bool> {{\nlet local : Option = None\nvalue\n}}\n"
+            ),
+            KindReason::ExpectedType,
+            ("Option", 1),
+        ),
+        (
+            "kind-precedence-inline-result.ash",
+            format!(
+                "{OPTION}{HIGHER}fn bad(value : Unit) -> Option where Higher<Bool> {{\nlet local : Option = None\nvalue\n}}\n"
+            ),
+            KindReason::ExpectedType,
+            ("Option", 1),
+        ),
+        (
+            "kind-precedence-inline-requirement.ash",
+            format!(
+                "{OPTION}{HIGHER}fn bad(value : Unit) -> Unit where Higher<Bool> {{\nlet local : Option = None\nvalue\n}}\n"
+            ),
+            KindReason::Argument,
+            ("Bool", 0),
+        ),
+        (
+            "kind-precedence-inline-body.ash",
+            format!(
+                "{OPTION}{HIGHER}fn bad(value : Unit) -> Unit where Higher<Option> {{\nlet local : Option = None\nvalue\n}}\n"
+            ),
+            KindReason::ExpectedType,
+            ("Option", 2),
+        ),
+    ];
+
+    for (name, source, reason, primary) in cases {
+        let failure = failure(name, &source);
+        let PipelineFailure::Kind(KindFailure::Source(error)) = failure else {
+            panic!("{name} should retain public kind ownership, found {failure:?}");
+        };
+        assert_eq!(error.reason, reason, "case: {name}");
+        assert_eq!(
+            (
+                error.primary.span().range().start(),
+                error.primary.span().range().end(),
+            ),
+            occurrence_range(&source, primary.0, primary.1),
+            "case: {name}",
+        );
+    }
 }
 
 #[test]

@@ -10,7 +10,9 @@ use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
     elaborate::TypeError,
     interface::InterfaceReason,
+    kind::{KindFailure, KindReason},
     module::ModuleRoots,
+    types::Kind,
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -96,6 +98,17 @@ fn canonicalize_source_ids(rendered: &str) -> String {
         canonical.push_str(&line[id_end..]);
     }
     canonical
+}
+
+fn occurrence_range(text: &str, needle: &str) -> (u32, u32) {
+    let start = text
+        .find(needle)
+        .unwrap_or_else(|| panic!("the fixture should contain {needle:?}"));
+    let end = start + needle.len();
+    (
+        u32::try_from(start).expect("the fixture start should fit a source offset"),
+        u32::try_from(end).expect("the fixture end should fit a source offset"),
+    )
 }
 
 #[test]
@@ -452,4 +465,154 @@ fn cli_renders_a_selected_facade_prerequisite_route_without_reclassifying_it() {
         canonicalize_source_ids(&actual),
         canonicalize_source_ids(&expected)
     );
+}
+
+#[test]
+fn cli_renders_each_structured_kind_reason_without_reclassifying_it() {
+    struct Case {
+        name: &'static str,
+        entry: &'static str,
+        dependency: Option<&'static str>,
+        reason: KindReason,
+        imported_relation: bool,
+    }
+
+    let cases = [
+        Case {
+            name: "not-applicable",
+            entry: concat!(
+                "bad<A> : A<Int> -> Unit\n",
+                "bad value = ()\n\n",
+                "main : Unit -> Unit\n",
+                "main value = value\n",
+            ),
+            dependency: None,
+            reason: KindReason::NotApplicable,
+            imported_relation: false,
+        },
+        Case {
+            name: "argument",
+            entry: concat!(
+                "import dependency as Dependency\n",
+                "bad : Dependency.Holder<Int> -> Unit\n",
+                "bad value = ()\n\n",
+                "main : Unit -> Unit\n",
+                "main value = value\n",
+            ),
+            dependency: Some("pub type Holder<F : Type -> Type> = Holder\n"),
+            reason: KindReason::Argument,
+            imported_relation: true,
+        },
+        Case {
+            name: "expected-type",
+            entry: concat!(
+                "import dependency as Dependency\n",
+                "bad : Dependency.Holder -> Unit\n",
+                "bad value = ()\n\n",
+                "main : Unit -> Unit\n",
+                "main value = value\n",
+            ),
+            dependency: Some("pub type Holder<F : Type -> Type> = Holder\n"),
+            reason: KindReason::ExpectedType,
+            imported_relation: true,
+        },
+    ];
+
+    for case in cases {
+        let tree = TempTree::create();
+        let entry = tree.write("entry.ash", case.entry);
+        if let Some(dependency) = case.dependency {
+            tree.write("dependency.ash", dependency);
+        }
+        let structured = run_path(RunConfiguration {
+            entry: entry.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .expect_err("the fixture should fail during kind checking");
+        let FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(diagnostic))) =
+            &structured
+        else {
+            panic!(
+                "{} should retain the structured Kind failure, found {structured:?}",
+                case.name
+            );
+        };
+        assert_eq!(diagnostic.reason, case.reason, "case: {}", case.name);
+        assert_eq!(diagnostic.related.len(), 1, "case: {}", case.name);
+        assert_eq!(
+            diagnostic.primary.span().source() != diagnostic.related[0].span().source(),
+            case.imported_relation,
+            "case: {}",
+            case.name,
+        );
+        if let Some(dependency) = case.dependency {
+            let (primary_text, primary_message, related_message, expected_kind, found_kind) =
+                match case.reason {
+                    KindReason::Argument => (
+                        "Int",
+                        "this type argument has the wrong kind",
+                        "the applied type's parameter kind is declared here",
+                        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                        Kind::Type,
+                    ),
+                    KindReason::ExpectedType => (
+                        "Dependency.Holder",
+                        "this function domain must have kind Type",
+                        "the found kind is fixed by this declaration",
+                        Kind::Type,
+                        Kind::Arrow(
+                            Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))),
+                            Box::new(Kind::Type),
+                        ),
+                    ),
+                    KindReason::NotApplicable => {
+                        unreachable!("the imported fixtures cover argument and expected-type")
+                    }
+                };
+            assert_eq!(
+                (
+                    diagnostic.primary.span().range().start(),
+                    diagnostic.primary.span().range().end(),
+                ),
+                occurrence_range(case.entry, primary_text),
+                "imported primary span: {}",
+                case.name,
+            );
+            assert_eq!(
+                diagnostic.primary.message(),
+                primary_message,
+                "imported primary message: {}",
+                case.name,
+            );
+            assert_eq!(
+                (
+                    diagnostic.related[0].span().range().start(),
+                    diagnostic.related[0].span().range().end(),
+                ),
+                occurrence_range(dependency, "pub type Holder<F : Type -> Type> = Holder"),
+                "imported declaration span: {}",
+                case.name,
+            );
+            assert_eq!(
+                diagnostic.related[0].message(),
+                related_message,
+                "imported related message: {}",
+                case.name,
+            );
+            assert_eq!(diagnostic.expected_kind(), Some(&expected_kind));
+            assert_eq!(diagnostic.found_kind(), Some(&found_kind));
+        }
+        let expected = format!("{}\n", diagnostic.render_plain());
+
+        let output = ash([entry.into_os_string()]);
+        assert_eq!(output.status.code(), Some(1), "case: {}", case.name);
+        assert!(output.stdout.is_empty(), "case: {}", case.name);
+        let actual = String::from_utf8(output.stderr).expect("kind diagnostics should be UTF-8");
+        assert_eq!(
+            canonicalize_source_ids(&actual),
+            canonicalize_source_ids(&expected),
+            "case: {}",
+            case.name,
+        );
+    }
 }

@@ -1,6 +1,7 @@
 use std::fmt;
 
 use ash::diagnostic::{Diagnostic, SourceLabel};
+use ash::kind::KindReason;
 use ash::source::{ByteRange, GeneratedReason, Origin, SourceError, SourceFile};
 
 #[test]
@@ -214,4 +215,36 @@ fn diagnostic_reason_remains_typed_independently_from_rendering() {
     assert!(rendered.contains("parse.expected-operand"));
     assert!(rendered.contains("expected expression"));
     assert!(rendered.contains("found end of line"));
+}
+
+#[test]
+fn kind_reasons_remain_typed_independently_from_plain_rendering() {
+    let source = SourceFile::new("kind-reasons.ash", "F<Int>")
+        .expect("the kind diagnostic source should fit");
+    let span = source
+        .span(ByteRange::new(0, 6).expect("the kind diagnostic range is ordered"))
+        .expect("the kind diagnostic range should fit");
+
+    for (reason, code) in [
+        (KindReason::NotApplicable, "kind.not-applicable"),
+        (KindReason::Argument, "kind.argument"),
+        (KindReason::ExpectedType, "kind.expected-type"),
+    ] {
+        let mut diagnostic = Diagnostic::new(
+            reason,
+            SourceLabel::new(span, "the structured label is retained independently"),
+        );
+        diagnostic.expected = Some("Type -> Type".to_owned());
+        diagnostic.found = Some("Type".to_owned());
+
+        let rendered = diagnostic.render_plain();
+
+        assert_eq!(diagnostic.reason, reason);
+        assert_eq!(diagnostic.primary.span(), span);
+        assert_eq!(diagnostic.expected.as_deref(), Some("Type -> Type"));
+        assert_eq!(diagnostic.found.as_deref(), Some("Type"));
+        assert!(rendered.starts_with(code));
+        assert!(rendered.contains("expected Type -> Type"));
+        assert!(rendered.contains("found Type"));
+    }
 }
