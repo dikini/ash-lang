@@ -82,6 +82,10 @@ parameter:
 MethodScheme = forall method_parameters. method_value_type
 ```
 
+The scheme remains in the immutable method registry keyed by `MethodId`. It
+does not enter the ordinary term environment under a `BinderId`, and no source
+occurrence can name the scheme without instantiating it.
+
 The method occurrence has the conceptual constrained scheme:
 
 ```text
@@ -91,20 +95,31 @@ forall interface_parameter method_parameters.
 
 Checking one occurrence instantiates every binder with a fresh inference
 variable of the same fixed kind. Only the interface argument creates an
-evidence obligation. The occurrence also retains the ordered, zonked
-method-local arguments produced by ordinary checking. Evidence selection does
-not choose, infer, or refine those arguments.
+evidence obligation. The occurrence also records the ordered method-local
+arguments produced by ordinary checking. Evidence selection does not choose,
+infer, or refine those arguments.
+
+Selection may finish before the module's complete inference substitution is
+closed. The occurrence remains private pending state until inference closure
+zonks its interface and method-local arguments. Checked-module publication
+then atomically freezes those inference-free arguments with the already fixed
+selection. An unsolved argument or any failure before that point publishes no
+checked module or summary.
 
 An unresolved interface argument remains `constraint.ambiguous` at the
 occurrence's evidence-closure boundary. An otherwise unresolved method-local
 argument remains `type.ambiguous` under the existing inference-closure rule.
 This increment does not add method-determination or improvement rules.
 
-Method schemes compare modulo one capture-free, order- and kind-preserving
-renaming of their bound method parameters. Free interface, implementation-head,
-nominal, and resolved source identities still compare exactly. Monotype
-equality and unification do not become alpha-equivalence or higher-order
-matching.
+Canonical resolved method schemes compare exact binder identities, owners,
+order, kinds, and bodies through checking, summaries, imports, and linked
+validation. At the Core boundary only, a generated evidence adapter's local
+type binders may differ from the canonical method binders. Comparing that
+adapter with its authenticated method scheme admits one capture-free,
+order- and kind-preserving alpha-renaming. Free interface,
+implementation-head, nominal, and resolved source identities still compare
+exactly. Monotype equality and unification do not become alpha-equivalence or
+higher-order matching.
 
 ### Implementation methods
 
@@ -141,12 +156,13 @@ method scheme. Import admission authenticates the complete binder set, order,
 owner, kinds, body scope, method identity, and provenance before a dependent
 module checks solely from that summary.
 
-The occurrence-local evidence field atomically retains the selected interface
-argument, ordered method-local instantiation arguments, and selected evidence.
-Linked evidence validation authenticates those arguments against the defining
-method scheme, their kinds, the checked occurrence type, and the selected
-`MethodId`. It also authenticates every implementation method's combined
-parameter order and its relationship to the interface method scheme.
+After module inference closure, the occurrence-local evidence field atomically
+retains the selected interface argument, ordered inference-free method-local
+instantiation arguments, and selected evidence. Linked evidence validation
+authenticates those arguments against the defining method scheme, their kinds,
+the checked occurrence type, and the selected `MethodId`. It also authenticates
+every implementation method's combined parameter order and its relationship to
+the interface method scheme.
 
 Validation produces the only capability that may authorize polymorphic Core
 evidence. A missing, extra, reordered, wrong-kind, wrong-owner, mismatched, or
@@ -184,8 +200,9 @@ type-abstract method_parameters.
 ```
 
 The adapter exposes exactly the selected method scheme. It does not specialize
-or copy the implementation body. Scheme comparison at its evidence boundary
-uses the capture-free alpha-equivalence rule above.
+or copy the implementation body. Its generated method binders compare with the
+canonical resolved method scheme using only the bounded capture-free
+alpha-equivalence rule above.
 
 Minimal immutable authentication facts derived from validated linked evidence
 survive Core synthesis. They relate each polymorphic evidence position to its
@@ -199,7 +216,9 @@ authenticated facts and canonical type-binder records. It requires every
 nested scheme and polymorphic term binder to occur in one exact generated
 evidence position, checks its owner and order, validates every adapter and
 method type application, and consumes every authentication fact exactly once.
-It does not trust a Core node flag or an unchecked copied scheme.
+Canonical method binders remain exact authority; only a locally generated
+adapter abstraction may use an authenticated alpha-renaming. Validation does
+not trust a Core node flag or an unchecked copied scheme.
 
 An authenticated evidence variable may be type-applied at a method occurrence
 or forwarded to the matching generated evidence domain of another constrained
@@ -216,7 +235,8 @@ type abstractions, type applications, schemes, binder scope, and provenance,
 then pass fresh independent validation. Method authentication facts, method
 schemes, and all type operations erase before evaluation. The evaluator gains
 no interface value, dictionary, type value, lookup, frame, transition, or
-failure mode.
+failure mode. Evaluation cannot receive unchecked Core, and the evaluator does
+not inspect the retained validation authority used by a later transformation.
 
 ### Failure ownership and resources
 
@@ -228,6 +248,14 @@ for a method that omits its interface parameter. Kind checking owns invalid
 method-binder and method-type kinds. Existing type, constraint, implementation,
 summary, linked-evidence, and Core judgments own failures only after their
 inputs pass the earlier boundary.
+
+A repeated method binder or one that repeats the interface parameter is
+`resolve.duplicate-type-parameter`. A listed binder absent from the method type
+is `resolve.unused-type-parameter`; a free name absent from a present complete
+list is `resolve.unknown-type`. Kind failures retain `kind.not-applicable`,
+`kind.argument`, or `kind.expected-type` according to the first owning kind
+rule. After successful kind checking, `interface.method-parameter` precedes
+`interface.method-not-function` for the same declaration.
 
 Syntax retention charges the syntax budget. Binder records, method schemes,
 instantiation arguments, substitution, adapters, and Core types charge the
@@ -253,8 +281,8 @@ production limit change requires proposal review rather than a local increase.
 - Checked summaries and linked evidence authenticate method schemes and exact
   occurrence instantiation arguments.
 - Core admits nested schemes only in authenticated compiler-generated method
-  evidence positions and compares their bound method parameters by
-  capture-free alpha-equivalence.
+  evidence positions; canonical resolved binders stay exact, while generated
+  adapters compare by bounded capture-free alpha-equivalence.
 - Generated adapters make concrete implementation methods usable as
   polymorphic evidence without specialization or runtime dictionaries.
 - Ordinary source and Core value positions remain rank-1, and evaluation
@@ -270,8 +298,8 @@ production limit change requires proposal review rather than a local increase.
 - [Kinds, monotypes, and schemes](../../spec/static-semantics.md#kinds-monotypes-and-schemes)
   distinguishes a method scheme from every source monotype position.
 - [Inference and rank-1 restrictions](../../spec/static-semantics.md#inference-and-rank-1-restrictions)
-  defines method instantiation, ambiguity, alpha-equivalence, escape
-  prevention, and recursive rigidity.
+  defines method instantiation, ambiguity, escape prevention, and recursive
+  rigidity.
 - [Interfaces and constrained schemes](../../spec/static-semantics.md#interfaces-and-constrained-schemes)
   defines method schemes, binder completeness, method occurrences, and
   evidence obligations.
@@ -284,8 +312,8 @@ production limit change requires proposal review rather than a local increase.
   [Interface-evidence lowering](../../spec/elaboration.md#interface-evidence-lowering),
   [Explicit rank-1 operations](../../spec/elaboration.md#explicit-rank-1-operations),
   and [Validation boundary](../../spec/elaboration.md#validation-boundary)
-  define retained occurrence arguments, adapters, authenticated nested schemes,
-  transformations, and independent validation.
+  define retained occurrence arguments, bounded adapter alpha-equivalence,
+  authenticated nested schemes, transformations, and independent validation.
 - [Type erasure](../../spec/dynamic-semantics.md#type-erasure) and
   [Generated interface evidence](../../spec/dynamic-semantics.md#generated-interface-evidence)
   define adapter erasure and the unchanged runtime boundary.
@@ -443,7 +471,10 @@ extra, duplicate, reordered, wrong-kind, wrong-owner, wrong-origin, or
 wrong-spelling method binders; a method body with a free or escaped binder;
 mismatched occurrence method arguments; wrong `MethodId` or `ImplMethodId`;
 wrong adapter head, method, prerequisite, or argument order; and a selection
-whose checked type does not equal its method scheme instantiation.
+whose checked type does not equal its method scheme instantiation. Summary and
+linked validation must also reject a nested scheme forged into an ordinary
+global, constructor, implementation head, prerequisite, source method body, or
+other non-method fact.
 
 Core tampering must independently reject every nested-scheme route outside an
 authenticated method evidence position; missing, duplicate, unconsumed,
@@ -452,7 +483,15 @@ authentication; a method adapter with capture, escape, shadowing, mismatched
 scheme, wrong implementation binder, partial or reordered type application,
 or wrong prerequisite application; and each malformed result after both
 retained transformations. Positive alpha-renaming evidence must accept one
-complete capture-free generated method-binder renaming.
+complete capture-free generated adapter-binder renaming while rejecting a
+renamed canonical method fact.
+
+Runtime evidence must show that polymorphic method evidence adds no evaluator
+value, environment entry class, frame, lookup, transition, failure reason, or
+runtime interface state. The retained linked corpus must have an exact erased
+trace through the existing type-erasure, recursive-binding, variable, and
+strict-application transitions, and both transformed programs must produce the
+same observation.
 
 Resource evidence must inventory every new syntax, binder, scheme, occurrence,
 summary, linked, adapter, Core, transformation, and teardown carrier. It must
