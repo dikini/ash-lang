@@ -282,6 +282,10 @@ const PHASE_DEPENDENT_NO_KIND_INFERENCE: &str = "Every omitted declaration kind 
 
 const EXPLICIT_KIND_RULE_FRAGMENTS: &[(&str, &str)] = &[
     (
+        "spec/lexical-structure.md",
+        "Angle brackets delimit parameter lists on nominal, global, and\nimplementation declarations",
+    ),
+    (
         "spec/syntax.md",
         "type_parameter ::= upper_identifier [ \":\" kind ] ;",
     ),

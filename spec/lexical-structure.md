@@ -29,12 +29,12 @@ The remaining punctuation admitted by Ash is `(`, `)`, `{`, `}`, `<`, `>`,
 `@`, `.`, `:`, `=`, `==`, `+`, `*`, `->`, `=>`, `|`, and comma. `@`
 introduces a named module root. A period separates module-path segments or a
 module alias from a qualified member; it does not begin a floating-point
-literal. Angle brackets delimit nominal type parameters, the single parameter
-of an interface declaration, saturated nominal type applications, and the
-single type argument of an interface application. The longest token wins where
-one spelling prefixes another. Semicolon is recognized only to provide its
-specified source rejection; no grammar production admits it as source
-punctuation.
+literal. Angle brackets delimit parameter lists on nominal, global, and
+implementation declarations, the single parameter of an interface declaration,
+named type applications, and the single type argument of an interface
+application. The longest token wins where one spelling prefixes another.
+Semicolon is recognized only to provide its specified source rejection; no
+grammar production admits it as source punctuation.
 
 Ash has no comments, string or character literals, escapes, Unicode
 identifiers, floating-point literals, or negative literals.

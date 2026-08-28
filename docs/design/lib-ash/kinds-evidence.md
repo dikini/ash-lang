@@ -102,7 +102,8 @@ The shared total kind engine uses four fixed environments:
 - `DELTA` maps declaration or generated scheme binders to declared kinds;
 - `OMEGA` maps transient inference identities to their fixed kinds;
 - `XI` maps canonical nominal identities to derived or frozen kinds; and
-- `IOTA` maps interface identities to the declared kind of their parameter.
+- `IOTA` maps interface identities to their canonical parameter record,
+  including its `TypeVariableId` and declared Kind.
 
 Primitive types synthesize `Type`. Variables and inference identities use
 `DELTA` and `OMEGA`. Nominals use `XI`. Unary application requires a function
@@ -373,6 +374,8 @@ The retained exact formulas and their executable owners are:
 | independent Core capacity | 983,040 cumulative units; depth-96 uses `275,398 + 145,151 = 420,549`; width-32,767 uses `22W + 7 = 720,881` | `core_validation_type_work_capacity_is_exact_and_atomic` in `src/core/validate.rs`, `deep_generic_prerequisite_chain_completes_the_pipeline_on_a_small_stack` in `tests/interfaces.rs`, and `validated_program_discards_a_wide_application_on_a_small_stack` in `src/core/dialect.rs` |
 | unchanged width-256 elaboration and Core witness | `320,221 + 4,883 + 512 = 325,616` of 327,680 type units; 4,096 unrelated `OMEGA` entries do not change reachable solution cost | `wide_nominal_application_remains_width_through_elaboration_and_core` in `tests/polymorphism.rs` and `reachable_solution_cost_is_independent_of_unrelated_omega_width` in `src/elaborate.rs` |
 | row-bearing Core construction and transforms | construction costs `3 + 4 + 12 + 9 + 1 = 29`; identity rebuild costs `6 + 8 + 20 + 18 + 2 = 54`; literal folding costs `2 + 8 + 16 + 4 + 18 + 2 = 50`; both transforms add zero copied row units and share the exact immutable registry | `row_bearing_construction_and_identity_have_exact_independent_type_work`, `folded_higher_kinded_transform_has_exact_independent_type_work`, and `unchecked_transforms_share_the_exact_nonempty_global_row_registry` in `src/core/transform.rs` |
+| malformed expanded Core resource mapping | width 1,000 expands to at least 1,000,000 retained type cells, exceeds the 983,040 validation ledger while fitting the unchanged construction limit, and reports `ValidationReason::Resource` | `expanded_malformed_type_application_maps_to_validation_resource` in `tests/core_validation.rs` |
+| depth-32,000 iterative success and failure teardown | the successful type-application witness costs `11D + 6 = 352,006`; transform, match coverage and redundancy, late-pattern, substituted-payload, downstream-validation, and downstream-evaluator owners all dismantle on 256 KiB stacks | `late_pattern_rebuild_failure_discards_completed_patterns_iteratively` in `src/core/transform.rs`; `successful_type_application_validation_discards_instantiation_work_iteratively`, `successful_match_validation_discards_coverage_matrix_iteratively`, `redundant_match_validation_discards_pending_pattern_row_iteratively`, `late_pattern_validation_error_discards_owned_payload_type_iteratively`, and `payload_shape_error_discards_substituted_type_iteratively` in `src/core/validate.rs`; and `downstream_validation_failure_discards_deep_result_type_iteratively` and `downstream_evaluator_failure_discards_deep_result_type_iteratively` in `src/driver.rs` |
 
 Exact-success, one-short failure, atomic publication, retry, and disposal probes
 cover binder allocation, kind synthesis, environments, inference solutions,
@@ -478,10 +481,25 @@ not yet been reconciled. The reconciled specification now passes all 57 tests.
 Independent architecture-decision, normative-authority, and evidence-lifecycle
 reviews pass without findings, each with `gpt-5.6-sol` at `xhigh` reasoning.
 `cargo xtask verify`, Markdown lint, relative-link checks, formatting, and diff
-hygiene pass at the Task 12 checkpoint. Task 13 must still run and record the
-fresh complete workspace inventory, final review corrections, exact verification,
-and lifecycle cleanup. Until those gates finish, this section is an evidence
-checkpoint rather than the final retention record.
+hygiene pass at the Task 12 checkpoint. At that point, Task 13 still had to
+record the fresh complete workspace inventory, final review corrections, exact
+verification, and lifecycle cleanup.
+
+Task 13's implementation/Core/resource review passes without findings. Its
+normative review found and corrected one stale lexical claim that named type
+applications were saturated. Its evidence/lifecycle review restored the
+canonical interface parameter identity in `IOTA` and retained the width-1,000
+malformed-Core and depth-32,000 teardown witnesses above. Both correction
+reviews then pass without remaining findings. All three reviewers used
+`gpt-5.6-sol` at `xhigh` reasoning.
+
+The fresh all-target inventory contains 1,422 tests: 642 library tests, ten
+`ash` binary tests, 769 integration tests, and one `xtask` test. Formatting,
+all-target and all-feature checking, all 1,422 tests, Clippy with warnings
+denied, the exact test inventory, `cargo xtask verify`, Markdown lint,
+relative-link checks, and diff hygiene pass on the retained tree. This report
+is the final evidence record for the bounded increment; transition-artifact
+cleanup does not close or tag the complete `lib-ash` milestone.
 
 ## Intentional exclusions and remaining pressure
 

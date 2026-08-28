@@ -514,6 +514,16 @@ expanded work remains above the accepted validator-local `3 * TYPE_WORK_LIMIT`
 capacity. Its expected `Resource` result is unchanged. The predecessor-valid
 depth-96, width-32,767, and depth-32,000 witnesses retain their dimensions.
 
+Task 13's implementation/Core/resource review passes without findings. Its
+normative and evidence/lifecycle reviews found the stale lexical saturation
+claim, incomplete final resource-retention list, and incomplete `IOTA` record;
+the corrected repeat reviews pass without remaining findings. All three used
+`gpt-5.6-sol` at `xhigh` reasoning. The fresh all-target inventory contains
+1,422 passing tests: 642 library, ten `ash` binary, 769 integration, and one
+`xtask`. Formatting, all-target and all-feature checking, the complete tests,
+Clippy with warnings denied, the exact inventory, `cargo xtask verify`, Markdown
+lint, relative-link checks, and diff hygiene pass before retention and cleanup.
+
 No semantic deviation from CP-0009 is currently known. Any product evidence
 that exposes missing or incorrect semantics returns to proposal or design work
 instead of being decided in this task.
