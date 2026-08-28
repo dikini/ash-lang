@@ -68,12 +68,14 @@ pub(crate) struct MethodEvidenceCatalog {
     domains: Vec<MethodEvidenceDomain>,
     occurrences: Vec<MethodEvidenceOccurrence>,
     adapters: Vec<MethodEvidenceAdapter>,
+    concrete_sources: Vec<MethodEvidenceConcreteSource>,
     expectations: Vec<MethodEvidenceExpectation>,
 }
 
 impl Default for MethodEvidenceCatalog {
     fn default() -> Self {
         Self::new(
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -172,6 +174,32 @@ pub(crate) struct MethodEvidenceAdapterEdge {
     pub(crate) producer: MethodEvidenceExpectedProducer,
 }
 
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceConcreteSource {
+    pub(crate) occurrence: usize,
+    pub(crate) selection_node: EvidenceNodeId,
+    pub(crate) implementation: ImplMethodId,
+    pub(crate) binder: BinderId,
+    pub(crate) head_arguments: Box<[Type]>,
+    pub(crate) prerequisites: Box<[MethodEvidenceConcretePrerequisite]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MethodEvidenceConcretePrerequisite {
+    pub(crate) selection_node: EvidenceNodeId,
+    pub(crate) method: MethodId,
+    pub(crate) scope_position: Option<usize>,
+}
+
+impl Drop for MethodEvidenceConcreteSource {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.head_arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceExpectedProducer {
     Authenticated(usize),
@@ -227,6 +255,7 @@ impl MethodEvidenceCatalog {
             .and_then(|work| work.checked_add(self.domains.len()))
             .and_then(|work| work.checked_add(self.occurrences.len()))
             .and_then(|work| work.checked_add(self.adapters.len()))
+            .and_then(|work| work.checked_add(self.concrete_sources.len()))
             .and_then(|work| work.checked_add(self.expectations.len()))
     }
 
@@ -248,6 +277,7 @@ impl MethodEvidenceCatalog {
         domains: Vec<MethodEvidenceDomain>,
         occurrences: Vec<MethodEvidenceOccurrence>,
         adapters: Vec<MethodEvidenceAdapter>,
+        concrete_sources: Vec<MethodEvidenceConcreteSource>,
         expectations: Vec<MethodEvidenceExpectation>,
     ) -> Self {
         Self {
@@ -256,6 +286,7 @@ impl MethodEvidenceCatalog {
             domains,
             occurrences,
             adapters,
+            concrete_sources,
             expectations,
         }
     }
@@ -294,6 +325,10 @@ impl MethodEvidenceCatalog {
 
     pub(crate) fn adapters(&self) -> &[MethodEvidenceAdapter] {
         &self.adapters
+    }
+
+    pub(crate) fn concrete_sources(&self) -> &[MethodEvidenceConcreteSource] {
+        &self.concrete_sources
     }
 
     pub(crate) fn expectations(&self) -> &[MethodEvidenceExpectation] {
@@ -3243,6 +3278,7 @@ mod tests {
                 source_parameters: Box::new([]),
                 interface_argument: Type::Int,
             }],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),

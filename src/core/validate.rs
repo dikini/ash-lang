@@ -22,7 +22,7 @@ use super::{
 };
 use crate::{
     core::{CorePattern, CorePatternKind},
-    interface::ImplMethodId,
+    interface::{EvidenceNode, ImplMethodId},
     module::ModuleId,
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::{
@@ -1970,6 +1970,191 @@ impl<'program, 'source> Validator<'program, 'source> {
         }
     }
 
+    fn validate_concrete_adapter_source(
+        &self,
+        anchor: &MethodEvidenceAnchor,
+        anchors: &HashMap<NodeId, &MethodEvidenceAnchor>,
+        occurrence_slot: usize,
+        selection_node: crate::interface::EvidenceNodeId,
+        implementation: crate::interface::ImplMethodId,
+        source_node: NodeId,
+    ) -> Result<bool, ValidationError> {
+        self.charge_type_work(self.program.method_evidence.occurrence_count())?;
+        let occurrence = self
+            .program
+            .method_evidence
+            .occurrence(occurrence_slot)
+            .ok_or_else(|| {
+                ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+            })?;
+        let sources = self.program.method_evidence.concrete_sources();
+        self.charge_type_work(sources.len())?;
+        let root = sources
+            .iter()
+            .position(|source| {
+                source.occurrence == occurrence_slot
+                    && source.selection_node == selection_node
+                    && source.implementation == implementation
+            })
+            .ok_or_else(|| {
+                ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+            })?;
+        let mut pending = Vec::new();
+        self.charge_type_work(1)?;
+        pending
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(anchor.node)))?;
+        pending.push((root, source_node));
+        while let Some((source_index, actual_node)) = pending.pop() {
+            let source = sources.get(source_index).ok_or_else(|| {
+                ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+            })?;
+            let EvidenceNode::Implementation {
+                substitution,
+                prerequisites,
+                methods,
+                ..
+            } = occurrence
+                .selection
+                .node(source.selection_node)
+                .ok_or_else(|| {
+                    ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+                })?
+            else {
+                return Ok(false);
+            };
+            self.charge_type_work(methods.len().checked_add(substitution.len()).ok_or_else(
+                || ValidationError::new(ValidationReason::Resource, Some(anchor.node)),
+            )?)?;
+            if source.occurrence != occurrence_slot
+                || !methods.contains(&source.implementation)
+                || source.head_arguments.len() != substitution.len()
+            {
+                return Ok(false);
+            }
+            for (expected, actual) in source.head_arguments.iter().zip(substitution) {
+                if !self.same_type_charged(expected, actual.argument())? {
+                    return Ok(false);
+                }
+            }
+            let expected_prerequisite_nodes = prerequisites.len();
+            self.charge_type_work(expected_prerequisite_nodes)?;
+            let mut current = actual_node;
+            for prerequisite in source.prerequisites.iter().rev() {
+                self.charge_type_work(1)?;
+                let PureExprKind::Computation(PureComputation::Apply(application)) =
+                    &self.node(current)?.kind
+                else {
+                    return Ok(false);
+                };
+                let argument = application.argument();
+                match occurrence
+                    .selection
+                    .node(prerequisite.selection_node)
+                    .ok_or_else(|| {
+                        ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+                    })? {
+                    EvidenceNode::Abstract {
+                        requirement,
+                        methods,
+                    } if methods.contains(&prerequisite.method) => {
+                        let Some(position) = prerequisite.scope_position else {
+                            return Ok(false);
+                        };
+                        let binder = self.method_evidence_scope_binder(anchor, position)?;
+                        if !matches!(
+                            self.node(argument)?.kind,
+                            PureExprKind::Variable(variable) if variable.binder() == binder
+                        ) || !matches!(
+                            occurrence.selection.node(prerequisite.selection_node),
+                            Some(EvidenceNode::Abstract { requirement: actual, .. }) if actual == requirement
+                        ) {
+                            return Ok(false);
+                        }
+                    }
+                    EvidenceNode::Implementation { methods, .. } => {
+                        self.charge_type_work(methods.len())?;
+                        let Some(selected) = methods
+                            .iter()
+                            .find(|selected| selected.method() == prerequisite.method)
+                            .copied()
+                        else {
+                            return Ok(false);
+                        };
+                        self.charge_type_work(self.program.method_evidence.method_count())?;
+                        if self
+                            .program
+                            .method_evidence
+                            .method(prerequisite.method)
+                            .is_some()
+                        {
+                            self.charge_type_work(anchors.len())?;
+                            if !anchors.values().any(|candidate| {
+                                candidate.occurrence == Some(occurrence_slot)
+                                    && candidate.node == argument
+                                    && matches!(candidate.role, MethodEvidenceAnchorRole::Adapter { implementation, selection_node } if implementation == selected && selection_node == prerequisite.selection_node)
+                            }) {
+                                return Ok(false);
+                            }
+                        } else {
+                            self.charge_type_work(sources.len().checked_add(1).ok_or_else(
+                                || {
+                                    ValidationError::new(
+                                        ValidationReason::Resource,
+                                        Some(anchor.node),
+                                    )
+                                },
+                            )?)?;
+                            let Some(child) = sources.iter().position(|candidate| {
+                                candidate.occurrence == occurrence_slot
+                                    && candidate.selection_node == prerequisite.selection_node
+                                    && candidate.implementation == selected
+                            }) else {
+                                return Ok(false);
+                            };
+                            pending.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, Some(anchor.node))
+                            })?;
+                            pending.push((child, argument));
+                        }
+                    }
+                    EvidenceNode::Abstract { .. } => return Ok(false),
+                }
+                current = application.function();
+            }
+            if source.head_arguments.is_empty() {
+                if !matches!(
+                    self.node(current)?.kind,
+                    PureExprKind::Variable(variable) if variable.binder() == source.binder
+                ) {
+                    return Ok(false);
+                }
+            } else {
+                let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+                    &self.node(current)?.kind
+                else {
+                    return Ok(false);
+                };
+                if application.arguments().len() != source.head_arguments.len() {
+                    return Ok(false);
+                }
+                for (actual, expected) in application.arguments().iter().zip(&source.head_arguments)
+                {
+                    if !self.same_type_charged(actual, expected)? {
+                        return Ok(false);
+                    }
+                }
+                if !matches!(
+                    self.node(application.function())?.kind,
+                    PureExprKind::Variable(variable) if variable.binder() == source.binder
+                ) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     fn validate_adapter_edge(
         &self,
         anchor: &MethodEvidenceAnchor,
@@ -2201,8 +2386,26 @@ impl<'program, 'source> Validator<'program, 'source> {
                         ));
                     }
                 };
+                let concrete_source_matches = match expected {
+                    MethodEvidenceProducer::Adapter { implementation } => self
+                        .validate_concrete_adapter_source(
+                            anchor,
+                            anchors,
+                            anchor.occurrence.ok_or_else(|| {
+                                ValidationError::new(
+                                    ValidationReason::ApplicationType,
+                                    Some(anchor.node),
+                                )
+                            })?,
+                            selection_node,
+                            implementation,
+                            application.argument(),
+                        )?,
+                    MethodEvidenceProducer::Abstract { .. } => true,
+                };
                 (
-                    selection_node == producer_selection_node
+                    concrete_source_matches
+                        && selection_node == producer_selection_node
                         && expected == producer
                         && producer_node == application.argument()
                         && producer_binder == exact_scope_binder,
@@ -5336,6 +5539,199 @@ mod tests {
             ),
             &[],
         )
+    }
+
+    fn concrete_monomorphic_adapter_edge_fixture() -> LinkedCoreValidationFixture {
+        LinkedCoreValidationFixture::compile(
+            "pub seed : Unit -> Unit\nseed value = value\n",
+            concat!(
+                "type Wrap<A> = Wrap(A)\n\n",
+                "interface Base<I> {\nbase : I -> I\n}\n\n",
+                "interface Convert<I> {\nconvert<X> : (I, X) -> I\n}\n\n",
+                "impl Base<Int> {\nbase value = value\n}\n\n",
+                "impl<A> Convert<Wrap<A>> where Base<A> {\n",
+                "convert (Wrap(value), ignored) = Wrap(base(value))\n",
+                "}\n\n",
+                "fake : Int -> Int\nfake value = value\n\n",
+                "main : Unit -> Wrap<Int>\n",
+                "main () = {\nlet ignored = fake(0)\nconvert((Wrap(42), true))\n}\n",
+            ),
+            &[],
+        )
+    }
+
+    fn replace_concrete_monomorphic_adapter_edge_source_with_global(
+        program: &mut UnvalidatedProgram,
+    ) {
+        let edge = program
+            .method_evidence_anchors
+            .iter()
+            .find(|anchor| {
+                let Some(MethodEvidenceExpectedRole::AdapterEdge { adapter, ordinal }) = program
+                    .method_evidence
+                    .expectations()
+                    .get(anchor.expectation)
+                    .map(|expected| expected.role)
+                else {
+                    return false;
+                };
+                matches!(
+                    program.method_evidence.adapters()[adapter].prerequisites[ordinal].producer,
+                    super::super::dialect::MethodEvidenceExpectedProducer::Monomorphic {
+                        producer: MethodEvidenceProducer::Adapter { .. },
+                        ..
+                    }
+                )
+            })
+            .expect("the fixture has a concrete monomorphic adapter edge")
+            .node;
+        let edge_index = edge.index().expect("the edge belongs to the fixture");
+        let PureExprKind::Computation(PureComputation::Apply(application)) =
+            program.nodes[edge_index].kind
+        else {
+            panic!("the authenticated edge is an application")
+        };
+        let original_argument = application.argument();
+        let original = &program.nodes[original_argument.index().expect("argument index")];
+        let wrong_argument = program
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| match node.kind {
+                PureExprKind::Variable(variable)
+                    if matches!(variable.binder(), BinderId::Resolved { .. })
+                        && crate::types::same_type(&node.ty, &original.ty) =>
+                {
+                    Some(NodeId::new(
+                        program.arena,
+                        u32::try_from(index).expect("fixture index"),
+                    ))
+                }
+                _ => None,
+            })
+            .expect("the fixture has a same-typed ordinary global producer");
+        let swapped_use = program
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| {
+                let PureExprKind::Computation(PureComputation::Apply(other)) = node.kind else {
+                    return None;
+                };
+                (other.function() == wrong_argument && index != edge_index)
+                    .then_some((index, other.argument()))
+            })
+            .expect("the wrong global producer has an ordinary same-typed use");
+        program.nodes[swapped_use.0].kind = PureExprKind::Computation(PureComputation::Apply(
+            ApplicationNode::new(original_argument, swapped_use.1),
+        ));
+        program.nodes[edge_index].kind = PureExprKind::Computation(PureComputation::Apply(
+            ApplicationNode::new(application.function(), wrong_argument),
+        ));
+        let anchor = program
+            .method_evidence_anchors
+            .iter_mut()
+            .find(|anchor| anchor.node == edge)
+            .expect("the exact edge anchor is retained");
+        let MethodEvidenceAnchorRole::AdapterEdge {
+            adapter,
+            adapter_selection_node,
+            ordinal,
+            producer_selection_node,
+            producer,
+            ..
+        } = anchor.role
+        else {
+            unreachable!()
+        };
+        anchor.role = MethodEvidenceAnchorRole::AdapterEdge {
+            adapter,
+            adapter_selection_node,
+            ordinal,
+            producer_node: wrong_argument,
+            producer_selection_node,
+            producer_binder: None,
+            producer,
+        };
+    }
+
+    #[test]
+    fn concrete_monomorphic_adapter_edges_reject_same_typed_global_sources_after_every_rebuild() {
+        for rebuild in 0..3 {
+            let fixture = concrete_monomorphic_adapter_edge_fixture();
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                mut program,
+                module_sources,
+                globals: _,
+            } = fixture;
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            if rebuild != 0 {
+                let validated = validate_modules(program, &sources, &module_sources)
+                    .expect("the concrete monomorphic source validates");
+                program = if rebuild == 1 {
+                    identity_traversal(&validated).expect("identity rebuild")
+                } else {
+                    fold_literal_primitives(&validated).expect("literal-fold rebuild")
+                };
+            }
+            replace_concrete_monomorphic_adapter_edge_source_with_global(&mut program);
+            assert!(
+                validate_modules(program, &sources, &module_sources).is_err(),
+                "same-typed ordinary global source must reject after rebuild {rebuild}",
+            );
+            drop(directory);
+        }
+    }
+
+    #[test]
+    fn concrete_monomorphic_source_validation_has_an_exact_retry_boundary() {
+        let fixture = concrete_monomorphic_adapter_edge_fixture();
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let measured = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the concrete source fixture is canonical");
+        measured
+            .validate_method_evidence_authority()
+            .expect("the concrete source topology validates");
+        // The fixed authority graph costs 584 units. Its one concrete source
+        // adds S=1 catalog lookup, one fallible pending slot, and M=1 exact
+        // selected-method membership cell.
+        const EXACT_WORK: usize = 584 + 1 + 1 + 1 + 1;
+        assert_eq!(measured.type_work.get(), EXACT_WORK);
+
+        let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the one-short concrete source fixture is canonical");
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+            .expect("the one-short prefix fits");
+        assert_eq!(
+            short
+                .validate_method_evidence_authority()
+                .expect_err("one missing concrete-source unit rejects")
+                .reason(),
+            ValidationReason::Resource,
+        );
+        for _ in 0..2 {
+            let exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the exact concrete source fixture is canonical");
+            exact
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                .expect("the exact prefix fits");
+            exact
+                .validate_method_evidence_authority()
+                .expect("a fresh exact concrete-source pass retries");
+            assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
     }
 
     fn replace_monomorphic_adapter_edge_with_same_typed_wrong_producer(

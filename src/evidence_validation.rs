@@ -2347,6 +2347,16 @@ fn build_core_method_evidence_catalog(
         type_work,
         program.result().span,
     )?;
+    let concrete_sources = build_method_evidence_concrete_sources(
+        program,
+        &methods,
+        &occurrences,
+        &adapters,
+        &expectations,
+        constraint_work,
+        type_work,
+        program.result().span,
+    )?;
     charge(constraint_work, 1, program.result().span)?;
     Ok(MethodEvidenceCatalog::new(
         methods,
@@ -2354,8 +2364,245 @@ fn build_core_method_evidence_catalog(
         domains,
         occurrences,
         adapters,
+        concrete_sources,
         expectations,
     ))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "concrete adapter sources are derived from linked selection and checked method facts"
+)]
+fn build_method_evidence_concrete_sources(
+    program: &ResolvedModuleProgram,
+    polymorphic_methods: &[MethodEvidenceMethod],
+    occurrences: &[MethodEvidenceOccurrence],
+    adapters: &[MethodEvidenceAdapter],
+    expectations: &[MethodEvidenceExpectation],
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<Vec<crate::core::dialect::MethodEvidenceConcreteSource>, EvidenceValidationFailure> {
+    let mut pending = Vec::new();
+    let edge_count = expectations
+        .iter()
+        .filter(|expectation| {
+            matches!(
+                expectation.role,
+                MethodEvidenceExpectedRole::AdapterEdge { .. }
+            )
+        })
+        .count();
+    let root_pass_work = expectations
+        .len()
+        .checked_mul(2)
+        .and_then(|work| work.checked_add(edge_count))
+        .ok_or_else(|| resource(span))?;
+    charge(constraint_work, root_pass_work, span)?;
+    pending
+        .try_reserve(edge_count)
+        .map_err(|_| resource(span))?;
+    for expectation in expectations {
+        let MethodEvidenceExpectedRole::AdapterEdge { adapter, ordinal } = expectation.role else {
+            continue;
+        };
+        let edge = adapters
+            .get(adapter)
+            .and_then(|adapter| adapter.prerequisites.get(ordinal))
+            .ok_or_else(|| invalid_root(span))?;
+        if let crate::core::dialect::MethodEvidenceExpectedProducer::Monomorphic {
+            selection_node,
+            producer: crate::core::dialect::MethodEvidenceProducer::Adapter { implementation },
+            ..
+        } = edge.producer
+        {
+            pending.push((
+                expectation.occurrence.ok_or_else(|| invalid_root(span))?,
+                selection_node,
+                implementation,
+            ));
+        }
+    }
+    let mut sources = Vec::new();
+    while let Some((occurrence_slot, selection_node, implementation)) = pending.pop() {
+        charge(
+            constraint_work,
+            occurrences
+                .len()
+                .checked_add(sources.len())
+                .ok_or_else(|| resource(span))?,
+            span,
+        )?;
+        if sources.iter().any(
+            |source: &crate::core::dialect::MethodEvidenceConcreteSource| {
+                source.occurrence == occurrence_slot
+                    && source.selection_node == selection_node
+                    && source.implementation == implementation
+            },
+        ) {
+            continue;
+        }
+        let occurrence = occurrences
+            .iter()
+            .find(|occurrence| occurrence.slot == occurrence_slot)
+            .ok_or_else(|| invalid_root(span))?;
+        let EvidenceNode::Implementation {
+            substitution,
+            prerequisites,
+            methods: selected_methods,
+            ..
+        } = occurrence
+            .selection
+            .node(selection_node)
+            .ok_or_else(|| invalid_root(span))?
+        else {
+            return Err(invalid_root(span));
+        };
+        charge(
+            constraint_work,
+            selected_methods
+                .len()
+                .checked_add(polymorphic_methods.len())
+                .ok_or_else(|| resource(span))?,
+            span,
+        )?;
+        if !selected_methods.contains(&implementation)
+            || polymorphic_methods
+                .iter()
+                .any(|method| method.id == implementation.method())
+        {
+            return Err(invalid_root(span));
+        }
+        let method_count = program
+            .groups()
+            .iter()
+            .flat_map(ResolvedModuleGroup::implementation_facts)
+            .map(|implementation| implementation.methods.len())
+            .try_fold(0usize, usize::checked_add)
+            .ok_or_else(|| resource(span))?;
+        charge(constraint_work, method_count, span)?;
+        let checked = program
+            .groups()
+            .iter()
+            .flat_map(ResolvedModuleGroup::implementation_facts)
+            .flat_map(|implementation| implementation.methods.iter())
+            .find(|method| method.id == implementation)
+            .ok_or_else(|| invalid_root(span))?;
+        if checked.head_type_parameter_count() != substitution.len()
+            || checked.scheme.requirements.len() != prerequisites.len()
+        {
+            return Err(invalid_root(span));
+        }
+        let prerequisite_count = prerequisites
+            .iter()
+            .try_fold(0usize, |count, prerequisite| {
+                let methods = match occurrence.selection.node(*prerequisite)? {
+                    EvidenceNode::Abstract { methods, .. } => methods.len(),
+                    EvidenceNode::Implementation { methods, .. } => methods.len(),
+                };
+                count.checked_add(methods)
+            })
+            .ok_or_else(|| invalid_root(span))?;
+        let prerequisite_scan_work = prerequisites
+            .len()
+            .checked_add(prerequisite_count)
+            .ok_or_else(|| resource(span))?;
+        charge(constraint_work, prerequisite_scan_work, span)?;
+        let retained_work = 5usize
+            .checked_add(
+                prerequisite_count
+                    .checked_mul(2)
+                    .ok_or_else(|| resource(span))?,
+            )
+            .ok_or_else(|| resource(span))?;
+        charge(constraint_work, retained_work, span)?;
+        sources.try_reserve(1).map_err(|_| resource(span))?;
+        let mut head_arguments = Vec::new();
+        type_work
+            .charge(substitution.len())
+            .map_err(|()| type_resource(span))?;
+        head_arguments
+            .try_reserve_exact(substitution.len())
+            .map_err(|_| type_resource(span))?;
+        for substitution in substitution {
+            head_arguments.push(
+                clone_type_with_budget(substitution.argument(), type_work)
+                    .map_err(|()| type_resource(span))?,
+            );
+        }
+        let mut retained_prerequisites = Vec::new();
+        let construction_work = prerequisites
+            .len()
+            .checked_add(prerequisite_count)
+            .ok_or_else(|| resource(span))?;
+        charge(constraint_work, construction_work, span)?;
+        charge(constraint_work, prerequisite_count, span)?;
+        retained_prerequisites
+            .try_reserve_exact(prerequisite_count)
+            .map_err(|_| resource(span))?;
+        for prerequisite in prerequisites {
+            match occurrence
+                .selection
+                .node(*prerequisite)
+                .ok_or_else(|| invalid_root(span))?
+            {
+                EvidenceNode::Abstract { methods, .. } => {
+                    for method in methods {
+                        let EvidenceNode::Abstract { requirement, .. } = occurrence
+                            .selection
+                            .node(*prerequisite)
+                            .ok_or_else(|| invalid_root(span))?
+                        else {
+                            unreachable!()
+                        };
+                        retained_prerequisites.push(
+                            crate::core::dialect::MethodEvidenceConcretePrerequisite {
+                                selection_node: *prerequisite,
+                                method: *method,
+                                scope_position: Some(method_evidence_scope_position(
+                                    program,
+                                    occurrence,
+                                    requirement,
+                                    *method,
+                                    constraint_work,
+                                    span,
+                                )?),
+                            },
+                        );
+                    }
+                }
+                EvidenceNode::Implementation { methods, .. } => {
+                    for method in methods {
+                        retained_prerequisites.push(
+                            crate::core::dialect::MethodEvidenceConcretePrerequisite {
+                                selection_node: *prerequisite,
+                                method: method.method(),
+                                scope_position: None,
+                            },
+                        );
+                        charge(constraint_work, polymorphic_methods.len(), span)?;
+                        if !polymorphic_methods
+                            .iter()
+                            .any(|row| row.id == method.method())
+                        {
+                            charge(constraint_work, 1, span)?;
+                            pending.try_reserve(1).map_err(|_| resource(span))?;
+                            pending.push((occurrence_slot, *prerequisite, *method));
+                        }
+                    }
+                }
+            }
+        }
+        sources.push(crate::core::dialect::MethodEvidenceConcreteSource {
+            occurrence: occurrence_slot,
+            selection_node,
+            implementation,
+            binder: checked.binder,
+            head_arguments: head_arguments.into_boxed_slice(),
+            prerequisites: retained_prerequisites.into_boxed_slice(),
+        });
+    }
+    Ok(sources)
 }
 
 #[allow(
@@ -6442,6 +6689,20 @@ mod tests {
         ))
     }
 
+    fn concrete_monomorphic_source_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "type Wrap<A> = Wrap(A)\n\n",
+            "interface Base<I> {\nbase : I -> I\n}\n\n",
+            "interface Convert<I> {\nconvert<X> : (I, X) -> I\n}\n\n",
+            "impl Base<Int> {\nbase value = value\n}\n\n",
+            "impl<A> Convert<Wrap<A>> where Base<A> {\n",
+            "convert (Wrap(value), ignored) = Wrap(base(value))\n",
+            "}\n\n",
+            "main : Unit -> Wrap<Int>\n",
+            "main () = convert((Wrap(42), true))\n",
+        ))
+    }
+
     #[test]
     fn authenticates_polymorphic_method_occurrence_arguments_before_core() {
         validate_interface_evidence(polymorphic_method_program())
@@ -6464,8 +6725,11 @@ mod tests {
         let type_work = measured_type.used();
         // The predecessor formula is 87. This fixture retains C=2 exact
         // occurrence-owner binders and A=1 adapter selection identity in both
-        // the adapter row and its expectation lookup key: 87 + C + 2A = 91.
-        assert_eq!(constraint_work, 91);
+        // the adapter row and its expectation lookup key. The bounded concrete
+        // source pass counts and then reads E=4 expectations, reserves G=1
+        // edge-root slot, and classifies M=1 selected source method:
+        // 87 + C + 2A + 2E + G + M = 101.
+        assert_eq!(constraint_work, 101);
         assert_eq!(type_work, 74);
         drop(catalog);
 
@@ -6500,6 +6764,66 @@ mod tests {
             .expect("a fresh exact catalog stage should retry reproducibly");
             assert_eq!(constraint_exact.used(), constraint_work);
             assert_eq!(type_exact.used(), type_work);
+            drop(retry);
+        }
+    }
+
+    #[test]
+    fn concrete_adapter_source_catalog_has_an_exact_retry_boundary() {
+        let program = concrete_monomorphic_source_program();
+        let mut measured_constraint = InterfaceConstraintBudget::default();
+        let mut measured_type = TypeWorkBudget::default();
+        let catalog = build_core_method_evidence_catalog(
+            &program,
+            &mut measured_constraint,
+            &mut measured_type,
+        )
+        .expect("the concrete source catalog should build");
+        assert_eq!(catalog.concrete_sources().len(), 1);
+        // The fixed linked adapter pipeline costs 106 constraint units. The
+        // source pass adds 2E=8 expectation passes, G=1 root capacity, C=1
+        // occurrence lookup, J=2 checked-method reads, M=1 selected-method
+        // membership, P=1 polymorphic-method classification, and five retained
+        // scalar identities. This ground source has H=0 cloned head Types.
+        const CONSTRAINT_WORK: usize = 106 + 8 + 1 + 1 + 2 + 1 + 1 + 5;
+        const TYPE_WORK: usize = 36;
+        assert_eq!(measured_constraint.used(), CONSTRAINT_WORK);
+        assert_eq!(measured_type.used(), TYPE_WORK);
+        drop(catalog);
+
+        let mut constraint_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+        assert_eq!(
+            build_core_method_evidence_catalog(
+                &program,
+                &mut constraint_short,
+                &mut TypeWorkBudget::default(),
+            )
+            .expect_err("one missing concrete-source catalog unit rejects")
+            .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+        assert_eq!(
+            build_core_method_evidence_catalog(
+                &program,
+                &mut InterfaceConstraintBudget::default(),
+                &mut type_short,
+            )
+            .expect_err("one missing catalog Type cell rejects")
+            .reason(),
+            EvidenceValidationReason::TypeResourceExhausted,
+        );
+        for _ in 0..2 {
+            let mut exact_constraint = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+            let mut exact_type = TypeWorkBudget::with_limit(TYPE_WORK);
+            let retry = build_core_method_evidence_catalog(
+                &program,
+                &mut exact_constraint,
+                &mut exact_type,
+            )
+            .expect("a fresh exact concrete-source catalog retries");
+            assert_eq!(exact_constraint.used(), CONSTRAINT_WORK);
+            assert_eq!(exact_type.used(), TYPE_WORK);
             drop(retry);
         }
     }

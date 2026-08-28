@@ -899,6 +899,51 @@ and evaluator semantic or state-machine changes.
   evaluator tree remains byte-identical to `5ce71d1`; no specification file or
   production resource-limit assignment changed. CP5 remains open for semantic
   re-review and final root verification.
+- A second semantic re-review of `98000f7` found one remaining concrete-source
+  authority gap. A polymorphic `Convert<Wrap<A>>::convert<X>` adapter selected
+  the concrete monomorphic `Base<Int>` implementation, but independent Core
+  validation trusted the copied edge producer node, tag, selection identity,
+  and type. The focused RED coordinated those copied fields while replacing
+  the selected source with a reachable same-typed ordinary global; validation
+  admitted the original tamper before production changed. Existing linked
+  selection and checked implementation-method facts completely determine the
+  source, so no language, selection, or representation rule was added.
+- The correction retains a bounded concrete-source catalog only for
+  monomorphic implementation sources reachable from existing polymorphic
+  adapter-edge expectations. Each row records the occurrence and selection
+  node, exact `ImplMethodId`, checked binder, selected head arguments, and
+  ordered prerequisite selection-node/method relation, including the exact
+  enclosing evidence-function position for abstract prerequisites. It retains
+  no Core `NodeId`. Independent validation now replays the canonical variable,
+  exact head `TypeApplication`, and complete prerequisite `Apply` chain from
+  those immutable facts. The coordinated same-typed global mutation rejects
+  in original Core and after identity and literal-fold transforms.
+- The general catalog probe moves from 91 to 101 constraint units because the
+  bounded source pass performs two exact expectation passes, reserves its root
+  worklist, and classifies the selected source; type work remains 74. The
+  concrete-source catalog fixture is exactly 125 constraint and 36 type units,
+  and its independent validator is exactly 588 units. Each has one-short
+  rejection and two fresh exact retries. The 2,197 figure is the predecessor
+  baseline inside the unchanged polymorphic authority probe; adding 22
+  precharged capacity rows and 28 identity units gives that fixture's 2,247
+  total. The earlier `cf93de7` transform fixture used 304/300 Core units plus
+  three anchor reads for 307/303 total; `98000f7` replaced it with the
+  concrete one-edge 678/678 fixture. Four exact concrete-source matcher lookups
+  move that current identity/fold boundary to 682/682, with one-short failure,
+  exact success, shared catalog `Arc`, fresh validation, and `Weak` teardown.
+  Builder's isolated one-anchor boundary remains 14. The CP5 reservation
+  remains 14 units, cumulative reserved use remains 52/70, 18 units remain
+  unreserved, and Checkpoint 6 is not reserved. CP5 remains open for semantic
+  re-review and final root verification.
+- Second-correction verification passes 707 library tests, all 62
+  Core-validation integration tests, all 21 architecture tests, and the
+  complete 1,514-test quiet locked workspace/all-target/all-feature matrix.
+  The broader locked workspace/all-feature run also passes. Formatting,
+  locked all-target/all-feature checking, strict Clippy with warnings denied,
+  `cargo xtask verify` including rustdoc, Markdown lint, and diff hygiene pass.
+  The evaluator tree remains byte-identical to `5ce71d1`; no specification file
+  or production resource-limit assignment changed. CP5 remains open for
+  semantic re-review and final root verification.
 
 ## Verification
 

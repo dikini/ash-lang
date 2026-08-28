@@ -869,7 +869,10 @@ mod tests {
         // anchor Type-clone/Builder-replay, and finish units. Reading the
         // immutable sidecar costs X=4, and remapping the exact prerequisite
         // producer costs G=1 before the embedded NodeId lookup.
-        const CORE_WORK: usize = 673;
+        // The edge-local concrete-source catalog adds S=1 lookup cell to each
+        // of the four method-filtered expectation matches replayed here.
+        const CONCRETE_SOURCE_LOOKUP_WORK: usize = 4;
+        const CORE_WORK: usize = 673 + CONCRETE_SOURCE_LOOKUP_WORK;
         const ANCHOR_REPLAY_WORK: usize = 4;
         const PRODUCER_REMAP_WORK: usize = 1;
         const IDENTITY_WORK: usize = CORE_WORK + ANCHOR_REPLAY_WORK + PRODUCER_REMAP_WORK;

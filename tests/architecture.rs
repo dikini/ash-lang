@@ -407,10 +407,12 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.value_type", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceAnchor.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.adapters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.concrete_sources", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.domains", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.implementation_owners", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.methods", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.occurrences", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Mixed),
+    kind_site!("src/core/dialect.rs::MethodEvidenceConcreteSource.head_arguments", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceDomain.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceImplementationOwner.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceImplementationOwner.source_parameters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -4160,6 +4162,8 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                 identifier,
                 "MethodEvidenceAdapter"
                     | "MethodEvidenceAdapterEdge"
+                    | "MethodEvidenceConcretePrerequisite"
+                    | "MethodEvidenceConcreteSource"
                     | "MethodEvidenceAnchor"
                     | "MethodEvidenceAnchorRole"
                     | "MethodEvidenceCatalog"
@@ -4176,6 +4180,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "WrongRequirementPosition"
                     | "authenticate_method_evidence"
                     | "consumed_method_evidence"
+                    | "concrete_sources"
                     | "empty_method_evidence"
                     | "implementation_owner_count"
                     | "method_evidence"
@@ -4207,6 +4212,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "method_evidence_anchors"
                     | "method_evidence_producer_matches"
                     | "method_evidence_scope_binder"
+                    | "validate_concrete_adapter_source"
                     | "validate_implementation_owner_anchor"
                     | "validate_method_evidence_authority"
                     | "validate_method_evidence_carrier_incoming"
