@@ -126,6 +126,76 @@ impl InterfaceConstraintBudget {
         }
         Ok(())
     }
+
+    /// Authenticates exact equality during one already-required structural
+    /// traversal. Successful work is identical to [`Self::charge_type`] for
+    /// `left`; the paired worklist remains fallible and charges before growth.
+    pub(crate) fn charge_equal_types(&mut self, left: &Type, right: &Type) -> Result<bool, ()> {
+        enum Task<'a> {
+            Compare(&'a Type, &'a Type),
+            Sequence(std::iter::Zip<std::slice::Iter<'a, Type>, std::slice::Iter<'a, Type>>),
+        }
+
+        self.charge(1)?;
+        let mut pending = Vec::new();
+        pending.try_reserve(1).map_err(|_| ())?;
+        pending.push(Task::Compare(left, right));
+        while let Some(task) = pending.pop() {
+            let Task::Compare(left, right) = task else {
+                let Task::Sequence(mut remaining) = task else {
+                    unreachable!()
+                };
+                if let Some((left, right)) = remaining.next() {
+                    self.charge(2)?;
+                    pending.try_reserve(2).map_err(|_| ())?;
+                    pending.push(Task::Sequence(remaining));
+                    pending.push(Task::Compare(left, right));
+                }
+                continue;
+            };
+            self.charge(1)?;
+            match (left, right) {
+                (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+                (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
+                (Type::Variable(left), Type::Variable(right)) if left == right => {}
+                (Type::Inference(left), Type::Inference(right)) if left == right => {}
+                (
+                    Type::Application(left_function, left_argument),
+                    Type::Application(right_function, right_argument),
+                )
+                | (
+                    Type::Function(left_function, left_argument),
+                    Type::Function(right_function, right_argument),
+                ) => {
+                    self.charge(2)?;
+                    pending.try_reserve(2).map_err(|_| ())?;
+                    pending.push(Task::Compare(left_argument, right_argument));
+                    pending.push(Task::Compare(left_function, right_function));
+                }
+                (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
+                    self.charge(1)?;
+                    pending.try_reserve(1).map_err(|_| ())?;
+                    pending.push(Task::Sequence(left.iter().zip(right.iter())));
+                }
+                (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
+                    if left_parameters.len() == right_parameters.len() =>
+                {
+                    if !same_kinded_type_parameters_with_charge(
+                        left_parameters,
+                        right_parameters,
+                        |work| self.charge(work),
+                    )? {
+                        return Ok(false);
+                    }
+                    self.charge(1)?;
+                    pending.try_reserve(1).map_err(|_| ())?;
+                    pending.push(Task::Compare(left, right));
+                }
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
 }
 
 /// Checks the generic implementation prerequisite termination judgment.
@@ -3118,6 +3188,62 @@ mod tests {
             .charge_type(&ty)
             .expect("the exact traversal and worklist budget should fit");
         assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn constraint_type_equality_reuses_the_exact_traversal_boundary() {
+        const EXACT_WORK: usize = 6;
+        let left = Type::Function(Box::new(Type::Int), Box::new(Type::Bool));
+        let equal = Type::Function(Box::new(Type::Int), Box::new(Type::Bool));
+        let different = Type::Function(Box::new(Type::Int), Box::new(Type::Unit));
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(short.charge_equal_types(&left, &equal), Err(()));
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        for _ in 0..2 {
+            let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            assert_eq!(exact.charge_equal_types(&left, &equal), Ok(true));
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
+
+        let mut mismatch = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(mismatch.charge_equal_types(&left, &different), Ok(false));
+        assert_eq!(mismatch.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn constraint_type_equality_is_exact_and_reusable_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+        const EXACT_WORK: usize = 4 * DEPTH + 2;
+
+        std::thread::Builder::new()
+            .name("deep-constraint-type-equality".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let deep_type = || {
+                    let mut ty = Type::Unit;
+                    for _ in 0..DEPTH {
+                        ty = Type::Function(Box::new(Type::Int), Box::new(ty));
+                    }
+                    IterativeTypeOwner::new(ty)
+                };
+                let left = deep_type();
+                let right = deep_type();
+
+                let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+                assert_eq!(short.charge_equal_types(&left, &right), Err(()));
+                assert_eq!(short.used(), EXACT_WORK - 1);
+
+                for _ in 0..2 {
+                    let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+                    assert_eq!(exact.charge_equal_types(&left, &right), Ok(true));
+                    assert_eq!(exact.used(), EXACT_WORK);
+                }
+            })
+            .expect("the deep equality worker should spawn")
+            .join()
+            .expect("deep equality and teardown should remain stack-safe");
     }
 
     #[test]

@@ -3889,9 +3889,20 @@ fn clone_checked_requirement(
 
 fn clone_checked_interface_fact(
     fact: &CheckedInterfaceFact,
+    source: Option<&ResolvedInterfaceDeclaration>,
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<CheckedInterfaceFact, ResolvedBuildFailure> {
+    if source.is_some_and(|source| {
+        source.id != fact.id
+            || source.spelling != fact.spelling
+            || source.methods.len() != fact.methods.len()
+    }) {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    // Each method slot reserves the retained method relation. For a local
+    // source, that same scalar authenticates the first source-origin node;
+    // deeper origin nodes charge below.
     constraint_work
         .charge(fact.methods.len().saturating_add(1))
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -3899,10 +3910,34 @@ fn clone_checked_interface_fact(
     methods
         .try_reserve(fact.methods.len())
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-    for method in &fact.methods {
-        constraint_work
-            .charge_type(&method.value_type)
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    for (method_index, method) in fact.methods.iter().enumerate() {
+        let source_method = source.and_then(|source| source.methods.get(method_index));
+        if let Some(source_method) = source_method {
+            authenticate_method_binder_authority(method, constraint_work)?;
+            if source_method.id != method.id
+                || source_method.spelling != method.spelling
+                || source_method.span != method.span
+                || !same_origin_after_base_charge(
+                    &source_method.origin,
+                    &method.origin,
+                    constraint_work,
+                )?
+                || !constraint_work
+                    .charge_equal_types(&source_method.annotation.ty, &method.value_type)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+                || !same_summary_resolved_type_variables_with_constraint_budget(
+                    &source_method.type_parameters,
+                    method.authoritative_type_parameters(),
+                    constraint_work,
+                )?
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        } else {
+            constraint_work
+                .charge_type(&method.value_type)
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        }
         let value_type = IterativeTypeOwner::new(
             clone_type_with_budget(&method.value_type, type_work)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?,
@@ -5601,6 +5636,58 @@ fn same_origin_with_constraint_budget(
     }
 }
 
+fn same_origin_after_base_charge(
+    mut left: &Origin,
+    mut right: &Origin,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    loop {
+        match (left, right) {
+            (Origin::Source(left), Origin::Source(right)) => return Ok(left == right),
+            (
+                Origin::Generated {
+                    cause: left_cause,
+                    reason: left_reason,
+                },
+                Origin::Generated {
+                    cause: right_cause,
+                    reason: right_reason,
+                },
+            ) if left_reason == right_reason => {
+                constraint_work
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                left = left_cause;
+                right = right_cause;
+            }
+            (
+                Origin::Related {
+                    primary: left_primary,
+                    related: left_related,
+                },
+                Origin::Related {
+                    primary: right_primary,
+                    related: right_related,
+                },
+            ) if left_related.len() == right_related.len() => {
+                let next_work = left_related
+                    .len()
+                    .checked_add(1)
+                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                constraint_work
+                    .charge(next_work)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                if left_related != right_related {
+                    return Ok(false);
+                }
+                left = left_primary;
+                right = right_primary;
+            }
+            _ => return Ok(false),
+        }
+    }
+}
+
 fn same_summary_resolved_type_variables_with_constraint_budget(
     left: &[ResolvedTypeVariable],
     right: &[ResolvedTypeVariable],
@@ -5989,8 +6076,8 @@ fn same_checked_interface_fact_with_optional_nominal_observer(
         return Ok(false);
     }
     for (left, right) in left.methods.iter().zip(&right.methods) {
-        authenticate_method_binder_authority(left, None, constraint_work)?;
-        authenticate_method_binder_authority(right, None, constraint_work)?;
+        authenticate_method_binder_authority(left, constraint_work)?;
+        authenticate_method_binder_authority(right, constraint_work)?;
         if left.id != right.id
             || left.spelling != right.spelling
             || left.span != right.span
@@ -6442,7 +6529,6 @@ fn clone_method_binder_authority_payload(
 
 fn authenticate_method_binder_authority(
     method: &CheckedInterfaceMethodFact,
-    source: Option<&ResolvedInterfaceMethod>,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<(), ResolvedBuildFailure> {
     if method.method_binder_authority.is_some() != !method.type_parameters().is_empty() {
@@ -6454,34 +6540,6 @@ fn authenticate_method_binder_authority(
         constraint_work,
     )? {
         return Err(ResolvedBuildFailure::InvalidState);
-    }
-    if source.is_some_and(|source| {
-        source.id != method.id || source.spelling != method.spelling || source.span != method.span
-    }) {
-        return Err(ResolvedBuildFailure::InvalidState);
-    }
-    if let Some(source) = source {
-        if !method.authoritative_type_parameters().is_empty()
-            && (!same_origin_with_constraint_budget(
-                &source.origin,
-                &method.origin,
-                constraint_work,
-            )? || !same_type_with_constraint_budget(
-                &source.annotation.ty,
-                method.value_type(),
-                constraint_work,
-            )
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?)
-        {
-            return Err(ResolvedBuildFailure::InvalidState);
-        }
-        if !same_summary_resolved_type_variables_with_constraint_budget(
-            &source.type_parameters,
-            method.authoritative_type_parameters(),
-            constraint_work,
-        )? {
-            return Err(ResolvedBuildFailure::InvalidState);
-        }
     }
     Ok(())
 }
@@ -6845,7 +6903,7 @@ impl ExportSummary {
                 type_work,
             )?;
             for method in &interface.methods {
-                authenticate_method_binder_authority(method, None, constraint_work)?;
+                authenticate_method_binder_authority(method, constraint_work)?;
                 register_summary_parameters(
                     method.authoritative_type_parameters(),
                     SummaryBinderOwner::Method(method.id),
@@ -6877,7 +6935,7 @@ impl ExportSummary {
                 type_work,
             )?;
             for method in &interface.methods {
-                authenticate_method_binder_authority(method, None, constraint_work)?;
+                authenticate_method_binder_authority(method, constraint_work)?;
                 register_summary_parameters(
                     method.authoritative_type_parameters(),
                     SummaryBinderOwner::Method(method.id),
@@ -7664,14 +7722,9 @@ impl ExportSummary {
                 if method.id != checked_method.id || method.spelling != checked_method.spelling {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                authenticate_method_binder_authority(
-                    checked_method,
-                    Some(method),
-                    constraint_work,
-                )?;
             }
             if checked_interfaces_by_id
-                .insert(checked.id, checked)
+                .insert(checked.id, (interface, checked))
                 .is_some()
             {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -7701,9 +7754,14 @@ impl ExportSummary {
                 .interfaces
                 .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let checked = match candidate.source {
-                CandidateFactSource::Local => checked_interfaces_by_id.get(&candidate.id).copied(),
-                CandidateFactSource::Imported => resolved.imported.interface(candidate.id),
+            let (source, checked) = match candidate.source {
+                CandidateFactSource::Local => checked_interfaces_by_id
+                    .get(&candidate.id)
+                    .map(|(source, checked)| (Some(*source), *checked)),
+                CandidateFactSource::Imported => resolved
+                    .imported
+                    .interface(candidate.id)
+                    .map(|checked| (None, checked)),
             }
             .ok_or(ResolvedBuildFailure::InvalidState)?;
             let owner_is_publisher = candidate.id.module() == resolved.module;
@@ -7723,6 +7781,7 @@ impl ExportSummary {
             let position = summary.interfaces.len();
             summary.interfaces.push(clone_checked_interface_fact(
                 checked,
+                source,
                 type_work,
                 constraint_work,
             )?);
@@ -7744,7 +7803,7 @@ impl ExportSummary {
             let interface = match candidate.source {
                 CandidateFactSource::Local => checked_interfaces_by_id
                     .get(&candidate.id.interface())
-                    .copied(),
+                    .map(|(_, checked)| *checked),
                 CandidateFactSource::Imported => {
                     resolved.imported.interface(candidate.id.interface())
                 }
@@ -7958,6 +8017,7 @@ impl ExportSummary {
                 }
                 summary.hidden_interfaces.push(clone_checked_interface_fact(
                     fact,
+                    None,
                     type_work,
                     constraint_work,
                 )?);
@@ -15049,6 +15109,134 @@ mod tests {
     }
 
     #[test]
+    fn freeze_rejects_coherently_forged_monomorphic_method_type_and_origin_before_publication() {
+        let source = SourceFile::new("monomorphic-method-forgery.ash", "interface Boxed<I>")
+            .expect("the monomorphic-forgery source should fit");
+        let span = source
+            .span(ByteRange::new(0, 18).expect("the monomorphic-forgery range should be ordered"))
+            .expect("the monomorphic-forgery span should fit");
+        let module = ModuleId::new(9_835);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let resolved_interface = ResolvedInterfaceDeclaration {
+            id: interface,
+            public: true,
+            spelling: "Boxed".to_owned(),
+            parameter: ResolvedTypeVariable {
+                id: interface_parameter,
+                spelling: "I".to_owned(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            methods: Box::new([ResolvedInterfaceMethod {
+                id: method,
+                spelling: "keep".to_owned(),
+                annotation: ResolvedType {
+                    ty: Type::Function(
+                        Box::new(Type::Variable(interface_parameter)),
+                        Box::new(Type::Variable(interface_parameter)),
+                    ),
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                type_parameters: Box::new([]),
+                has_explicit_type_parameters: false,
+                origin: Origin::Source(span),
+                span,
+            }]),
+            origin: Origin::Source(span),
+            span,
+        };
+        let forged_origin = || Origin::Generated {
+            cause: Box::new(Origin::Source(span)),
+            reason: crate::source::GeneratedReason::ConstantFolding,
+        };
+        let mut checked = [CheckedInterfaceFact {
+            id: interface,
+            spelling: "Boxed".to_owned(),
+            parameter: resolved_interface.parameter.clone(),
+            methods: Box::new([CheckedInterfaceMethodFact {
+                id: method,
+                spelling: "keep".to_owned(),
+                type_parameters: Box::new([]),
+                method_binder_authority: None,
+                value_type: Type::Function(
+                    Box::new(Type::Variable(interface_parameter)),
+                    Box::new(Type::Unit),
+                ),
+                origin: forged_origin(),
+                span,
+            }]),
+            origin: Origin::Source(span),
+            span,
+        }];
+        let mut export_candidate = ResolvedExportCandidate::default();
+        export_candidate
+            .try_insert_interface(
+                "Boxed".to_owned(),
+                CandidateInterface {
+                    id: interface,
+                    source: CandidateFactSource::Local,
+                },
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the interface export candidate should fit");
+        export_candidate
+            .try_insert_method(
+                "keep".to_owned(),
+                CandidateMethod {
+                    id: method,
+                    source: CandidateFactSource::Local,
+                },
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the method export candidate should fit");
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module,
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported: ImportedFacts::default(),
+            direct_dependencies: Vec::new(),
+            declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
+            interfaces: vec![resolved_interface],
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate,
+            span,
+        });
+
+        let assert_rejected = |checked: &[CheckedInterfaceFact]| {
+            assert_eq!(
+                ExportSummary::freeze(
+                    &resolved,
+                    &[],
+                    checked,
+                    &[],
+                    &[],
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                ),
+                Err(ResolvedBuildFailure::InvalidState),
+                "a monomorphic checked mirror must retain its source monotype and origin",
+            );
+        };
+
+        assert_rejected(&checked);
+        checked[0].methods[0].origin = Origin::Source(span);
+        assert_rejected(&checked);
+        checked[0].methods[0].value_type = Type::Function(
+            Box::new(Type::Variable(interface_parameter)),
+            Box::new(Type::Variable(interface_parameter)),
+        );
+        checked[0].methods[0].origin = forged_origin();
+        assert_rejected(&checked);
+    }
+
+    #[test]
     fn method_binder_authority_retention_has_exact_independent_ledgers() {
         // One embedded private payload is graph storage. Each of the two binder copies owns
         // one record plus one `Type` Kind node in TypeWork.
@@ -15100,7 +15288,7 @@ mod tests {
         assert!(method.method_binder_authority.is_none());
         let mut budget = crate::interface::InterfaceConstraintBudget::with_limit(0);
 
-        authenticate_method_binder_authority(method, None, &mut budget)
+        authenticate_method_binder_authority(method, &mut budget)
             .expect("an empty embedded authority should require no graph work");
         assert_eq!(budget.used(), 0);
     }
@@ -15112,7 +15300,6 @@ mod tests {
         assert_eq!(
             authenticate_method_binder_authority(
                 &polymorphic.interfaces[0].methods[0],
-                None,
                 &mut crate::interface::InterfaceConstraintBudget::default(),
             ),
             Err(ResolvedBuildFailure::InvalidState),
@@ -15124,7 +15311,6 @@ mod tests {
         assert_eq!(
             authenticate_method_binder_authority(
                 &monomorphic.interfaces[0].methods[0],
-                None,
                 &mut crate::interface::InterfaceConstraintBudget::with_limit(0),
             ),
             Err(ResolvedBuildFailure::InvalidState),

@@ -622,6 +622,45 @@ and evaluator semantic or state-machine changes.
   semantic and Rust/resource re-reviews remain pending. The Checkpoint 4
   reservation remains 12 units, cumulative reserved use remains 38/70, 32
   units remain unreserved, and Checkpoint 5 is not reserved.
+- Checkpoint 4 semantic re-review rejected correction `f027da9` with one
+  important finding. The exact RED,
+  `cargo test --locked --lib
+  resolved::tests::freeze_rejects_coherently_forged_monomorphic_method_type_and_origin_before_publication
+  -- --exact`, kept the canonical method identity, spelling, owner, order,
+  span, empty binder mirror, and `None` private payload while replacing the
+  source monotype and origin; `ExportSummary::freeze` incorrectly returned a
+  publishable summary. The source-authentication branch had guarded origin and
+  monotype comparison on a nonempty method-binder payload.
+- The third correction authenticates source origin and monotype for both
+  monomorphic and polymorphic local methods while cloning the body-free
+  summary fact. The already-reserved method relation authenticates the first
+  origin node, with each deeper origin node charged separately. A fallible
+  paired type worklist authenticates exact source/checked equality during the
+  existing charged summary-clone traversal, so successful work equals the
+  preceding `charge_type` boundary rather than adding a second traversal.
+  Binder presence and private/public/source equality retain their previous
+  order and ownership. Imported mirrors still clone only already-authenticated
+  private authority, and local dependent checking consumes that private slice.
+  No monomorphic row, allocation, registry entry, or production-limit change
+  was introduced.
+- The new source-origin/type RED is GREEN for the combined forge and for each
+  mutation independently. The paired traversal rejects one-short, succeeds
+  exactly and reproducibly at six cells for a three-node function, and remains
+  exact and stack-safe at `4D + 2` for depth `D = 32,768`. The existing
+  polymorphic coherent forge, complete detached binder matrix, linked-diamond
+  carrier matrix, deep and wide summary tests, all four cross-stage resource
+  tests, and the default 2,800-interface acceptance witness remain GREEN.
+  Monomorphic cumulative accounting remains `37W`, `52W + 1`, `62W + 12`,
+  `65W + 24`, and `110W + 69`; the default witness still ends at 308,069.
+  Focused verification passes all 682 library tests, the planned 47 product
+  tests with counts 2/20/1/14/2/8, all 21 architecture tests, and all four
+  cross-stage resource tests. Complete workspace verification passes all
+  1,483 tests, strict Clippy with warnings denied, formatting, compilation,
+  metadata, documentation generation, Markdown lint, and diff hygiene. The
+  correction used `gpt-5.6-sol` at xhigh reasoning. Independent semantic and
+  Rust/resource re-reviews remain pending. The Checkpoint 4 reservation
+  remains 12 units, cumulative reserved use remains 38/70, 32 units remain
+  unreserved, and Checkpoint 5 is not reserved.
 
 ## Verification
 
