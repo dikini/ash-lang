@@ -2245,6 +2245,25 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
+    pub(crate) fn replace_first_implementation_method_head_parameter_count_for_test(
+        &mut self,
+        module: ModuleId,
+        replacement: usize,
+    ) -> bool {
+        let Some(method) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.module == module)
+            .and_then(|group| group.implementation_facts.first_mut())
+            .and_then(|implementation| implementation.methods.first_mut())
+        else {
+            return false;
+        };
+        method.head_type_parameter_count = replacement;
+        true
+    }
+
+    #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn replace_available_route_for_test(
         &mut self,

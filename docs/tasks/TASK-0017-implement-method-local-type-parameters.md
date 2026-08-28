@@ -661,6 +661,37 @@ and evaluator semantic or state-machine changes.
   Rust/resource re-reviews remain pending. The Checkpoint 4 reservation
   remains 12 units, cumulative reserved use remains 38/70, 32 units remain
   unreserved, and Checkpoint 5 is not reserved.
+- Checkpoint 4 semantic re-review rejected correction `a96e49a` with one
+  important finding and no other findings. The exact RED,
+  `cargo test --locked --lib
+  evidence_validation::tests::rejects_forged_implementation_head_method_partition_before_capability
+  -- --exact`, changed only an implementation method's stored
+  `head_type_parameter_count` from one to zero while preserving its canonical
+  four-binder head-then-method scheme. Linked validation incorrectly returned
+  a `ValidatedInterfaceProgram` and its method-evidence capability because it
+  compared only the concatenated binder sequence.
+- The fourth correction requires the stored partition to equal the canonical
+  implementation head length at the linked per-method boundary before the
+  existing concatenated-binder authentication. The scalar comparison executes
+  in the already-charged method-relation slot and adds no allocation, carrier,
+  row, constraint unit, TypeWork unit, or production-limit change. The exact
+  partition RED is GREEN and publishes no capability. The positive
+  polymorphic implementation, reordered head-then-method binder, source
+  authority, method identity, deep, one-short, and accepted-capacity witnesses
+  remain GREEN.
+- Resource accounting remains `37W`, `52W + 1`, `62W + 12`, `65W + 24`, and
+  `110W + 69`; the default 2,800-interface witness still succeeds at 308,069.
+  The generic implementation-body boundary remains six units. Focused
+  verification passes all 683 library tests, the planned 47 product tests with
+  counts 2/20/1/14/2/8, all 21 architecture tests, and all four cross-stage
+  resource tests. Complete workspace verification passes all 1,484 tests. The
+  correction used `gpt-5.6-sol` at xhigh reasoning. Formatting, locked
+  all-target compilation, strict locked workspace/all-target/all-feature
+  Clippy, test listing, `cargo xtask verify`, documentation generation,
+  Markdown lint, and diff hygiene pass. Independent semantic and Rust/resource
+  re-reviews remain pending. The Checkpoint 4 reservation remains 12 units,
+  cumulative reserved use remains 38/70, 32 units remain unreserved, and
+  Checkpoint 5 is not reserved.
 
 ## Verification
 

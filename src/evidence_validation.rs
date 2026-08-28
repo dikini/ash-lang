@@ -1316,13 +1316,15 @@ fn validate_implementation_consistency<'a>(
             .method_groups
             .get(checked.source_group)
             .ok_or_else(|| unknown(span))?;
-        if !same_parameter_pairs_to_two_record_slices_charged(
-            &method.scheme.type_parameters,
-            &fact.head_parameters,
-            interface_method.authoritative_type_parameters(),
-            budget,
-            method.span,
-        )? {
+        if method.head_type_parameter_count() != fact.head_parameters.len()
+            || !same_parameter_pairs_to_two_record_slices_charged(
+                &method.scheme.type_parameters,
+                &fact.head_parameters,
+                interface_method.authoritative_type_parameters(),
+                budget,
+                method.span,
+            )?
+        {
             return Err(unknown(method.span));
         }
         let method_variable_count = variables
@@ -5311,6 +5313,26 @@ mod tests {
         assert_eq!(
             validate_interface_evidence(program)
                 .expect_err("a reordered combined implementation method scheme must fail")
+                .reason(),
+            EvidenceValidationReason::UnknownIdentity,
+        );
+    }
+
+    #[test]
+    fn rejects_forged_implementation_head_method_partition_before_capability() {
+        let mut program = polymorphic_method_program();
+        let module = program.groups()[0].module();
+        let method = &program.groups()[0].implementation_facts()[0].methods[0];
+        assert_eq!(method.head_type_parameter_count(), 1);
+        assert_eq!(method.scheme.type_parameters.len(), 4);
+        assert!(
+            program.replace_first_implementation_method_head_parameter_count_for_test(module, 0),
+            "the fixture should expose only its stored head/method partition",
+        );
+
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("a forged partition must publish no validation capability")
                 .reason(),
             EvidenceValidationReason::UnknownIdentity,
         );
