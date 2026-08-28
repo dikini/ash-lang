@@ -419,6 +419,7 @@ enum TypeParameterOwnerBoundary {
     OperationalGlobal,
     Implementation,
     Interface,
+    InterfaceMethod,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -819,6 +820,13 @@ fn interface_method(parser: &mut Parser<'_>) {
     parser.start(NodeKind::InterfaceMethod);
     let recovery_start = parser.pending_recovery_count();
     binder(parser);
+    if parser.at(&TokenKind::Less) {
+        let outcome = type_parameters(parser, TypeParameterOwnerBoundary::InterfaceMethod);
+        if outcome.stops_declaration() {
+            parser.finish();
+            return;
+        }
+    }
     if !parser.at(&TokenKind::Colon) {
         report_pending_expected(parser, ExpectedForm::Colon);
         consume_to_line_or_brace(parser);
@@ -1617,6 +1625,7 @@ fn at_type_parameter_owner(parser: &Parser<'_>, owner: TypeParameterOwnerBoundar
             starts_implementation_interface_application(parser)
         }
         TypeParameterOwnerBoundary::Interface => parser.at(&TokenKind::LeftBrace),
+        TypeParameterOwnerBoundary::InterfaceMethod => parser.at(&TokenKind::Colon),
     }
 }
 
@@ -1650,6 +1659,9 @@ const fn type_parameter_owner_boundary(
             SynchronizationBoundary::ImplementationInterfaceHead
         }
         TypeParameterOwnerBoundary::Interface => SynchronizationBoundary::InterfaceBodyOpeningBrace,
+        TypeParameterOwnerBoundary::InterfaceMethod => {
+            SynchronizationBoundary::InterfaceMethodColon
+        }
     }
 }
 

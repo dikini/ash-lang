@@ -152,6 +152,8 @@ pub struct SurfaceInterfaceDeclaration {
 pub struct SurfaceInterfaceMethod {
     /// The file-wide method spelling.
     pub name: SurfaceName,
+    /// The optional explicit ordered method-local type parameters.
+    pub type_parameters: Option<Vec<SurfaceTypeParameter>>,
     /// The declared source value type.
     pub annotation: SurfaceType,
     /// The complete method signature span.

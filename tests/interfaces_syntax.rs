@@ -5,7 +5,10 @@ use ash::{
         SynchronizationBoundary, parse, project_module,
     },
     source::SourceFile,
-    surface::{SurfaceDeclarationIndex, SurfaceDefinitionKind, SurfaceReference, SurfaceTypeKind},
+    surface::{
+        SurfaceDeclarationIndex, SurfaceDefinitionKind, SurfaceKindKind, SurfaceReference,
+        SurfaceTypeKind,
+    },
 };
 
 fn spanned_text(source: &SourceFile, span: ash::source::Span) -> &str {
@@ -49,6 +52,181 @@ fn assert_projection_refused(source: &SourceFile, tree: &ash::parser::ConcreteTr
         project_module(source, tree),
         Err(ProjectionError::RecoveryNodesPresent)
     );
+}
+
+fn first_node_of_kind(
+    node: &ash::parser::ConcreteNode,
+    kind: NodeKind,
+) -> Option<&ash::parser::ConcreteNode> {
+    if node.kind == kind {
+        return Some(node);
+    }
+    node.children.iter().find_map(|child| match child {
+        ConcreteElement::Node(child) => first_node_of_kind(child, kind),
+        ConcreteElement::Token(_) | ConcreteElement::Missing { .. } | ConcreteElement::Error(_) => {
+            None
+        }
+    })
+}
+
+#[test]
+fn projects_method_local_type_parameters_and_kinds() {
+    let text = concat!(
+        "interface Functor<F : Type -> Type> {\n",
+        "map<A, B : Type> : (A -> B, F<A>) -> F<B>\n",
+        "}\n",
+    );
+    let source =
+        SourceFile::new("method-parameters.ash", text).expect("method-parameter source should fit");
+    let tree = parse(lex(&source).expect("method-parameter source should lex"));
+    assert_complete_balanced_events(&tree);
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+    let parameter_list = first_node_of_kind(
+        tree.root().expect("the parser should retain a module root"),
+        NodeKind::TypeParameters,
+    )
+    .expect("the method binder list should retain its own concrete node");
+    let direct_tokens = parameter_list
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            ConcreteElement::Token(index) => Some(&tree.tokens()[*index]),
+            ConcreteElement::Node(_)
+            | ConcreteElement::Missing { .. }
+            | ConcreteElement::Error(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let start = direct_tokens
+        .first()
+        .expect("the binder list has an opening delimiter")
+        .span
+        .range()
+        .start() as usize;
+    let end = direct_tokens
+        .last()
+        .expect("the binder list has a closing delimiter")
+        .span
+        .range()
+        .end() as usize;
+    assert_eq!(&source.text()[start..end], "<A, B : Type>");
+
+    let module = project_module(&source, &tree).expect("method parameters should project");
+    let [method] = module.interfaces[0].methods.as_slice() else {
+        panic!("expected one method");
+    };
+    let Some(parameters) = method.type_parameters.as_deref() else {
+        panic!("an explicit method binder list must remain present");
+    };
+    assert_eq!(
+        parameters
+            .iter()
+            .map(|parameter| parameter.name.text.as_str())
+            .collect::<Vec<_>>(),
+        ["A", "B"],
+    );
+    assert_eq!(spanned_text(&source, parameters[0].span), "A");
+    assert_eq!(spanned_text(&source, parameters[1].span), "B : Type");
+    let kind = parameters[1]
+        .kind
+        .as_ref()
+        .expect("the second parameter has an explicit kind");
+    assert_eq!(kind.kind, SurfaceKindKind::Type);
+    assert_eq!(spanned_text(&source, kind.span), "Type");
+    assert_eq!(
+        spanned_text(&source, method.span),
+        "map<A, B : Type> : (A -> B, F<A>) -> F<B>"
+    );
+
+    let absent_text = "interface Identity<A> {\nid : A -> A\n}\n";
+    let absent_source =
+        SourceFile::new("absent-method-parameters.ash", absent_text).expect("source should fit");
+    let absent_tree = parse(lex(&absent_source).expect("source should lex"));
+    assert_complete_balanced_events(&absent_tree);
+    let absent_module =
+        project_module(&absent_source, &absent_tree).expect("absent parameters should project");
+    assert!(
+        absent_module.interfaces[0].methods[0]
+            .type_parameters
+            .is_none()
+    );
+}
+
+#[test]
+fn malformed_method_type_parameter_lists_are_parser_owned_and_recover() {
+    let cases = [
+        (
+            "empty list",
+            "interface Broken<A> {\nbad<> : A -> A\ngood : A -> A\n}\n",
+            "an identifier",
+            ">",
+            SynchronizationBoundary::TypeParameterListClosing,
+            ">",
+        ),
+        (
+            "duplicate separator",
+            "interface Broken<A> {\nbad<B,, C> : A -> A\ngood : A -> A\n}\n",
+            "an identifier",
+            ",",
+            SynchronizationBoundary::TypeParameterSeparator,
+            ",",
+        ),
+        (
+            "missing kind",
+            "interface Broken<A> {\nbad<B :, C> : A -> A\ngood : A -> A\n}\n",
+            "a kind",
+            ",",
+            SynchronizationBoundary::TypeParameterSeparator,
+            ",",
+        ),
+        (
+            "missing closing delimiter",
+            "interface Broken<A> {\nbad<B : Type : A -> A\ngood : A -> A\n}\n",
+            ">",
+            ":",
+            SynchronizationBoundary::InterfaceMethodColon,
+            ":",
+        ),
+    ];
+
+    for (case, text, expected, primary, boundary, synchronization) in cases {
+        let (source, tree) = parse_tree(text);
+        let [diagnostic] = tree.parse_diagnostics() else {
+            panic!(
+                "{case} should retain one parser diagnostic: {:?}",
+                tree.parse_diagnostics()
+            );
+        };
+        assert_eq!(diagnostic.reason, ParseReason::ExpectedForm, "{case}");
+        assert_eq!(diagnostic.expected.as_deref(), Some(expected), "{case}");
+        assert_eq!(
+            spanned_text(&source, diagnostic.primary.span()),
+            primary,
+            "{case}"
+        );
+        assert!(
+            matches!(
+                diagnostic.context.as_slice(),
+                [ParseContext::Synchronization { boundary: actual, span }]
+                    if *actual == boundary
+                        && spanned_text(&source, *span) == synchronization
+            ),
+            "{case}: {:?}",
+            diagnostic.context,
+        );
+        assert_eq!(
+            tree.events()
+                .iter()
+                .filter(|event| matches!(event, Event::Start(NodeKind::InterfaceMethod)))
+                .count(),
+            2,
+            "{case} must retain the following valid method as a complete method node",
+        );
+        assert_projection_refused(&source, &tree);
+    }
 }
 
 #[test]

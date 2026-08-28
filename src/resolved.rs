@@ -12828,8 +12828,10 @@ pub struct ResolvedInterfaceMethod {
     pub spelling: String,
     /// Resolved source value type.
     pub annotation: ResolvedType,
-    /// Free method-local type candidates retained for Task 4 rejection.
+    /// Ordered method-local binders or absent-list rejection candidates.
     pub type_parameters: Box<[ResolvedTypeVariable]>,
+    /// Whether `type_parameters` came from a present complete source list.
+    pub has_explicit_type_parameters: bool,
     /// Causal method provenance.
     pub origin: Origin,
     /// Complete method-signature span.
@@ -19290,6 +19292,7 @@ mod tests {
                     span,
                 },
                 type_parameters: Box::new([]),
+                has_explicit_type_parameters: false,
                 origin: Origin::Source(span),
                 span,
             }]

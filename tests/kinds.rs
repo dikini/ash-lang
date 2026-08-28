@@ -441,6 +441,50 @@ fn top_level_kind_failures_follow_declaration_order() {
 }
 
 #[test]
+fn present_method_type_parameter_kinds_are_fixed_and_checked() {
+    resolve_valid(concat!(
+        "interface Functor<F : Type -> Type> {\n",
+        "map<A, G : Type -> Type> : (A, G<A>) -> F<A>\n",
+        "}\n",
+    ));
+
+    let fixture = KindFixture::new(concat!(
+        "interface Bad<A> {\n",
+        "bad<F : Type -> Type> : F -> A\n",
+        "}\n",
+    ));
+    let error = kind_error(&fixture);
+    assert_eq!(error.reason, KindReason::ExpectedType);
+    assert_eq!(error.expected_kind(), Some(&Kind::Type));
+    assert_eq!(error.found_kind(), Some(&arrow(Kind::Type, Kind::Type)));
+    assert_primary(&error, fixture.span_of("F", 1));
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(
+        error.related[0].span().range(),
+        fixture.span_of("F", 0).range()
+    );
+
+    let fixture = KindFixture::new(concat!(
+        "interface Bad<A> {\n",
+        "bad<B> : B<Int> -> A\n",
+        "}\n",
+    ));
+    let error = kind_error(&fixture);
+    assert_eq!(error.reason, KindReason::NotApplicable);
+    assert_eq!(
+        error.expectation(),
+        &KindExpectation::Function { domain: Kind::Type }
+    );
+    assert_eq!(error.found_kind(), Some(&Kind::Type));
+    assert_primary(&error, fixture.span_of("B<Int>", 0));
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(
+        error.related[0].span().range(),
+        fixture.span_of("B", 1).range()
+    );
+}
+
+#[test]
 fn method_local_candidate_precedes_its_invalid_kind_application() {
     assert_eq!(
         later_owner_reason(concat!(

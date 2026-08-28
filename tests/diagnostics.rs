@@ -1127,6 +1127,106 @@ fn rank_one_resolution_and_kind_diagnostics_retain_exact_type_sites() {
 }
 
 #[test]
+fn method_type_parameter_diagnostics_retain_boundary_and_spans() {
+    let duplicate_text = "interface Bad<A> {\nbad<A> : A -> A\n}\n";
+    let PipelineFailure::Resolution(duplicate) =
+        failure("duplicate-method-owner-parameter.ash", duplicate_text)
+    else {
+        panic!("an interface-parameter duplicate should fail during resolution");
+    };
+    assert_eq!(duplicate.reason, ResolveReason::DuplicateTypeParameter);
+    assert_eq!(
+        (
+            duplicate.primary.span().range().start(),
+            duplicate.primary.span().range().end(),
+        ),
+        occurrence_range(duplicate_text, "A", 1),
+    );
+    assert_eq!(duplicate.related.len(), 1);
+    assert_eq!(
+        (
+            duplicate.related[0].span().range().start(),
+            duplicate.related[0].span().range().end(),
+        ),
+        occurrence_range(duplicate_text, "A", 0),
+    );
+
+    let unused_text = "interface Bad<A> {\nbad<B, C> : (A, B) -> B\n}\n";
+    let PipelineFailure::Resolution(unused) = failure("unused-method-parameter.ash", unused_text)
+    else {
+        panic!("an unused method parameter should fail during resolution");
+    };
+    assert_eq!(unused.reason, ResolveReason::UnusedTypeParameter);
+    assert_eq!(unused.found.as_deref(), Some("C"));
+    assert_eq!(
+        (
+            unused.primary.span().range().start(),
+            unused.primary.span().range().end(),
+        ),
+        occurrence_range(unused_text, "C", 0),
+    );
+
+    let unknown_text = "interface Bad<A> {\nbad<B> : (A, B, C) -> B\n}\n";
+    let PipelineFailure::Resolution(unknown) =
+        failure("unknown-method-parameter.ash", unknown_text)
+    else {
+        panic!("an unlisted method parameter should fail during resolution");
+    };
+    assert_eq!(unknown.reason, ResolveReason::UnknownType);
+    assert_eq!(unknown.found.as_deref(), Some("C"));
+    assert_eq!(
+        (
+            unknown.primary.span().range().start(),
+            unknown.primary.span().range().end(),
+        ),
+        occurrence_range(unknown_text, "C", 0),
+    );
+
+    let kind_text = "interface Bad<A> {\nbad<F : Type -> Type> : F -> A\n}\n";
+    let PipelineFailure::Kind(KindFailure::Source(kind)) =
+        failure("method-parameter-kind.ash", kind_text)
+    else {
+        panic!("a method parameter kind mismatch should fail during kind checking");
+    };
+    assert_eq!(kind.reason, KindReason::ExpectedType);
+    assert_eq!(kind.expected_kind(), Some(&Kind::Type));
+    assert_eq!(
+        kind.found_kind(),
+        Some(&Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)))
+    );
+    assert_eq!(
+        (
+            kind.primary.span().range().start(),
+            kind.primary.span().range().end(),
+        ),
+        occurrence_range(kind_text, "F", 1),
+    );
+    assert_eq!(kind.related.len(), 1);
+    assert_eq!(
+        (
+            kind.related[0].span().range().start(),
+            kind.related[0].span().range().end(),
+        ),
+        occurrence_range(kind_text, "F", 0),
+    );
+
+    let absent_text = "interface Bad<A> {\nbad : G<Int> -> A\n}\n";
+    let PipelineFailure::Typing(TypeError::Interface(absent)) =
+        failure("absent-method-parameter-list.ash", absent_text)
+    else {
+        panic!("an absent method list should retain interface-checking ownership");
+    };
+    assert_eq!(absent.reason.to_string(), "interface.method-parameter");
+    assert_eq!(
+        (
+            absent.primary.span().range().start(),
+            absent.primary.span().range().end(),
+        ),
+        occurrence_range(absent_text, "bad : G<Int> -> A", 0),
+    );
+}
+
+#[test]
 fn public_kind_diagnostics_retain_complete_causal_rows() {
     const OPTION: &str = "type Option<A> =\nNone\n| Some(A)\n";
     const HIGHER: &str = concat!(

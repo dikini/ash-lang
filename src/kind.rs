@@ -2419,10 +2419,20 @@ fn check_interface<'a>(
     environments: &mut KindEnvironments<'a>,
     budget: &mut TypeWorkBudget,
 ) -> Result<DeclarationKindOutcome, KindFailure> {
-    environments.install_owner_parameters(std::slice::from_ref(&interface.parameter), budget)?;
     for method in &interface.methods {
         authenticate_owner_parameters(registry, &method.type_parameters, budget)?;
-        if !method.type_parameters.is_empty() {
+        environments
+            .install_owner_parameters(std::slice::from_ref(&interface.parameter), budget)?;
+        if method.has_explicit_type_parameters {
+            for parameter in &method.type_parameters {
+                environments.insert_declared(
+                    parameter.id,
+                    &parameter.kind,
+                    parameter.origin.primary_span(),
+                    budget,
+                )?;
+            }
+        } else if !method.type_parameters.is_empty() {
             return Ok(DeclarationKindOutcome::Deferred);
         }
         environments.expect_value_type(&method.annotation, budget)?;

@@ -149,12 +149,96 @@ fn retains_method_local_type_candidates_for_interface_checking() {
         panic!("expected one retained method-local type candidate");
     };
 
+    assert!(!method.has_explicit_type_parameters);
     assert_eq!(candidate.spelling, "B");
     let Type::Function(domain, codomain) = &method.annotation.ty else {
         panic!("expected the method's resolved function type");
     };
     assert_eq!(domain.as_ref(), &Type::Variable(candidate.id));
     assert_eq!(codomain.as_ref(), &Type::Variable(interface.parameter.id));
+}
+
+#[test]
+fn method_type_binders_are_complete_ordered_and_declaration_ordered() {
+    let program = resolve_valid(concat!(
+        "interface Functor<F : Type -> Type> {\n",
+        "map<B, A, G : Type -> Type> : (A -> B, F<A>, G<A>) -> F<B>\n",
+        "}\n\n",
+        "type Pair<C, D> = Pair(C, D)\n\n",
+        "interface Identity<E> {\n",
+        "identity<X> : (E, X) -> X\n",
+        "candidate : X -> E\n",
+        "}\n\n",
+        "later<Z> : Z -> Z\n",
+        "later value = value\n",
+    ));
+
+    let [functor, identity] = program.interfaces() else {
+        panic!("expected two interfaces");
+    };
+    let method = &functor.methods[0];
+    assert!(method.has_explicit_type_parameters);
+    assert_eq!(
+        method
+            .type_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [
+            ("B", &Kind::Type),
+            ("A", &Kind::Type),
+            (
+                "G",
+                &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+            ),
+        ],
+    );
+    let nominal = program
+        .registry()
+        .nominal_parameters(program.registry().nominals()[0].id)
+        .expect("the nominal has canonical parameters");
+    let ResolvedDefinitionKind::Equational(later) = &program.definitions()[0].kind else {
+        panic!("expected the equational global");
+    };
+    assert_eq!(functor.parameter.id.local(), 0);
+    assert_eq!(method.type_parameters[0].id.local(), 1);
+    assert_eq!(method.type_parameters[1].id.local(), 2);
+    assert_eq!(method.type_parameters[2].id.local(), 3);
+    assert_eq!(nominal[0].id.local(), 4);
+    assert_eq!(nominal[1].id.local(), 5);
+    assert_eq!(identity.parameter.id.local(), 6);
+    assert_eq!(identity.methods[0].type_parameters[0].id.local(), 7);
+    assert!(identity.methods[0].has_explicit_type_parameters);
+    assert!(!identity.methods[1].has_explicit_type_parameters);
+    assert_eq!(identity.methods[1].type_parameters[0].spelling, "X");
+    assert_eq!(identity.methods[1].type_parameters[0].id.local(), 8);
+    assert_ne!(
+        identity.methods[0].type_parameters[0].id,
+        identity.methods[1].type_parameters[0].id,
+    );
+    assert_eq!(later.interface.type_parameters[0].id.local(), 9);
+
+    let duplicate_owner = resolve_error("interface Bad<A> {\nbad<A> : A -> A\n}\n");
+    assert_eq!(
+        duplicate_owner.reason,
+        ResolveReason::DuplicateTypeParameter
+    );
+    assert_eq!(duplicate_owner.related.len(), 1);
+
+    let duplicate_local = resolve_error("interface Bad<A> {\nbad<B, B> : (A, B) -> B\n}\n");
+    assert_eq!(
+        duplicate_local.reason,
+        ResolveReason::DuplicateTypeParameter
+    );
+    assert_eq!(duplicate_local.related.len(), 1);
+
+    let unused = resolve_error("interface Bad<A> {\nbad<B, C> : (A, B) -> B\n}\n");
+    assert_eq!(unused.reason, ResolveReason::UnusedTypeParameter);
+    assert_eq!(unused.found.as_deref(), Some("C"));
+
+    let unlisted = resolve_error("interface Bad<A> {\nbad<B> : (A, B, C) -> B\n}\n");
+    assert_eq!(unlisted.reason, ResolveReason::UnknownType);
+    assert_eq!(unlisted.found.as_deref(), Some("C"));
 }
 
 #[test]

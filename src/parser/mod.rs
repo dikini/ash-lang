@@ -231,6 +231,8 @@ pub enum SynchronizationBoundary {
     TypeDeclarationEqual,
     /// The `:` following an equational global's type parameters.
     EquationalGlobalColon,
+    /// The `:` following an interface method's type parameters.
+    InterfaceMethodColon,
     /// The `(` following an operational global's type parameters.
     OperationalParameterOpeningParen,
     /// The interface application following an implementation's type parameters.
@@ -652,6 +654,9 @@ const fn synchronization_message(boundary: SynchronizationBoundary) -> &'static 
         }
         SynchronizationBoundary::EquationalGlobalColon => {
             "parsing resumes at this equational global colon"
+        }
+        SynchronizationBoundary::InterfaceMethodColon => {
+            "parsing resumes at this interface method colon"
         }
         SynchronizationBoundary::OperationalParameterOpeningParen => {
             "parsing resumes at this operational parameter opening parenthesis"

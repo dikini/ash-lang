@@ -351,6 +351,9 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         }
         NodeKind::InterfaceMethod => {
             shape.node(NodeKind::Binder)?;
+            if shape.peek_node_is(NodeKind::TypeParameters) {
+                shape.node(NodeKind::TypeParameters)?;
+            }
             shape.token(&TokenKind::Colon)?;
             shape.node(NodeKind::Type)?;
         }
@@ -958,6 +961,7 @@ fn project_interface_method(
     let binder = only_child_of_kind(node, NodeKind::Binder)?;
     Ok(SurfaceInterfaceMethod {
         name: project_binder(binder, tokens)?.name,
+        type_parameters: project_optional_type_parameters(source, node, tokens)?,
         annotation: project_type(source, only_child_of_kind(node, NodeKind::Type)?, tokens)?,
         span: node_span(source, node, tokens)?,
     })

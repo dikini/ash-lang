@@ -11530,6 +11530,7 @@ mod tests {
                                 span,
                             },
                             type_parameters: Box::new([]),
+                            has_explicit_type_parameters: false,
                             origin: Origin::Source(span),
                             span,
                         }]

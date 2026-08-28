@@ -1686,9 +1686,10 @@ impl Resolver {
                 )
             })?;
         for method in &declaration.methods {
+            let explicit = method.type_parameters.as_deref();
             let mut names = Vec::new();
             let mut seen = HashSet::from([declaration.parameter.name.text.as_str()]);
-            let declared = HashSet::from([declaration.parameter.name.text.as_str()]);
+            let declared = validate_method_type_parameters(&declaration.parameter, explicit)?;
             collect_free_type_names(
                 &method.annotation,
                 &self.type_names,
@@ -1698,10 +1699,7 @@ impl Resolver {
                 &mut names,
                 &mut self.type_work,
             )?;
-            let type_parameters = names
-                .into_iter()
-                .map(|name| self.allocate_type_variable(&name, None))
-                .collect::<Result<Vec<_>, _>>()?;
+            let type_parameters = self.allocate_declaration_type_parameters(explicit, &names)?;
             methods.push(type_parameters);
         }
         Ok(PendingInterfaceTypeParameters { parameter, methods })
@@ -1774,6 +1772,7 @@ impl Resolver {
                     spelling: method.name.text.clone(),
                     annotation: annotation?,
                     type_parameters: type_parameters.into_boxed_slice(),
+                    has_explicit_type_parameters: method.type_parameters.is_some(),
                     origin: Origin::Source(method.span),
                     span: method.span,
                 });
@@ -6586,6 +6585,37 @@ fn validate_explicit_type_parameters(
     };
     let mut declared = HashSet::with_capacity(parameters.len());
     let mut first = HashMap::with_capacity(parameters.len());
+    for parameter in parameters {
+        if let Some(first_span) = first.insert(parameter.name.text.as_str(), parameter.name.span) {
+            let mut diagnostic = Diagnostic::new(
+                ResolveReason::DuplicateTypeParameter,
+                SourceLabel::new(
+                    parameter.name.span,
+                    "this type parameter is already declared",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                first_span,
+                "the first type parameter is here",
+            ));
+            return Err(diagnostic.into());
+        }
+        declared.insert(parameter.name.text.as_str());
+    }
+    Ok(declared)
+}
+
+fn validate_method_type_parameters<'a>(
+    owner: &'a SurfaceTypeParameter,
+    parameters: Option<&'a [SurfaceTypeParameter]>,
+) -> Result<HashSet<&'a str>, ResolveError> {
+    let Some(parameters) = parameters else {
+        return Ok(HashSet::from([owner.name.text.as_str()]));
+    };
+    let mut declared = HashSet::with_capacity(parameters.len().saturating_add(1));
+    let mut first = HashMap::with_capacity(parameters.len().saturating_add(1));
+    declared.insert(owner.name.text.as_str());
+    first.insert(owner.name.text.as_str(), owner.name.span);
     for parameter in parameters {
         if let Some(first_span) = first.insert(parameter.name.text.as_str(), parameter.name.span) {
             let mut diagnostic = Diagnostic::new(

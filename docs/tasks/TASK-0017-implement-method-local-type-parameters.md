@@ -124,6 +124,29 @@ and evaluator semantic or state-machine changes.
   seams. In particular, evidence selection currently fills a slot before whole
   module inference closure; CP-0010 requires pending selection followed by one
   atomic publication of the interface argument, method arguments, and choice.
+- Checkpoint 2 completes with its reserved 10 units. The syntax RED command
+  `cargo test --locked --test interfaces_syntax
+  projects_method_local_type_parameters_and_kinds -- --exact` first failed
+  because `SurfaceInterfaceMethod` had no binder list, then failed because the
+  parser reported a missing `:` at `<`. The malformed-list exact test likewise
+  reported a missing `:` instead of the causal list failure. The resolution RED
+  command `cargo test --locked --test resolution
+  method_type_binders_are_complete_ordered_and_declaration_ordered -- --exact`
+  returned occurrence order `A, B, G`, all at kind `Type`, instead of written
+  order `B, A, G : Type -> Type`. The focused kind RED accepted a method that
+  used `F : Type -> Type` in a value-type position because predecessor kinding
+  deferred every nonempty method parameter set.
+- GREEN evidence is `cargo test --locked --test interfaces_syntax` with 28
+  tests, `cargo test --locked --test resolution` with 52 tests,
+  `cargo test --locked --test kinds` with 22 tests, `cargo test --locked --test
+  diagnostics` with 34 tests, `cargo fmt --check`, `cargo check --locked
+  --all-targets`, and `git diff --check`. Self-review checked CP-0010 scope,
+  absent-list precedence, signature-only scope, canonical declaration order,
+  fixed kinds, parser recovery ownership, Rust ownership and error paths, and
+  diff scope. It corrected the method-colon recovery label and the required
+  all-target test-fixture initializers and found no remaining actionable issue.
+  Independent semantic and Rust/resource reviews remain pending. Cumulative
+  reserved use is 14/70; 56 units remain and Checkpoint 3 is not reserved.
 
 ## Verification
 
