@@ -2600,15 +2600,32 @@ impl Resolver {
             span,
             "imported interface parameter exceeded its type-work budget",
         )?;
+        let retained = CheckedInterfaceFact::with_cloned_method_binder_authority(
+            exported,
+            parameter,
+            methods.into_boxed_slice(),
+            &mut self.type_work,
+            &mut self.constraint_work,
+        )
+        .map_err(|failure| match failure {
+            ResolvedBuildFailure::TypeResource => error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported method authority exceeded its type-work budget",
+            ),
+            ResolvedBuildFailure::ConstraintResource => error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "imported method authority exceeded its work budget",
+            ),
+            ResolvedBuildFailure::InvalidState => error(
+                ResolveReason::InternalState,
+                span,
+                "an imported method authority disagrees with its checked mirror",
+            ),
+        })?;
         self.imported.insert_interface(
-            CheckedInterfaceFact {
-                id: exported.id,
-                spelling: exported.spelling.clone(),
-                parameter,
-                methods: methods.into_boxed_slice(),
-                origin: exported.origin.clone(),
-                span: exported.span,
-            },
+            retained,
             direct_dependency,
             span,
             access == ImportedInterfaceAccess::PublicExport,
@@ -8662,9 +8679,10 @@ mod tests {
         );
         // Route 1; fact metadata 2; parameter record, Source-Origin, and Type
         // Kind 3; interface Source-Origin 1; method Source-Origin 1; the
-        // seven-node Type pair 14 plus its 2U nominal indexes; and Secret D=5
-        // (header, one parameter record/Origin/Kind, defining Origin).
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 3 + 1 + 1 + (14 + 2) + 5;
+        // seven-node Type pair 14 plus its 2U nominal indexes; the two private
+        // method-authority rows; and Secret D=5 (header, one parameter
+        // record/Origin/Kind, defining Origin).
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 3 + 1 + 1 + (14 + 2) + 2 + 5;
 
         let fixture = ImportBudgetFixture::create(ENTRY, FACADE);
         fs::write(fixture.0.join("base.ash"), BASE)
@@ -9302,12 +9320,13 @@ mod tests {
     fn hidden_interface_import_route_uses_its_exact_constraint_budget() {
         // ConstraintWork owns one route visit, three interface/method/binder
         // retained facts, two traversals of the five-cell method type, and the
-        // method binder's record, Source-Origin, and Type-Kind authentication.
+        // method binder's record, Source-Origin, and Type-Kind authentication,
+        // plus one private canonical method-authority row.
         // TypeWork owns the same three retained carriers, two five-cell type
         // traversals, and two records plus Type Kinds for the interface and
-        // method binders.
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 3 + 2 * 5 + 3;
-        const EXACT_TYPE_WORK: usize = 3 + 2 * 5 + 2 * (1 + 1);
+        // method binders, plus one independent retained canonical method binder.
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 3 + 2 * 5 + 3 + 1;
+        const EXACT_TYPE_WORK: usize = 3 + 2 * 5 + 2 * (1 + 1) + (1 + 1);
 
         let constraint_short =
             retain_hidden_interface_import_with_limits(EXACT_CONSTRAINT_WORK - 1, EXACT_TYPE_WORK);
@@ -9316,7 +9335,11 @@ mod tests {
             .expect_err("one missing unit should reject hidden interface retention");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(constraint_short.constraint_used, EXACT_CONSTRAINT_WORK - 1,);
-        assert_eq!(constraint_short.type_used, 3);
+        assert_eq!(
+            constraint_short.type_used,
+            EXACT_TYPE_WORK - (1 + 1),
+            "the private binder copy begins only after its authority row reserves",
+        );
         assert!(constraint_short.retained.is_none());
 
         let type_short =

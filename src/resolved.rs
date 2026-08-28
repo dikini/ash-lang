@@ -2058,6 +2058,117 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
+    pub(crate) fn replace_nth_direct_method_evidence_identity_for_test(
+        &mut self,
+        module: ModuleId,
+        ordinal: usize,
+        replacement: MethodId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let mut seen = 0usize;
+        for definition in &mut group.definitions {
+            let Some(source) = definition.source.as_mut() else {
+                continue;
+            };
+            let ResolvedDefinitionKind::Equational(global) = &mut source.kind else {
+                continue;
+            };
+            for equation in &mut global.equations {
+                let occurrence = match &mut equation.body.kind {
+                    ResolvedExprKind::Occurrence(occurrence)
+                        if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                    {
+                        Some(occurrence)
+                    }
+                    ResolvedExprKind::Apply(application) => match &mut application.function.kind {
+                        ResolvedExprKind::Occurrence(occurrence)
+                            if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                        {
+                            Some(occurrence)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(occurrence) = occurrence else {
+                    continue;
+                };
+                if seen == ordinal {
+                    let Some(slot) = occurrence.evidence.first_mut() else {
+                        return false;
+                    };
+                    return slot.replace_checked_method_for_test(replacement);
+                }
+                seen = match seen.checked_add(1) {
+                    Some(next) => next,
+                    None => return false,
+                };
+            }
+        }
+        false
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_nth_direct_method_occurrence_selection_for_test(
+        &mut self,
+        module: ModuleId,
+        ordinal: usize,
+        replacement: EvidenceSelection,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let mut replacement = Some(replacement);
+        let mut seen = 0usize;
+        for definition in &mut group.definitions {
+            let Some(source) = definition.source.as_mut() else {
+                continue;
+            };
+            let ResolvedDefinitionKind::Equational(global) = &mut source.kind else {
+                continue;
+            };
+            for equation in &mut global.equations {
+                let occurrence = match &mut equation.body.kind {
+                    ResolvedExprKind::Occurrence(occurrence)
+                        if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                    {
+                        Some(occurrence)
+                    }
+                    ResolvedExprKind::Apply(application) => match &mut application.function.kind {
+                        ResolvedExprKind::Occurrence(occurrence)
+                            if matches!(occurrence.term, ResolvedTermName::Method(_)) =>
+                        {
+                            Some(occurrence)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(occurrence) = occurrence else {
+                    continue;
+                };
+                if seen == ordinal {
+                    let Some(slot) = occurrence.evidence.first_mut() else {
+                        return false;
+                    };
+                    return slot.replace_selection_for_test(
+                        replacement
+                            .take()
+                            .expect("one replacement is consumed at most once"),
+                    );
+                }
+                seen = match seen.checked_add(1) {
+                    Some(next) => next,
+                    None => return false,
+                };
+            }
+        }
+        false
+    }
+
+    #[cfg(test)]
     pub(crate) fn replace_nth_direct_method_occurrence_checked_type_for_test(
         &mut self,
         module: ModuleId,
@@ -3451,6 +3562,8 @@ pub struct CheckedInterfaceFact {
     pub parameter: ResolvedTypeVariable,
     /// Checked methods in semantic declaration order.
     pub methods: Box<[CheckedInterfaceMethodFact]>,
+    /// Canonical method-binder rows minted from defining source authority.
+    method_binder_authorities: Box<[MethodBinderAuthority]>,
     /// Causal declaration provenance.
     pub origin: Origin,
     /// Complete declaration span.
@@ -3471,6 +3584,70 @@ impl CheckedInterfaceFact {
     pub fn method(&self, id: MethodId) -> Option<&CheckedInterfaceMethodFact> {
         self.methods.iter().find(|method| method.id == id)
     }
+
+    pub(crate) fn with_resolved_method_binder_authority(
+        source: &ResolvedInterfaceDeclaration,
+        parameter: ResolvedTypeVariable,
+        methods: Box<[CheckedInterfaceMethodFact]>,
+        type_work: &mut TypeWorkBudget,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        let method_binder_authorities =
+            clone_resolved_method_binder_authorities(&source.methods, type_work, constraint_work)?
+                .into_boxed_slice();
+        Ok(Self {
+            id: source.id,
+            spelling: source.spelling.clone(),
+            parameter,
+            methods,
+            method_binder_authorities,
+            origin: source.origin.clone(),
+            span: source.span,
+        })
+    }
+
+    pub(crate) fn with_cloned_method_binder_authority(
+        source: &Self,
+        parameter: ResolvedTypeVariable,
+        methods: Box<[CheckedInterfaceMethodFact]>,
+        type_work: &mut TypeWorkBudget,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        let method_binder_authorities = clone_method_binder_authority_rows(
+            &source.method_binder_authorities,
+            type_work,
+            constraint_work,
+        )?
+        .into_boxed_slice();
+        Ok(Self {
+            id: source.id,
+            spelling: source.spelling.clone(),
+            parameter,
+            methods,
+            method_binder_authorities,
+            origin: source.origin.clone(),
+            span: source.span,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn without_methods_for_test(
+        id: InterfaceId,
+        spelling: String,
+        parameter: ResolvedTypeVariable,
+        origin: Origin,
+        span: Span,
+    ) -> Self {
+        Self {
+            id,
+            spelling,
+            parameter,
+            methods: Box::new([]),
+            method_binder_authorities: Box::new([]),
+            origin,
+            span,
+        }
+    }
 }
 
 impl Drop for CheckedInterfaceFact {
@@ -3481,6 +3658,9 @@ impl Drop for CheckedInterfaceFact {
         ));
         for method in std::mem::take(&mut self.methods).into_vec() {
             drop(method);
+        }
+        for authority in std::mem::take(&mut self.method_binder_authorities).into_vec() {
+            drop(authority);
         }
         discard_origin_iteratively(std::mem::replace(
             &mut self.origin,
@@ -3671,6 +3851,7 @@ fn clone_checked_interface_fact(
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<CheckedInterfaceFact, ResolvedBuildFailure> {
+    authenticate_method_binder_authority(fact, None, constraint_work)?;
     constraint_work
         .charge(fact.methods.len().saturating_add(1))
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -3698,15 +3879,14 @@ fn clone_checked_interface_fact(
             span: method.span,
         });
     }
-    Ok(CheckedInterfaceFact {
-        id: fact.id,
-        spelling: fact.spelling.clone(),
-        parameter: clone_resolved_type_variable_with_budget(&fact.parameter, type_work)
+    CheckedInterfaceFact::with_cloned_method_binder_authority(
+        fact,
+        clone_resolved_type_variable_with_budget(&fact.parameter, type_work)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-        methods: methods.into_boxed_slice(),
-        origin: fact.origin.clone(),
-        span: fact.span,
-    })
+        methods.into_boxed_slice(),
+        type_work,
+        constraint_work,
+    )
 }
 
 fn clone_checked_implementation_fact(
@@ -4661,7 +4841,7 @@ fn canonical_constructor_scheme(
     })
 }
 
-/// Checked, body-free exports from one dependency module.
+/// Private canonical method-binder authority retained with one checked interface.
 #[derive(Debug, Eq, PartialEq)]
 struct MethodBinderAuthority {
     method: MethodId,
@@ -4696,7 +4876,6 @@ pub struct ExportSummary {
     interfaces: Vec<CheckedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
     hidden_interfaces: Vec<CheckedInterfaceFact>,
-    method_binder_authorities: Vec<MethodBinderAuthority>,
     implementations: Vec<AuthorizedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
@@ -5768,6 +5947,8 @@ fn same_checked_interface_fact_with_optional_nominal_observer(
     {
         return Ok(false);
     }
+    authenticate_method_binder_authority(left, None, constraint_work)?;
+    authenticate_method_binder_authority(right, None, constraint_work)?;
     let metadata_work = right
         .methods
         .len()
@@ -6218,26 +6399,12 @@ fn retain_hidden_interface_reference(
     Ok(())
 }
 
-fn clone_method_binder_authorities(
-    public_interfaces: &[CheckedInterfaceFact],
-    hidden_interfaces: &[CheckedInterfaceFact],
+fn clone_resolved_method_binder_authorities(
+    methods: &[ResolvedInterfaceMethod],
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<Vec<MethodBinderAuthority>, ResolvedBuildFailure> {
-    let authority_count = public_interfaces.iter().chain(hidden_interfaces).try_fold(
-        0usize,
-        |count, interface| {
-            interface.methods.iter().try_fold(count, |count, method| {
-                if method.type_parameters().is_empty() {
-                    Ok(count)
-                } else {
-                    count
-                        .checked_add(1)
-                        .ok_or(ResolvedBuildFailure::ConstraintResource)
-                }
-            })
-        },
-    )?;
+    let authority_count = methods.len();
     constraint_work
         .charge(authority_count)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -6245,23 +6412,102 @@ fn clone_method_binder_authorities(
     authorities
         .try_reserve_exact(authority_count)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-    for interface in public_interfaces.iter().chain(hidden_interfaces) {
-        for method in &interface.methods {
-            if method.type_parameters().is_empty() {
-                continue;
-            }
-            let parameters = clone_resolved_type_variable_buffer_with_budget(
-                method.type_parameters(),
-                type_work,
-            )
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            authorities.push(MethodBinderAuthority {
-                method: method.id,
-                parameters: parameters.into_boxed_slice(),
-            });
-        }
+    for method in methods {
+        let parameters =
+            clone_resolved_type_variable_buffer_with_budget(&method.type_parameters, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        authorities.push(MethodBinderAuthority {
+            method: method.id,
+            parameters: parameters.into_boxed_slice(),
+        });
     }
     Ok(authorities)
+}
+
+fn clone_method_binder_authority_rows(
+    source: &[MethodBinderAuthority],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<Vec<MethodBinderAuthority>, ResolvedBuildFailure> {
+    constraint_work
+        .charge(source.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let mut authorities = Vec::new();
+    authorities
+        .try_reserve_exact(source.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    for authority in source {
+        let parameters =
+            clone_resolved_type_variable_buffer_with_budget(&authority.parameters, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        authorities.push(MethodBinderAuthority {
+            method: authority.method,
+            parameters: parameters.into_boxed_slice(),
+        });
+    }
+    Ok(authorities)
+}
+
+fn authenticate_method_binder_authority(
+    interface: &CheckedInterfaceFact,
+    source_methods: Option<&[ResolvedInterfaceMethod]>,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    if interface.methods.len() != interface.method_binder_authorities.len() {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    constraint_work
+        .charge(interface.method_binder_authorities.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    for (method_position, (method, authority)) in interface
+        .methods
+        .iter()
+        .zip(&interface.method_binder_authorities)
+        .enumerate()
+    {
+        if authority.method != method.id
+            || !same_summary_resolved_type_variables_with_constraint_budget(
+                &authority.parameters,
+                method.type_parameters(),
+                constraint_work,
+            )?
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        if let Some(source_methods) = source_methods {
+            let source = source_methods
+                .get(method_position)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if source.id != method.id
+                || source.spelling != method.spelling
+                || source.span != method.span
+                || !same_origin_with_constraint_budget(
+                    &source.origin,
+                    &method.origin,
+                    constraint_work,
+                )?
+                || !same_type_with_constraint_budget(
+                    &source.annotation.ty,
+                    method.value_type(),
+                    constraint_work,
+                )
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if !same_summary_resolved_type_variables_with_constraint_budget(
+                &source.type_parameters,
+                &authority.parameters,
+                constraint_work,
+            )? {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+    }
+    if source_methods.is_some_and(|methods| methods.len() != interface.methods.len()) {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    Ok(())
 }
 
 impl ExportSummary {
@@ -6609,7 +6855,6 @@ impl ExportSummary {
         interface_facts
             .try_reserve(interface_fact_count)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-        let mut method_authority_position = 0usize;
         for (position, interface) in self.interfaces.iter().enumerate() {
             if self.interface_positions.get(&interface.id) != Some(&position)
                 || interface_facts.insert(interface.id, interface).is_some()
@@ -6623,33 +6868,14 @@ impl ExportSummary {
                 &mut environments,
                 type_work,
             )?;
-            for method in &interface.methods {
-                let next_authority = self
-                    .method_binder_authorities
-                    .get(method_authority_position);
-                let authority = if next_authority
-                    .is_some_and(|authority| authority.method == method.id)
-                    || !method.type_parameters().is_empty()
-                {
-                    let authority = next_authority.ok_or(ResolvedBuildFailure::InvalidState)?;
-                    if authority.method != method.id
-                        || !same_summary_resolved_type_variables_with_constraint_budget(
-                            &authority.parameters,
-                            method.type_parameters(),
-                            constraint_work,
-                        )?
-                    {
-                        return Err(ResolvedBuildFailure::InvalidState);
-                    }
-                    method_authority_position = method_authority_position
-                        .checked_add(1)
-                        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
-                    authority.parameters.as_ref()
-                } else {
-                    &[]
-                };
+            authenticate_method_binder_authority(interface, None, constraint_work)?;
+            for (method, authority) in interface
+                .methods
+                .iter()
+                .zip(&interface.method_binder_authorities)
+            {
                 register_summary_parameters(
-                    authority,
+                    &authority.parameters,
                     SummaryBinderOwner::Method(method.id),
                     &mut canonical_variables,
                     &mut environments,
@@ -6678,33 +6904,14 @@ impl ExportSummary {
                 &mut environments,
                 type_work,
             )?;
-            for method in &interface.methods {
-                let next_authority = self
-                    .method_binder_authorities
-                    .get(method_authority_position);
-                let authority = if next_authority
-                    .is_some_and(|authority| authority.method == method.id)
-                    || !method.type_parameters().is_empty()
-                {
-                    let authority = next_authority.ok_or(ResolvedBuildFailure::InvalidState)?;
-                    if authority.method != method.id
-                        || !same_summary_resolved_type_variables_with_constraint_budget(
-                            &authority.parameters,
-                            method.type_parameters(),
-                            constraint_work,
-                        )?
-                    {
-                        return Err(ResolvedBuildFailure::InvalidState);
-                    }
-                    method_authority_position = method_authority_position
-                        .checked_add(1)
-                        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
-                    authority.parameters.as_ref()
-                } else {
-                    &[]
-                };
+            authenticate_method_binder_authority(interface, None, constraint_work)?;
+            for (method, authority) in interface
+                .methods
+                .iter()
+                .zip(&interface.method_binder_authorities)
+            {
                 register_summary_parameters(
-                    authority,
+                    &authority.parameters,
                     SummaryBinderOwner::Method(method.id),
                     &mut canonical_variables,
                     &mut environments,
@@ -6719,9 +6926,6 @@ impl ExportSummary {
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
-        }
-        if method_authority_position != self.method_binder_authorities.len() {
-            return Err(ResolvedBuildFailure::InvalidState);
         }
         constraint_work
             .charge(self.interface_names.len())
@@ -7237,7 +7441,6 @@ impl ExportSummary {
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
             hidden_interfaces: Vec::new(),
-            method_binder_authorities: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -7325,7 +7528,6 @@ impl ExportSummary {
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
             hidden_interfaces: Vec::new(),
-            method_binder_authorities: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -7495,6 +7697,11 @@ impl ExportSummary {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
             }
+            authenticate_method_binder_authority(
+                checked,
+                Some(&interface.methods),
+                constraint_work,
+            )?;
             if checked_interfaces_by_id
                 .insert(checked.id, checked)
                 .is_some()
@@ -8359,13 +8566,6 @@ impl ExportSummary {
             summary.hidden_nominal_order.push(imported.id);
         }
 
-        summary.method_binder_authorities = clone_method_binder_authorities(
-            &summary.interfaces,
-            &summary.hidden_interfaces,
-            type_work,
-            constraint_work,
-        )?;
-
         Ok(summary)
     }
 
@@ -8723,7 +8923,6 @@ impl ExportSummary {
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
             hidden_interfaces: Vec::new(),
-            method_binder_authorities: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -11191,7 +11390,6 @@ impl Drop for ExportSummary {
         for fact in self.hidden_interfaces.drain(..) {
             drop(fact);
         }
-        self.method_binder_authorities.clear();
         for fact in self.implementations.drain(..) {
             drop(fact);
         }
@@ -14339,7 +14537,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     enum InterfaceAuthenticationMutationForTest {
         None,
         MissingPublicName,
@@ -14380,6 +14578,10 @@ mod tests {
                     ),
                     origin: Origin::Source(span),
                     span,
+                }]),
+                method_binder_authorities: Box::new([MethodBinderAuthority {
+                    method: MethodId::new(id, 0),
+                    parameters: Box::new([]),
                 }]),
                 origin: Origin::Source(span),
                 span,
@@ -14443,10 +14645,12 @@ mod tests {
         const NAMES: usize = 3;
         const METHODS: usize = 2;
         // The fused order/namespace indexes cost N+M. ConstraintWork then owns
-        // I+H fact slots, N named aliases, I public reverse relations, and M
-        // method-owner relations. Each method's free-variable closure, outer
-        // Function shape, and Kind are authenticated on TypeWork.
-        const EXACT: usize = NAMES + METHODS + 2 * PUBLIC + HIDDEN + NAMES + METHODS;
+        // I+H fact slots and private method-authority rows, N named aliases, I
+        // public reverse relations, and M method-owner relations. Each
+        // method's free-variable closure, outer Function shape, and Kind are
+        // authenticated on TypeWork.
+        const EXACT: usize =
+            NAMES + METHODS + 2 * PUBLIC + HIDDEN + NAMES + METHODS + PUBLIC + HIDDEN;
         let summary =
             interface_authentication_summary(InterfaceAuthenticationMutationForTest::None);
         let mut measured = crate::interface::InterfaceConstraintBudget::default();
@@ -14459,7 +14663,7 @@ mod tests {
             summary.authenticate(&mut TypeWorkBudget::default(), &mut short),
             Err(ResolvedBuildFailure::ConstraintResource),
         );
-        assert_eq!(short.used(), NAMES + METHODS + PUBLIC + HIDDEN + NAMES);
+        assert_eq!(short.used(), EXACT - (PUBLIC + HIDDEN + 1));
         for _ in 0..2 {
             let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT);
             summary
@@ -14469,16 +14673,16 @@ mod tests {
         }
 
         for (mutation, exact, short_used) in [
-            (InterfaceAuthenticationMutationForTest::BadPosition, 8, 5),
+            (InterfaceAuthenticationMutationForTest::BadPosition, 9, 8),
             (
                 InterfaceAuthenticationMutationForTest::MissingPublicName,
-                13,
-                9,
+                16,
+                12,
             ),
             (
                 InterfaceAuthenticationMutationForTest::BadMethodOwner,
-                15,
-                11,
+                18,
+                14,
             ),
         ] {
             let summary = interface_authentication_summary(mutation);
@@ -14487,13 +14691,14 @@ mod tests {
                 summary.authenticate(&mut TypeWorkBudget::default(), &mut short),
                 Err(ResolvedBuildFailure::ConstraintResource),
             );
-            assert_eq!(short.used(), short_used);
+            assert_eq!(short.used(), short_used, "{mutation:?}");
             for _ in 0..2 {
                 let mut exact_budget =
                     crate::interface::InterfaceConstraintBudget::with_limit(exact);
                 assert_eq!(
                     summary.authenticate(&mut TypeWorkBudget::default(), &mut exact_budget),
                     Err(ResolvedBuildFailure::InvalidState),
+                    "{mutation:?}",
                 );
                 assert_eq!(exact_budget.used(), exact);
             }
@@ -14617,6 +14822,23 @@ mod tests {
                 origin: Origin::Source(method_span),
                 span: method_span,
             }]),
+            method_binder_authorities: Box::new([MethodBinderAuthority {
+                method,
+                parameters: Box::new([
+                    ResolvedTypeVariable {
+                        id: first,
+                        spelling: "A".to_owned(),
+                        kind: Kind::Type,
+                        origin: Origin::Source(first_span),
+                    },
+                    ResolvedTypeVariable {
+                        id: second,
+                        spelling: "B".to_owned(),
+                        kind: Kind::Type,
+                        origin: Origin::Source(second_span),
+                    },
+                ]),
+            }]),
             origin: Origin::Source(interface_span),
             span: interface_span,
         });
@@ -14627,14 +14849,6 @@ mod tests {
             .insert("Functor".to_owned(), interface);
         summary.method_name_order.push("map".to_owned());
         summary.method_names.insert("map".to_owned(), method);
-        summary.method_binder_authorities = clone_method_binder_authorities(
-            &summary.interfaces,
-            &summary.hidden_interfaces,
-            &mut TypeWorkBudget::unbounded(),
-            &mut crate::interface::InterfaceConstraintBudget::default(),
-        )
-        .expect("the canonical method-binder authority should fit");
-
         let method = &mut summary.interfaces[0].methods[0];
         match mutation {
             None => {}
@@ -14741,6 +14955,142 @@ mod tests {
     }
 
     #[test]
+    fn freeze_rejects_coherently_forged_checked_method_binder_before_publication() {
+        let source = SourceFile::new("coherent-method-forgery.ash", "interface Boxed<I>")
+            .expect("the coherent-forgery source should fit");
+        let span = source
+            .span(ByteRange::new(0, 18).expect("the coherent-forgery range should be ordered"))
+            .expect("the coherent-forgery span should fit");
+        let module = ModuleId::new(9_833);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let canonical = TypeVariableId::resolved(module, 1);
+        let forged = TypeVariableId::resolved(module, 99);
+        let resolved_interface = ResolvedInterfaceDeclaration {
+            id: interface,
+            public: true,
+            spelling: "Boxed".to_owned(),
+            parameter: ResolvedTypeVariable {
+                id: interface_parameter,
+                spelling: "I".to_owned(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            methods: Box::new([ResolvedInterfaceMethod {
+                id: method,
+                spelling: "keep".to_owned(),
+                annotation: ResolvedType {
+                    ty: Type::Function(
+                        Box::new(Type::Variable(canonical)),
+                        Box::new(Type::Variable(interface_parameter)),
+                    ),
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                type_parameters: Box::new([ResolvedTypeVariable {
+                    id: canonical,
+                    spelling: "A".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                }]),
+                has_explicit_type_parameters: true,
+                origin: Origin::Source(span),
+                span,
+            }]),
+            origin: Origin::Source(span),
+            span,
+        };
+        let forged_origin = Origin::Generated {
+            cause: Box::new(Origin::Source(span)),
+            reason: crate::source::GeneratedReason::ConstantFolding,
+        };
+        let checked = [CheckedInterfaceFact {
+            id: interface,
+            spelling: "Boxed".to_owned(),
+            parameter: resolved_interface.parameter.clone(),
+            methods: Box::new([CheckedInterfaceMethodFact {
+                id: method,
+                spelling: "keep".to_owned(),
+                type_parameters: Box::new([ResolvedTypeVariable {
+                    id: forged,
+                    spelling: "Forged".to_owned(),
+                    kind: Kind::Type,
+                    origin: forged_origin,
+                }]),
+                value_type: Type::Function(
+                    Box::new(Type::Variable(forged)),
+                    Box::new(Type::Variable(interface_parameter)),
+                ),
+                origin: Origin::Source(span),
+                span,
+            }]),
+            method_binder_authorities: Box::new([MethodBinderAuthority {
+                method,
+                parameters: Box::new([ResolvedTypeVariable {
+                    id: canonical,
+                    spelling: "A".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                }]),
+            }]),
+            origin: Origin::Source(span),
+            span,
+        }];
+        let mut export_candidate = ResolvedExportCandidate::default();
+        export_candidate
+            .try_insert_interface(
+                "Boxed".to_owned(),
+                CandidateInterface {
+                    id: interface,
+                    source: CandidateFactSource::Local,
+                },
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the interface export candidate should fit");
+        export_candidate
+            .try_insert_method(
+                "keep".to_owned(),
+                CandidateMethod {
+                    id: method,
+                    source: CandidateFactSource::Local,
+                },
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the method export candidate should fit");
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module,
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported: ImportedFacts::default(),
+            direct_dependencies: Vec::new(),
+            declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
+            interfaces: vec![resolved_interface],
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate,
+            span,
+        });
+
+        assert_eq!(
+            ExportSummary::freeze(
+                &resolved,
+                &[],
+                &checked,
+                &[],
+                &[],
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "the checked mirror must not mint its own method-binder authority",
+        );
+    }
+
+    #[test]
     fn method_binder_authority_retention_has_exact_independent_ledgers() {
         // One private row is graph storage. Each of the two binder copies owns
         // one record plus one `Type` Kind node in TypeWork.
@@ -14749,9 +15099,8 @@ mod tests {
         let summary = polymorphic_method_summary(None);
 
         assert_eq!(
-            clone_method_binder_authorities(
-                &summary.interfaces,
-                &summary.hidden_interfaces,
+            clone_method_binder_authority_rows(
+                &summary.interfaces[0].method_binder_authorities,
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
                 &mut crate::interface::InterfaceConstraintBudget::with_limit(
                     EXACT_CONSTRAINT_WORK - 1,
@@ -14760,9 +15109,8 @@ mod tests {
             Err(ResolvedBuildFailure::ConstraintResource),
         );
         assert_eq!(
-            clone_method_binder_authorities(
-                &summary.interfaces,
-                &summary.hidden_interfaces,
+            clone_method_binder_authority_rows(
+                &summary.interfaces[0].method_binder_authorities,
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1),
                 &mut crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK,),
             ),
@@ -14771,9 +15119,8 @@ mod tests {
         let mut exact_type = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
         let mut exact_constraint =
             crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
-        let authorities = clone_method_binder_authorities(
-            &summary.interfaces,
-            &summary.hidden_interfaces,
+        let authorities = clone_method_binder_authority_rows(
+            &summary.interfaces[0].method_binder_authorities,
             &mut exact_type,
             &mut exact_constraint,
         )
@@ -14785,11 +15132,56 @@ mod tests {
     }
 
     #[test]
+    fn monomorphic_method_still_requires_one_private_authority_row() {
+        let mut summary =
+            interface_authentication_summary(InterfaceAuthenticationMutationForTest::None);
+        assert!(
+            summary.interfaces[0].methods[0]
+                .type_parameters()
+                .is_empty()
+        );
+        summary.interfaces[0].method_binder_authorities = Box::new([]);
+
+        assert_eq!(
+            summary.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+        );
+    }
+
+    #[test]
+    fn private_method_authority_discards_deep_binder_origin_iteratively() {
+        std::thread::Builder::new()
+            .name("deep-private-method-authority-drop".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_768;
+                let source = SourceFile::new("deep-authority.ash", "authority")
+                    .expect("the deep-authority source should fit");
+                let module = ModuleId::new(9_834);
+                drop(MethodBinderAuthority {
+                    method: MethodId::new(InterfaceId::new(module, 0), 0),
+                    parameters: Box::new([ResolvedTypeVariable {
+                        id: TypeVariableId::resolved(module, 0),
+                        spelling: "A".to_owned(),
+                        kind: Kind::Type,
+                        origin: generated_origin(&source, DEPTH),
+                    }]),
+                });
+            })
+            .expect("the deep private-authority drop thread should spawn")
+            .join()
+            .expect("private authority teardown should remain stack-safe");
+    }
+
+    #[test]
     fn raw_global_duplicate_requirements_reach_summary_admission_exactly_and_atomically() {
-        // The interface carrier costs 15 cells. The global adds one expression,
+        // The interface carrier costs 18 cells. The global adds one expression,
         // canonical-global, and term-binder cell; six closed-type collection
         // cells; two first-group index cells; and two Unit comparison cells.
-        const EXACT_CONSTRAINT_WORK: usize = 15 + 3 + 6 + 2 + 2;
+        const EXACT_CONSTRAINT_WORK: usize = 18 + 3 + 6 + 2 + 2;
         let summary = interface_summary_with_duplicate_global_requirements();
 
         let mut measured = crate::interface::InterfaceConstraintBudget::default();
@@ -14860,12 +15252,12 @@ mod tests {
 
     #[test]
     fn implementation_summary_authentication_has_exact_independent_ledgers() {
-        // The interface-only Constraint fixture costs 15. One implementation adds one
+        // The interface-only Constraint fixture costs 18. One implementation adds one
         // implementation-count scan, one G+M term-binder slot, one local
         // authorization method cell, two exact ground-head cells, ten fused
         // interface-method substitution cells, and two implementation-index
         // cells.
-        const EXACT: usize = 15 + 1 + 1 + 1 + 2 + 10 + 2;
+        const EXACT: usize = 18 + 1 + 1 + 1 + 2 + 10 + 2;
         const TYPE_WORK: usize = 58;
         let summary = interface_summary_with_local_implementation(false);
         let mut short_type = TypeWorkBudget::with_limit(TYPE_WORK);
@@ -14887,7 +15279,7 @@ mod tests {
         assert_eq!(type_short.used(), TYPE_WORK - 1);
         assert_eq!(
             type_short_constraint.used(),
-            30,
+            33,
             "Type failure follows every carrier comparison and precedes final index retention",
         );
         for _ in 0..2 {
@@ -14903,7 +15295,7 @@ mod tests {
         // Before method-shape checking, the two new aggregate cells and the
         // authorization cell are all charged. A malformed position then owns
         // InvalidState; one-short cannot reach that semantic check.
-        const BAD_POSITION_EXACT: usize = 15 + 1 + 1 + 1;
+        const BAD_POSITION_EXACT: usize = 18 + 1 + 1 + 1;
         let malformed = interface_summary_with_local_implementation(true);
         let mut short =
             crate::interface::InterfaceConstraintBudget::with_limit(BAD_POSITION_EXACT - 1);
@@ -15556,6 +15948,10 @@ mod tests {
                         span,
                     }]
                     .into_boxed_slice(),
+                    method_binder_authorities: Box::new([MethodBinderAuthority {
+                        method,
+                        parameters: Box::new([]),
+                    }]),
                     parameter,
                     origin: Origin::Source(span),
                     span,
@@ -17190,6 +17586,10 @@ mod tests {
                 origin: Origin::Source(span),
                 span,
             }]),
+            method_binder_authorities: Box::new([MethodBinderAuthority {
+                method: method_id,
+                parameters: Box::new([]),
+            }]),
             origin: Origin::Source(span),
             span,
         };
@@ -17273,7 +17673,7 @@ mod tests {
                 constraint_work,
             )
         });
-        assert_exact(13, &mut |type_work, constraint_work| {
+        assert_exact(15, &mut |type_work, constraint_work| {
             same_checked_interface_fact_with_budget(
                 &left_interface,
                 &right_interface,
@@ -17425,7 +17825,9 @@ mod tests {
             APPLIED_PARAMETER_CELLS + CONSTRUCTOR_RESULT_CELLS + 2;
         const GLOBAL_FIXED_CELLS: usize = 4;
         const CONSTRUCTOR_FIXED_CELLS: usize = 4;
-        const INTERFACE_FIXED_CELLS: usize = 6;
+        // Two private method-authority rows precede ordinary interface fact
+        // comparison, one for each authenticated route.
+        const INTERFACE_FIXED_CELLS: usize = 8;
         const GLOBAL_WORK: usize = GLOBAL_FIXED_CELLS + KIND_CELLS + PUBLIC_VALUE_CELLS;
         const CONSTRUCTOR_WORK: usize = CONSTRUCTOR_FIXED_CELLS
             + KIND_CELLS
@@ -17634,6 +18036,10 @@ mod tests {
                         origin: Origin::Source(span),
                         span,
                     }]),
+                    method_binder_authorities: Box::new([MethodBinderAuthority {
+                        method,
+                        parameters: Box::new([]),
+                    }]),
                     origin: Origin::Source(span),
                     span,
                 };
@@ -17728,7 +18134,9 @@ mod tests {
         const GLOBAL_FIXED_CELLS: usize = 8;
         const GLOBAL_REQUIREMENT_CELLS: usize = 5;
         const INTERFACE_FIXED_CELLS: usize = 5;
-        const INTERFACE_METHOD_CELLS: usize = 8;
+        // Each method costs its two private authority rows plus the predecessor
+        // eight-cell checked mirror comparison.
+        const INTERFACE_METHOD_CELLS: usize = 10;
         const PREREQUISITE_IMPLEMENTATION_FIXED_CELLS: usize = 30;
         const METHOD_IMPLEMENTATION_FIXED_CELLS: usize = 4;
         const IMPLEMENTATION_MEMBER_CELLS: usize = 8;
@@ -17739,7 +18147,7 @@ mod tests {
         const METHOD_IMPLEMENTATION_WORK: usize =
             METHOD_IMPLEMENTATION_FIXED_CELLS + IMPLEMENTATION_MEMBER_CELLS * WIDTH;
         const GLOBAL_FIRST_ARGUMENT_MISMATCH_WORK: usize = WIDTH + 6;
-        const INTERFACE_FIRST_METHOD_MISMATCH_WORK: usize = WIDTH + 5;
+        const INTERFACE_FIRST_METHOD_MISMATCH_WORK: usize = 3 * WIDTH + 5;
         const PREREQUISITE_TOP_MISMATCH_WORK: usize = WIDTH + 13;
         const PREREQUISITE_METHOD_MISMATCH_WORK: usize = 4 * WIDTH + 17;
         const IMPLEMENTATION_FIRST_METHOD_MISMATCH_WORK: usize = WIDTH + 4;
@@ -17897,6 +18305,14 @@ mod tests {
                             span,
                         });
                     }
+                    let method_binder_authorities = methods
+                        .iter()
+                        .map(|method| MethodBinderAuthority {
+                            method: method.id,
+                            parameters: Box::new([]),
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
                     CheckedInterfaceFact {
                         id: interface,
                         spelling: "Wide".to_owned(),
@@ -17907,6 +18323,7 @@ mod tests {
                             origin: Origin::Source(span),
                         },
                         methods: methods.into_boxed_slice(),
+                        method_binder_authorities,
                         origin: Origin::Source(span),
                         span,
                     }
@@ -17926,6 +18343,8 @@ mod tests {
                     },
                 );
                 right_interface.methods[0].id = MethodId::new(interface, u32::MAX);
+                right_interface.method_binder_authorities[0].method =
+                    MethodId::new(interface, u32::MAX);
                 assert_prefix(
                     "interface first method identity",
                     INTERFACE_FIRST_METHOD_MISMATCH_WORK,
@@ -19317,6 +19736,7 @@ mod tests {
                     origin: Origin::Source(span),
                 },
                 methods: Box::new([]),
+                method_binder_authorities: Box::new([]),
                 origin: Origin::Source(span),
                 span,
             },
@@ -19673,6 +20093,7 @@ mod tests {
                     origin: Origin::Source(interface_span),
                 },
                 methods: Box::new([]),
+                method_binder_authorities: Box::new([]),
                 origin: Origin::Source(interface_span),
                 span: interface_span,
             },
@@ -19932,6 +20353,7 @@ mod tests {
                                 origin,
                             },
                             methods: Box::new([]),
+                            method_binder_authorities: Box::new([]),
                             origin: Origin::Source(span),
                             span,
                         },
@@ -20259,7 +20681,6 @@ mod tests {
             interfaces: Vec::new(),
             interface_positions: HashMap::new(),
             hidden_interfaces: Vec::new(),
-            method_binder_authorities: Vec::new(),
             implementations: Vec::new(),
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
@@ -20818,6 +21239,7 @@ mod tests {
                     origin: Origin::Source(interface_span),
                 },
                 methods: Box::new([]),
+                method_binder_authorities: Box::new([]),
                 origin: Origin::Source(interface_span),
                 span: interface_span,
             },
@@ -21589,6 +22011,10 @@ mod tests {
                     span: interface_span,
                 }]
                 .into_boxed_slice(),
+                method_binder_authorities: Box::new([MethodBinderAuthority {
+                    method,
+                    parameters: Box::new([]),
+                }]),
                 origin: Origin::Source(interface_span),
                 span: interface_span,
             },
@@ -21653,13 +22079,13 @@ mod tests {
 
     #[test]
     fn hidden_interface_summary_closure_uses_its_exact_constraint_budget() {
-        let (short, short_used) = freeze_hidden_interface_summary_with_limit(14);
+        let (short, short_used) = freeze_hidden_interface_summary_with_limit(16);
         assert_eq!(short, Err(ResolvedBuildFailure::ConstraintResource));
-        assert_eq!(short_used, 14);
+        assert_eq!(short_used, 16);
 
-        let (exact, exact_used) = freeze_hidden_interface_summary_with_limit(15);
+        let (exact, exact_used) = freeze_hidden_interface_summary_with_limit(17);
         let summary = exact.expect("the exact budget should retain one hidden interface fact");
-        assert_eq!(exact_used, 15);
+        assert_eq!(exact_used, 17);
         assert!(summary.interface("Render").is_none());
         let hidden = summary
             .hidden_interfaces()
@@ -21697,6 +22123,7 @@ mod tests {
                     origin: Origin::Source(hidden_span),
                 },
                 methods: Box::new([]),
+                method_binder_authorities: Box::new([]),
                 origin: Origin::Source(hidden_span),
                 span: hidden_span,
             },
@@ -21745,6 +22172,7 @@ mod tests {
                     origin: Origin::Source(first),
                 },
                 methods: Box::new([]),
+                method_binder_authorities: Box::new([]),
                 origin: Origin::Source(first),
                 span: first,
             },

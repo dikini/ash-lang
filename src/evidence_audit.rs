@@ -36,7 +36,7 @@ pub(crate) fn audit_checked_body_evidence<'a, G, M, S>(
 where
     G: FnMut(BinderId) -> Option<&'a ConstrainedScheme>,
     M: FnMut(MethodId) -> bool,
-    S: FnMut(&EvidenceSlot) -> bool,
+    S: FnMut(&EvidenceSlot, Option<MethodId>) -> bool,
 {
     let mut pending = Vec::new();
 
@@ -131,27 +131,31 @@ fn audit_occurrence<'a, G, M, S>(
 where
     G: FnMut(BinderId) -> Option<&'a ConstrainedScheme>,
     M: FnMut(MethodId) -> bool,
-    S: FnMut(&EvidenceSlot) -> bool,
+    S: FnMut(&EvidenceSlot, Option<MethodId>) -> bool,
 {
     budget
         .charge(1)
         .map_err(|()| EvidenceAuditFailure::ConstraintResource)?;
-    let expected = match occurrence.term {
-        ResolvedTermName::Global(binder) => {
-            global_scheme(binder).map_or(0, |scheme| scheme.requirements.len())
-        }
+    let (expected, checked_method) = match occurrence.term {
+        ResolvedTermName::Global(binder) => (
+            global_scheme(binder).map_or(0, |scheme| scheme.requirements.len()),
+            None,
+        ),
         ResolvedTermName::Method(method) => {
             if !method_known(method) {
                 return Err(EvidenceAuditFailure::InvalidState);
             }
-            1
+            (1, Some(method))
         }
     };
     budget
         .charge(expected)
         .map_err(|()| EvidenceAuditFailure::ConstraintResource)?;
     if occurrence.evidence.len() != expected
-        || occurrence.evidence.iter().any(|slot| !slot_ready(slot))
+        || occurrence
+            .evidence
+            .iter()
+            .any(|slot| !slot_ready(slot, checked_method))
     {
         return Err(EvidenceAuditFailure::InvalidState);
     }
@@ -268,7 +272,7 @@ mod tests {
             .finish(root, InterfaceId::new(module, 0), Type::Int)
             .expect("the root should exist");
         slot.handle()
-            .fill(Type::Int, Box::new([]), None, selection)
+            .fill(None, Type::Int, Box::new([]), None, selection)
             .expect("the fresh slot should accept evidence");
         slot
     }
@@ -427,7 +431,10 @@ mod tests {
                 &[],
                 |binder| (binder == constrained).then_some(&scheme),
                 |candidate| candidate == method,
-                |slot| slot.selection().is_some(),
+                |slot, checked_method| {
+                    slot.selection().is_some()
+                        && (checked_method.is_none() || checked_method == Some(method))
+                },
                 &mut InterfaceConstraintBudget::default(),
             ),
             Ok(())
@@ -469,7 +476,7 @@ mod tests {
                 &[],
                 |binder| (binder == constrained).then_some(&scheme),
                 |_| index != 2,
-                |slot| slot.selection().is_some(),
+                |slot, _| slot.selection().is_some(),
                 &mut InterfaceConstraintBudget::default(),
             );
             assert_eq!(result, Err(EvidenceAuditFailure::InvalidState));
@@ -499,7 +506,7 @@ mod tests {
                 &implementations,
                 |binder| (binder == constrained).then_some(&scheme),
                 |_| false,
-                |slot| slot.selection().is_some(),
+                |slot, _| slot.selection().is_some(),
                 &mut InterfaceConstraintBudget::default(),
             ),
             Err(EvidenceAuditFailure::InvalidState)
@@ -533,7 +540,7 @@ mod tests {
                     &[],
                     |_| None,
                     |_| false,
-                    |slot| slot.selection().is_some(),
+                    |slot, _| slot.selection().is_some(),
                     &mut InterfaceConstraintBudget::default(),
                 )
                 .expect("the deep checked body should authenticate iteratively");
@@ -563,7 +570,7 @@ mod tests {
                 &[],
                 |_| None,
                 |_| false,
-                |slot| slot.selection().is_some(),
+                |slot, _| slot.selection().is_some(),
                 &mut InterfaceConstraintBudget::with_limit(3),
             ),
             Err(EvidenceAuditFailure::ConstraintResource)
@@ -580,10 +587,43 @@ mod tests {
                 &[],
                 |_| None,
                 |_| false,
-                |slot| slot.selection().is_some(),
+                |slot, _| slot.selection().is_some(),
                 &mut InterfaceConstraintBudget::with_limit(4),
             ),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn rejects_staged_method_identity_that_differs_from_the_occurrence() {
+        let span = fixture_span();
+        let module = ModuleId::new(36);
+        let owner = BinderId::resolved(module, 0);
+        let interface = InterfaceId::new(module, 0);
+        let first = MethodId::new(interface, 0);
+        let second = MethodId::new(interface, 1);
+        let definitions = [definition(
+            occurrence(
+                ResolvedTermName::Method(first),
+                vec![selected_slot(module)],
+                span,
+            ),
+            owner,
+            span,
+        )];
+
+        assert_eq!(
+            audit_checked_body_evidence(
+                &definitions,
+                &[],
+                |_| None,
+                |method| method == first,
+                |slot, checked_method| {
+                    slot.selection().is_some() && checked_method == Some(second)
+                },
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Err(EvidenceAuditFailure::InvalidState),
         );
     }
 }

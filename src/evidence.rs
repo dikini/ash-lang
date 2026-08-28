@@ -157,6 +157,7 @@ impl Drop for ImplementationEntry {
 #[derive(Debug)]
 struct PendingObligation {
     interface: InterfaceId,
+    checked_method: Option<MethodId>,
     argument: Type,
     method_arguments: Box<[Type]>,
     checked_value_type: Option<Type>,
@@ -263,6 +264,7 @@ pub(crate) struct MethodRigidityCondition {
 
 #[derive(Debug)]
 pub(crate) struct MethodObligationMetadata {
+    checked_method: MethodId,
     method_arguments: Box<[Type]>,
     checked_value_type: Option<Type>,
     method_rigidity: Option<MethodRigidityCondition>,
@@ -270,10 +272,12 @@ pub(crate) struct MethodObligationMetadata {
 
 impl MethodObligationMetadata {
     pub(crate) const fn new(
+        checked_method: MethodId,
         method_arguments: Box<[Type]>,
         method_rigidity: Option<MethodRigidityCondition>,
     ) -> Self {
         Self {
+            checked_method,
             method_arguments,
             checked_value_type: None,
             method_rigidity,
@@ -287,8 +291,16 @@ impl MethodObligationMetadata {
         self
     }
 
-    fn into_parts(mut self) -> (Box<[Type]>, Option<Type>, Option<MethodRigidityCondition>) {
+    fn into_parts(
+        mut self,
+    ) -> (
+        MethodId,
+        Box<[Type]>,
+        Option<Type>,
+        Option<MethodRigidityCondition>,
+    ) {
         (
+            self.checked_method,
             std::mem::take(&mut self.method_arguments),
             self.checked_value_type.take(),
             self.method_rigidity.take(),
@@ -412,6 +424,7 @@ impl Drop for PendingObligation {
 
 #[derive(Debug)]
 struct SelectedOccurrence {
+    checked_method: Option<MethodId>,
     checked_argument: Type,
     method_arguments: Box<[Type]>,
     checked_value_type: Option<Type>,
@@ -435,12 +448,16 @@ impl Drop for SelectedOccurrence {
 #[derive(Debug)]
 pub(crate) struct PendingEvidencePublication {
     occurrences: Vec<SelectedOccurrence>,
-    slot_ids: HashSet<usize>,
+    slot_ids: HashMap<usize, Option<MethodId>>,
 }
 
 impl PendingEvidencePublication {
-    pub(crate) fn contains(&self, slot: &crate::interface::EvidenceSlot) -> bool {
-        self.slot_ids.contains(&slot.storage_id())
+    pub(crate) fn contains_expected(
+        &self,
+        slot: &crate::interface::EvidenceSlot,
+        checked_method: Option<MethodId>,
+    ) -> bool {
+        self.slot_ids.get(&slot.storage_id()) == Some(&checked_method)
     }
 
     fn preflight(&mut self) -> Result<(), SelectionFailure> {
@@ -453,7 +470,11 @@ impl PendingEvidencePublication {
                 .as_ref()
                 .ok_or(SelectionFailure::InvalidState)?;
             let slot_id = slot.storage_id();
-            if occurrence.selection.is_none() || !slot.is_empty() || !self.slot_ids.remove(&slot_id)
+            if occurrence.selection.is_none()
+                || occurrence.checked_method.is_some() != occurrence.checked_value_type.is_some()
+                || occurrence.checked_method.is_none() && !occurrence.method_arguments.is_empty()
+                || !slot.is_empty()
+                || self.slot_ids.remove(&slot_id) != Some(occurrence.checked_method)
             {
                 return Err(SelectionFailure::InvalidState);
             }
@@ -469,6 +490,7 @@ impl PendingEvidencePublication {
         self.preflight()?;
         while let Some(mut occurrence) = self.occurrences.pop() {
             let checked_argument = std::mem::replace(&mut occurrence.checked_argument, Type::Unit);
+            let checked_method = occurrence.checked_method.take();
             let method_arguments = std::mem::take(&mut occurrence.method_arguments);
             let checked_value_type = occurrence.checked_value_type.take();
             let selection = occurrence
@@ -480,6 +502,7 @@ impl PendingEvidencePublication {
                 .take()
                 .expect("publication preflight authenticates every slot")
                 .fill_preflighted(
+                    checked_method,
                     checked_argument,
                     method_arguments,
                     checked_value_type,
@@ -1245,6 +1268,7 @@ impl EvidenceSelector {
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         self.pending.push(PendingObligation {
             interface,
+            checked_method: None,
             argument: argument.into_inner(),
             method_arguments: Box::new([]),
             checked_value_type: None,
@@ -1289,7 +1313,7 @@ impl EvidenceSelector {
         let retained_work = metadata
             .method_arguments
             .len()
-            .checked_add(1)
+            .checked_add(2)
             .and_then(|work| work.checked_add(rigidity_work))
             .and_then(|work| work.checked_add(usize::from(metadata.checked_value_type.is_some())))
             .ok_or(SelectionFailure::ConstraintResource)?;
@@ -1314,9 +1338,11 @@ impl EvidenceSelector {
         self.pending
             .try_reserve(1)
             .map_err(|_| SelectionFailure::ConstraintResource)?;
-        let (method_arguments, checked_value_type, method_rigidity) = metadata.into_parts();
+        let (checked_method, method_arguments, checked_value_type, method_rigidity) =
+            metadata.into_parts();
         self.pending.push(PendingObligation {
             interface,
+            checked_method: Some(checked_method),
             argument: argument.into_inner(),
             method_arguments,
             checked_value_type,
@@ -1503,6 +1529,7 @@ impl EvidenceSelector {
             });
         }
         self.selected.push(SelectedOccurrence {
+            checked_method: obligation.checked_method,
             checked_argument,
             method_arguments: std::mem::take(&mut obligation.method_arguments),
             checked_value_type: obligation.checked_value_type.take(),
@@ -1732,6 +1759,7 @@ impl EvidenceSelector {
                 });
             }
             self.selected.push(SelectedOccurrence {
+                checked_method: obligation.checked_method,
                 checked_argument,
                 method_arguments: std::mem::take(&mut obligation.method_arguments),
                 checked_value_type: obligation.checked_value_type.take(),
@@ -1765,6 +1793,11 @@ impl EvidenceSelector {
             .iter()
             .filter(|selected| selected.checked_value_type.is_some())
             .count();
+        let checked_method_count = self
+            .selected
+            .iter()
+            .filter(|selected| selected.checked_method.is_some())
+            .count();
         let retained_work = method_argument_count
             .and_then(|count| {
                 self.selected
@@ -1773,12 +1806,13 @@ impl EvidenceSelector {
                     .and_then(|fixed| count.checked_add(fixed))
             })
             .and_then(|count| count.checked_add(checked_value_type_count))
+            .and_then(|count| count.checked_add(checked_method_count))
             .ok_or(SelectionFailure::ConstraintResource)?;
         constraint_work
             .charge(retained_work)
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         let mut occurrences = Vec::new();
-        let mut slot_ids = HashSet::new();
+        let mut slot_ids = HashMap::new();
         occurrences
             .try_reserve(self.selected.len())
             .map_err(|_| SelectionFailure::ConstraintResource)?;
@@ -1843,7 +1877,7 @@ impl EvidenceSelector {
                 return Err(SelectionFailure::InvalidState);
             };
             let slot_id = slot.storage_id();
-            if !slot.is_empty() || !slot_ids.insert(slot_id) {
+            if !slot.is_empty() || slot_ids.insert(slot_id, selected.checked_method).is_some() {
                 for argument in method_arguments {
                     discard_type_iteratively(argument);
                 }
@@ -1853,6 +1887,7 @@ impl EvidenceSelector {
                 return Err(SelectionFailure::InvalidState);
             }
             occurrences.push(SelectedOccurrence {
+                checked_method: selected.checked_method,
                 checked_argument: checked_argument.into_inner(),
                 method_arguments: method_arguments.into_boxed_slice(),
                 checked_value_type,
@@ -2947,19 +2982,18 @@ mod tests {
             .span(ByteRange::new(0, 9).expect("interface fixture range"))
             .expect("interface fixture span");
         let interface = InterfaceId::new(ModuleId::from(file.id()), 0);
-        CheckedInterfaceFact {
-            id: interface,
-            spelling: "Interface".to_owned(),
-            parameter: ResolvedTypeVariable {
+        CheckedInterfaceFact::without_methods_for_test(
+            interface,
+            "Interface".to_owned(),
+            ResolvedTypeVariable {
                 id: TypeVariableId::resolved(ModuleId::from(file.id()), 0),
                 spelling: "F".to_owned(),
                 kind,
                 origin: Origin::Source(span),
             },
-            methods: Box::new([]),
-            origin: Origin::Source(span),
+            Origin::Source(span),
             span,
-        }
+        )
     }
 
     fn registry_for_interface_fact(fact: &CheckedInterfaceFact) -> ResolvedRegistry {
@@ -3057,6 +3091,7 @@ mod tests {
                 repeat_interface,
                 &Type::Int,
                 MethodObligationMetadata::new(
+                    MethodId::new(repeat_interface, 0),
                     Box::new([Type::Bool]),
                     Some(MethodRigidityCondition::new(
                         Box::new([Type::Int]),
@@ -3117,6 +3152,7 @@ mod tests {
                         interface,
                         &Type::Int,
                         MethodObligationMetadata::new(
+                            MethodId::new(interface, 0),
                             Box::new([Type::Bool]),
                             Some(MethodRigidityCondition::new(Box::new([Type::Int]), *site)),
                         ),
@@ -3370,6 +3406,7 @@ mod tests {
                 duplicate.repeat_interface,
                 &Type::Int,
                 MethodObligationMetadata::new(
+                    MethodId::new(duplicate.repeat_interface, 0),
                     Box::new([Type::Bool]),
                     Some(MethodRigidityCondition::new(
                         Box::new([Type::Int]),
@@ -3618,7 +3655,7 @@ mod tests {
 
     #[test]
     fn publication_preflight_rejects_without_partially_filling_an_earlier_slot() {
-        let (interface, _, requirement) = ids();
+        let (interface, method, requirement) = ids();
         let mut budget = InterfaceConstraintBudget::default();
         let mut builder = EvidenceSelectionBuilder::new();
         let root = builder
@@ -3632,24 +3669,26 @@ mod tests {
         let first_handle = first.handle();
         let second_handle = second.handle();
         second_handle
-            .fill(Type::Int, Box::new([]), None, selection.clone())
+            .fill(None, Type::Int, Box::new([]), None, selection.clone())
             .expect("the second slot should begin filled for the invalid fixture");
-        let mut slot_ids = HashSet::new();
+        let mut slot_ids = HashMap::new();
         slot_ids
             .try_reserve(2)
             .expect("two preflight fixture identities should fit");
-        slot_ids.insert(first_handle.storage_id());
-        slot_ids.insert(second_handle.storage_id());
+        slot_ids.insert(first_handle.storage_id(), Some(method));
+        slot_ids.insert(second_handle.storage_id(), None);
         let publication = PendingEvidencePublication {
             occurrences: vec![
                 SelectedOccurrence {
+                    checked_method: Some(method),
                     checked_argument: Type::Int,
                     method_arguments: Box::new([Type::Bool]),
-                    checked_value_type: None,
+                    checked_value_type: Some(Type::Unit),
                     selection: Some(selection.clone()),
                     slot: Some(first_handle),
                 },
                 SelectedOccurrence {
+                    checked_method: None,
                     checked_argument: Type::Int,
                     method_arguments: Box::new([]),
                     checked_value_type: None,
@@ -3671,13 +3710,13 @@ mod tests {
         // Two method arguments, the authenticated checked-value carrier, and
         // two occurrence/slot records, then the exact two-unit comparison of
         // the checked and selected Int goal.
-        const EXACT_CONSTRAINT_WORK: usize = 2 + 1 + 2 + 2;
+        const EXACT_CONSTRAINT_WORK: usize = 2 + 1 + 1 + 2 + 2;
         // The ordered method-argument vector owns two retained Type carriers;
         // the identity zonk fixture performs no additional Type cloning.
         const EXACT_TYPE_WORK: usize = 2;
 
         let run = |constraint_limit, type_limit| {
-            let (interface, _, requirement) = ids();
+            let (interface, method, requirement) = ids();
             let mut builder = EvidenceSelectionBuilder::new();
             let root = builder
                 .push_abstract(requirement, &[], &mut InterfaceConstraintBudget::default())
@@ -3688,6 +3727,7 @@ mod tests {
             let slot = EvidenceSlot::empty();
             let mut selector = EvidenceSelector::new();
             selector.selected.push(SelectedOccurrence {
+                checked_method: Some(method),
                 checked_argument: Type::Int,
                 method_arguments: Box::new([Type::Bool, Type::Int]),
                 checked_value_type: Some(Type::Bool),
@@ -3725,18 +3765,18 @@ mod tests {
         assert_eq!(slot.method_arguments(), &[Type::Bool, Type::Int]);
         assert!(matches!(
             slot.filled_method(),
-            Some((Type::Int, [Type::Bool, Type::Int], Type::Bool, _))
+            Some((_, Type::Int, [Type::Bool, Type::Int], Type::Bool, _))
         ));
         assert!(slot.selection().is_some());
     }
 
     #[test]
     fn conditional_method_rigidity_ingress_has_exact_atomic_retry_boundaries() {
-        // One method argument, one occurrence record, one rigid argument, one
-        // condition record, plus the two-record traversals of the retained
+        // One method identity, one method argument, one occurrence record, one
+        // rigid argument, one condition record, plus the two-record traversals of the retained
         // interface Int and fresh method Bool arguments. The checked Unit
         // value type owns one carrier plus the two-cell retained type walk.
-        const EXACT_CONSTRAINT_WORK: usize = 8 + 3;
+        const EXACT_CONSTRAINT_WORK: usize = 8 + 3 + 1;
         // Only the interface argument is cloned at this ownership boundary.
         const EXACT_TYPE_WORK: usize = 1;
         let (interface, _, _) = ids();
@@ -3755,6 +3795,7 @@ mod tests {
                 interface,
                 &Type::Int,
                 MethodObligationMetadata::new(
+                    MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
                     Some(MethodRigidityCondition::new(
                         Box::new([Type::Bool]),
@@ -3777,6 +3818,7 @@ mod tests {
                 interface,
                 &Type::Int,
                 MethodObligationMetadata::new(
+                    MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
                     Some(MethodRigidityCondition::new(
                         Box::new([Type::Bool]),
@@ -3801,6 +3843,7 @@ mod tests {
                 interface,
                 &Type::Int,
                 MethodObligationMetadata::new(
+                    MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
                     Some(MethodRigidityCondition::new(
                         Box::new([Type::Bool]),
@@ -3823,7 +3866,9 @@ mod tests {
     #[test]
     fn wide_conditional_method_rigidity_ingress_is_exact_and_atomic() {
         const WIDTH: usize = 1_024;
-        const EXACT_CONSTRAINT_WORK: usize = WIDTH * 4 + 4;
+        // Four cells per method/rigidity argument, five fixed ingress facts,
+        // and the checked-value carrier plus its Unit traversal.
+        const EXACT_CONSTRAINT_WORK: usize = WIDTH * 4 + 8;
         const EXACT_TYPE_WORK: usize = 1;
         let (interface, _, _) = ids();
         let source = SourceFile::new("wide-method-rigidity-ingress.ash", "use")
@@ -3840,12 +3885,14 @@ mod tests {
                 interface,
                 &Type::Int,
                 MethodObligationMetadata::new(
+                    MethodId::new(interface, 0),
                     make_arguments(),
                     Some(MethodRigidityCondition::new(
                         make_arguments(),
                         MethodRigiditySite::application(span, span, span),
                     )),
-                ),
+                )
+                .with_checked_value_type(Type::Unit),
                 SelectionSite::plain(slot.handle(), span),
                 &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1),
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
@@ -3862,12 +3909,14 @@ mod tests {
                 interface,
                 &Type::Int,
                 MethodObligationMetadata::new(
+                    MethodId::new(interface, 0),
                     make_arguments(),
                     Some(MethodRigidityCondition::new(
                         make_arguments(),
                         MethodRigiditySite::application(span, span, span),
                     )),
-                ),
+                )
+                .with_checked_value_type(Type::Unit),
                 SelectionSite::plain(slot.handle(), span),
                 &mut exact_constraints,
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
@@ -3900,6 +3949,7 @@ mod tests {
                         interface,
                         &Type::Int,
                         MethodObligationMetadata::new(
+                            MethodId::new(interface, 0),
                             Box::new([Type::Bool]),
                             Some(MethodRigidityCondition::new(
                                 Box::new([deep_value_type(DEPTH)]),
@@ -3935,9 +3985,10 @@ mod tests {
                     .expect("the selected deep span should fit");
                 let mut selector = EvidenceSelector::new();
                 selector.selected.push(SelectedOccurrence {
+                    checked_method: Some(MethodId::new(InterfaceId::new(ModuleId::new(0), 0), 0)),
                     checked_argument: Type::Int,
                     method_arguments: Box::new([Type::Bool]),
-                    checked_value_type: None,
+                    checked_value_type: Some(Type::Unit),
                     selection: None,
                     slot: None,
                 });
@@ -3996,12 +4047,14 @@ mod tests {
                 interface,
                 &Type::Int,
                 MethodObligationMetadata::new(
+                    MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
                     Some(MethodRigidityCondition::new(
                         Box::new([Type::Int]),
                         MethodRigiditySite::application(span, span, span),
                     )),
-                ),
+                )
+                .with_checked_value_type(Type::Unit),
                 SelectionSite::plain(abstract_slot.handle(), span),
                 &mut InterfaceConstraintBudget::default(),
                 &mut TypeWorkBudget::default(),
@@ -4070,12 +4123,14 @@ mod tests {
                 interface,
                 &Type::Int,
                 MethodObligationMetadata::new(
+                    MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
                     Some(MethodRigidityCondition::new(
                         Box::new([Type::Int]),
                         MethodRigiditySite::application(span, span, span),
                     )),
-                ),
+                )
+                .with_checked_value_type(Type::Unit),
                 SelectionSite::plain(current_slot.handle(), span),
                 &mut InterfaceConstraintBudget::default(),
                 &mut TypeWorkBudget::default(),
@@ -4120,7 +4175,7 @@ mod tests {
             .name("pending-method-argument-zonk-failure".to_owned())
             .stack_size(256 * 1024)
             .spawn(|| {
-                let (interface, _, requirement) = ids();
+                let (interface, method, requirement) = ids();
                 let mut builder = EvidenceSelectionBuilder::new();
                 let root = builder
                     .push_abstract(requirement, &[], &mut InterfaceConstraintBudget::default())
@@ -4131,6 +4186,7 @@ mod tests {
                 let slot = EvidenceSlot::empty();
                 let mut selector = EvidenceSelector::new();
                 selector.selected.push(SelectedOccurrence {
+                    checked_method: Some(method),
                     checked_argument: Type::Int,
                     method_arguments: Box::new([deep_value_type(DEPTH), Type::Bool]),
                     checked_value_type: Some(Type::Unit),
@@ -6194,6 +6250,7 @@ mod tests {
                         interface,
                         &Type::Int,
                         MethodObligationMetadata::new(
+                            MethodId::new(interface, 0),
                             Box::new([Type::Bool]),
                             Some(MethodRigidityCondition::new(
                                 Box::new([Type::Int]),

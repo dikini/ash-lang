@@ -2678,14 +2678,18 @@ fn validate_occurrence<'a>(
             }
         }
         ResolvedTermName::Method(method) => {
+            let occurrence_method = method;
             let method = registry
                 .method(program, method)
                 .ok_or_else(|| unknown(span))?;
             let [slot] = occurrence.evidence.as_ref() else {
                 return Err(invalid_root(span));
             };
-            let (checked_argument, method_arguments, checked_value_type, selection) =
+            let (checked_method, checked_argument, method_arguments, checked_value_type, selection) =
                 slot.filled_method().ok_or_else(|| invalid_root(span))?;
+            if checked_method != occurrence_method {
+                return Err(invalid_root(span));
+            }
             validate_checked_selection_in_scope(
                 program,
                 registry,
@@ -2699,6 +2703,18 @@ fn validate_occurrence<'a>(
                 type_work,
                 span,
             )?;
+            let authentic_method_relation = match selection.node(selection.root()) {
+                Some(EvidenceNode::Abstract { methods, .. }) => methods.contains(&checked_method),
+                Some(EvidenceNode::Implementation {
+                    implementation,
+                    methods,
+                    ..
+                }) => methods.contains(&ImplMethodId::new(implementation, checked_method)),
+                None => false,
+            };
+            if !authentic_method_relation {
+                return Err(invalid_root(span));
+            }
             if method_arguments.len() != method.type_parameters().len() {
                 return Err(invalid_root(span));
             }
@@ -4971,6 +4987,174 @@ mod tests {
     fn authenticates_polymorphic_method_occurrence_arguments_before_core() {
         validate_interface_evidence(polymorphic_method_program())
             .expect("canonical method schemes and occurrence arguments should authenticate");
+    }
+
+    fn same_shaped_method_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "interface Choose<I> {\n",
+            "first<A> : (I, A) -> I\n",
+            "second<B> : (I, B) -> I\n",
+            "}\n\n",
+            "impl Choose<Bool> {\n",
+            "first pair = true\n",
+            "second pair = true\n",
+            "}\n\n",
+            "main : Unit -> Bool\n",
+            "main () = first((true, false))\n",
+        ))
+    }
+
+    #[test]
+    fn rejects_same_shaped_method_occurrence_identity_substitution() {
+        let mut program = same_shaped_method_program();
+        let group = &program.groups()[0];
+        let module = group.module();
+        let second = group.interface_facts()[0].methods[1].id;
+        assert!(
+            program.replace_nth_direct_method_occurrence_identity_for_test(module, 0, second),
+            "the fixture should expose its first method occurrence",
+        );
+
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("retained occurrence evidence must reject a same-shaped MethodId")
+                .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
+    fn rejects_same_shaped_retained_method_identity_substitution() {
+        let mut program = same_shaped_method_program();
+        let group = &program.groups()[0];
+        let module = group.module();
+        let second = group.interface_facts()[0].methods[1].id;
+        assert!(
+            program.replace_nth_direct_method_evidence_identity_for_test(module, 0, second),
+            "the fixture should expose the retained identity of its first occurrence",
+        );
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("the retained MethodId must equal the occurrence MethodId")
+                .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_concrete_method_relationship_for_same_shaped_occurrence() {
+        let mut program = same_shaped_method_program();
+        let group = &program.groups()[0];
+        let module = group.module();
+        let implementation = &group.implementation_facts()[0];
+        let [first, second] = implementation.methods.as_ref() else {
+            panic!("the fixture should retain two implementation methods");
+        };
+        let forged = implementation_selection_for_argument(
+            implementation.id,
+            implementation.interface,
+            &[second.id, first.id],
+            Type::Bool,
+        );
+        assert!(
+            program.replace_nth_direct_method_occurrence_selection_for_test(module, 0, forged),
+            "the fixture should expose its concrete method occurrence",
+        );
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("concrete evidence must retain the canonical ImplMethodId relation")
+                .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_abstract_method_relationship_for_same_shaped_occurrence() {
+        let mut program = entry_program(concat!(
+            "interface Choose<I> {\n",
+            "first<A> : (I, A) -> I\n",
+            "second<B> : (I, B) -> I\n",
+            "}\n\n",
+            "relay<I, A> : (I, A) -> I where Choose<I>\n",
+            "relay pair = first(pair)\n\n",
+            "impl Choose<Bool> {\n",
+            "first pair = true\n",
+            "second pair = true\n",
+            "}\n\n",
+            "main : Unit -> Bool\n",
+            "main () = relay((true, false))\n",
+        ));
+        let group = &program.groups()[0];
+        let module = group.module();
+        let interface = &group.interface_facts()[0];
+        let requirement = group
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.spelling == "relay")
+            .and_then(|scheme| scheme.scheme.requirements.first())
+            .expect("relay should retain its abstract requirement");
+        let second = interface.methods[1].id;
+        let mut builder = EvidenceSelectionBuilder::new();
+        let root = builder
+            .push_abstract(
+                requirement.id,
+                &[second],
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the forged abstract method row should fit");
+        let forged = builder
+            .finish(root, interface.id, requirement.argument.clone())
+            .expect("the forged abstract selection should have a root");
+        assert!(
+            program.replace_nth_direct_method_occurrence_selection_for_test(module, 0, forged),
+            "the relay should expose its abstract method occurrence",
+        );
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("abstract evidence must retain the selected MethodId relation")
+                .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_exact_current_impl_method_relationship() {
+        let mut program = entry_program(concat!(
+            "interface Choose<I> {\n",
+            "first<A> : (I, A) -> I\n",
+            "second<B> : (I, B) -> I\n",
+            "}\n\n",
+            "impl Choose<Bool> {\n",
+            "first pair = first(pair)\n",
+            "second pair = true\n",
+            "}\n\n",
+            "main : Unit -> Bool\n",
+            "main () = first((true, false))\n",
+        ));
+        let group = &program.groups()[0];
+        let module = group.module();
+        let implementation = &group.implementation_facts()[0];
+        let [first, second] = implementation.methods.as_ref() else {
+            panic!("the exact-current fixture should retain two implementation methods");
+        };
+        let forged = implementation_selection_for_argument(
+            implementation.id,
+            implementation.interface,
+            &[second.id, first.id],
+            Type::Bool,
+        );
+        assert!(
+            program.replace_nth_direct_method_occurrence_selection_for_test(module, 0, forged),
+            "the implementation should expose its exact-current occurrence",
+        );
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err(
+                    "exact-current evidence must retain the canonical ImplMethodId relation"
+                )
+                .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+        );
     }
 
     #[test]

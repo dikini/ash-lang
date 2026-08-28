@@ -3069,6 +3069,7 @@ impl Elaborator {
                     interface,
                     argument,
                     MethodObligationMetadata::new(
+                        method,
                         retained_method_arguments.into_boxed_slice(),
                         method_rigidity,
                     )
@@ -8313,7 +8314,7 @@ pub(crate) fn check_module_with_budget(
             resolved.implementations(),
             |binder| selector.scheme(binder),
             |method| selector.method(method).is_some(),
-            |slot| publication.contains(slot),
+            |slot, checked_method| publication.contains_expected(slot, checked_method),
             constraint_work,
         )
         .map_err(|failure| match failure {
@@ -8527,15 +8528,23 @@ fn checked_interface_facts(
                 span: method.span,
             });
         }
-        facts.push(CheckedInterfaceFact {
-            id: interface.id,
-            spelling: interface.spelling.clone(),
-            parameter: clone_resolved_type_variable_with_budget(&interface.parameter, type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
-            methods: methods.into_boxed_slice(),
-            origin: interface.origin.clone(),
-            span: interface.span,
-        });
+        facts.push(
+            CheckedInterfaceFact::with_resolved_method_binder_authority(
+                interface,
+                clone_resolved_type_variable_with_budget(&interface.parameter, type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+                methods.into_boxed_slice(),
+                type_work,
+                constraint_work,
+            )
+            .map_err(|failure| match failure {
+                ResolvedBuildFailure::TypeResource => {
+                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                }
+                ResolvedBuildFailure::ConstraintResource => constraint_resource(),
+                ResolvedBuildFailure::InvalidState => invalid_state(),
+            })?,
+        );
     }
     Ok(facts.into_boxed_slice())
 }
@@ -11787,7 +11796,11 @@ mod tests {
         let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(38);
+        // One private interface requires 48 cells: the predecessor's 39 plus
+        // nine canonical source-method authentication cells. No public
+        // summary clone is retained.
+        const EXACT_WORK: usize = 48;
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -11796,11 +11809,11 @@ mod tests {
             failure,
             TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
         );
-        assert_eq!(short.used(), 38);
+        assert_eq!(short.used(), EXACT_WORK - 1);
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut constraint_work = InterfaceConstraintBudget::with_limit(39);
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(EXACT_WORK);
 
         check_module_with_budget(
             first,
@@ -11809,7 +11822,7 @@ mod tests {
             &mut constraint_work,
         )
         .expect("one interface should fit the exact constraint budget");
-        assert_eq!(constraint_work.used(), 39);
+        assert_eq!(constraint_work.used(), EXACT_WORK);
         assert_eq!(constraint_work.charge(1), Err(()));
         let failure = check_module_with_budget(
             second,
@@ -11881,9 +11894,9 @@ mod tests {
 
     #[test]
     fn impl_method_substitution_uses_the_exact_constraint_budget() {
-        // The predecessor's 83 cells plus one Task 8 body-free method-scheme
-        // relationship form the complete check-and-freeze boundary.
-        const EXACT_WORK: usize = 84;
+        // The predecessor's 84 cells plus nine canonical source-method
+        // authentication cells form the complete private-interface boundary.
+        const EXACT_WORK: usize = 93;
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
             "impl Keep<Int> {\nkeep value = value\n}\n",

@@ -456,6 +456,86 @@ and evaluator semantic or state-machine changes.
   reviews remain pending. The Checkpoint 4 reservation remains 12 units,
   cumulative reserved use is 38/70, 32 units remain unreserved, and Checkpoint
   5 is not reserved.
+- Checkpoint 4 semantic review rejected `652f74c` with two important findings
+  and no critical or minor findings. The exact pre-publication authority RED,
+  `cargo test --locked --lib
+  resolved::tests::freeze_rejects_coherently_forged_checked_method_binder_before_publication
+  -- --exact`, failed because a resolved `A` binder and a coherently forged
+  checked `Forged` binder, identity, origin, and body scope were accepted. The
+  exact linked-identity RED, `cargo test --locked --lib
+  evidence_validation::tests::rejects_same_shaped_method_occurrence_identity_substitution
+  -- --exact`, failed because changing only `first<A>` to the same-shaped
+  `second<B>` occurrence still validated.
+- Checked interface facts now own a private defining-source authority row for
+  every method, including monomorphic methods. Each row retains its stable
+  `MethodId` and complete ordered binder records. Checking mints the rows from
+  resolved source; imports, public and hidden summary mirrors, facades, and
+  diamond routes clone already-authenticated rows. Freeze authenticates exact
+  method order, identity, spelling, span, origin, monotype, binder identity,
+  binder spelling, binder origin, kind, owner, and body scope before
+  publication. Detached authentication and alternate-route equality consume
+  the private rows rather than minting authority from a checked mirror. Missing
+  monomorphic rows reject, the combined registry still counts each logical
+  binder once, and a 32,768-deep private binder origin disposes on a 64 KiB
+  stack.
+- Method obligations now retain the originally checked `MethodId` through
+  pending selection, selected occurrences, the private publication map, and
+  `FilledEvidenceSlot`. Publication atomically moves that identity with the
+  interface argument, method arguments, checked value type, and selection;
+  ordinary global slots retain `None`. Linked validation first requires exact
+  equality with the occurrence identity, then authenticates an abstract root's
+  `MethodId` or a concrete and exact-current root's
+  `ImplMethodId::new(selected_impl, method)`. It does not reselect evidence and
+  method arguments do not affect candidate choice. Dedicated tampering
+  witnesses reject the retained identity alone, occurrence identity alone,
+  wrong abstract relationship, wrong concrete relationship, and wrong
+  exact-current relationship; the checked-body audit also rejects a staged
+  identity that differs from the occurrence.
+- Corrected resource witnesses charge one constraint unit per retained or
+  authenticated private method row and retain each copied binder record and
+  kind on TypeWork without adding a second logical registry variable. Two
+  `Type` binders clone at exact constraint/type limits `1/4`; the generic hidden
+  import boundary is `18/19`. One method occurrence with one method argument,
+  one rigidity argument, and a checked `Unit` value enters at `12/1`; width
+  `W` enters at `(4W + 8)/1`. Two method arguments publish at `8/2`, including
+  the retained method identity. A private one-method interface checks at 48
+  constraint units, while the implementation fixture checks at 93. For the
+  public wide graph, dependency checking is `48W`, entry resolution is
+  `65W + 1`, entry checking is `75W + 12`, linking is `78W + 24`, and linked
+  validation is `123W + 69`. At test width 4,000, linking remains below the
+  unchanged 327,680-unit production limit and validation crosses it. All
+  exact boundaries reject one-short attempts without publication and accept a
+  clean retry; no production limit changed.
+- The predecessor width-5,000 resource fixtures were already intentionally
+  invalid: one exhausted the shared default budget during linked validation,
+  and one contained a prerequisite cycle whose diagnostic had to precede
+  unrelated resource exhaustion. Required Checkpoint 4 authority work moves
+  the width-5,000 cumulative prefix to 240,000 after dependency checking,
+  325,001 after entry resolution, and 375,012 during entry checking, so that
+  padding now exhausts before either intended owner. Recalibrating only those
+  stress fixtures to width 4,000 yields 192,000, 260,001, 300,012, and 312,024
+  through linking, then 492,069 after validation. The unchanged default limit
+  therefore preserves the original validation-exhaustion and cycle-precedence
+  contracts. No previously successful program becomes a regression witness;
+  the old sources were deliberate rejection cases.
+- Correction verification passes all 677 library tests, the planned 68-test
+  Checkpoint 4 bundle with counts 21/2/1/20/14/2/8, and all three cross-stage
+  resource tests. The locked workspace/all-target/all-feature command passes
+  1,477 tests across 47 suites with no failures or ignored tests. Formatting,
+  locked all-target checking, strict locked workspace/all-target/all-feature
+  Clippy, test listing, `cargo xtask verify`, Markdown lint, and diff hygiene
+  pass. The correction agent used `gpt-5.6-sol` at xhigh reasoning.
+  Self-review corrected an uncharged
+  quadratic authority lookup to ordered linear consumption, added the required
+  row for monomorphic methods, moved cheap top-level alternate-route identity
+  rejection before private-row traversal to preserve precedence, strengthened
+  source method origin and monotype authentication, made the construction API
+  accept the resolved interface directly, added deep private-row disposal, and
+  recalibrated only already-invalid wide resource fixtures to preserve their
+  owning phase and diagnostic precedence. The Checkpoint 4 reservation remains
+  12 units, cumulative reserved use remains 38/70, 32 units remain unreserved,
+  independent semantic and Rust/resource re-reviews remain pending, and
+  Checkpoint 5 is not reserved.
 
 ## Verification
 
