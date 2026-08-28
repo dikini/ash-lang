@@ -175,6 +175,14 @@ pub(crate) struct MethodRigiditySite {
     argument_span: Option<Span>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum MethodRigidityMatchRank {
+    // Declaration order is causal priority: the smallest matching rank wins.
+    Application,
+    Argument,
+    Occurrence,
+}
+
 impl MethodRigiditySite {
     pub(crate) const fn occurrence(occurrence_span: Span) -> Self {
         Self {
@@ -208,8 +216,19 @@ impl MethodRigiditySite {
         self.argument_span
     }
 
-    pub(crate) fn matches_failure_span(self, span: Span) -> bool {
-        self.application_span == Some(span) || self.argument_span == Some(span)
+    fn failure_match_rank(self, span: Span) -> Option<MethodRigidityMatchRank> {
+        if self.application_span == Some(span) {
+            Some(MethodRigidityMatchRank::Application)
+        } else if self.argument_span == Some(span) {
+            Some(MethodRigidityMatchRank::Argument)
+        } else if self.application_span.is_none()
+            && self.argument_span.is_none()
+            && self.occurrence_span == span
+        {
+            Some(MethodRigidityMatchRank::Occurrence)
+        } else {
+            None
+        }
     }
 }
 
@@ -586,8 +605,15 @@ impl EvidenceSelector {
             constraint_work
                 .charge_type(&method.value_type)
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
+            let method_parameter_records = method
+                .type_parameters
+                .len()
+                .checked_mul(2)
+                .ok_or(SelectionFailure::ConstraintResource)?;
+            // One retained parameter record and one temporary duplicate-index
+            // entry are allocated for every authenticated method binder.
             constraint_work
-                .charge(method.type_parameters.len())
+                .charge(method_parameter_records)
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
             type_work
                 .charge(method.type_parameters.len())
@@ -1305,19 +1331,9 @@ impl EvidenceSelector {
                 import_span: None,
                 causes: Vec::new(),
             })?;
-        let mut matching_index = None;
-        for (offset, obligation) in self.pending[target.marker..].iter().enumerate() {
-            if obligation
-                .method_rigidity
-                .as_ref()
-                .is_some_and(|condition| condition.site.matches_failure_span(target.failure_span))
-            {
-                if matching_index.is_some() {
-                    return Err(invalid());
-                }
-                matching_index = Some(target.marker + offset);
-            }
-        }
+        let matching_index = self
+            .matching_method_rigidity_index(target)
+            .map_err(|_| invalid())?;
         let Some(matching_index) = matching_index else {
             return Ok(false);
         };
@@ -1448,6 +1464,44 @@ impl EvidenceSelector {
         Ok(true)
     }
 
+    fn matching_method_rigidity_index(
+        &self,
+        target: MethodRigidityTarget,
+    ) -> Result<Option<usize>, SelectionFailure> {
+        if target.marker > self.pending.len() {
+            return Err(SelectionFailure::InvalidState);
+        }
+        let mut best = None;
+        let mut duplicate = false;
+        for (offset, obligation) in self.pending[target.marker..].iter().enumerate() {
+            let Some(rank) = obligation
+                .method_rigidity
+                .as_ref()
+                .and_then(|condition| condition.site.failure_match_rank(target.failure_span))
+            else {
+                continue;
+            };
+            let index = target.marker + offset;
+            match best {
+                None => {
+                    best = Some((rank, index));
+                    duplicate = false;
+                }
+                Some((best_rank, _)) if rank < best_rank => {
+                    best = Some((rank, index));
+                    duplicate = false;
+                }
+                Some((best_rank, _)) if rank == best_rank => duplicate = true,
+                Some(_) => {}
+            }
+        }
+        if duplicate {
+            Err(SelectionFailure::InvalidState)
+        } else {
+            Ok(best.map(|(_, index)| index))
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn close<F>(
         &mut self,
@@ -1508,13 +1562,16 @@ impl EvidenceSelector {
                 causes: Vec::new(),
             });
         }
+        let pending_count = self.pending.len() - marker;
         let conditional_count = self.pending[marker..]
             .iter()
             .filter(|obligation| obligation.method_rigidity.is_some())
             .count();
+        // One pending-record unit prices each selected output before either
+        // retained output buffer reserves or the pending suffix moves.
         constraint_work
             .charge(
-                (self.pending.len() - marker)
+                pending_count
                     .checked_add(conditional_count)
                     .ok_or(SelectionError {
                         failure: SelectionFailure::ConstraintResource,
@@ -1533,6 +1590,15 @@ impl EvidenceSelector {
             })?;
         self.method_rigidities
             .try_reserve(conditional_count)
+            .map_err(|_| SelectionError {
+                failure: SelectionFailure::ConstraintResource,
+                span: None,
+                declaration_span: None,
+                import_span: None,
+                causes: Vec::new(),
+            })?;
+        self.selected
+            .try_reserve(pending_count)
             .map_err(|_| SelectionError {
                 failure: SelectionFailure::ConstraintResource,
                 span: None,
@@ -1594,13 +1660,6 @@ impl EvidenceSelector {
                     });
                 }
             };
-            self.selected.try_reserve(1).map_err(|_| SelectionError {
-                failure: SelectionFailure::ConstraintResource,
-                span: Some(obligation.span),
-                declaration_span: obligation.declaration_span,
-                import_span: obligation.import_span,
-                causes: Vec::new(),
-            })?;
             let selected_index = self.selected.len();
             let exact_current = self.current.is_some_and(|current| {
                 matches!(
@@ -2951,6 +3010,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn failed_body_rigidity_matching_has_deterministic_causal_tiers() {
+        let module = ModuleId::new(112);
+        let interface = InterfaceId::new(module, 0);
+        let source = SourceFile::new(
+            "method-rigidity-matching.ash",
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        )
+        .expect("the matching-tier source should fit");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the matching range should be ordered"))
+                .expect("the matching span should fit")
+        };
+        let failure = span(6, 20);
+        let first_argument_match =
+            MethodRigiditySite::application(span(0, 5), span(0, 25), failure);
+        let second_argument_match =
+            MethodRigiditySite::application(span(1, 5), span(0, 30), failure);
+        let whole_application_match =
+            MethodRigiditySite::application(span(6, 11), failure, span(12, 20));
+        let duplicate_whole_application =
+            MethodRigiditySite::application(span(7, 11), failure, span(13, 20));
+        let occurrence_only = MethodRigiditySite::occurrence(failure);
+        let nonmatching = MethodRigiditySite::application(span(21, 25), span(21, 35), span(26, 35));
+        let selector_for = |sites: &[MethodRigiditySite]| {
+            let mut selector = EvidenceSelector::new();
+            for site in sites {
+                selector
+                    .push_cloned_obligation(
+                        interface,
+                        &Type::Int,
+                        MethodObligationMetadata::new(
+                            Box::new([Type::Bool]),
+                            Some(MethodRigidityCondition::new(Box::new([Type::Int]), *site)),
+                        ),
+                        SelectionSite::plain(
+                            EvidenceSlot::empty().handle(),
+                            site.occurrence_span(),
+                        ),
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .expect("the matching-tier condition should stage");
+            }
+            selector
+        };
+        let target = MethodRigidityTarget::new(0, failure);
+
+        assert_eq!(
+            selector_for(&[nonmatching]).matching_method_rigidity_index(target),
+            Ok(None)
+        );
+        assert_eq!(
+            selector_for(&[first_argument_match]).matching_method_rigidity_index(target),
+            Ok(Some(0))
+        );
+        assert_eq!(
+            selector_for(&[occurrence_only]).matching_method_rigidity_index(target),
+            Ok(Some(0))
+        );
+        assert_eq!(
+            selector_for(&[
+                first_argument_match,
+                second_argument_match,
+                whole_application_match,
+            ])
+            .matching_method_rigidity_index(target),
+            Ok(Some(2)),
+            "one whole-application match should outrank duplicate argument matches"
+        );
+        assert_eq!(
+            selector_for(&[whole_application_match, duplicate_whole_application])
+                .matching_method_rigidity_index(target),
+            Err(SelectionFailure::InvalidState)
+        );
+        assert_eq!(
+            selector_for(&[first_argument_match, second_argument_match])
+                .matching_method_rigidity_index(target),
+            Err(SelectionFailure::InvalidState)
+        );
+    }
+
     fn assert_isolated_rigidity_fixture_unmodified(fixture: &IsolatedRigidityFixture) {
         assert_eq!(fixture.selector.pending.len(), 2);
         assert_eq!(
@@ -3253,6 +3395,8 @@ mod tests {
 
     #[test]
     fn interface_selector_method_scheme_has_exact_atomic_dual_boundaries() {
+        const EXACT_CONSTRAINT_WORK: usize = 20;
+
         let setup = || {
             let mut fact = interface_fact_with_kind(Kind::Type);
             let method_parameter = TypeVariableId::resolved(fact.id.module(), 1);
@@ -3297,6 +3441,7 @@ mod tests {
         let (measured, selector, method_parameter, exact_constraints, exact_types) =
             run(usize::MAX, usize::MAX);
         measured.expect("the measured method scheme should publish atomically");
+        assert_eq!(exact_constraints, EXACT_CONSTRAINT_WORK);
         let method = selector
             .method(selector.interfaces[0].methods[0].id)
             .expect("the selector should retain the method scheme");
@@ -3325,6 +3470,76 @@ mod tests {
         assert_eq!(used_constraints, exact_constraints);
         assert_eq!(used_types, exact_types);
         assert_eq!(selector.interfaces.len(), 1);
+    }
+
+    #[test]
+    fn wide_method_scheme_ingress_charges_retained_and_duplicate_indexes() {
+        const WIDTH: usize = 1_024;
+        const EXACT_CONSTRAINT_WORK: usize = WIDTH * 7 + 11;
+        const EXACT_TYPE_WORK: usize = WIDTH * 3 + 5;
+
+        let setup = || {
+            let mut fact = interface_fact_with_kind(Kind::Type);
+            let mut parameters = Vec::new();
+            parameters
+                .try_reserve(WIDTH)
+                .expect("the wide parameter fixture should fit");
+            for index in 0..WIDTH {
+                parameters.push(ResolvedTypeVariable {
+                    id: TypeVariableId::resolved(
+                        fact.id.module(),
+                        u32::try_from(index + 1)
+                            .expect("the wide parameter ordinal should fit u32"),
+                    ),
+                    spelling: format!("T{index}"),
+                    kind: Kind::Type,
+                    origin: Origin::Source(fact.span),
+                });
+            }
+            let values = parameters
+                .iter()
+                .map(|parameter| Type::Variable(parameter.id))
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            fact.methods = Box::new([CheckedInterfaceMethodFact {
+                id: MethodId::new(fact.id, 0),
+                spelling: "wide".to_owned(),
+                type_parameters: parameters.into_boxed_slice(),
+                value_type: Type::Function(
+                    Box::new(Type::Variable(fact.parameter.id)),
+                    Box::new(Type::Tuple(values)),
+                ),
+                origin: Origin::Source(fact.span),
+                span: fact.span,
+            }]);
+            let registry = registry_for_interface_fact(&fact);
+            (fact, registry)
+        };
+        let (fact, registry) = setup();
+        let mut selector = EvidenceSelector::new();
+        let short = selector.add_interface_fact(
+            &registry,
+            &fact,
+            &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1),
+            &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+        );
+        assert_eq!(short, Err(SelectionFailure::ConstraintResource));
+        assert!(selector.interfaces.is_empty());
+        assert!(selector.interface_indices.is_empty());
+        assert!(selector.method_indices.is_empty());
+
+        let mut exact_constraints = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let mut exact_types = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        selector
+            .add_interface_fact(&registry, &fact, &mut exact_constraints, &mut exact_types)
+            .expect("the exact wide dual-index retry should publish");
+        assert_eq!(exact_constraints.used(), EXACT_CONSTRAINT_WORK);
+        assert_eq!(exact_types.used(), EXACT_TYPE_WORK);
+        assert_eq!(selector.interfaces.len(), 1);
+        assert_eq!(
+            selector.interfaces[0].methods[0].type_parameters.len(),
+            WIDTH
+        );
     }
 
     #[test]
@@ -5761,7 +5976,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_obligation_transfer_has_an_exact_width_boundary_without_allocation() {
+    fn closing_obligation_transfer_has_an_exact_preallocation_boundary() {
         const WIDTH: usize = 128;
         let (interface, _, _) = ids();
         let file = SourceFile::new("pending-close.ash", "x").expect("source");
@@ -5793,6 +6008,7 @@ mod tests {
         assert_eq!(short.failure(), SelectionFailure::ConstraintResource);
         assert_eq!(short.span(), None);
         assert_eq!(selector.pending.len(), WIDTH);
+        assert_eq!(selector.selected.capacity(), 0);
 
         let task_short = selector
             .close(
@@ -5805,6 +6021,7 @@ mod tests {
         assert_eq!(task_short.failure(), SelectionFailure::ConstraintResource);
         assert_eq!(task_short.span(), Some(span));
         assert_eq!(selector.pending.len(), WIDTH - 1);
+        assert!(selector.selected.capacity() >= WIDTH);
 
         let reached_first = selector
             .close(
@@ -5816,6 +6033,118 @@ mod tests {
             .expect_err("transfer plus one task slot should reach the first obligation");
         assert_eq!(reached_first.failure(), SelectionFailure::InvalidState);
         assert_eq!(reached_first.span(), Some(span));
+    }
+
+    #[test]
+    fn normal_close_reserves_all_selected_outputs_before_moving_pending_records() {
+        const WIDTH: usize = 128;
+        let (interface, _, _) = ids();
+        let source = SourceFile::new("normal-close-reservation.ash", "x")
+            .expect("the reservation source should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the reservation range should be ordered"))
+            .expect("the reservation span should fit");
+        let mut failing = EvidenceSelector::new();
+        for _ in 0..WIDTH {
+            failing
+                .push_obligation(
+                    interface,
+                    Type::Int,
+                    EvidenceSlot::empty().handle(),
+                    span,
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("the pending reservation fixture should stage");
+        }
+        assert_eq!(failing.selected.capacity(), 0);
+        let error = failing
+            .close_with_registry(
+                &ResolvedRegistry::new(Vec::new(), Vec::new()),
+                0,
+                |argument, _| Ok(argument),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect_err("missing interface authority should fail after output reservation");
+        assert_eq!(error.failure(), SelectionFailure::InvalidState);
+        assert_eq!(failing.pending.len(), WIDTH - 1);
+        assert!(
+            failing.selected.capacity() >= WIDTH,
+            "all selected outputs must reserve before the first pending record moves"
+        );
+
+        let method = MethodId::new(interface, 0);
+        let current = ImplId::new(interface.module(), 0);
+        let mut ordered = EvidenceSelector::new();
+        ordered.add_interface_raw(
+            interface,
+            TypeVariableId::new(0),
+            vec![(method, Type::Unit)],
+        );
+        ordered.add_implementation_raw(implementation(
+            current,
+            interface,
+            Vec::new(),
+            Type::Int,
+            Vec::new(),
+            vec![ImplMethodId::new(current, method)],
+        ));
+        let registry = ordered.canonical_registry_for_test();
+        ordered
+            .enter_implementation_scope(
+                current,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the ordered current scope should fit");
+        let marker = ordered.pending_marker();
+        for conditional in [true, false, true] {
+            let slot = EvidenceSlot::empty();
+            if conditional {
+                ordered
+                    .push_cloned_obligation(
+                        interface,
+                        &Type::Int,
+                        MethodObligationMetadata::new(
+                            Box::new([Type::Bool]),
+                            Some(MethodRigidityCondition::new(
+                                Box::new([Type::Int]),
+                                MethodRigiditySite::application(span, span, span),
+                            )),
+                        ),
+                        SelectionSite::plain(slot.handle(), span),
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .expect("the ordered conditional obligation should stage");
+            } else {
+                ordered
+                    .push_owned_obligation(
+                        interface,
+                        Type::Int,
+                        SelectionSite::plain(slot.handle(), span),
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the ordered plain obligation should stage");
+            }
+        }
+        ordered
+            .close_with_registry(
+                &registry,
+                marker,
+                |argument, _| Ok(argument),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the pre-reserved output batch should close in source order");
+        assert!(ordered.pending.is_empty());
+        assert_eq!(ordered.selected.len(), 3);
+        assert_eq!(ordered.selected[0].method_arguments.len(), 1);
+        assert!(ordered.selected[1].method_arguments.is_empty());
+        assert_eq!(ordered.selected[2].method_arguments.len(), 1);
+        assert_eq!(ordered.method_rigidities.len(), 2);
+        assert_eq!(ordered.method_rigidities[0].selected_index, 0);
+        assert_eq!(ordered.method_rigidities[1].selected_index, 2);
     }
 
     #[test]

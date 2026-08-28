@@ -211,9 +211,10 @@ and evaluator semantic or state-machine changes.
 - Resource evidence covers the new carriers and disposal routes. For
   `q = 1 + m` occurrence binders, retained resolved and Core parameter copies
   charge `2q + 1 + 2 sum(K)` type work; the two-binder exact witness is
-  `2K + 7` and rejects one short. Selector method ingress charges `m` retained
-  binder records plus canonical kind comparisons in the constraint ledger and
-  `m + sum(K)` type work. For `O` staged occurrences and `M` total method
+  `2K + 7` and rejects one short. Selector method ingress charges `2m`
+  binder-index records, split between retained binder records and the temporary
+  duplicate index, plus canonical kind comparisons in the constraint ledger
+  and `m + sum(K)` type work. For `O` staged occurrences and `M` total method
   arguments, publication precharges `M + 2O` carrier units plus exact goal
   comparisons and `M` type carriers plus zonking; exact evidence for one
   two-argument occurrence is constraint 6 and type 2, with both one-short
@@ -327,6 +328,50 @@ and evaluator semantic or state-machine changes.
   implementation tests, 24 interface-selection tests, 33 interface tests, and
   40 polymorphism tests; 64 `interface`-filtered, 115 `elaborate`-filtered, and
   130 `evidence`-filtered library tests also pass. Formatting, locked all-target
+  checking, strict locked workspace/all-target/all-feature Clippy, Markdown
+  task lint, diff hygiene, and intended-path status inspection pass. The
+  correction agent used `gpt-5.6-sol` at xhigh reasoning. Self-review found no
+  selection-precedence, Core, evaluator, higher-rank, polymorphic-recursion
+  admission, resource-limit, or specification change. The specification is
+  unchanged; independent semantic and Rust/resource re-reviews remain pending.
+  The Checkpoint 3 reservation remains 12 units, cumulative reserved use
+  remains 26/70, and 44 units remain unreserved.
+- Checkpoint 3 quality/resource review rejected `698b99a` with three important
+  findings. The nested-call RED `cargo test --locked --test
+  interface_selection nested_same_method_calls_prefer_the_whole_failed_application
+  -- --exact --nocapture` exited 101 because the pipeline returned an internal
+  failure: the inner whole-application span equaled the outer argument span,
+  and unranked raw-span uniqueness treated both valid occurrences as duplicate
+  matches. The normal-close reservation RED showed zero selected-output
+  capacity after the first pending record had already moved. Method-scheme
+  ingress RED measured 19 constraint units instead of the required 20 for one
+  binder, while the 1,024-binder one-short boundary incorrectly succeeded.
+- Failed-body correlation now ranks one unique whole-application match before
+  one unique argument-span fallback, then one occurrence-only match. Duplicate
+  matches reject only within the selected rank, so a unique higher-rank match
+  supersedes lower-rank collisions. The nested source fixture now reports
+  `type.polymorphic-recursion`, expected `A`, found `Bool`, and never promotes
+  valid source geometry to an internal failure. The scan remains one charged
+  pass over the pending suffix, allocates no index, and does not inspect method
+  arguments or change candidate choice.
+- Normal close uses its existing `P + R` precharge for `P` selected occurrence
+  outputs and `R` conditional rigidity outputs, then reserves both complete
+  buffers before reversing or draining pending records. No fallible allocation
+  of selected-output vector capacity remains after mutation; exact evidence
+  preserves source order and rigidity indices 0 and 2 around an ordinary middle
+  occurrence.
+  Method-scheme ingress now atomically charges `2m` constraint records before
+  reserving the retained binder sequence and temporary duplicate index. Its
+  method-specific constraint formula is `C(V) + 2m + sum(1 + C(K_i))`, where
+  `C(V)` is the existing type traversal and `C(K_i)` is fixed-kind comparison.
+  The wide kind-`Type`
+  fixture, including interface ingress, is exactly `7m + 11` constraint and
+  `3m + 5` type units: at `m = 1,024`, 7,179/3,077. One-short failure publishes
+  no interface or method index, and exact retry succeeds.
+- Third-correction verification passes 21 architecture tests, 44
+  implementation tests, 25 interface-selection tests, 33 interface tests, and
+  40 polymorphism tests; 64 `interface`-filtered, 115 `elaborate`-filtered, and
+  133 `evidence`-filtered library tests also pass. Formatting, locked all-target
   checking, strict locked workspace/all-target/all-feature Clippy, Markdown
   task lint, diff hygiene, and intended-path status inspection pass. The
   correction agent used `gpt-5.6-sol` at xhigh reasoning. Self-review found no

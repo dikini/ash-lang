@@ -1039,6 +1039,27 @@ fn unrelated_selection_failure_does_not_mask_matching_polymorphic_recursion() {
 }
 
 #[test]
+fn nested_same_method_calls_prefer_the_whole_failed_application() {
+    let text = concat!(
+        "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n",
+        "impl Repeat<Int> {\n",
+        "repeat (owner, value) = repeat(repeat((owner, true)))\n",
+        "}\n",
+        "main : Unit -> Unit\n",
+        "main () = ()\n",
+    );
+    let TypeError::Source(diagnostic) =
+        check(text).expect_err("the nested exact-current call should reject polymorphic recursion")
+    else {
+        panic!("nested source geometry must never become an internal failure");
+    };
+
+    assert_eq!(diagnostic.reason.to_string(), "type.polymorphic-recursion");
+    assert_eq!(diagnostic.expected.as_deref(), Some("A"));
+    assert_eq!(diagnostic.found.as_deref(), Some("Bool"));
+}
+
+#[test]
 fn polymorphic_method_arguments_never_influence_candidate_selection() {
     let checked = check(concat!(
         "interface Choose<I> {\nchoose<A> : (I, A) -> I\n}\n\n",
