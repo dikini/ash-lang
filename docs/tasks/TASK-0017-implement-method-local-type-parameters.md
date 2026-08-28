@@ -791,6 +791,63 @@ and evaluator semantic or state-machine changes.
   dictionaries, body specialization or copying, evaluator state or behavior,
   general nested schemes, selection changes, specification reconciliation, or
   a persistent representation choice outside AD-0007.
+- Checkpoint 5's two lowering REDs are witnessed before production changes.
+  `cargo test --locked --test core_validation
+  abstract_polymorphic_method_evidence_instantiates_at_retained_arguments --
+  --exact --nocapture` exited 101 while elaborating the abstract occurrence:
+  the retained `(Int, Bool)` method arguments were not type-applied, so the
+  monomorphic evidence function still required `(I, A, B)`. `cargo test
+  --locked --test core_validation
+  concrete_method_evidence_uses_one_generated_adapter -- --exact --nocapture`
+  exited 101 with `Internal(InvalidState)`: concrete lowering exposed the
+  implementation method directly and could not construct the required
+  expression-local polymorphic adapter. Both failures are at the intended
+  predecessor seams; no evaluator, specification, resource limit, selection,
+  or production source changed for the REDs.
+- Checkpoint 5's abstract and concrete verticals are GREEN. Abstract evidence
+  retains the authenticated method arguments in an exact `TypeApplication`;
+  concrete evidence builds one capture-free method-local adapter over the
+  selected implementation and its ordered prerequisite applications. Focused
+  Core validation also passes two polymorphic domain positions in declaration
+  order, direct exact forwarding without adapter or reselection, and
+  exact-current recursion with an active abstract prerequisite. The ordinary
+  monomorphic path and the evaluator remain unchanged.
+- The linked CP5 authority is one immutable private catalog plus exact Core
+  anchors. It retains canonical methods, every relevant implementation owner,
+  exact definition domains and occurrences, adapters and prerequisite edges,
+  and stable expectation indexes. Builder publication consumes each expected
+  event once; independent validation repeats consumption and checks owner
+  envelopes, complete application and forwarding relations, selected
+  implementation identity, source instantiation, ordered prerequisites,
+  bounded complete alpha-renaming, and exclusive incoming uses. Private
+  mutation matrices reject missing, extra, duplicate, stale, wrong-index,
+  owner, requirement, position, method, interface, scheme, producer,
+  instantiation, adapter, forwarding, alpha capture, shadow, escape, storage,
+  return, and owner-envelope tampering. Unauthenticated nested schemes remain
+  rejected through binding, storage, and return routes.
+- Identity and literal-fold transforms remap every authority anchor, preserve
+  the catalog by `Arc` identity, and freshly revalidate; representative
+  post-transform tampering is rejected. Exact resource probes pass at 87
+  constraint and 74 type units for linked catalog construction, 14 units for
+  one Builder anchor and finish, 2,219 units for independent validation, six
+  type units for one scope-entry row, and 307/303 units for identity/fold
+  transform replay. Every retained scalar, reference, Type, Kind, selection
+  edge, worklist, map, and carrier capacity is charged before reserve or
+  publication. One-short rejection and fresh exact retry are covered at each
+  seam. Deep accepted/rejected scoped arguments and linked authority teardown
+  pass on 256 KiB stacks; shared catalog `Weak` handles reach zero and no cycle
+  remains.
+- CP5 implementation verification currently passes 702 library tests, all 61
+  Core-validation integration tests, all 21 architecture tests, and the
+  complete 1,508-test locked workspace/all-target/all-feature matrix. Locked
+  checking, strict Clippy with warnings denied, test listing, `cargo xtask
+  verify` including rustdoc, Markdown lint, and diff hygiene also pass. The
+  evaluator tree is byte-identical to `5ce71d1`, no relative links were added,
+  production resource-limit assignments are unchanged, and the resource audit
+  is clear. Checkpoint 5 remains reserved at 14 units,
+  cumulative reserved use remains 52/70, 18 units remain unreserved, and
+  Checkpoint 6 is not reserved. Independent semantic and final root review are
+  still pending, so Checkpoint 5 is not marked complete.
 
 ## Verification
 

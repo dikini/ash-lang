@@ -33,6 +33,11 @@ impl RecursiveBindingMember {
         &mut self.binder
     }
 
+    #[cfg(test)]
+    pub(super) fn replace_initializer_for_core_test(&mut self, initializer: NodeId) -> NodeId {
+        std::mem::replace(&mut self.initializer, initializer)
+    }
+
     fn discard_metadata(self) {
         self.binder.discard_metadata();
     }

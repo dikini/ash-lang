@@ -26,10 +26,99 @@ use ash::{
 };
 use std::{
     collections::HashSet,
+    fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
+
+static INTERFACE_CORE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+struct InterfaceCoreFixture(PathBuf);
+
+impl InterfaceCoreFixture {
+    fn create(text: &str) -> Self {
+        loop {
+            let id = INTERFACE_CORE_FIXTURE_IDS.fetch_add(1, Ordering::Relaxed);
+            let directory = std::env::temp_dir().join(format!(
+                "ash-core-interface-check-{}-{id}",
+                std::process::id()
+            ));
+            match fs::create_dir(&directory) {
+                Ok(()) => {
+                    let path = directory.join("entry.ash");
+                    fs::write(&path, text).expect("the Core interface fixture should be writable");
+                    return Self(path);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("the Core interface fixture should be creatable: {error}"),
+            }
+        }
+    }
+}
+
+impl Drop for InterfaceCoreFixture {
+    fn drop(&mut self) {
+        if let Some(directory) = self.0.parent() {
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+}
+
+fn validated_interface_core(text: &str) -> ValidatedProgram {
+    let fixture = InterfaceCoreFixture::create(text);
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the Core interface fixture should load");
+    let module = graph
+        .module(graph.entry())
+        .expect("the Core interface entry should remain admitted");
+    let resolved = resolve_module(module, &[]).expect("the Core interface fixture should resolve");
+    let checked = check_module(resolved).expect("the Core interface fixture should check");
+    let linked =
+        link_modules(vec![checked], graph.entry()).expect("the Core interface fixture should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("the Core interface evidence should authenticate");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the linked namespace should reserve");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("the authenticated interface evidence should lower");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the authenticated interface Core should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    ash::core::validate_modules(unchecked, &sources, &module_sources)
+        .expect("the authenticated interface Core should independently validate")
+}
+
+fn reachable_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
+    let mut pending = vec![program.root()];
+    let mut visited = HashSet::new();
+    let mut nodes = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let node = program
+            .node(id)
+            .expect("every reachable Core handle should belong to the program");
+        pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+        nodes.push(id);
+    }
+    nodes
+}
 
 fn linked_product_entry() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -201,6 +290,279 @@ fn assert_integer_evaluation(program: &ValidatedProgram, expected: &str) {
     assert_eq!(
         value,
         Integer::parse_decimal(expected).expect("the expected integer should parse"),
+    );
+}
+
+#[test]
+fn abstract_polymorphic_method_evidence_instantiates_at_retained_arguments() {
+    let program = validated_interface_core(concat!(
+        "interface Pairing<I> {\n",
+        "pair<A, B> : (I, A, B) -> (A, B)\n",
+        "}\n\n",
+        "impl Pairing<Int> {\n",
+        "pair (owner, left, right) = (left, right)\n",
+        "}\n\n",
+        "use_pairing<I> : I -> (Int, Bool) where Pairing<I>\n",
+        "use_pairing owner = pair((owner, 1, true))\n\n",
+        "main : Unit -> (Int, Bool)\n",
+        "main () = use_pairing(42)\n",
+    ));
+
+    let mut evidence_binder = None;
+    for id in reachable_nodes(&program) {
+        let node = program.node(id).expect("the reachable node should exist");
+        let PureExprKind::Value(PureValue::Function(function)) = &node.kind else {
+            continue;
+        };
+        if matches!(function.parameter().ty(), Type::Forall(parameters, _) if parameters.len() == 2)
+        {
+            assert!(
+                evidence_binder.replace(function.parameter().id()).is_none(),
+                "the constrained definition should expose one polymorphic evidence binder",
+            );
+        }
+    }
+    let evidence_binder =
+        evidence_binder.expect("the generated evidence domain should retain the method scheme");
+
+    let applications = reachable_nodes(&program)
+        .into_iter()
+        .filter_map(|id| {
+            let node = program.node(id)?;
+            let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+                &node.kind
+            else {
+                return None;
+            };
+            let function = program.node(application.function())?;
+            matches!(
+                function.kind,
+                PureExprKind::Variable(variable) if variable.binder() == evidence_binder
+            )
+            .then(|| application.arguments().to_vec())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        applications,
+        [vec![Type::Int, Type::Bool]],
+        "the abstract evidence occurrence must instantiate the complete retained method arguments once",
+    );
+}
+
+#[test]
+fn concrete_method_evidence_uses_one_generated_adapter() {
+    let program = validated_interface_core(concat!(
+        "type Wrap<A> = Wrap(A)\n\n",
+        "interface Base<I> {\n",
+        "base : I -> I\n",
+        "}\n\n",
+        "interface Convert<I> {\n",
+        "convert<X> : (I, X) -> I\n",
+        "}\n\n",
+        "impl Base<Int> {\n",
+        "base value = value\n",
+        "}\n\n",
+        "impl<A> Convert<Wrap<A>> where Base<A> {\n",
+        "convert (Wrap(value), ignored) = Wrap(base(value))\n",
+        "}\n\n",
+        "main : Unit -> Wrap<Int>\n",
+        "main () = convert((Wrap(42), true))\n",
+    ));
+
+    let mut recursive_initializers = HashSet::new();
+    for id in reachable_nodes(&program) {
+        let node = program.node(id).expect("the reachable node should exist");
+        if let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind {
+            recursive_initializers
+                .extend(group.members().iter().map(|member| member.initializer()));
+        }
+    }
+
+    let adapters = reachable_nodes(&program)
+        .into_iter()
+        .filter(|id| {
+            matches!(
+                &program.node(*id).expect("the reachable node should exist").kind,
+                PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))
+                    if abstraction.parameters().len() == 1 && !recursive_initializers.contains(id)
+            )
+        })
+        .collect::<Vec<_>>();
+    let [adapter] = adapters.as_slice() else {
+        panic!("the concrete method selection should create exactly one expression-local adapter");
+    };
+    let adapter_node = program.node(*adapter).expect("the adapter should exist");
+    let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+        &adapter_node.kind
+    else {
+        unreachable!("the selected adapter node is a type abstraction")
+    };
+    let [(method_parameter, Kind::Type)] = abstraction.parameters() else {
+        panic!("the adapter should bind the one declared method parameter at its exact kind");
+    };
+    let body = program
+        .node(abstraction.body())
+        .expect("the adapter body should exist");
+    let PureExprKind::Computation(PureComputation::Apply(prerequisite_application)) = &body.kind
+    else {
+        panic!("the adapter should apply prerequisite evidence after type instantiation");
+    };
+    let type_application = program
+        .node(prerequisite_application.function())
+        .expect("the adapter's type application should exist");
+    let PureExprKind::Computation(PureComputation::TypeApplication(type_application)) =
+        &type_application.kind
+    else {
+        panic!("the implementation method must be type-applied before prerequisites");
+    };
+    assert_eq!(
+        type_application.arguments(),
+        &[Type::Int, Type::Variable(*method_parameter)],
+        "implementation head arguments must precede the adapter's method arguments",
+    );
+    assert!(matches!(
+        program
+            .node(type_application.function())
+            .expect("the original implementation-method occurrence should exist")
+            .kind,
+        PureExprKind::Variable(_)
+    ));
+    assert!(matches!(
+        program
+            .node(prerequisite_application.argument())
+            .expect("the prerequisite evidence occurrence should exist")
+            .kind,
+        PureExprKind::Variable(_)
+    ));
+}
+
+#[test]
+fn polymorphic_method_domains_follow_declaration_order() {
+    let program = validated_interface_core(concat!(
+        "interface Ordered<I> {\n",
+        "first<A> : (I, A) -> A\n",
+        "second<A, B> : (I, A, B) -> B\n",
+        "}\n\n",
+        "impl Ordered<Int> {\n",
+        "first (owner, value) = value\n",
+        "second (owner, left, right) = right\n",
+        "}\n\n",
+        "use<I> : I -> (Int, Bool) where Ordered<I>\n",
+        "use owner = (first((owner, 1)), second((owner, 1, true)))\n\n",
+        "main : Unit -> (Int, Bool)\n",
+        "main () = use(42)\n",
+    ));
+
+    let mut ordered_chain = None;
+    for id in reachable_nodes(&program) {
+        let Some(node) = program.node(id) else {
+            continue;
+        };
+        let PureExprKind::Value(PureValue::Function(first)) = &node.kind else {
+            continue;
+        };
+        let Type::Forall(first_parameters, _) = first.parameter().ty() else {
+            continue;
+        };
+        let Some(second_node) = program.node(first.body()) else {
+            continue;
+        };
+        let PureExprKind::Value(PureValue::Function(second)) = &second_node.kind else {
+            continue;
+        };
+        let Type::Forall(second_parameters, _) = second.parameter().ty() else {
+            continue;
+        };
+        if first_parameters.len() == 1 && second_parameters.len() == 2 {
+            assert!(ordered_chain.replace((id, first.body())).is_none());
+        }
+    }
+    assert!(
+        ordered_chain.is_some(),
+        "the two polymorphic domains must link in declaration order"
+    );
+}
+
+#[test]
+fn polymorphic_evidence_forwards_directly_between_matching_domains() {
+    let program = validated_interface_core(concat!(
+        "interface Forward<I> {\n",
+        "forward<A> : (I, A) -> A\n",
+        "}\n\n",
+        "impl Forward<Int> {\n",
+        "forward (owner, value) = value\n",
+        "}\n\n",
+        "inner<I> : I -> Int where Forward<I>\n",
+        "inner owner = forward((owner, 1))\n\n",
+        "outer<I> : I -> Int where Forward<I>\n",
+        "outer owner = inner(owner)\n\n",
+        "main : Unit -> Int\n",
+        "main () = outer(42)\n",
+    ));
+
+    let direct_forwards = reachable_nodes(&program)
+        .into_iter()
+        .filter(|id| {
+            let Some(node) = program.node(*id) else { return false };
+            let PureExprKind::Computation(PureComputation::Apply(application)) = &node.kind else { return false };
+            let Some(function) = program.node(application.function()) else { return false };
+            let Some(argument) = program.node(application.argument()) else { return false };
+            matches!(function.ty, Type::Function(ref domain, _) if matches!(domain.as_ref(), Type::Forall(_, _)))
+                && matches!(argument.kind, PureExprKind::Variable(_))
+        })
+        .count();
+    assert_eq!(
+        direct_forwards, 1,
+        "forwarding must supply the matching evidence variable directly once"
+    );
+}
+
+#[test]
+fn exact_current_polymorphic_adapter_reuses_abstract_prerequisites() {
+    let program = validated_interface_core(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "interface Score<A> {\n",
+        "score<X> : (A, X) -> Int\n",
+        "}\n\n",
+        "impl Score<Int> {\n",
+        "score (value, ignored) = value\n",
+        "}\n\n",
+        "impl Score<Option<A>> where Score<A> {\n",
+        "score (None, ignored) = 4\n",
+        "score (Some(value), ignored) = {\n",
+        "let empty : Option<A> = None\n",
+        "score((empty, ignored)) * 10 + score((value, ignored))\n",
+        "}\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = score((Some(2), true))\n",
+    ));
+
+    let abstract_prerequisite_adapters = reachable_nodes(&program)
+        .into_iter()
+        .filter(|id| {
+            let Some(node) = program.node(*id) else {
+                return false;
+            };
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                &node.kind
+            else {
+                return false;
+            };
+            let Some(body) = program.node(abstraction.body()) else {
+                return false;
+            };
+            let PureExprKind::Computation(PureComputation::Apply(application)) = &body.kind else {
+                return false;
+            };
+            program
+                .node(application.argument())
+                .is_some_and(|argument| matches!(argument.kind, PureExprKind::Variable(_)))
+        })
+        .count();
+    assert!(
+        abstract_prerequisite_adapters >= 1,
+        "the exact-current adapter must reuse its active abstract prerequisite"
     );
 }
 

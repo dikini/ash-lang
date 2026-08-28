@@ -1235,7 +1235,7 @@ mod tests {
         const LINKED: usize = 65 * WIDTH + 24;
         // Validation ends by publishing one private method-evidence
         // authentication capability after the complete graph succeeds.
-        const VALIDATED: usize = 110 * WIDTH + 69;
+        const VALIDATED: usize = 112 * WIDTH + 80;
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
             "main : Unit -> Int\n",

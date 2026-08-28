@@ -1,14 +1,24 @@
 //! Closed assembly of the named pure Ash Core dialect.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     error::Error,
     fmt,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU32, Ordering},
     },
 };
+
+fn empty_registry() -> &'static Arc<ResolvedRegistry> {
+    static EMPTY: OnceLock<Arc<ResolvedRegistry>> = OnceLock::new();
+    EMPTY.get_or_init(|| Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())))
+}
+
+fn empty_method_evidence() -> &'static Arc<MethodEvidenceCatalog> {
+    static EMPTY: OnceLock<Arc<MethodEvidenceCatalog>> = OnceLock::new();
+    EMPTY.get_or_init(|| Arc::new(MethodEvidenceCatalog::default()))
+}
 
 use super::{
     binding::BindingNode,
@@ -22,14 +32,771 @@ use super::{
 };
 use crate::{
     integer::Integer,
+    interface::{
+        EvidenceNode, EvidenceNodeId, EvidenceSelection, ImplMethodId, MethodId, RequirementId,
+    },
     resolved::{BinderId, ResolvedRegistry},
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
-        Kind, Type, TypeVariableId, TypeWorkBudget, charge_kinded_type_parameters,
-        clone_kinded_type_parameters_with_budget, clone_type_with_budget, discard_type_iteratively,
-        replace_type_iteratively,
+        IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
+        charge_kinded_type_parameters, clone_kinded_type_parameters_with_budget,
+        clone_type_with_budget, discard_type_iteratively, replace_type_iteratively,
+        same_type_with_budget, substitute_type_variables_with,
     },
 };
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceMethod {
+    pub(crate) id: MethodId,
+    pub(crate) interface_parameter: TypeVariableId,
+    pub(crate) parameters: Box<[(TypeVariableId, Kind)]>,
+    pub(crate) value_type: Type,
+}
+
+impl Drop for MethodEvidenceMethod {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.value_type, Type::Unit));
+    }
+}
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceCatalog {
+    methods: Vec<MethodEvidenceMethod>,
+    implementation_owners: Vec<MethodEvidenceImplementationOwner>,
+    domains: Vec<MethodEvidenceDomain>,
+    occurrences: Vec<MethodEvidenceOccurrence>,
+    adapters: Vec<MethodEvidenceAdapter>,
+    expectations: Vec<MethodEvidenceExpectation>,
+}
+
+impl Default for MethodEvidenceCatalog {
+    fn default() -> Self {
+        Self::new(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+}
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceImplementationOwner {
+    pub(crate) implementation: ImplMethodId,
+    pub(crate) binder: BinderId,
+    pub(crate) head_type_parameter_count: usize,
+    pub(crate) source_parameters: Box<[(TypeVariableId, Kind)]>,
+    pub(crate) interface_argument: Type,
+}
+
+impl Drop for MethodEvidenceImplementationOwner {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.interface_argument, Type::Unit));
+    }
+}
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceDomain {
+    pub(crate) owner: MethodEvidenceOwner,
+    pub(crate) requirement: RequirementId,
+    pub(crate) requirement_position: u32,
+    pub(crate) method: MethodId,
+    pub(crate) method_position: u32,
+    pub(crate) interface_argument: Type,
+}
+
+impl Drop for MethodEvidenceDomain {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.interface_argument, Type::Unit));
+    }
+}
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceOccurrence {
+    pub(crate) slot: usize,
+    pub(crate) scope: Option<MethodEvidenceOwner>,
+    pub(crate) target_owner: Option<MethodEvidenceOwner>,
+    pub(crate) target_requirement: Option<RequirementId>,
+    pub(crate) checked_method: Option<MethodId>,
+    pub(crate) checked_argument: Type,
+    pub(crate) method_arguments: Box<[Type]>,
+    pub(crate) checked_value_type: Option<Type>,
+    pub(crate) selection: EvidenceSelection,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum MethodEvidenceOwner {
+    Global(BinderId),
+    Implementation(ImplMethodId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MethodEvidenceExpectedRole {
+    ImplementationOwner { owner: usize },
+    Domain { domain: usize },
+    Application { domain: usize, producer: usize },
+    Instantiation { producer: usize },
+    Adapter { adapter: usize },
+    AdapterEdge { adapter: usize, ordinal: usize },
+}
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceAdapter {
+    pub(crate) implementation: ImplMethodId,
+    pub(crate) binder: BinderId,
+    pub(crate) source_parameters: Box<[TypeVariableId]>,
+    pub(crate) head_arguments: Box<[Type]>,
+    pub(crate) prerequisites: Box<[MethodEvidenceAdapterEdge]>,
+}
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceAdapterEdge {
+    pub(crate) owner: MethodEvidenceOwner,
+    pub(crate) requirement: RequirementId,
+    pub(crate) method: MethodId,
+    pub(crate) interface_argument: Type,
+    pub(crate) interface_parameter: TypeVariableId,
+    pub(crate) method_parameters: Box<[(TypeVariableId, Kind)]>,
+    pub(crate) value_type: Type,
+    pub(crate) producer: MethodEvidenceExpectedProducer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MethodEvidenceExpectedProducer {
+    Authenticated(usize),
+    Monomorphic(MethodEvidenceProducer),
+}
+
+impl Drop for MethodEvidenceAdapter {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.head_arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
+        for mut edge in std::mem::take(&mut self.prerequisites).into_vec() {
+            discard_type_iteratively(std::mem::replace(&mut edge.interface_argument, Type::Unit));
+            discard_type_iteratively(std::mem::replace(&mut edge.value_type, Type::Unit));
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MethodEvidenceProducer {
+    Abstract { requirement: RequirementId },
+    Adapter { implementation: ImplMethodId },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MethodEvidenceExpectation {
+    pub(crate) occurrence: Option<usize>,
+    pub(crate) method: MethodId,
+    pub(crate) role: MethodEvidenceExpectedRole,
+}
+
+impl Drop for MethodEvidenceOccurrence {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.checked_argument, Type::Unit));
+        for argument in std::mem::take(&mut self.method_arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
+        if let Some(ty) = self.checked_value_type.take() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+impl MethodEvidenceCatalog {
+    fn lookup_work(&self) -> Option<usize> {
+        self.methods
+            .len()
+            .checked_add(self.implementation_owners.len())
+            .and_then(|work| work.checked_add(self.domains.len()))
+            .and_then(|work| work.checked_add(self.occurrences.len()))
+            .and_then(|work| work.checked_add(self.adapters.len()))
+            .and_then(|work| work.checked_add(self.expectations.len()))
+    }
+
+    pub(crate) const fn method_count(&self) -> usize {
+        self.methods.len()
+    }
+
+    pub(crate) const fn occurrence_count(&self) -> usize {
+        self.occurrences.len()
+    }
+
+    pub(crate) const fn implementation_owner_count(&self) -> usize {
+        self.implementation_owners.len()
+    }
+
+    pub(crate) fn new(
+        methods: Vec<MethodEvidenceMethod>,
+        implementation_owners: Vec<MethodEvidenceImplementationOwner>,
+        domains: Vec<MethodEvidenceDomain>,
+        occurrences: Vec<MethodEvidenceOccurrence>,
+        adapters: Vec<MethodEvidenceAdapter>,
+        expectations: Vec<MethodEvidenceExpectation>,
+    ) -> Self {
+        Self {
+            methods,
+            implementation_owners,
+            domains,
+            occurrences,
+            adapters,
+            expectations,
+        }
+    }
+
+    pub(crate) fn implementation_owner(
+        &self,
+        implementation: ImplMethodId,
+    ) -> Option<&MethodEvidenceImplementationOwner> {
+        self.implementation_owners
+            .binary_search_by_key(&implementation, |owner| owner.implementation)
+            .ok()
+            .and_then(|index| self.implementation_owners.get(index))
+    }
+
+    pub(crate) fn implementation_owners(&self) -> &[MethodEvidenceImplementationOwner] {
+        &self.implementation_owners
+    }
+
+    pub(crate) fn method(&self, id: MethodId) -> Option<&MethodEvidenceMethod> {
+        self.methods
+            .binary_search_by_key(&id, |method| method.id)
+            .ok()
+            .and_then(|index| self.methods.get(index))
+    }
+
+    pub(crate) fn domains(&self) -> &[MethodEvidenceDomain] {
+        &self.domains
+    }
+
+    pub(crate) fn occurrence(&self, slot: usize) -> Option<&MethodEvidenceOccurrence> {
+        self.occurrences
+            .binary_search_by_key(&slot, |occurrence| occurrence.slot)
+            .ok()
+            .and_then(|index| self.occurrences.get(index))
+    }
+
+    pub(crate) fn adapters(&self) -> &[MethodEvidenceAdapter] {
+        &self.adapters
+    }
+
+    pub(crate) fn expectations(&self) -> &[MethodEvidenceExpectation] {
+        &self.expectations
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MethodEvidenceCatalogMutationForTest {
+    WrongRequirementPosition,
+    WrongMethodPosition,
+    WrongMethodScheme,
+    WrongCanonicalMethodParameter,
+    WrongAdapterBinder,
+    WrongAdapterSourceParameter,
+    WrongOwnerSourceParameter,
+    WrongHeadCount,
+    WrongHeadArgument,
+    MissingPrerequisite,
+    WrongPrerequisiteProducer,
+    MissingExpectation,
+    ExtraExpectation,
+}
+
+#[cfg(test)]
+impl MethodEvidenceCatalog {
+    pub(super) fn occurrences_mut_for_core_test(&mut self) -> &mut [MethodEvidenceOccurrence] {
+        &mut self.occurrences
+    }
+
+    pub(crate) fn corrupt_for_core_test(
+        &mut self,
+        mutation: MethodEvidenceCatalogMutationForTest,
+    ) -> bool {
+        match mutation {
+            MethodEvidenceCatalogMutationForTest::WrongRequirementPosition => {
+                self.domains.first_mut().is_some_and(|domain| {
+                    domain.requirement_position = domain.requirement_position.saturating_add(1);
+                    true
+                })
+            }
+            MethodEvidenceCatalogMutationForTest::WrongMethodPosition => {
+                self.domains.first_mut().is_some_and(|domain| {
+                    domain.method_position = domain.method_position.saturating_add(1);
+                    true
+                })
+            }
+            MethodEvidenceCatalogMutationForTest::WrongMethodScheme => {
+                self.methods.first_mut().is_some_and(|method| {
+                    discard_type_iteratively(std::mem::replace(&mut method.value_type, Type::Bool));
+                    true
+                })
+            }
+            MethodEvidenceCatalogMutationForTest::WrongCanonicalMethodParameter => self
+                .methods
+                .iter_mut()
+                .find_map(|method| method.parameters.first_mut())
+                .is_some_and(|parameter| {
+                    parameter.0 = TypeVariableId::generated(u32::MAX);
+                    true
+                }),
+            MethodEvidenceCatalogMutationForTest::WrongAdapterBinder => {
+                let Some(replacement) = self
+                    .implementation_owners
+                    .iter()
+                    .map(|owner| owner.binder)
+                    .find(|binder| {
+                        self.adapters
+                            .first()
+                            .is_some_and(|adapter| adapter.binder != *binder)
+                    })
+                else {
+                    return false;
+                };
+                self.adapters[0].binder = replacement;
+                true
+            }
+            MethodEvidenceCatalogMutationForTest::WrongAdapterSourceParameter => self
+                .adapters
+                .iter_mut()
+                .find(|adapter| {
+                    !adapter.source_parameters.is_empty() && adapter.prerequisites.is_empty()
+                })
+                .is_some_and(|adapter| {
+                    adapter.source_parameters[0] = TypeVariableId::generated(u32::MAX);
+                    true
+                }),
+            MethodEvidenceCatalogMutationForTest::WrongOwnerSourceParameter => {
+                let Some(implementation) = self
+                    .adapters
+                    .iter()
+                    .find(|adapter| {
+                        !adapter.source_parameters.is_empty() && adapter.prerequisites.is_empty()
+                    })
+                    .map(|adapter| adapter.implementation)
+                else {
+                    return false;
+                };
+                self.implementation_owners
+                    .iter_mut()
+                    .find(|owner| owner.implementation == implementation)
+                    .is_some_and(|owner| {
+                        owner.source_parameters[0].0 = TypeVariableId::generated(u32::MAX);
+                        true
+                    })
+            }
+            MethodEvidenceCatalogMutationForTest::WrongHeadCount => {
+                let Some(implementation) = self
+                    .adapters
+                    .iter()
+                    .find(|adapter| adapter.prerequisites.is_empty())
+                    .map(|adapter| adapter.implementation)
+                else {
+                    return false;
+                };
+                self.implementation_owners
+                    .iter_mut()
+                    .find(|owner| owner.implementation == implementation)
+                    .is_some_and(|owner| {
+                        owner.head_type_parameter_count =
+                            owner.head_type_parameter_count.saturating_add(1);
+                        true
+                    })
+            }
+            MethodEvidenceCatalogMutationForTest::WrongHeadArgument => self
+                .adapters
+                .iter_mut()
+                .find_map(|adapter| adapter.head_arguments.first_mut())
+                .is_some_and(|argument| {
+                    discard_type_iteratively(std::mem::replace(argument, Type::Bool));
+                    true
+                }),
+            MethodEvidenceCatalogMutationForTest::MissingPrerequisite => self
+                .adapters
+                .iter_mut()
+                .find(|adapter| !adapter.prerequisites.is_empty())
+                .is_some_and(|adapter| {
+                    let mut prerequisites = std::mem::take(&mut adapter.prerequisites).into_vec();
+                    let mut removed = prerequisites.pop().expect("non-empty prerequisites");
+                    discard_type_iteratively(std::mem::replace(
+                        &mut removed.interface_argument,
+                        Type::Unit,
+                    ));
+                    discard_type_iteratively(std::mem::replace(
+                        &mut removed.value_type,
+                        Type::Unit,
+                    ));
+                    adapter.prerequisites = prerequisites.into_boxed_slice();
+                    true
+                }),
+            MethodEvidenceCatalogMutationForTest::WrongPrerequisiteProducer => self
+                .adapters
+                .iter_mut()
+                .find_map(|adapter| adapter.prerequisites.first_mut())
+                .is_some_and(|edge| {
+                    edge.producer = MethodEvidenceExpectedProducer::Authenticated(usize::MAX);
+                    true
+                }),
+            MethodEvidenceCatalogMutationForTest::MissingExpectation => {
+                self.expectations.pop().is_some()
+            }
+            MethodEvidenceCatalogMutationForTest::ExtraExpectation => {
+                let Some(extra) = self.expectations.first().copied() else {
+                    return false;
+                };
+                self.expectations.push(extra);
+                true
+            }
+        }
+    }
+}
+
+pub(super) fn method_evidence_anchor_matches_expectation(
+    catalog: &MethodEvidenceCatalog,
+    expected: &MethodEvidenceExpectation,
+    owner: Option<MethodEvidenceOwner>,
+    requirement: Option<RequirementId>,
+    role: MethodEvidenceAnchorRole,
+    interface_argument: &Type,
+    type_work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    type_work.charge(catalog.lookup_work().ok_or(())?)?;
+    type_work.charge(1)?;
+    match (expected.role, role) {
+        (
+            MethodEvidenceExpectedRole::ImplementationOwner {
+                owner: expected_owner,
+            },
+            MethodEvidenceAnchorRole::ImplementationOwner {
+                implementation,
+                binder,
+            },
+        ) => {
+            let Some(expected) = catalog.implementation_owners.get(expected_owner) else {
+                return Ok(false);
+            };
+            Ok(expected.implementation == implementation
+                && expected.binder == binder
+                && same_type_with_budget(
+                    &expected.interface_argument,
+                    interface_argument,
+                    type_work,
+                )?
+                && Some(MethodEvidenceOwner::Implementation(implementation)) == owner
+                && requirement.is_none())
+        }
+        (
+            MethodEvidenceExpectedRole::Domain { domain },
+            MethodEvidenceAnchorRole::Domain { .. },
+        ) => {
+            let Some(domain) = catalog.domains().get(domain) else {
+                return Ok(false);
+            };
+            Ok(Some(domain.owner) == owner
+                && Some(domain.requirement) == requirement
+                && domain.method == expected.method
+                && same_type_with_budget(
+                    &domain.interface_argument,
+                    interface_argument,
+                    type_work,
+                )?)
+        }
+        (
+            MethodEvidenceExpectedRole::Application { domain, producer },
+            MethodEvidenceAnchorRole::Application { producer: actual },
+        ) => {
+            let Some(domain) = catalog.domains().get(domain) else {
+                return Ok(false);
+            };
+            let Some(occurrence) = expected
+                .occurrence
+                .and_then(|slot| catalog.occurrence(slot))
+            else {
+                return Ok(false);
+            };
+            let target = Some(domain.owner) == owner
+                && Some(domain.requirement) == requirement
+                && domain.method == expected.method
+                && occurrence.target_owner == owner
+                && occurrence.target_requirement == requirement
+                && same_type_with_budget(
+                    &occurrence.checked_argument,
+                    interface_argument,
+                    type_work,
+                )?;
+            let source = method_evidence_producer_matches(catalog, producer, actual);
+            Ok(target && source)
+        }
+        (
+            MethodEvidenceExpectedRole::Instantiation { producer },
+            MethodEvidenceAnchorRole::Instantiation { binder },
+        ) => {
+            let Some(occurrence) = catalog.occurrence(expected.occurrence.unwrap_or(usize::MAX))
+            else {
+                return Ok(false);
+            };
+            let source_matches = match catalog
+                .expectations()
+                .get(producer)
+                .map(|source| source.role)
+            {
+                Some(MethodEvidenceExpectedRole::Domain { domain }) => {
+                    catalog.domains().get(domain).is_some_and(|domain| {
+                        binder.is_some() && requirement == Some(domain.requirement)
+                    })
+                }
+                Some(MethodEvidenceExpectedRole::Adapter { .. }) => {
+                    binder.is_none() && requirement.is_none()
+                }
+                _ => false,
+            };
+            Ok(occurrence.scope == owner
+                && occurrence.checked_method == Some(expected.method)
+                && same_type_with_budget(
+                    &occurrence.checked_argument,
+                    interface_argument,
+                    type_work,
+                )?
+                && source_matches)
+        }
+        (
+            MethodEvidenceExpectedRole::Adapter { adapter },
+            MethodEvidenceAnchorRole::Adapter { implementation },
+        ) => {
+            let Some(expected) = catalog.adapters().get(adapter) else {
+                return Ok(false);
+            };
+            Ok(expected.implementation == implementation
+                && method_evidence_adapter_interface_matches(
+                    catalog,
+                    expected,
+                    interface_argument,
+                    type_work,
+                )?)
+        }
+        (
+            MethodEvidenceExpectedRole::AdapterEdge { adapter, ordinal },
+            MethodEvidenceAnchorRole::AdapterEdge {
+                adapter: implementation,
+                ordinal: actual_ordinal,
+                producer,
+            },
+        ) => Ok(catalog.adapters().get(adapter).is_some_and(|adapter_row| {
+            adapter_row.implementation == implementation
+                && ordinal == actual_ordinal
+                && adapter_row.prerequisites.get(ordinal).is_some_and(|edge| {
+                    Some(edge.owner) == owner
+                        && Some(edge.requirement) == requirement
+                        && edge.method == expected.method
+                        && method_evidence_expected_producer_matches(
+                            catalog,
+                            edge.producer,
+                            producer,
+                        )
+                })
+        })),
+        _ => Ok(false),
+    }
+}
+
+fn method_evidence_adapter_interface_matches(
+    catalog: &MethodEvidenceCatalog,
+    adapter: &MethodEvidenceAdapter,
+    actual: &Type,
+    type_work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    let Some(owner) = catalog.implementation_owner(adapter.implementation) else {
+        return Ok(false);
+    };
+    if adapter.head_arguments.len() != owner.head_type_parameter_count
+        || owner.head_type_parameter_count > owner.source_parameters.len()
+    {
+        return Ok(false);
+    }
+    let mut replacements = HashMap::new();
+    type_work.charge(owner.head_type_parameter_count)?;
+    if replacements
+        .try_reserve(owner.head_type_parameter_count)
+        .is_err()
+    {
+        return Err(());
+    }
+    for ((parameter, _), argument) in owner
+        .source_parameters
+        .iter()
+        .take(owner.head_type_parameter_count)
+        .zip(&adapter.head_arguments)
+    {
+        replacements.insert(*parameter, clone_type_with_budget(argument, type_work)?);
+    }
+    let expected =
+        substitute_type_variables_with(&owner.interface_argument, &replacements, |cells| {
+            type_work.charge(cells)
+        })?;
+    let expected = IterativeTypeOwner::new(expected);
+    same_type_with_budget(&expected, actual, type_work)
+}
+
+fn method_evidence_expected_producer_matches(
+    catalog: &MethodEvidenceCatalog,
+    expected: MethodEvidenceExpectedProducer,
+    actual: MethodEvidenceProducer,
+) -> bool {
+    match expected {
+        MethodEvidenceExpectedProducer::Authenticated(expectation) => {
+            method_evidence_producer_matches(catalog, expectation, actual)
+        }
+        MethodEvidenceExpectedProducer::Monomorphic(expected) => expected == actual,
+    }
+}
+
+pub(super) fn method_evidence_producer_matches(
+    catalog: &MethodEvidenceCatalog,
+    producer: usize,
+    actual: MethodEvidenceProducer,
+) -> bool {
+    match (
+        catalog
+            .expectations()
+            .get(producer)
+            .map(|source| source.role),
+        actual,
+    ) {
+        (
+            Some(MethodEvidenceExpectedRole::Domain { domain }),
+            MethodEvidenceProducer::Abstract { requirement },
+        ) => catalog
+            .domains()
+            .get(domain)
+            .is_some_and(|domain| domain.requirement == requirement),
+        (
+            Some(MethodEvidenceExpectedRole::Adapter { adapter }),
+            MethodEvidenceProducer::Adapter { implementation },
+        ) => catalog
+            .adapters()
+            .get(adapter)
+            .is_some_and(|adapter| adapter.implementation == implementation),
+        _ => false,
+    }
+}
+
+fn selection_contains_method(
+    selection: &EvidenceSelection,
+    method: MethodId,
+    type_work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    selection_contains(selection, type_work, |node| match node {
+        EvidenceNode::Abstract { methods, .. } => methods.contains(&method),
+        EvidenceNode::Implementation { methods, .. } => {
+            methods.iter().any(|candidate| candidate.method() == method)
+        }
+    })
+}
+
+fn selection_contains_implementation_method(
+    selection: &EvidenceSelection,
+    method: ImplMethodId,
+    type_work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    selection_contains(selection, type_work, |node| match node {
+        EvidenceNode::Implementation { methods, .. } => methods.contains(&method),
+        EvidenceNode::Abstract { .. } => false,
+    })
+}
+
+fn selection_contains(
+    selection: &EvidenceSelection,
+    type_work: &mut TypeWorkBudget,
+    mut predicate: impl FnMut(EvidenceNode<'_>) -> bool,
+) -> Result<bool, ()> {
+    type_work.charge(1)?;
+    type_work.charge(selection.node_count().checked_mul(2).ok_or(())?)?;
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(selection.node_count())
+        .map_err(|_| ())?;
+    pending.push(selection.root());
+    let mut visited = HashSet::<EvidenceNodeId>::new();
+    visited
+        .try_reserve(selection.node_count())
+        .map_err(|_| ())?;
+    while let Some(identity) = pending.pop() {
+        type_work.charge(1)?;
+        if !visited.insert(identity) {
+            continue;
+        }
+        let Some(node) = selection.node(identity) else {
+            return Ok(false);
+        };
+        let method_count = match node {
+            EvidenceNode::Abstract { methods, .. } => methods.len(),
+            EvidenceNode::Implementation { methods, .. } => methods.len(),
+        };
+        type_work.charge(method_count)?;
+        if predicate(node) {
+            return Ok(true);
+        }
+        if let EvidenceNode::Implementation { prerequisites, .. } = node {
+            type_work.charge(prerequisites.len())?;
+            pending.try_reserve(prerequisites.len()).map_err(|_| ())?;
+            pending.extend(prerequisites.iter().copied());
+        }
+    }
+    Ok(false)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MethodEvidenceAnchorRole {
+    ImplementationOwner {
+        implementation: ImplMethodId,
+        binder: BinderId,
+    },
+    Domain {
+        binder: BinderId,
+    },
+    Application {
+        producer: MethodEvidenceProducer,
+    },
+    Instantiation {
+        binder: Option<BinderId>,
+    },
+    Adapter {
+        implementation: ImplMethodId,
+    },
+    AdapterEdge {
+        adapter: ImplMethodId,
+        ordinal: usize,
+        producer: MethodEvidenceProducer,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct MethodEvidenceAnchor {
+    pub(crate) node: NodeId,
+    pub(crate) owner: Option<MethodEvidenceOwner>,
+    pub(crate) requirement: Option<RequirementId>,
+    pub(crate) method: MethodId,
+    pub(crate) interface_argument: Type,
+    pub(crate) role: MethodEvidenceAnchorRole,
+    pub(crate) occurrence: Option<usize>,
+    pub(crate) expectation: usize,
+}
+
+impl Drop for MethodEvidenceAnchor {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.interface_argument, Type::Unit));
+    }
+}
 
 /// Names the closed pure Core dialect selected by Ash.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -285,22 +1052,43 @@ pub(super) struct StoredNode {
 #[derive(Debug)]
 pub struct UnvalidatedProgram {
     pub(super) registry: Arc<ResolvedRegistry>,
+    pub(super) method_evidence: Arc<MethodEvidenceCatalog>,
+    pub(super) method_evidence_anchors: Box<[MethodEvidenceAnchor]>,
     pub(super) arena: ArenaId,
     pub(super) nodes: Vec<StoredNode>,
     pub(super) root: NodeId,
 }
+
+type UnvalidatedParts = (
+    Arc<ResolvedRegistry>,
+    Arc<MethodEvidenceCatalog>,
+    Box<[MethodEvidenceAnchor]>,
+    ArenaId,
+    Vec<StoredNode>,
+    NodeId,
+);
 
 impl UnvalidatedProgram {
     pub(super) fn discard_iteratively(mut self) {
         self.discard_contents();
     }
 
-    pub(super) fn into_parts(
-        mut self,
-    ) -> (Arc<ResolvedRegistry>, ArenaId, Vec<StoredNode>, NodeId) {
-        let registry = std::mem::take(&mut self.registry);
+    pub(super) fn into_parts(mut self) -> UnvalidatedParts {
+        let registry = std::mem::replace(&mut self.registry, Arc::clone(empty_registry()));
+        let method_evidence = std::mem::replace(
+            &mut self.method_evidence,
+            Arc::clone(empty_method_evidence()),
+        );
+        let method_evidence_anchors = std::mem::take(&mut self.method_evidence_anchors);
         let nodes = std::mem::take(&mut self.nodes);
-        (registry, self.arena, nodes, self.root)
+        (
+            registry,
+            method_evidence,
+            method_evidence_anchors,
+            self.arena,
+            nodes,
+            self.root,
+        )
     }
 
     fn discard_contents(&mut self) {
@@ -340,9 +1128,15 @@ impl UnvalidatedProgram {
                 ) => {}
             }
         }
-        if let Ok(registry) = Arc::try_unwrap(std::mem::take(&mut self.registry)) {
+        let registry = std::mem::replace(&mut self.registry, Arc::clone(empty_registry()));
+        if let Ok(registry) = Arc::try_unwrap(registry) {
             registry.discard_iteratively();
         }
+        self.method_evidence_anchors = Box::new([]);
+        drop(std::mem::replace(
+            &mut self.method_evidence,
+            Arc::clone(empty_method_evidence()),
+        ));
     }
 }
 
@@ -356,6 +1150,8 @@ impl Drop for UnvalidatedProgram {
 #[derive(Debug)]
 pub struct PureProgram {
     registry: Arc<ResolvedRegistry>,
+    method_evidence: Arc<MethodEvidenceCatalog>,
+    method_evidence_anchors: Box<[MethodEvidenceAnchor]>,
     arena: ArenaId,
     nodes: Box<[TypedExpr]>,
     root: NodeId,
@@ -364,12 +1160,16 @@ pub struct PureProgram {
 impl PureProgram {
     pub(super) fn new(
         registry: Arc<ResolvedRegistry>,
+        method_evidence: Arc<MethodEvidenceCatalog>,
+        method_evidence_anchors: Box<[MethodEvidenceAnchor]>,
         arena: ArenaId,
         nodes: Vec<TypedExpr>,
         root: NodeId,
     ) -> Self {
         Self {
             registry,
+            method_evidence,
+            method_evidence_anchors,
             arena,
             nodes: nodes.into_boxed_slice(),
             root,
@@ -403,6 +1203,14 @@ impl PureProgram {
     #[must_use]
     pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
         &self.registry
+    }
+
+    pub(crate) const fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
+        &self.method_evidence
+    }
+
+    pub(crate) const fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
+        &self.method_evidence_anchors
     }
 }
 
@@ -443,10 +1251,15 @@ impl Drop for PureProgram {
                 ) => {}
             }
         }
-        let registry = std::mem::replace(&mut self.registry, Arc::new(ResolvedRegistry::default()));
+        let registry = std::mem::replace(&mut self.registry, Arc::clone(empty_registry()));
         if let Ok(registry) = Arc::try_unwrap(registry) {
             registry.discard_iteratively();
         }
+        self.method_evidence_anchors = Box::new([]);
+        drop(std::mem::replace(
+            &mut self.method_evidence,
+            Arc::clone(empty_method_evidence()),
+        ));
     }
 }
 
@@ -486,6 +1299,14 @@ impl ValidatedProgram {
     #[must_use]
     pub fn registry(&self) -> &Arc<ResolvedRegistry> {
         self.0.registry()
+    }
+
+    pub(crate) fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
+        self.0.method_evidence()
+    }
+
+    pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
+        self.0.method_evidence_anchors()
     }
 }
 
@@ -554,10 +1375,13 @@ impl fmt::Display for BuildError {
 impl Error for BuildError {}
 
 /// Builds an unchecked pure Core arena with checked identity allocation.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 #[must_use]
 pub struct CoreBuilder {
     registry: Arc<ResolvedRegistry>,
+    method_evidence: Arc<MethodEvidenceCatalog>,
+    method_evidence_anchors: Vec<MethodEvidenceAnchor>,
+    consumed_method_evidence: Vec<bool>,
     arena: Option<ArenaId>,
     nodes: Vec<StoredNode>,
     next_binder: u32,
@@ -571,6 +1395,12 @@ pub struct CoreBuilder {
     requires_type_rewrite: bool,
 }
 
+impl Default for CoreBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Identifies the first Core node after an elaboration-local type boundary.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TypeRewriteCheckpoint(usize);
@@ -579,7 +1409,10 @@ impl CoreBuilder {
     /// Starts an empty Core arena.
     pub fn new() -> Self {
         Self {
-            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            registry: Arc::clone(empty_registry()),
+            method_evidence: Arc::clone(empty_method_evidence()),
+            method_evidence_anchors: Vec::new(),
+            consumed_method_evidence: Vec::new(),
             arena: None,
             nodes: Vec::new(),
             next_binder: 0,
@@ -599,6 +1432,197 @@ impl CoreBuilder {
         let mut builder = Self::new();
         builder.registry = registry;
         builder
+    }
+
+    pub(crate) fn with_registry_and_method_evidence(
+        registry: Arc<ResolvedRegistry>,
+        method_evidence: Arc<MethodEvidenceCatalog>,
+    ) -> Result<Self, BuildError> {
+        let mut builder = Self::with_registry(registry);
+        builder.method_evidence = method_evidence;
+        let expectation_count = builder.method_evidence.expectations().len();
+        builder
+            .type_work
+            .charge(expectation_count)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        builder
+            .consumed_method_evidence
+            .try_reserve_exact(expectation_count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        builder
+            .consumed_method_evidence
+            .resize(expectation_count, false);
+        builder
+            .method_evidence_anchors
+            .try_reserve_exact(expectation_count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        Ok(builder)
+    }
+
+    pub(crate) fn requires_method_evidence_implementation_owner(
+        &mut self,
+        implementation: ImplMethodId,
+    ) -> Result<bool, BuildError> {
+        self.type_work
+            .charge(self.method_evidence.implementation_owner_count())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        Ok(self
+            .method_evidence
+            .implementation_owner(implementation)
+            .is_some())
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the private anchor row is authenticated field-for-field"
+    )]
+    pub(crate) fn authenticate_method_evidence(
+        &mut self,
+        node: NodeId,
+        owner: Option<MethodEvidenceOwner>,
+        requirement: Option<RequirementId>,
+        method: MethodId,
+        interface_argument: Type,
+        role: MethodEvidenceAnchorRole,
+        occurrence: Option<usize>,
+    ) -> Result<(), BuildError> {
+        let lookup_work = self
+            .method_evidence
+            .occurrence_count()
+            .checked_mul(3)
+            .and_then(|work| work.checked_add(self.method_evidence.method_count()))
+            .ok_or(BuildError::TypeWorkExceeded)?;
+        self.type_work
+            .charge(lookup_work)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let interface_argument = IterativeTypeOwner::new(interface_argument);
+        let owner = match (role, occurrence) {
+            (
+                MethodEvidenceAnchorRole::Instantiation { .. }
+                | MethodEvidenceAnchorRole::Adapter { .. },
+                Some(slot),
+            ) => self
+                .method_evidence
+                .occurrence(slot)
+                .and_then(|expected| expected.scope),
+            _ => owner,
+        };
+        let selection_authority = match (role, occurrence) {
+            (MethodEvidenceAnchorRole::Application { .. }, Some(slot)) => self
+                .method_evidence
+                .occurrence(slot)
+                .map(|expected| expected.selection.clone())
+                .map(|selection| selection_contains_method(&selection, method, &mut self.type_work))
+                .transpose()
+                .map_err(|()| BuildError::TypeWorkExceeded)?
+                .unwrap_or(false),
+            (MethodEvidenceAnchorRole::Adapter { implementation }, Some(slot)) => self
+                .method_evidence
+                .occurrence(slot)
+                .map(|expected| expected.selection.clone())
+                .map(|selection| {
+                    selection_contains_implementation_method(
+                        &selection,
+                        implementation,
+                        &mut self.type_work,
+                    )
+                })
+                .transpose()
+                .map_err(|()| BuildError::TypeWorkExceeded)?
+                .unwrap_or(false),
+            (MethodEvidenceAnchorRole::AdapterEdge { adapter, .. }, Some(slot)) => self
+                .method_evidence
+                .occurrence(slot)
+                .map(|expected| expected.selection.clone())
+                .map(|selection| {
+                    selection_contains_implementation_method(
+                        &selection,
+                        adapter,
+                        &mut self.type_work,
+                    )
+                })
+                .transpose()
+                .map_err(|()| BuildError::TypeWorkExceeded)?
+                .unwrap_or(false),
+            _ => true,
+        };
+        let authority_matches = selection_authority
+            && matches!(
+                (role, occurrence),
+                (MethodEvidenceAnchorRole::ImplementationOwner { .. }, None)
+                    | (MethodEvidenceAnchorRole::Domain { .. }, None)
+                    | (
+                        MethodEvidenceAnchorRole::Instantiation { .. }
+                            | MethodEvidenceAnchorRole::Application { .. }
+                            | MethodEvidenceAnchorRole::Adapter { .. }
+                            | MethodEvidenceAnchorRole::AdapterEdge { .. },
+                        Some(_)
+                    )
+            );
+        if self.arena != Some(node.arena())
+            || (!matches!(
+                role,
+                MethodEvidenceAnchorRole::AdapterEdge { .. }
+                    | MethodEvidenceAnchorRole::ImplementationOwner { .. }
+            ) && self.method_evidence.method(method).is_none())
+            || !authority_matches
+        {
+            return Err(BuildError::InvalidPayload);
+        }
+        self.type_work
+            .charge(self.method_evidence_anchors.len())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if self.method_evidence_anchors.iter().any(|anchor| {
+            anchor.node == node && anchor.role == role && anchor.occurrence == occurrence
+        }) {
+            return Err(BuildError::InvalidPayload);
+        }
+        self.type_work
+            .charge(self.method_evidence.expectations().len())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let mut expectation = None;
+        for (index, expected) in self.method_evidence.expectations().iter().enumerate() {
+            if !self.consumed_method_evidence[index]
+                && expected.occurrence == occurrence
+                && expected.method == method
+                && method_evidence_anchor_matches_expectation(
+                    &self.method_evidence,
+                    expected,
+                    owner,
+                    requirement,
+                    role,
+                    &interface_argument,
+                    &mut self.type_work,
+                )
+                .map_err(|()| BuildError::TypeWorkExceeded)?
+            {
+                expectation = Some(index);
+                break;
+            }
+        }
+        let Some(expectation) = expectation else {
+            return Err(BuildError::InvalidPayload);
+        };
+        self.type_work
+            .charge(7)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.method_evidence_anchors
+            .try_reserve(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        let (interface_argument, _) =
+            admit_type_with_status(interface_argument.into_inner(), &mut self.type_work, true)?;
+        self.method_evidence_anchors.push(MethodEvidenceAnchor {
+            node,
+            owner,
+            requirement,
+            method,
+            interface_argument,
+            role,
+            occurrence,
+            expectation,
+        });
+        self.consumed_method_evidence[expectation] = true;
+        Ok(())
     }
 
     /// Reserves the complete resolver-assigned binder namespace.
@@ -1251,12 +2275,34 @@ impl CoreBuilder {
         if index >= self.nodes.len() {
             return Err(BuildError::InvalidNodeId);
         }
+        self.type_work
+            .charge(self.consumed_method_evidence.len())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if self
+            .consumed_method_evidence
+            .iter()
+            .any(|consumed| !consumed)
+        {
+            return Err(BuildError::InvalidPayload);
+        }
         Ok(UnvalidatedProgram {
-            registry: std::mem::take(&mut self.registry),
+            registry: std::mem::replace(&mut self.registry, Arc::clone(empty_registry())),
+            method_evidence: std::mem::replace(
+                &mut self.method_evidence,
+                Arc::clone(empty_method_evidence()),
+            ),
+            method_evidence_anchors: std::mem::take(&mut self.method_evidence_anchors)
+                .into_boxed_slice(),
             arena,
             nodes: std::mem::take(&mut self.nodes),
             root,
         })
+    }
+
+    pub(crate) fn charge_rebuild_work(&mut self, work: usize) -> Result<(), BuildError> {
+        self.type_work
+            .charge(work)
+            .map_err(|()| BuildError::TypeWorkExceeded)
     }
 
     fn push(&mut self, ty: Type, origin: Origin, kind: PureExprKind) -> Result<NodeId, BuildError> {
@@ -2042,10 +3088,11 @@ fn admit_origin(origin: Origin) -> Result<Origin, BuildError> {
 mod tests {
     use super::*;
     use crate::{
+        interface::{ImplId, InterfaceId},
         module::ModuleId,
         resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable},
         source::{ByteRange, GeneratedReason, SourceFile},
-        types::{ConstructorId, NominalTypeId, TypeVariableId},
+        types::{ConstructorId, NominalTypeId, TYPE_WORK_LIMIT, TypeVariableId},
     };
 
     fn resolved_id(local: u32) -> BinderId {
@@ -2086,6 +3133,87 @@ mod tests {
             };
         }
         origin
+    }
+
+    #[test]
+    fn one_method_evidence_anchor_and_finish_have_an_exact_retry_boundary() {
+        const AUTHENTICATE_AND_FINISH_WORK: usize = 14;
+        let source = SourceFile::new("method-anchor.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let interface = InterfaceId::new(ModuleId::new(0), 0);
+        let method = MethodId::new(interface, 0);
+        let implementation = ImplMethodId::new(ImplId::new(ModuleId::new(0), 0), method);
+        let binder = resolved_id(0);
+        let catalog = Arc::new(MethodEvidenceCatalog::new(
+            Vec::new(),
+            vec![MethodEvidenceImplementationOwner {
+                implementation,
+                binder,
+                head_type_parameter_count: 0,
+                source_parameters: Box::new([]),
+                interface_argument: Type::Int,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![MethodEvidenceExpectation {
+                occurrence: None,
+                method,
+                role: MethodEvidenceExpectedRole::ImplementationOwner { owner: 0 },
+            }],
+        ));
+        let prepare = || {
+            let mut builder = CoreBuilder::with_registry_and_method_evidence(
+                Arc::new(ResolvedRegistry::default()),
+                Arc::clone(&catalog),
+            )
+            .expect("the one-row consumption bitmap should fit");
+            let node = builder
+                .unit(Type::Unit, origin.clone())
+                .expect("the anchor carrier should fit");
+            (builder, node)
+        };
+        let authenticate = |builder: &mut CoreBuilder, node| {
+            builder.authenticate_method_evidence(
+                node,
+                Some(MethodEvidenceOwner::Implementation(implementation)),
+                None,
+                method,
+                Type::Int,
+                MethodEvidenceAnchorRole::ImplementationOwner {
+                    implementation,
+                    binder,
+                },
+                None,
+            )
+        };
+
+        let (mut short, short_node) = prepare();
+        short
+            .charge_type_work_for_test(
+                TYPE_WORK_LIMIT - short.type_work.used() - (AUTHENTICATE_AND_FINISH_WORK - 1),
+            )
+            .expect("the one-short prefix should fit");
+        authenticate(&mut short, short_node).expect("the exact anchor emission should fit");
+        assert_eq!(
+            short
+                .finish(short_node)
+                .expect_err("one missing finish-consumption cell must reject publication"),
+            BuildError::TypeWorkExceeded,
+        );
+
+        for _ in 0..2 {
+            let (mut exact, exact_node) = prepare();
+            exact
+                .charge_type_work_for_test(
+                    TYPE_WORK_LIMIT - exact.type_work.used() - AUTHENTICATE_AND_FINISH_WORK,
+                )
+                .expect("the exact prefix should fit");
+            authenticate(&mut exact, exact_node).expect("the exact anchor emission should fit");
+            exact
+                .finish(exact_node)
+                .expect("a fresh exact stage should retry and publish");
+        }
     }
 
     #[test]

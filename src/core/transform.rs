@@ -170,7 +170,10 @@ fn rebuild_with_initial_type_work(
     initial_type_work: usize,
 ) -> Result<UnvalidatedProgram, TransformError> {
     let order = postorder(program, fold_literal_primitives)?;
-    let mut builder = CoreBuilder::with_registry(Arc::clone(program.registry()));
+    let mut builder = CoreBuilder::with_registry_and_method_evidence(
+        Arc::clone(program.registry()),
+        Arc::clone(program.method_evidence()),
+    )?;
     #[cfg(test)]
     builder.charge_type_work_for_test(initial_type_work)?;
     #[cfg(not(test))]
@@ -215,7 +218,12 @@ fn rebuild_with_initial_type_work(
     }
     builder.reserve_resolved_binders(binders)?;
 
-    let mut remapped = vec![None; program.node_count()];
+    builder.charge_rebuild_work(program.node_count())?;
+    let mut remapped = Vec::new();
+    remapped
+        .try_reserve_exact(program.node_count())
+        .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
+    remapped.resize(program.node_count(), None);
     for original in order {
         let expression = program
             .node(original)
@@ -233,6 +241,20 @@ fn rebuild_with_initial_type_work(
         *slot = Some(transformed);
     }
     let root = remap(&remapped, program.root())?;
+    builder.charge_rebuild_work(program.method_evidence_anchors().len())?;
+    for anchor in program.method_evidence_anchors() {
+        let node = remap(&remapped, anchor.node)?;
+        let interface_argument = builder.clone_type_for_rebuild(&anchor.interface_argument)?;
+        builder.authenticate_method_evidence(
+            node,
+            anchor.owner,
+            anchor.requirement,
+            anchor.method,
+            interface_argument,
+            anchor.role,
+            anchor.occurrence,
+        )?;
+    }
     builder.finish(root).map_err(TransformError::from)
 }
 
@@ -760,6 +782,106 @@ mod tests {
         }
     }
 
+    fn linked_method_transform_fixture() -> LinkedTransformFixture {
+        let directory = LinkedTransformDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            concat!(
+                "interface Score<A> {\n",
+                "score<X> : (A, X) -> Int\n",
+                "}\n\n",
+                "impl Score<Int> {\n",
+                "score (value, ignored) = value + 1\n",
+                "}\n\n",
+                "main : Unit -> Int\n",
+                "main () = 1 + 2 + score((1, true))\n",
+            ),
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty())
+            .expect("the linked method transform graph should load");
+        let checked = checked_linked_transform_graph(&graph);
+        let linked = link_modules(checked, graph.entry())
+            .expect("the checked linked method transform graph should link");
+        let linked = validate_linked_facts_for_test(linked)
+            .expect("the linked method transform facts should authenticate");
+        let mut elaborator = Elaborator::for_module_program(&linked)
+            .expect("the linked method transform binder namespace should fit");
+        let typed = elaborator
+            .synthesize_module_program(&linked)
+            .expect("the linked method transform program should lower to Core");
+        let unchecked = elaborator
+            .finish(typed.node)
+            .expect("the linked method transform Core root should finish");
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let module_sources = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let program =
+            super::super::validate::validate_modules(unchecked, &sources, &module_sources)
+                .expect("the linked method transform Core should validate");
+        LinkedTransformFixture {
+            _directory: directory,
+            graph,
+            program,
+            module_sources,
+        }
+    }
+
+    #[test]
+    fn linked_method_transforms_have_exact_anchor_remap_and_arc_lifecycle_boundaries() {
+        // Node reconstruction, anchor Type cloning/Builder replay, and finish
+        // consume the fixed Core terms. Reading/remapping the immutable source
+        // sidecar is a separate one-cell term for each of X=3 anchors.
+        const IDENTITY_CORE_WORK: usize = 304;
+        const FOLD_CORE_WORK: usize = 300;
+        const ANCHOR_REPLAY_WORK: usize = 3;
+        const IDENTITY_WORK: usize = IDENTITY_CORE_WORK + ANCHOR_REPLAY_WORK;
+        const FOLD_WORK: usize = FOLD_CORE_WORK + ANCHOR_REPLAY_WORK;
+        let fixture = linked_method_transform_fixture();
+        assert_eq!(
+            fixture.program.method_evidence_anchors().len(),
+            ANCHOR_REPLAY_WORK,
+        );
+        let registry = Arc::clone(fixture.program.registry());
+        let catalog = Arc::clone(fixture.program.method_evidence());
+        let weak_registry = Arc::downgrade(&registry);
+        let weak_catalog = Arc::downgrade(&catalog);
+        let sources = fixture.sources();
+        for (fold, exact_work) in [(false, IDENTITY_WORK), (true, FOLD_WORK)] {
+            assert_eq!(
+                rebuild_with_initial_type_work(
+                    &fixture.program,
+                    fold,
+                    TYPE_WORK_LIMIT - (exact_work - 1),
+                )
+                .expect_err("one missing anchor-remap unit must reject the transform"),
+                TransformError::Build(BuildError::TypeWorkExceeded),
+            );
+            let rebuilt = rebuild_with_initial_type_work(
+                &fixture.program,
+                fold,
+                TYPE_WORK_LIMIT - exact_work,
+            )
+            .expect("the exact anchor-remap allowance should fit");
+            assert!(Arc::ptr_eq(&rebuilt.registry, &registry));
+            assert!(Arc::ptr_eq(&rebuilt.method_evidence, &catalog));
+            super::super::validate::validate_modules(rebuilt, &sources, &fixture.module_sources)
+                .expect("the exactly rebuilt anchors should freshly validate");
+        }
+        drop(sources);
+        drop(registry);
+        drop(catalog);
+        drop(fixture);
+        assert!(weak_registry.upgrade().is_none());
+        assert!(weak_catalog.upgrade().is_none());
+    }
+
     type GlobalRowShape = (BinderId, Vec<TypeVariableId>);
 
     fn global_row_shape(registry: &ResolvedRegistry) -> Vec<GlobalRowShape> {
@@ -959,7 +1081,8 @@ mod tests {
                 // Abstraction: scheme clone/admission 16 + parameter record/Arrow Kind 4 = 20.
                 // Recursive owner/root: scheme binder clone/admission 16 + Unit result 2 = 18.
                 // Recursive body Unit clone/admission = 2. The shared row again adds 0.
-                const IDENTITY_WORK: usize = 6 + 8 + 20 + 18 + 2;
+                // Exact old-to-new NodeId remap slots = 7.
+                const IDENTITY_WORK: usize = 6 + 8 + 20 + 18 + 2 + 7;
 
                 let fixture = linked_row_bearing_fold_fixture();
                 let registry = Arc::clone(fixture.program.registry());
@@ -1063,7 +1186,8 @@ mod tests {
                 // Recursive owner: scheme binder clone/admission 16 + result Unit 2 = 18.
                 // Recursive body Unit: one clone + one admission = 2.
                 // The shared registry Arc and its nonempty resolved-global row add 0.
-                const EXACT_WORK: usize = 2 + 8 + 16 + 4 + 18 + 2;
+                // Exact old-to-new NodeId remap slots = 7.
+                const EXACT_WORK: usize = 2 + 8 + 16 + 4 + 18 + 2 + 7;
                 let fixture = linked_row_bearing_fold_fixture();
                 let registry = Arc::clone(fixture.program.registry());
                 let rows = global_row_shape(&registry);
@@ -1179,7 +1303,8 @@ mod tests {
         // Body: one retained clone + one admission visit = 2.
         // Abstraction scheme: six clone units and six admission units.
         // Abstraction parameters: one binder record + three Kind nodes = 4.
-        const EXACT_WORK: usize = 18;
+        // Exact old-to-new NodeId remap slots = 2.
+        const EXACT_WORK: usize = 20;
         let source =
             SourceFile::new("transform-kinds.ash", "higher").expect("transform fixture source");
         let origin = Origin::Source(

@@ -8,6 +8,11 @@ use std::{
 };
 
 use crate::{
+    core::dialect::{
+        MethodEvidenceAdapter, MethodEvidenceCatalog, MethodEvidenceDomain,
+        MethodEvidenceExpectation, MethodEvidenceExpectedRole, MethodEvidenceImplementationOwner,
+        MethodEvidenceMethod, MethodEvidenceOccurrence, MethodEvidenceOwner,
+    },
     interface::{
         CheckedRequirement, ConstrainedScheme, EvidenceNode, EvidenceNodeId, EvidenceSelection,
         EvidenceSubstitution, ImplId, ImplMethodId, InterfaceConstraintBudget, InterfaceId,
@@ -25,7 +30,8 @@ use crate::{
     source::{Origin, Span},
     types::{
         ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
-        TypeWorkBudget, discard_type_iteratively, same_kind_with_charge,
+        TypeWorkBudget, clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
+        same_kind_with_charge,
     },
 };
 
@@ -1998,6 +2004,7 @@ struct MethodEvidenceAuthentication;
 #[derive(Debug)]
 pub struct ValidatedInterfaceProgram {
     source: ResolvedModuleProgram,
+    method_evidence: Arc<MethodEvidenceCatalog>,
     _method_evidence: MethodEvidenceAuthentication,
 }
 
@@ -2006,6 +2013,10 @@ impl ValidatedInterfaceProgram {
     #[must_use]
     pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
         self.source.registry()
+    }
+
+    pub(crate) const fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
+        &self.method_evidence
     }
 
     /// Returns dependency-ordered checked module groups.
@@ -2074,11 +2085,1214 @@ pub(crate) fn validate_interface_evidence_with_budget(
         type_work,
     )?;
     drop(kind_environments);
+    let method_evidence = build_core_method_evidence_catalog(&program, constraint_work, type_work)?;
     charge(constraint_work, 1, program.result().span)?;
     Ok(ValidatedInterfaceProgram {
         source: program,
+        method_evidence: Arc::new(method_evidence),
         _method_evidence: MethodEvidenceAuthentication,
     })
+}
+
+fn build_core_method_evidence_catalog(
+    program: &ResolvedModuleProgram,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<MethodEvidenceCatalog, EvidenceValidationFailure> {
+    charge(constraint_work, 1, program.result().span)?;
+    let mut method_count = 0usize;
+    for group in program.groups() {
+        for interface in group.interface_facts() {
+            charge(
+                constraint_work,
+                interface.methods.len(),
+                program.result().span,
+            )?;
+            for method in &interface.methods {
+                if !method.authoritative_type_parameters().is_empty() {
+                    method_count = method_count
+                        .checked_add(1)
+                        .ok_or_else(|| resource(program.result().span))?;
+                }
+            }
+        }
+    }
+    charge(constraint_work, method_count, program.result().span)?;
+    let mut methods = Vec::new();
+    methods
+        .try_reserve(method_count)
+        .map_err(|_| resource(program.result().span))?;
+    for group in program.groups() {
+        for interface in group.interface_facts() {
+            charge(
+                constraint_work,
+                interface.methods.len(),
+                program.result().span,
+            )?;
+            for method in &interface.methods {
+                if method.authoritative_type_parameters().is_empty() {
+                    continue;
+                }
+                let mut parameters = Vec::new();
+                parameters
+                    .try_reserve(method.authoritative_type_parameters().len())
+                    .map_err(|_| type_resource(method.span))?;
+                for parameter in method.authoritative_type_parameters() {
+                    type_work
+                        .charge(1)
+                        .map_err(|()| type_resource(method.span))?;
+                    parameters.push((
+                        parameter.id,
+                        clone_kind_with_budget(&parameter.kind, type_work)
+                            .map_err(|()| type_resource(method.span))?,
+                    ));
+                }
+                methods.push(MethodEvidenceMethod {
+                    id: method.id,
+                    interface_parameter: interface.parameter.id,
+                    parameters: parameters.into_boxed_slice(),
+                    value_type: clone_type_with_budget(method.value_type(), type_work)
+                        .map_err(|()| type_resource(method.span))?,
+                });
+            }
+        }
+    }
+    charge(
+        constraint_work,
+        methods.len().saturating_sub(1),
+        program.result().span,
+    )?;
+    if methods.len() != method_count || methods.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+        return Err(invalid_root(program.result().span));
+    }
+    let mut implementation_owner_count = 0usize;
+    for group in program.groups() {
+        for implementation in group.implementation_facts() {
+            for method in &implementation.methods {
+                let search_work = method
+                    .scheme
+                    .requirements
+                    .len()
+                    .checked_add(1)
+                    .and_then(|passes| passes.checked_mul(methods.len()))
+                    .ok_or_else(|| resource(program.result().span))?;
+                charge(
+                    constraint_work,
+                    search_work
+                        .checked_add(1)
+                        .ok_or_else(|| resource(program.result().span))?,
+                    program.result().span,
+                )?;
+                if methods
+                    .iter()
+                    .any(|canonical| canonical.id == method.id.method())
+                    || method.scheme.requirements.iter().any(|requirement| {
+                        methods
+                            .iter()
+                            .any(|canonical| canonical.id.interface() == requirement.interface)
+                    })
+                {
+                    implementation_owner_count = implementation_owner_count
+                        .checked_add(1)
+                        .ok_or_else(|| resource(program.result().span))?;
+                }
+            }
+        }
+    }
+    charge(
+        constraint_work,
+        implementation_owner_count,
+        program.result().span,
+    )?;
+    let mut implementation_owners = Vec::new();
+    implementation_owners
+        .try_reserve_exact(implementation_owner_count)
+        .map_err(|_| resource(program.result().span))?;
+    for group in program.groups() {
+        for implementation in group.implementation_facts() {
+            for method in &implementation.methods {
+                let search_work = method
+                    .scheme
+                    .requirements
+                    .len()
+                    .checked_add(1)
+                    .and_then(|passes| passes.checked_mul(methods.len()))
+                    .ok_or_else(|| resource(program.result().span))?;
+                charge(
+                    constraint_work,
+                    search_work
+                        .checked_add(1)
+                        .ok_or_else(|| resource(program.result().span))?,
+                    program.result().span,
+                )?;
+                if !(methods
+                    .iter()
+                    .any(|canonical| canonical.id == method.id.method())
+                    || method.scheme.requirements.iter().any(|requirement| {
+                        methods
+                            .iter()
+                            .any(|canonical| canonical.id.interface() == requirement.interface)
+                    }))
+                {
+                    continue;
+                }
+                let mut source_parameters = Vec::new();
+                source_parameters
+                    .try_reserve_exact(method.scheme.type_parameters.len())
+                    .map_err(|_| type_resource(method.span))?;
+                for (parameter, kind) in &method.scheme.type_parameters {
+                    type_work
+                        .charge(1)
+                        .map_err(|()| type_resource(method.span))?;
+                    source_parameters.push((
+                        *parameter,
+                        clone_kind_with_budget(kind, type_work)
+                            .map_err(|()| type_resource(method.span))?,
+                    ));
+                }
+                implementation_owners.push(MethodEvidenceImplementationOwner {
+                    implementation: method.id,
+                    binder: method.binder,
+                    head_type_parameter_count: method.head_type_parameter_count(),
+                    source_parameters: source_parameters.into_boxed_slice(),
+                    interface_argument: clone_type_with_budget(&implementation.argument, type_work)
+                        .map_err(|()| type_resource(method.span))?,
+                });
+            }
+        }
+    }
+    for index in 1..implementation_owners.len() {
+        let mut cursor = index;
+        while cursor > 0 {
+            charge(constraint_work, 1, program.result().span)?;
+            if implementation_owners[cursor - 1].implementation
+                <= implementation_owners[cursor].implementation
+            {
+                break;
+            }
+            implementation_owners.swap(cursor - 1, cursor);
+            cursor -= 1;
+        }
+    }
+    charge(
+        constraint_work,
+        implementation_owners.len().saturating_sub(1),
+        program.result().span,
+    )?;
+    if implementation_owners.len() != implementation_owner_count
+        || implementation_owners
+            .windows(2)
+            .any(|pair| pair[0].implementation >= pair[1].implementation)
+    {
+        return Err(invalid_root(program.result().span));
+    }
+    let mut domains = Vec::new();
+    for group in program.groups() {
+        for checked in group.schemes() {
+            collect_method_evidence_domains(
+                &methods,
+                &checked.scheme,
+                MethodEvidenceOwner::Global(checked.binder),
+                &mut domains,
+                constraint_work,
+                type_work,
+                checked.origin.primary_span(),
+            )?;
+        }
+        for implementation in group.implementation_facts() {
+            for method in &implementation.methods {
+                collect_method_evidence_domains(
+                    &methods,
+                    &method.scheme,
+                    MethodEvidenceOwner::Implementation(method.id),
+                    &mut domains,
+                    constraint_work,
+                    type_work,
+                    method.span,
+                )?;
+            }
+        }
+    }
+    let mut occurrences =
+        collect_method_evidence_occurrences(program, &methods, constraint_work, type_work)?;
+    for index in 1..occurrences.len() {
+        let mut cursor = index;
+        while cursor > 0 {
+            charge(constraint_work, 1, program.result().span)?;
+            if occurrences[cursor - 1].slot <= occurrences[cursor].slot {
+                break;
+            }
+            occurrences.swap(cursor - 1, cursor);
+            cursor -= 1;
+        }
+    }
+    charge(
+        constraint_work,
+        occurrences.len().saturating_sub(1),
+        program.result().span,
+    )?;
+    if occurrences
+        .windows(2)
+        .any(|pair| pair[0].slot == pair[1].slot)
+    {
+        return Err(invalid_root(program.result().span));
+    }
+    let (adapters, expectations) = build_method_evidence_expectations(
+        program,
+        &methods,
+        &implementation_owners,
+        &domains,
+        &occurrences,
+        constraint_work,
+        type_work,
+        program.result().span,
+    )?;
+    charge(constraint_work, 1, program.result().span)?;
+    Ok(MethodEvidenceCatalog::new(
+        methods,
+        implementation_owners,
+        domains,
+        occurrences,
+        adapters,
+        expectations,
+    ))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "linked evidence rows are derived from independent authenticated inputs"
+)]
+fn build_method_evidence_expectations(
+    program: &ResolvedModuleProgram,
+    methods: &[MethodEvidenceMethod],
+    implementation_owners: &[MethodEvidenceImplementationOwner],
+    domains: &[MethodEvidenceDomain],
+    occurrences: &[MethodEvidenceOccurrence],
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<(Vec<MethodEvidenceAdapter>, Vec<MethodEvidenceExpectation>), EvidenceValidationFailure>
+{
+    let mut expectations = Vec::new();
+    let initial_expectations = implementation_owners
+        .len()
+        .checked_add(domains.len())
+        .ok_or_else(|| resource(span))?;
+    charge(constraint_work, initial_expectations, span)?;
+    expectations
+        .try_reserve(initial_expectations)
+        .map_err(|_| resource(span))?;
+    for (owner, row) in implementation_owners.iter().enumerate() {
+        expectations.push(MethodEvidenceExpectation {
+            occurrence: None,
+            method: row.implementation.method(),
+            role: MethodEvidenceExpectedRole::ImplementationOwner { owner },
+        });
+    }
+    let mut domain_expectations = HashMap::new();
+    charge(constraint_work, domains.len(), span)?;
+    domain_expectations
+        .try_reserve(domains.len())
+        .map_err(|_| resource(span))?;
+    for (domain, row) in domains.iter().enumerate() {
+        let expectation = expectations.len();
+        expectations.push(MethodEvidenceExpectation {
+            occurrence: None,
+            method: row.method,
+            role: MethodEvidenceExpectedRole::Domain { domain },
+        });
+        if domain_expectations.insert(domain, expectation).is_some() {
+            return Err(invalid_root(span));
+        }
+    }
+
+    let mut adapters = Vec::new();
+    let mut adapter_expectations = HashMap::new();
+    for occurrence in occurrences {
+        let mut pending = Vec::new();
+        charge(
+            constraint_work,
+            occurrence
+                .selection
+                .node_count()
+                .checked_mul(2)
+                .ok_or_else(|| resource(span))?,
+            span,
+        )?;
+        pending
+            .try_reserve(occurrence.selection.node_count())
+            .map_err(|_| resource(span))?;
+        pending.push(occurrence.selection.root());
+        let mut visited = HashSet::new();
+        visited
+            .try_reserve(occurrence.selection.node_count())
+            .map_err(|_| resource(span))?;
+        while let Some(identity) = pending.pop() {
+            charge(constraint_work, 1, span)?;
+            if !visited.insert(identity) {
+                continue;
+            }
+            let Some(EvidenceNode::Implementation {
+                substitution,
+                prerequisites,
+                methods: selected_methods,
+                ..
+            }) = occurrence.selection.node(identity)
+            else {
+                continue;
+            };
+            charge(constraint_work, prerequisites.len(), span)?;
+            pending
+                .try_reserve(prerequisites.len())
+                .map_err(|_| resource(span))?;
+            pending.extend(prerequisites.iter().copied());
+            charge(constraint_work, selected_methods.len(), span)?;
+            for selected in selected_methods.iter().filter(|selected| {
+                identity != occurrence.selection.root()
+                    || occurrence
+                        .checked_method
+                        .is_none_or(|requested| requested == selected.method())
+            }) {
+                charge(constraint_work, methods.len(), span)?;
+                if !methods.iter().any(|method| method.id == selected.method()) {
+                    continue;
+                }
+                let producer_count = program
+                    .groups()
+                    .iter()
+                    .flat_map(ResolvedModuleGroup::implementation_facts)
+                    .flat_map(|implementation| implementation.methods.iter())
+                    .count();
+                charge(constraint_work, producer_count, span)?;
+                let producer = program
+                    .groups()
+                    .iter()
+                    .flat_map(ResolvedModuleGroup::implementation_facts)
+                    .flat_map(|implementation| implementation.methods.iter())
+                    .find(|method| method.id == *selected)
+                    .ok_or_else(|| invalid_root(span))?;
+                if producer.head_type_parameter_count() != substitution.len() {
+                    return Err(invalid_root(span));
+                }
+                let mut head_arguments = Vec::new();
+                type_work
+                    .charge(substitution.len())
+                    .map_err(|()| type_resource(span))?;
+                head_arguments
+                    .try_reserve_exact(substitution.len())
+                    .map_err(|_| type_resource(span))?;
+                for argument in substitution {
+                    head_arguments.push(
+                        clone_type_with_budget(argument.argument(), type_work)
+                            .map_err(|()| type_resource(span))?,
+                    );
+                }
+                let mut source_parameters = Vec::new();
+                type_work
+                    .charge(producer.scheme.type_parameters.len())
+                    .map_err(|()| type_resource(span))?;
+                source_parameters
+                    .try_reserve_exact(producer.scheme.type_parameters.len())
+                    .map_err(|_| type_resource(span))?;
+                source_parameters.extend(
+                    producer
+                        .scheme
+                        .type_parameters
+                        .iter()
+                        .map(|parameter| parameter.0),
+                );
+                charge(constraint_work, 1, span)?;
+                adapters.try_reserve(1).map_err(|_| resource(span))?;
+                let adapter = adapters.len();
+                adapters.push(MethodEvidenceAdapter {
+                    implementation: *selected,
+                    binder: producer.binder,
+                    source_parameters: source_parameters.into_boxed_slice(),
+                    head_arguments: head_arguments.into_boxed_slice(),
+                    prerequisites: Box::new([]),
+                });
+                charge(constraint_work, 1, span)?;
+                expectations.try_reserve(1).map_err(|_| resource(span))?;
+                let expectation = expectations.len();
+                expectations.push(MethodEvidenceExpectation {
+                    occurrence: Some(occurrence.slot),
+                    method: selected.method(),
+                    role: MethodEvidenceExpectedRole::Adapter { adapter },
+                });
+                charge(constraint_work, 1, span)?;
+                adapter_expectations
+                    .try_reserve(1)
+                    .map_err(|_| resource(span))?;
+                if adapter_expectations
+                    .insert((occurrence.slot, *selected), expectation)
+                    .is_some()
+                {
+                    return Err(invalid_root(span));
+                }
+            }
+        }
+    }
+
+    for occurrence in occurrences {
+        if let Some(method) = occurrence.checked_method {
+            charge(
+                constraint_work,
+                domains
+                    .len()
+                    .checked_add(adapter_expectations.len())
+                    .ok_or_else(|| resource(span))?,
+                span,
+            )?;
+            let producer = method_evidence_producer_expectation(
+                occurrence,
+                occurrence.selection.root(),
+                method,
+                domains,
+                &domain_expectations,
+                &adapter_expectations,
+                span,
+            )?;
+            charge(constraint_work, 1, span)?;
+            expectations.try_reserve(1).map_err(|_| resource(span))?;
+            expectations.push(MethodEvidenceExpectation {
+                occurrence: Some(occurrence.slot),
+                method,
+                role: MethodEvidenceExpectedRole::Instantiation { producer },
+            });
+        } else {
+            charge(constraint_work, methods.len(), span)?;
+            for method in methods
+                .iter()
+                .filter(|method| method.id.interface() == occurrence.selection.interface())
+            {
+                charge(constraint_work, domains.len(), span)?;
+                let domain = domains
+                    .iter()
+                    .position(|domain| {
+                        Some(domain.owner) == occurrence.target_owner
+                            && occurrence.target_requirement == Some(domain.requirement)
+                            && domain.method == method.id
+                    })
+                    .ok_or_else(|| invalid_root(span))?;
+                charge(
+                    constraint_work,
+                    domains
+                        .len()
+                        .checked_add(adapter_expectations.len())
+                        .and_then(|count| count.checked_add(1))
+                        .ok_or_else(|| resource(span))?,
+                    span,
+                )?;
+                expectations.try_reserve(1).map_err(|_| resource(span))?;
+                expectations.push(MethodEvidenceExpectation {
+                    occurrence: Some(occurrence.slot),
+                    method: method.id,
+                    role: MethodEvidenceExpectedRole::Application {
+                        domain,
+                        producer: method_evidence_producer_expectation(
+                            occurrence,
+                            occurrence.selection.root(),
+                            method.id,
+                            domains,
+                            &domain_expectations,
+                            &adapter_expectations,
+                            span,
+                        )?,
+                    },
+                });
+            }
+        }
+        let mut pending = Vec::new();
+        charge(
+            constraint_work,
+            occurrence
+                .selection
+                .node_count()
+                .checked_mul(2)
+                .ok_or_else(|| resource(span))?,
+            span,
+        )?;
+        pending
+            .try_reserve(occurrence.selection.node_count())
+            .map_err(|_| resource(span))?;
+        pending.push(occurrence.selection.root());
+        let mut visited = HashSet::new();
+        visited
+            .try_reserve(occurrence.selection.node_count())
+            .map_err(|_| resource(span))?;
+        while let Some(identity) = pending.pop() {
+            charge(constraint_work, 1, span)?;
+            if !visited.insert(identity) {
+                continue;
+            }
+            let node = occurrence
+                .selection
+                .node(identity)
+                .ok_or_else(|| invalid_root(span))?;
+            let EvidenceNode::Implementation {
+                prerequisites,
+                methods: selected_methods,
+                ..
+            } = node
+            else {
+                continue;
+            };
+            charge(constraint_work, prerequisites.len(), span)?;
+            charge(constraint_work, selected_methods.len(), span)?;
+            for selected in selected_methods.iter().filter(|selected| {
+                identity != occurrence.selection.root()
+                    || occurrence
+                        .checked_method
+                        .is_none_or(|requested| requested == selected.method())
+            }) {
+                let producer_count = program
+                    .groups()
+                    .iter()
+                    .flat_map(ResolvedModuleGroup::implementation_facts)
+                    .flat_map(|implementation| implementation.methods.iter())
+                    .count();
+                charge(constraint_work, producer_count, span)?;
+                let producer = program
+                    .groups()
+                    .iter()
+                    .flat_map(ResolvedModuleGroup::implementation_facts)
+                    .flat_map(|implementation| implementation.methods.iter())
+                    .find(|method| method.id == *selected)
+                    .ok_or_else(|| invalid_root(span))?;
+                if producer.scheme.requirements.len() != prerequisites.len() {
+                    return Err(invalid_root(span));
+                }
+                let adapter_expectation = adapter_expectations
+                    .get(&(occurrence.slot, *selected))
+                    .copied();
+                if adapter_expectation.is_none() {
+                    charge(constraint_work, prerequisites.len(), span)?;
+                    pending
+                        .try_reserve(prerequisites.len())
+                        .map_err(|_| resource(span))?;
+                    pending.extend(prerequisites.iter().copied());
+                    continue;
+                }
+                let adapter_edge_count = prerequisites
+                    .iter()
+                    .try_fold(0usize, |count, prerequisite| {
+                        let child = occurrence.selection.node(*prerequisite)?;
+                        let methods = match child {
+                            EvidenceNode::Abstract { methods, .. } => methods.len(),
+                            EvidenceNode::Implementation { methods, .. } => methods.len(),
+                        };
+                        count.checked_add(methods)
+                    })
+                    .ok_or_else(|| invalid_root(span))?;
+                let adapter_edge_capacity_work = prerequisites
+                    .len()
+                    .checked_add(adapter_edge_count)
+                    .ok_or_else(|| resource(span))?;
+                charge(constraint_work, adapter_edge_capacity_work, span)?;
+                let mut adapter_edges = Vec::new();
+                adapter_edges
+                    .try_reserve_exact(adapter_edge_count)
+                    .map_err(|_| resource(span))?;
+                for (prerequisite, requirement) in
+                    prerequisites.iter().zip(&producer.scheme.requirements)
+                {
+                    let child = occurrence
+                        .selection
+                        .node(*prerequisite)
+                        .ok_or_else(|| invalid_root(span))?;
+                    macro_rules! retain_edge {
+                        ($method:expr) => {{
+                            let method = $method;
+                            let producer_search_work = methods
+                                .len()
+                                .checked_add(domains.len())
+                                .and_then(|count| count.checked_add(domain_expectations.len()))
+                                .and_then(|count| count.checked_add(adapter_expectations.len()))
+                                .and_then(|count| {
+                                    let child_methods = match child {
+                                        EvidenceNode::Abstract { methods, .. } => methods.len(),
+                                        EvidenceNode::Implementation { methods, .. } => {
+                                            methods.len()
+                                        }
+                                    };
+                                    count.checked_add(child_methods)
+                                })
+                                .ok_or_else(|| resource(span))?;
+                            charge(constraint_work, producer_search_work, span)?;
+                            let producer = if methods.iter().any(|row| row.id == method) {
+                                crate::core::dialect::MethodEvidenceExpectedProducer::Authenticated(
+                                    method_evidence_producer_expectation(
+                                        occurrence,
+                                        *prerequisite,
+                                        method,
+                                        domains,
+                                        &domain_expectations,
+                                        &adapter_expectations,
+                                        span,
+                                    )?,
+                                )
+                            } else {
+                                crate::core::dialect::MethodEvidenceExpectedProducer::Monomorphic(
+                                    method_evidence_semantic_producer(
+                                        &occurrence.selection,
+                                        *prerequisite,
+                                        method,
+                                        span,
+                                    )?,
+                                )
+                            };
+                            charge(constraint_work, 1, span)?;
+                            adapter_edges.try_reserve(1).map_err(|_| resource(span))?;
+                            let ordinal = adapter_edges.len();
+                            let interface_search_work = program
+                                .groups()
+                                .iter()
+                                .flat_map(ResolvedModuleGroup::interface_facts)
+                                .try_fold(0usize, |count, interface| {
+                                    count.checked_add(1).and_then(|count| {
+                                        count.checked_add(interface.methods.len())
+                                    })
+                                })
+                                .ok_or_else(|| resource(span))?;
+                            charge(constraint_work, interface_search_work, span)?;
+                            let interface = program
+                                .groups()
+                                .iter()
+                                .flat_map(ResolvedModuleGroup::interface_facts)
+                                .find(|interface| interface.id == method.interface())
+                                .ok_or_else(|| invalid_root(span))?;
+                            let canonical = interface
+                                .methods
+                                .iter()
+                                .find(|candidate| candidate.id == method)
+                                .ok_or_else(|| invalid_root(span))?;
+                            let mut method_parameters = Vec::new();
+                            method_parameters
+                                .try_reserve_exact(canonical.authoritative_type_parameters().len())
+                                .map_err(|_| type_resource(span))?;
+                            for parameter in canonical.authoritative_type_parameters() {
+                                type_work.charge(1).map_err(|()| type_resource(span))?;
+                                method_parameters.push((
+                                    parameter.id,
+                                    clone_kind_with_budget(&parameter.kind, type_work)
+                                        .map_err(|()| type_resource(span))?,
+                                ));
+                            }
+                            adapter_edges.push(crate::core::dialect::MethodEvidenceAdapterEdge {
+                                owner: MethodEvidenceOwner::Implementation(*selected),
+                                requirement: requirement.id,
+                                method,
+                                interface_argument: clone_type_with_budget(
+                                    requirement.argument(),
+                                    type_work,
+                                )
+                                .map_err(|()| type_resource(span))?,
+                                interface_parameter: interface.parameter.id,
+                                method_parameters: method_parameters.into_boxed_slice(),
+                                value_type: clone_type_with_budget(
+                                    canonical.value_type(),
+                                    type_work,
+                                )
+                                .map_err(|()| type_resource(span))?,
+                                producer,
+                            });
+                            charge(constraint_work, 1, span)?;
+                            expectations.try_reserve(1).map_err(|_| resource(span))?;
+                            expectations.push(MethodEvidenceExpectation {
+                                occurrence: Some(occurrence.slot),
+                                method,
+                                role: MethodEvidenceExpectedRole::AdapterEdge {
+                                    adapter: adapter_expectation
+                                        .and_then(|expectation| {
+                                            match expectations.get(expectation)?.role {
+                                                MethodEvidenceExpectedRole::Adapter { adapter } => {
+                                                    Some(adapter)
+                                                }
+                                                _ => None,
+                                            }
+                                        })
+                                        .ok_or_else(|| invalid_root(span))?,
+                                    ordinal,
+                                },
+                            });
+                        }};
+                    }
+                    match child {
+                        EvidenceNode::Abstract { methods, .. } => {
+                            for method in methods {
+                                retain_edge!(*method);
+                            }
+                        }
+                        EvidenceNode::Implementation { methods, .. } => {
+                            for method in methods {
+                                retain_edge!(method.method());
+                            }
+                        }
+                    }
+                    charge(constraint_work, 1, span)?;
+                    pending.try_reserve(1).map_err(|_| resource(span))?;
+                    pending.push(*prerequisite);
+                }
+                if let Some(expectation) = adapter_expectation {
+                    let MethodEvidenceExpectedRole::Adapter { adapter } = expectations
+                        .get(expectation)
+                        .ok_or_else(|| invalid_root(span))?
+                        .role
+                    else {
+                        return Err(invalid_root(span));
+                    };
+                    let row = adapters
+                        .get_mut(adapter)
+                        .ok_or_else(|| invalid_root(span))?;
+                    if !row.prerequisites.is_empty() {
+                        return Err(invalid_root(span));
+                    }
+                    row.prerequisites = adapter_edges.into_boxed_slice();
+                }
+            }
+        }
+    }
+    Ok((adapters, expectations))
+}
+
+fn method_evidence_producer_expectation(
+    occurrence: &MethodEvidenceOccurrence,
+    node: EvidenceNodeId,
+    method: MethodId,
+    domains: &[MethodEvidenceDomain],
+    domain_expectations: &HashMap<usize, usize>,
+    adapter_expectations: &HashMap<(usize, ImplMethodId), usize>,
+    span: Span,
+) -> Result<usize, EvidenceValidationFailure> {
+    match occurrence
+        .selection
+        .node(node)
+        .ok_or_else(|| invalid_root(span))?
+    {
+        EvidenceNode::Abstract {
+            requirement,
+            methods,
+        } if methods.contains(&method) => domains
+            .iter()
+            .position(|domain| {
+                Some(domain.owner) == occurrence.scope
+                    && domain.requirement == requirement
+                    && domain.method == method
+            })
+            .and_then(|domain| domain_expectations.get(&domain).copied())
+            .ok_or_else(|| invalid_root(span)),
+        EvidenceNode::Implementation { methods, .. } => methods
+            .iter()
+            .find(|candidate| candidate.method() == method)
+            .and_then(|implementation| {
+                adapter_expectations
+                    .get(&(occurrence.slot, *implementation))
+                    .copied()
+            })
+            .ok_or_else(|| invalid_root(span)),
+        EvidenceNode::Abstract { .. } => Err(invalid_root(span)),
+    }
+}
+
+fn method_evidence_semantic_producer(
+    selection: &EvidenceSelection,
+    node: EvidenceNodeId,
+    method: MethodId,
+    span: Span,
+) -> Result<crate::core::dialect::MethodEvidenceProducer, EvidenceValidationFailure> {
+    match selection.node(node).ok_or_else(|| invalid_root(span))? {
+        EvidenceNode::Abstract {
+            requirement,
+            methods,
+        } if methods.contains(&method) => {
+            Ok(crate::core::dialect::MethodEvidenceProducer::Abstract { requirement })
+        }
+        EvidenceNode::Implementation { methods, .. } => methods
+            .iter()
+            .find(|candidate| candidate.method() == method)
+            .copied()
+            .map(
+                |implementation| crate::core::dialect::MethodEvidenceProducer::Adapter {
+                    implementation,
+                },
+            )
+            .ok_or_else(|| invalid_root(span)),
+        EvidenceNode::Abstract { .. } => Err(invalid_root(span)),
+    }
+}
+
+fn collect_method_evidence_domains(
+    methods: &[MethodEvidenceMethod],
+    scheme: &ConstrainedScheme,
+    owner: MethodEvidenceOwner,
+    domains: &mut Vec<MethodEvidenceDomain>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    for requirement in &scheme.requirements {
+        charge(constraint_work, methods.len(), span)?;
+        for method in methods
+            .iter()
+            .filter(|method| method.id.interface() == requirement.interface)
+        {
+            charge(constraint_work, 1, span)?;
+            domains.try_reserve(1).map_err(|_| resource(span))?;
+            domains.push(MethodEvidenceDomain {
+                owner,
+                requirement: requirement.id,
+                requirement_position: requirement.id.declaration(),
+                method: method.id,
+                method_position: method.id.declaration(),
+                interface_argument: clone_type_with_budget(requirement.argument(), type_work)
+                    .map_err(|()| type_resource(span))?,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn collect_method_evidence_occurrences(
+    program: &ResolvedModuleProgram,
+    methods: &[MethodEvidenceMethod],
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<Vec<MethodEvidenceOccurrence>, EvidenceValidationFailure> {
+    let mut occurrences = Vec::new();
+    for group in program.groups() {
+        for (definition, checked) in group.definitions().iter().zip(group.schemes()) {
+            let owner = Some(MethodEvidenceOwner::Global(checked.binder));
+            match definition.kind() {
+                ResolvedDefinitionKind::Equational(global) => {
+                    for equation in &global.equations {
+                        collect_method_evidence_expression_occurrences(
+                            program,
+                            owner,
+                            &equation.body,
+                            methods,
+                            &mut occurrences,
+                            constraint_work,
+                            type_work,
+                        )?;
+                    }
+                }
+                ResolvedDefinitionKind::InlineOperational(global) => {
+                    for declaration in &global.body.declarations {
+                        match declaration {
+                            ResolvedLocalDeclaration::Binding(binding) => {
+                                collect_method_evidence_expression_occurrences(
+                                    program,
+                                    owner,
+                                    &binding.initializer,
+                                    methods,
+                                    &mut occurrences,
+                                    constraint_work,
+                                    type_work,
+                                )?;
+                            }
+                            ResolvedLocalDeclaration::Recursive(group) => {
+                                for member in &group.members {
+                                    collect_method_evidence_expression_occurrences(
+                                        program,
+                                        owner,
+                                        &member.initializer,
+                                        methods,
+                                        &mut occurrences,
+                                        constraint_work,
+                                        type_work,
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    collect_method_evidence_expression_occurrences(
+                        program,
+                        owner,
+                        &global.body.result,
+                        methods,
+                        &mut occurrences,
+                        constraint_work,
+                        type_work,
+                    )?;
+                }
+            }
+        }
+        for implementation in group.implementations() {
+            for method in implementation.method_groups() {
+                let owner = Some(MethodEvidenceOwner::Implementation(
+                    method.identity.ok_or_else(|| invalid_root(method.span))?,
+                ));
+                for equation in &method.equations {
+                    collect_method_evidence_expression_occurrences(
+                        program,
+                        owner,
+                        &equation.body,
+                        methods,
+                        &mut occurrences,
+                        constraint_work,
+                        type_work,
+                    )?;
+                }
+            }
+        }
+    }
+    collect_method_evidence_expression_occurrences(
+        program,
+        None,
+        program.result(),
+        methods,
+        &mut occurrences,
+        constraint_work,
+        type_work,
+    )?;
+    Ok(occurrences)
+}
+
+fn collect_method_evidence_expression_occurrences(
+    program: &ResolvedModuleProgram,
+    scope: Option<MethodEvidenceOwner>,
+    root: &ResolvedExpr,
+    methods: &[MethodEvidenceMethod],
+    occurrences: &mut Vec<MethodEvidenceOccurrence>,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let mut pending = Vec::new();
+    charge(constraint_work, 1, root.span)?;
+    pending.try_reserve(1).map_err(|_| resource(root.span))?;
+    pending.push(root);
+    while let Some(expression) = pending.pop() {
+        charge(constraint_work, 1, expression.span)?;
+        match &expression.kind {
+            ResolvedExprKind::Occurrence(occurrence) => match occurrence.term {
+                ResolvedTermName::Global(binder) => {
+                    let scheme_count = program
+                        .groups()
+                        .iter()
+                        .map(|group| group.schemes().len())
+                        .try_fold(0usize, usize::checked_add)
+                        .ok_or_else(|| resource(expression.span))?;
+                    charge(constraint_work, scheme_count, expression.span)?;
+                    let scheme = program
+                        .groups()
+                        .iter()
+                        .flat_map(ResolvedModuleGroup::schemes)
+                        .find(|checked| checked.binder == binder)
+                        .map(|checked| &checked.scheme);
+                    let Some(scheme) = scheme else {
+                        if occurrence.evidence.is_empty() {
+                            continue;
+                        }
+                        return Err(invalid_root(expression.span));
+                    };
+                    for (slot, requirement) in occurrence.evidence.iter().zip(&scheme.requirements)
+                    {
+                        charge(constraint_work, methods.len(), expression.span)?;
+                        if !methods
+                            .iter()
+                            .any(|method| method.id.interface() == requirement.interface)
+                        {
+                            continue;
+                        }
+                        let (checked_argument, selection) =
+                            slot.filled().ok_or_else(|| invalid_root(expression.span))?;
+                        push_method_evidence_occurrence(
+                            occurrences,
+                            slot.storage_id(),
+                            scope,
+                            Some(MethodEvidenceOwner::Global(binder)),
+                            Some(requirement.id),
+                            None,
+                            checked_argument,
+                            &[],
+                            None,
+                            selection,
+                            constraint_work,
+                            type_work,
+                            expression.span,
+                        )?;
+                    }
+                }
+                ResolvedTermName::Method(method) => {
+                    charge(constraint_work, methods.len(), expression.span)?;
+                    if !methods.iter().any(|row| row.id == method) {
+                        continue;
+                    }
+                    let [slot] = occurrence.evidence.as_ref() else {
+                        return Err(invalid_root(expression.span));
+                    };
+                    let (
+                        checked_method,
+                        checked_argument,
+                        method_arguments,
+                        checked_value_type,
+                        selection,
+                    ) = slot
+                        .filled_method()
+                        .ok_or_else(|| invalid_root(expression.span))?;
+                    push_method_evidence_occurrence(
+                        occurrences,
+                        slot.storage_id(),
+                        scope,
+                        None,
+                        None,
+                        Some(checked_method),
+                        checked_argument,
+                        method_arguments,
+                        Some(checked_value_type),
+                        selection,
+                        constraint_work,
+                        type_work,
+                        expression.span,
+                    )?;
+                }
+            },
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Constructor(_) => {}
+            ResolvedExprKind::Tuple(elements) => {
+                charge(constraint_work, elements.len(), expression.span)?;
+                pending
+                    .try_reserve(elements.len())
+                    .map_err(|_| resource(expression.span))?;
+                pending.extend(elements.iter().rev());
+            }
+            ResolvedExprKind::Apply(application) => {
+                charge(constraint_work, 2, expression.span)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| resource(expression.span))?;
+                pending.push(&application.argument);
+                pending.push(&application.function);
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                charge(constraint_work, 2, expression.span)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| resource(expression.span))?;
+                pending.push(&binary.right);
+                pending.push(&binary.left);
+            }
+            ResolvedExprKind::Block(block) => {
+                charge(constraint_work, 1, expression.span)?;
+                pending
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                pending.push(&block.result);
+                for declaration in block.declarations.iter().rev() {
+                    match declaration {
+                        ResolvedLocalDeclaration::Binding(binding) => {
+                            charge(constraint_work, 1, expression.span)?;
+                            pending
+                                .try_reserve(1)
+                                .map_err(|_| resource(expression.span))?;
+                            pending.push(&binding.initializer);
+                        }
+                        ResolvedLocalDeclaration::Recursive(group) => {
+                            charge(constraint_work, group.members.len(), expression.span)?;
+                            pending
+                                .try_reserve(group.members.len())
+                                .map_err(|_| resource(expression.span))?;
+                            pending.extend(
+                                group.members.iter().rev().map(|member| &member.initializer),
+                            );
+                        }
+                    }
+                }
+            }
+            ResolvedExprKind::Function(function) => {
+                charge(constraint_work, 1, expression.span)?;
+                pending
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                pending.push(&function.body.result);
+                for declaration in function.body.declarations.iter().rev() {
+                    match declaration {
+                        ResolvedLocalDeclaration::Binding(binding) => {
+                            charge(constraint_work, 1, expression.span)?;
+                            pending
+                                .try_reserve(1)
+                                .map_err(|_| resource(expression.span))?;
+                            pending.push(&binding.initializer);
+                        }
+                        ResolvedLocalDeclaration::Recursive(group) => {
+                            charge(constraint_work, group.members.len(), expression.span)?;
+                            pending
+                                .try_reserve(group.members.len())
+                                .map_err(|_| resource(expression.span))?;
+                            pending.extend(
+                                group.members.iter().rev().map(|member| &member.initializer),
+                            );
+                        }
+                    }
+                }
+            }
+            ResolvedExprKind::Match(matched) => {
+                let child_count = matched
+                    .arms
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(|| resource(expression.span))?;
+                charge(constraint_work, child_count, expression.span)?;
+                pending
+                    .try_reserve(child_count)
+                    .map_err(|_| resource(expression.span))?;
+                pending.extend(matched.arms.iter().rev().map(|arm| &arm.body));
+                pending.push(&matched.scrutinee);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_method_evidence_occurrence(
+    occurrences: &mut Vec<MethodEvidenceOccurrence>,
+    slot: usize,
+    scope: Option<MethodEvidenceOwner>,
+    target_owner: Option<MethodEvidenceOwner>,
+    target_requirement: Option<RequirementId>,
+    checked_method: Option<MethodId>,
+    checked_argument: &Type,
+    method_arguments: &[Type],
+    checked_value_type: Option<&Type>,
+    selection: &EvidenceSelection,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    charge(constraint_work, 1, span)?;
+    occurrences.try_reserve(1).map_err(|_| resource(span))?;
+    let mut retained_arguments = Vec::new();
+    type_work
+        .charge(method_arguments.len())
+        .map_err(|()| type_resource(span))?;
+    retained_arguments
+        .try_reserve(method_arguments.len())
+        .map_err(|_| type_resource(span))?;
+    for argument in method_arguments {
+        retained_arguments
+            .push(clone_type_with_budget(argument, type_work).map_err(|()| type_resource(span))?);
+    }
+    occurrences.push(MethodEvidenceOccurrence {
+        slot,
+        scope,
+        target_owner,
+        target_requirement,
+        checked_method,
+        checked_argument: clone_type_with_budget(checked_argument, type_work)
+            .map_err(|()| type_resource(span))?,
+        method_arguments: retained_arguments.into_boxed_slice(),
+        checked_value_type: checked_value_type
+            .map(|ty| clone_type_with_budget(ty, type_work))
+            .transpose()
+            .map_err(|()| type_resource(span))?,
+        selection: selection.clone(),
+    });
+    Ok(())
 }
 
 fn authenticate_linked_constructor_payloads<'a>(
@@ -3232,7 +4446,7 @@ fn current_identity_substitution_matches(
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<bool, EvidenceValidationFailure> {
-    if fact.head_parameters.len() != scope_variables.len()
+    if fact.head_parameters.len() > scope_variables.len()
         || fact.head_parameters.len() != substitution.len()
     {
         return Ok(false);
@@ -3241,7 +4455,7 @@ fn current_identity_substitution_matches(
     for ((parameter, scope_variable), binding) in fact
         .head_parameters
         .iter()
-        .zip(scope_variables)
+        .zip(scope_variables.iter().take(fact.head_parameters.len()))
         .zip(substitution)
     {
         charge(budget, 1, span)?;
@@ -4660,7 +5874,7 @@ mod tests {
         const DEEP_TYPE_AND_KIND_WORK: usize = 9 * DEPTH;
         // The final unit publishes the private method-evidence authentication
         // capability only after every occurrence has validated.
-        const PREEXISTING_FIXED_WORK: usize = 63 + 1;
+        const PREEXISTING_FIXED_WORK: usize = 63 + 1 + 16;
         // Replacing the predecessor Source-Origin comparison with generated
         // causes plus its Source leaf adds exactly one cell per cause. Keep
         // that independent deep payload within the production constraint cap.
@@ -5084,6 +6298,59 @@ mod tests {
     fn authenticates_polymorphic_method_occurrence_arguments_before_core() {
         validate_interface_evidence(polymorphic_method_program())
             .expect("canonical method schemes and occurrence arguments should authenticate");
+    }
+
+    #[test]
+    fn linked_method_evidence_catalog_has_exact_independent_ledgers() {
+        let program = polymorphic_method_program();
+        let mut measured_constraint = InterfaceConstraintBudget::default();
+        let mut measured_type = TypeWorkBudget::default();
+        let catalog = build_core_method_evidence_catalog(
+            &program,
+            &mut measured_constraint,
+            &mut measured_type,
+        )
+        .expect("the measured linked method-evidence catalog should build");
+        assert!(!catalog.expectations().is_empty());
+        let constraint_work = measured_constraint.used();
+        let type_work = measured_type.used();
+        assert_eq!(constraint_work, 87);
+        assert_eq!(type_work, 74);
+        drop(catalog);
+
+        let mut constraint_short = InterfaceConstraintBudget::with_limit(constraint_work - 1);
+        let mut type_default = TypeWorkBudget::default();
+        assert_eq!(
+            build_core_method_evidence_catalog(&program, &mut constraint_short, &mut type_default,)
+                .expect_err("one missing catalog relation unit must reject before publication")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(constraint_short.used(), constraint_work - 1);
+
+        let mut constraint_default = InterfaceConstraintBudget::default();
+        let mut type_short = TypeWorkBudget::with_limit(type_work - 1);
+        assert_eq!(
+            build_core_method_evidence_catalog(&program, &mut constraint_default, &mut type_short,)
+                .expect_err("one missing retained Type or Kind cell must reject publication")
+                .reason(),
+            EvidenceValidationReason::TypeResourceExhausted,
+        );
+        assert_eq!(type_short.used(), 70);
+
+        for _ in 0..2 {
+            let mut constraint_exact = InterfaceConstraintBudget::with_limit(constraint_work);
+            let mut type_exact = TypeWorkBudget::with_limit(type_work);
+            let retry = build_core_method_evidence_catalog(
+                &program,
+                &mut constraint_exact,
+                &mut type_exact,
+            )
+            .expect("a fresh exact catalog stage should retry reproducibly");
+            assert_eq!(constraint_exact.used(), constraint_work);
+            assert_eq!(type_exact.used(), type_work);
+            drop(retry);
+        }
     }
 
     fn same_shaped_method_program() -> ResolvedModuleProgram {
@@ -6410,6 +7677,7 @@ mod tests {
     fn validated_interface_capability_has_exact_resolved_program_payload() {
         let ValidatedInterfaceProgram {
             source,
+            method_evidence: _,
             _method_evidence: _,
         } = validate_interface_evidence(local_program())
             .expect("the local fixture should validate");

@@ -9,6 +9,10 @@ use std::{
 };
 
 use crate::{
+    core::dialect::{
+        MethodEvidenceAnchorRole, MethodEvidenceOwner,
+        MethodEvidenceProducer as CoreMethodEvidenceProducer,
+    },
     core::{
         BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
         CorePatternKind, NodeId, Primitive, TypedBinder, UnvalidatedProgram,
@@ -49,7 +53,8 @@ use crate::{
         InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
         charge_type_cells, clone_kind_with_budget, clone_kinded_type_parameters_with_budget,
         discard_type_iteratively, replace_type_iteratively, same_kind_with_budget,
-        same_kinded_type_parameters_with_budget, same_type, substitute_type_variables_with,
+        same_kinded_type_parameters_with_budget, same_type, same_type_with_budget,
+        substitute_type_variables_with,
     },
 };
 
@@ -314,6 +319,7 @@ fn discard_type_fact(mut fact: TypeFact) {
 struct LoweredInterfaceMethod {
     interface: InterfaceId,
     parameter: TypeVariableId,
+    type_parameters: Box<[(TypeVariableId, Kind)]>,
     value_type: Type,
     declaration_span: Span,
 }
@@ -327,17 +333,20 @@ impl Drop for LoweredInterfaceMethod {
 #[derive(Debug)]
 struct LoweredRequirementMethod {
     method: MethodId,
+    interface_argument: Type,
     ty: Type,
 }
 
 impl Drop for LoweredRequirementMethod {
     fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.interface_argument, Type::Unit));
         discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
     }
 }
 
 #[derive(Debug)]
 struct LoweredRequirement {
+    owner: MethodEvidenceOwner,
     id: RequirementId,
     methods: Box<[LoweredRequirementMethod]>,
 }
@@ -371,18 +380,28 @@ impl Drop for LoweredScheme {
 #[derive(Debug)]
 struct LoweredImplementationMethod {
     binder: BinderId,
+    head_type_parameter_count: usize,
+    interface_argument: Type,
     scheme: LoweredScheme,
     span: Span,
+}
+
+impl Drop for LoweredImplementationMethod {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.interface_argument, Type::Unit));
+    }
 }
 
 #[derive(Clone, Debug)]
 struct ActiveEvidenceBinder {
     binder: BinderId,
+    interface_argument: Type,
     ty: Type,
 }
 
 impl Drop for ActiveEvidenceBinder {
     fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.interface_argument, Type::Unit));
         discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
     }
 }
@@ -392,17 +411,30 @@ struct LoweredEvidenceMethod {
     method: MethodId,
     node: NodeId,
     ty: Type,
+    producer: PolymorphicEvidenceProducer,
+    adapter_interface_argument: Option<Type>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PolymorphicEvidenceProducer {
+    Abstract { requirement: RequirementId },
+    Adapter { implementation: ImplMethodId },
 }
 
 impl Drop for LoweredEvidenceMethod {
     fn drop(&mut self) {
         discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
+        if let Some(argument) = self.adapter_interface_argument.take() {
+            discard_type_iteratively(argument);
+        }
     }
 }
 
 struct ScopedEvidenceBinder {
+    owner: MethodEvidenceOwner,
     requirement: RequirementId,
     method: MethodId,
+    interface_argument: IterativeTypeOwner,
     binder: TypedBinder,
 }
 
@@ -572,7 +604,8 @@ impl TypeProvenance {
                         | Type::Tuple(_)
                         | Type::Nominal(_)
                         | Type::Variable(_)
-                        | Type::Inference(_),
+                        | Type::Inference(_)
+                        | Type::Forall(_, _),
                         Some(TypeProvenanceNode::Fact(_)),
                     ) => {}
                     (
@@ -1055,10 +1088,6 @@ impl TypeReplacementBuffer {
         &self.0
     }
 
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
         self.0.try_reserve(additional)
     }
@@ -1079,6 +1108,31 @@ impl Drop for TypeReplacementBuffer {
             discard_type_iteratively(ty);
         }
     }
+}
+
+fn substitute_fresh_type_variables_in_order(
+    ty: &Type,
+    replacements: &[(TypeVariableId, TypeVariableId)],
+    type_work: &mut TypeWorkBudget,
+) -> Result<Type, ()> {
+    if replacements.is_empty() {
+        return clone_type_with_budget(ty, type_work);
+    }
+    let mut current: Option<IterativeTypeOwner> = None;
+    for (source, fresh) in replacements {
+        let mut replacement = TypeReplacementBuffer::new();
+        replacement.try_reserve(1).map_err(|_| ())?;
+        replacement.try_insert_unique(*source, Type::Variable(*fresh))?;
+        let input = current.as_deref().unwrap_or(ty);
+        let renamed = substitute_type_variables_with(input, replacement.as_map(), |cells| {
+            type_work.charge(cells)
+        })?;
+        match current.as_mut() {
+            Some(current) => current.replace(renamed),
+            None => current = Some(IterativeTypeOwner::new(renamed)),
+        }
+    }
+    Ok(current.expect("non-empty fresh substitutions").into_inner())
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -1502,7 +1556,10 @@ impl Elaborator {
         program: &ValidatedInterfaceProgram,
     ) -> Result<Self, ElaborationFailure> {
         let registry = Arc::clone(program.registry());
-        let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+        let mut builder = CoreBuilder::with_registry_and_method_evidence(
+            Arc::clone(&registry),
+            Arc::clone(program.method_evidence()),
+        )?;
         let mut binders = Vec::new();
         let mut expressions = vec![program.result()];
         for group in program.groups() {
@@ -1602,9 +1659,27 @@ impl Elaborator {
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 for method in &interface.methods {
                     methods.push(method.id);
+                    let mut type_parameters = Vec::new();
+                    type_parameters
+                        .try_reserve(method.authoritative_type_parameters().len())
+                        .map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    for parameter in method.authoritative_type_parameters() {
+                        self.type_work.charge(1).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        type_parameters.push((
+                            parameter.id,
+                            clone_kind_with_budget(&parameter.kind, &mut self.type_work).map_err(
+                                |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                            )?,
+                        ));
+                    }
                     let lowered = LoweredInterfaceMethod {
                         interface: interface.id,
                         parameter: interface.parameter.id,
+                        type_parameters: type_parameters.into_boxed_slice(),
                         value_type: self.clone_type(&method.value_type)?,
                         declaration_span: method.span,
                     };
@@ -1641,6 +1716,7 @@ impl Elaborator {
                 let scheme = self.lower_constrained_scheme(
                     &checked.scheme,
                     &lowering,
+                    MethodEvidenceOwner::Global(checked.binder),
                     false,
                     checked.origin.primary_span(),
                 )?;
@@ -1657,11 +1733,14 @@ impl Elaborator {
                     let scheme = self.lower_constrained_scheme(
                         &method.scheme,
                         &lowering,
+                        MethodEvidenceOwner::Implementation(method.id),
                         true,
                         method.span,
                     )?;
                     let lowered = LoweredImplementationMethod {
                         binder: method.binder,
+                        head_type_parameter_count: method.head_type_parameter_count(),
+                        interface_argument: self.clone_type(&implementation.argument)?,
                         scheme,
                         span: method.span,
                     };
@@ -1682,6 +1761,7 @@ impl Elaborator {
         &mut self,
         scheme: &ConstrainedScheme,
         lowering: &EvidenceLowering,
+        owner: MethodEvidenceOwner,
         freshen_core_parameters: bool,
         origin: Span,
     ) -> Result<LoweredScheme, TypeError> {
@@ -1695,16 +1775,12 @@ impl Elaborator {
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
         .into_boxed_slice();
         let value_type = IterativeTypeOwner::new(self.clone_type(&scheme.value_type)?);
-        let mut parameter_replacements = TypeReplacementBuffer::new();
         let (source_type_parameters, type_parameters) = if freshen_core_parameters {
-            parameter_replacements
-                .try_reserve(original_type_parameters.len())
-                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let mut type_parameters = Vec::new();
             type_parameters
                 .try_reserve(original_type_parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for (source, kind) in &original_type_parameters {
+            for (_, kind) in &original_type_parameters {
                 let core = self.fresh_type_variable(kind, origin)?;
                 self.type_work
                     .charge(1)
@@ -1715,9 +1791,6 @@ impl Elaborator {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?,
                 ));
-                parameter_replacements
-                    .try_insert_unique(*source, Type::Variable(core))
-                    .map_err(|()| invalid_state())?;
             }
             (
                 Some(original_type_parameters),
@@ -1757,18 +1830,35 @@ impl Elaborator {
                         self.clone_type(&requirement.argument)?,
                     )
                     .map_err(|()| invalid_state())?;
-                let ty = substitute_type_variables_with(
-                    &method_fact.value_type,
-                    replacement.as_map(),
-                    |cells| self.type_work.charge(cells),
-                )
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let ty = IterativeTypeOwner::new(
+                    substitute_type_variables_with(
+                        &method_fact.value_type,
+                        replacement.as_map(),
+                        |cells| self.type_work.charge(cells),
+                    )
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+                );
+                let ty = if method_fact.type_parameters.is_empty() {
+                    ty.into_inner()
+                } else {
+                    self.type_work.charge(1).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let parameters = clone_kinded_type_parameters_with_budget(
+                        &method_fact.type_parameters,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                    Type::Forall(parameters.into_boxed_slice(), Box::new(ty.into_inner()))
+                };
                 methods.push(LoweredRequirementMethod {
                     method: *method,
+                    interface_argument: self.clone_type(&requirement.argument)?,
                     ty,
                 });
             }
             requirements.push(LoweredRequirement {
+                owner,
                 id: requirement.id,
                 methods: methods.into_boxed_slice(),
             });
@@ -1787,11 +1877,32 @@ impl Elaborator {
                 ));
             }
         }
-        if !parameter_replacements.is_empty() {
-            let renamed = substitute_type_variables_with(
+        if let Some(source_parameters) = source_type_parameters.as_deref() {
+            if source_parameters.len() != type_parameters.len() {
+                return Err(invalid_state());
+            }
+            let mut ordered_replacements = Vec::new();
+            ordered_replacements
+                .try_reserve_exact(source_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.type_work
+                .charge(
+                    source_parameters
+                        .len()
+                        .checked_mul(2)
+                        .ok_or_else(invalid_state)?,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            ordered_replacements.extend(
+                source_parameters
+                    .iter()
+                    .zip(&type_parameters)
+                    .map(|((source, _), (fresh, _))| (*source, *fresh)),
+            );
+            let renamed = substitute_fresh_type_variables_in_order(
                 &core_body,
-                parameter_replacements.as_map(),
-                |cells| self.type_work.charge(cells),
+                &ordered_replacements,
+                &mut self.type_work,
             )
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             core_body.replace(renamed);
@@ -3148,7 +3259,11 @@ impl Elaborator {
         let [slot] = occurrence.evidence.as_ref() else {
             return Err(invalid_state());
         };
-        let selection = slot.selection().ok_or_else(invalid_state)?;
+        let (checked_method, _, method_arguments, checked_value_type, selection) =
+            slot.filled_method().ok_or_else(invalid_state)?;
+        if checked_method != method {
+            return Err(invalid_state());
+        }
         if selection.interface() != method.interface() {
             return Err(invalid_state());
         }
@@ -3158,27 +3273,14 @@ impl Elaborator {
                 .interface_methods
                 .get(&method)
                 .ok_or_else(invalid_state)?;
-            let parameter = method_fact.parameter;
             let declaration_span = method_fact.declaration_span;
-            let value_type = IterativeTypeOwner::new(self.clone_type(&method_fact.value_type)?);
-            let mut replacement = TypeReplacementBuffer::new();
-            replacement
-                .try_reserve(1)
-                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            replacement
-                .try_insert_unique(parameter, self.clone_type(selection.argument())?)
-                .map_err(|()| invalid_state())?;
-            let expected = IterativeTypeOwner::new(
-                substitute_type_variables_with(&value_type, replacement.as_map(), |cells| {
-                    self.type_work.charge(cells)
-                })
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
-            );
+            let expected = IterativeTypeOwner::new(self.clone_type(checked_value_type)?);
             let mut methods = self.lower_evidence_selection(
                 selection,
                 &mut lowering,
                 &occurrence.origin,
                 Some(method),
+                slot.storage_id(),
             )?;
             if methods.len() != 1 {
                 return Err(invalid_state());
@@ -3187,8 +3289,61 @@ impl Elaborator {
             if selected.method != method {
                 return Err(invalid_state());
             }
-            if !same_type(&selected.ty, &expected) {
-                return Err(invalid_state());
+            if method_arguments.is_empty() {
+                if !same_type_with_budget(&selected.ty, &expected, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                {
+                    return Err(invalid_state());
+                }
+            } else {
+                let Type::Forall(parameters, _) = &selected.ty else {
+                    return Err(invalid_state());
+                };
+                if parameters.len() != method_arguments.len() {
+                    return Err(invalid_state());
+                }
+                let mut arguments = OwnedTypeBuffer(Vec::new());
+                self.type_work
+                    .charge(method_arguments.len())
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                arguments
+                    .try_reserve(method_arguments.len())
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                for argument in method_arguments {
+                    arguments.push(self.clone_type(argument)?);
+                }
+                let authentication = match selection.node(selection.root()) {
+                    Some(EvidenceNode::Abstract { requirement, .. }) => lowering
+                        .active_binders
+                        .get(&(requirement, method))
+                        .map(|active| (Some(requirement), Some(active.binder))),
+                    Some(EvidenceNode::Implementation { .. }) => Some((None, None)),
+                    None => None,
+                };
+                let application_type = self.clone_type(&expected)?;
+                let node = self.builder.type_application(
+                    selected.node,
+                    arguments.into_vec(),
+                    application_type,
+                    occurrence.origin.clone(),
+                )?;
+                if let Some((requirement, binder)) = authentication {
+                    let interface_argument = self.clone_type(selection.argument())?;
+                    self.builder.authenticate_method_evidence(
+                        node,
+                        None,
+                        requirement,
+                        method,
+                        interface_argument,
+                        MethodEvidenceAnchorRole::Instantiation { binder },
+                        Some(slot.storage_id()),
+                    )?;
+                }
+                selected.node = node;
+                discard_type_iteratively(std::mem::replace(
+                    &mut selected.ty,
+                    self.clone_type(&expected)?,
+                ));
             }
             let ty = IterativeTypeOwner::new(std::mem::replace(&mut selected.ty, Type::Unit));
             let provenance = self.at_span_provenance(&ty, declaration_span)?;
@@ -3207,25 +3362,36 @@ impl Elaborator {
         binder: BinderId,
         cause: &Origin,
     ) -> Result<Vec<ScopedEvidenceBinder>, TypeError> {
-        let lowering = self.evidence_lowering.as_ref().ok_or_else(invalid_state)?;
-        let scheme = lowering
+        let mut specifications = EvidenceSpecificationBuffer(Vec::new());
+        let method_count = self
+            .evidence_lowering
+            .as_ref()
+            .ok_or_else(invalid_state)?
             .global_schemes
             .get(&binder)
-            .ok_or_else(invalid_state)?;
-        let mut specifications = EvidenceSpecificationBuffer(Vec::new());
-        let method_count = scheme
+            .ok_or_else(invalid_state)?
             .requirements
             .iter()
             .map(|requirement| requirement.methods.len())
             .sum();
-        specifications
-            .try_reserve(method_count)
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.reserve_evidence_specifications(&mut specifications, method_count)?;
+        let scheme = self
+            .evidence_lowering
+            .as_ref()
+            .ok_or_else(invalid_state)?
+            .global_schemes
+            .get(&binder)
+            .ok_or_else(invalid_state)?;
         for requirement in &scheme.requirements {
             for method in &requirement.methods {
                 specifications.push((
+                    requirement.owner,
                     requirement.id,
                     method.method,
+                    clone_type_with_budget(&method.interface_argument, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?,
                     clone_type_with_budget(&method.ty, &mut self.type_work).map_err(|()| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?,
@@ -3240,26 +3406,38 @@ impl Elaborator {
         method: ImplMethodId,
         cause: &Origin,
     ) -> Result<Vec<ScopedEvidenceBinder>, TypeError> {
-        let lowering = self.evidence_lowering.as_ref().ok_or_else(invalid_state)?;
-        let scheme = &lowering
+        let mut specifications = EvidenceSpecificationBuffer(Vec::new());
+        let method_count = self
+            .evidence_lowering
+            .as_ref()
+            .ok_or_else(invalid_state)?
             .implementation_methods
             .get(&method)
             .ok_or_else(invalid_state)?
-            .scheme;
-        let mut specifications = EvidenceSpecificationBuffer(Vec::new());
-        let method_count = scheme
+            .scheme
             .requirements
             .iter()
             .map(|requirement| requirement.methods.len())
             .sum();
-        specifications
-            .try_reserve(method_count)
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.reserve_evidence_specifications(&mut specifications, method_count)?;
+        let scheme = &self
+            .evidence_lowering
+            .as_ref()
+            .ok_or_else(invalid_state)?
+            .implementation_methods
+            .get(&method)
+            .ok_or_else(invalid_state)?
+            .scheme;
         for requirement in &scheme.requirements {
             for method in &requirement.methods {
                 specifications.push((
+                    requirement.owner,
                     requirement.id,
                     method.method,
+                    clone_type_with_budget(&method.interface_argument, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?,
                     clone_type_with_budget(&method.ty, &mut self.type_work).map_err(|()| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?,
@@ -3269,11 +3447,33 @@ impl Elaborator {
         self.enter_lowered_evidence_specifications(specifications, cause)
     }
 
+    fn reserve_evidence_specifications(
+        &mut self,
+        specifications: &mut EvidenceSpecificationBuffer,
+        count: usize,
+    ) -> Result<(), TypeError> {
+        self.type_work
+            .charge(count)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        specifications
+            .try_reserve(count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
     fn enter_lowered_evidence_specifications(
         &mut self,
         specifications: EvidenceSpecificationBuffer,
         cause: &Origin,
     ) -> Result<Vec<ScopedEvidenceBinder>, TypeError> {
+        let scope_carrier_work = specifications
+            .len()
+            .checked_mul(3)
+            .ok_or(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted,
+            ))?;
+        self.type_work
+            .charge(scope_carrier_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         {
             let lowering = self.evidence_lowering.as_mut().ok_or_else(invalid_state)?;
             if !lowering.active_binders.is_empty() {
@@ -3288,7 +3488,12 @@ impl Elaborator {
         binders
             .try_reserve(specifications.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for (requirement, method, ty) in specifications.into_sequence() {
+        let mut staged_active = HashMap::new();
+        staged_active
+            .try_reserve(specifications.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (owner, requirement, method, interface_argument, ty) in specifications.into_sequence() {
+            let interface_argument = IterativeTypeOwner::new(interface_argument);
             let ty = IterativeTypeOwner::new(ty);
             let binder_ty = self.clone_type(&ty)?;
             let binder = self.builder.binder(
@@ -3300,24 +3505,28 @@ impl Elaborator {
             )?;
             let active = ActiveEvidenceBinder {
                 binder: binder.id(),
+                interface_argument: self.clone_type(&interface_argument)?,
                 ty: ty.into_inner(),
             };
-            if self
-                .evidence_lowering
-                .as_mut()
-                .ok_or_else(invalid_state)?
-                .active_binders
+            if staged_active
                 .insert((requirement, method), active)
                 .is_some()
             {
                 return Err(invalid_state());
             }
             binders.push(ScopedEvidenceBinder {
+                owner,
                 requirement,
                 method,
+                interface_argument,
                 binder,
             });
         }
+        self.evidence_lowering
+            .as_mut()
+            .ok_or_else(invalid_state)?
+            .active_binders
+            .extend(staged_active);
         Ok(binders)
     }
 
@@ -3329,17 +3538,38 @@ impl Elaborator {
     ) -> Result<TypedNode, TypeError> {
         let mut function = TypedNodeOwner::new(function);
         for scoped in binders.into_iter().rev() {
+            let ScopedEvidenceBinder {
+                owner,
+                requirement,
+                method,
+                interface_argument,
+                binder,
+            } = scoped;
             let active = self
                 .evidence_lowering
                 .as_mut()
                 .ok_or_else(invalid_state)?
                 .active_binders
-                .remove(&(scoped.requirement, scoped.method))
+                .remove(&(requirement, method))
                 .ok_or_else(invalid_state)?;
-            if active.binder != scoped.binder.id() || !same_type(&active.ty, scoped.binder.ty()) {
+            if active.binder != binder.id()
+                || !same_type_with_budget(&active.ty, binder.ty(), &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            {
                 return Err(invalid_state());
             }
-            let domain = IterativeTypeOwner::new(self.clone_type(scoped.binder.ty())?);
+            if !same_type_with_budget(
+                &active.interface_argument,
+                &interface_argument,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            {
+                return Err(invalid_state());
+            }
+            let is_polymorphic = matches!(binder.ty(), Type::Forall(_, _));
+            let binder_id = binder.id();
+            let domain = IterativeTypeOwner::new(self.clone_type(binder.ty())?);
             let codomain = self.clone_type(&function.ty)?;
             let ty = IterativeTypeOwner::new(Type::Function(
                 Box::new(domain.into_inner()),
@@ -3347,7 +3577,7 @@ impl Elaborator {
             ));
             let core_ty = self.clone_type(&ty)?;
             let node = self.builder.function(
-                scoped.binder,
+                binder,
                 function.node,
                 core_ty,
                 Origin::Generated {
@@ -3355,6 +3585,19 @@ impl Elaborator {
                     reason: GeneratedReason::TypeChecking,
                 },
             )?;
+            if is_polymorphic {
+                self.builder.authenticate_method_evidence(
+                    node,
+                    Some(owner),
+                    Some(requirement),
+                    method,
+                    interface_argument.into_inner(),
+                    MethodEvidenceAnchorRole::Domain { binder: binder_id },
+                    None,
+                )?;
+            } else {
+                drop(interface_argument);
+            }
             function.set_node(node);
             function.replace_type(ty.into_inner());
             let provenance = self.at_span_provenance(&function.ty, cause.primary_span())?;
@@ -3437,33 +3680,162 @@ impl Elaborator {
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
+    fn instantiate_lowered_source_type(
+        &mut self,
+        parameters: &[(TypeVariableId, Kind)],
+        ty: &Type,
+        arguments: &[Type],
+    ) -> Result<Type, TypeError> {
+        if parameters.len() != arguments.len() {
+            return Err(invalid_state());
+        }
+        self.type_work
+            .charge(parameters.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut replacements = TypeReplacementBuffer::new();
+        replacements
+            .try_reserve(arguments.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for ((parameter, _), argument) in parameters.iter().zip(arguments) {
+            if replacements
+                .try_insert_unique(*parameter, self.clone_type(argument)?)
+                .is_err()
+            {
+                return Err(invalid_state());
+            }
+        }
+        substitute_type_variables_with(ty, replacements.as_map(), |cells| {
+            self.type_work.charge(cells)
+        })
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the authenticated adapter edge is checked field-for-field"
+    )]
     fn apply_lowered_argument(
         &mut self,
         function: TypedNode,
         argument: &LoweredEvidenceMethod,
+        target_owner: MethodEvidenceOwner,
+        target_requirement: RequirementId,
+        target: &LoweredRequirementMethod,
+        target_interface_argument: &Type,
+        canonical_method: &LoweredInterfaceMethod,
+        adapter_edge: Option<(ImplMethodId, usize)>,
         origin: &Origin,
+        occurrence: usize,
     ) -> Result<TypedNode, TypeError> {
         let function = TypedNodeOwner::new(function);
         let Type::Function(domain, codomain) = &function.ty else {
             return Err(invalid_state());
         };
-        match self.unify(domain, &argument.ty) {
-            Ok(()) => {}
-            Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+        let polymorphic = matches!(domain.as_ref(), Type::Forall(_, _));
+        if polymorphic {
+            let producer_matches = match argument.producer {
+                PolymorphicEvidenceProducer::Abstract { .. } => {
+                    let Some(interface_argument) = argument.adapter_interface_argument.as_ref()
+                    else {
+                        return Err(invalid_state());
+                    };
+                    match self.unify(target_interface_argument, interface_argument) {
+                        Ok(()) => {}
+                        Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                            return Err(invalid_state());
+                        }
+                        Err(UnificationFailure::Resource) => {
+                            return Err(TypeError::Internal(
+                                ElaborationFailure::TypeResourceExhausted,
+                            ));
+                        }
+                        Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+                    }
+                    let current_domain = IterativeTypeOwner::new(self.zonk(domain)?);
+                    same_type_with_budget(&current_domain, &argument.ty, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?
+                }
+                PolymorphicEvidenceProducer::Adapter { implementation } => {
+                    let Some(interface_argument) = argument.adapter_interface_argument.as_ref()
+                    else {
+                        return Err(invalid_state());
+                    };
+                    match self.unify(target_interface_argument, interface_argument) {
+                        Ok(()) => {}
+                        Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                            return Err(invalid_state());
+                        }
+                        Err(UnificationFailure::Resource) => {
+                            return Err(TypeError::Internal(
+                                ElaborationFailure::TypeResourceExhausted,
+                            ));
+                        }
+                        Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+                    }
+                    let current_domain = IterativeTypeOwner::new(self.zonk(domain)?);
+                    implementation.method() == target.method
+                        && self.authenticated_adapter_scheme_matches(
+                            &current_domain,
+                            &argument.ty,
+                            &canonical_method.type_parameters,
+                        )?
+                }
+            };
+            if target.method != argument.method
+                || canonical_method.interface != argument.method.interface()
+                || !producer_matches
+            {
                 return Err(invalid_state());
             }
-            Err(UnificationFailure::Resource) => {
-                return Err(TypeError::Internal(
-                    ElaborationFailure::TypeResourceExhausted,
-                ));
+        } else {
+            match self.unify(domain, &argument.ty) {
+                Ok(()) => {}
+                Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                    return Err(invalid_state());
+                }
+                Err(UnificationFailure::Resource) => {
+                    return Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ));
+                }
+                Err(UnificationFailure::Invariant) => return Err(invalid_state()),
             }
-            Err(UnificationFailure::Invariant) => return Err(invalid_state()),
         }
         let ty = IterativeTypeOwner::new(self.clone_type(codomain)?);
         let core_ty = self.clone_type(&ty)?;
         let node =
             self.builder
                 .application(function.node, argument.node, core_ty, origin.clone())?;
+        if polymorphic || adapter_edge.is_some() {
+            let interface_argument = self.zonk(target_interface_argument)?;
+            let producer = match argument.producer {
+                PolymorphicEvidenceProducer::Abstract { requirement, .. } => {
+                    CoreMethodEvidenceProducer::Abstract { requirement }
+                }
+                PolymorphicEvidenceProducer::Adapter { implementation } => {
+                    CoreMethodEvidenceProducer::Adapter { implementation }
+                }
+            };
+            let role = adapter_edge.map_or(
+                MethodEvidenceAnchorRole::Application { producer },
+                |(adapter, ordinal)| MethodEvidenceAnchorRole::AdapterEdge {
+                    adapter,
+                    ordinal,
+                    producer,
+                },
+            );
+            self.builder.authenticate_method_evidence(
+                node,
+                Some(target_owner),
+                Some(target_requirement),
+                target.method,
+                interface_argument,
+                role,
+                Some(occurrence),
+            )?;
+        }
         let provenance = self.at_span_provenance(&ty, origin.primary_span())?;
         Ok(TypedNode {
             node,
@@ -3472,21 +3844,152 @@ impl Elaborator {
         })
     }
 
+    fn authenticated_adapter_scheme_matches(
+        &mut self,
+        expected: &Type,
+        actual: &Type,
+        canonical_parameters: &[(TypeVariableId, Kind)],
+    ) -> Result<bool, TypeError> {
+        let (
+            Type::Forall(expected_parameters, expected_body),
+            Type::Forall(actual_parameters, actual_body),
+        ) = (expected, actual)
+        else {
+            return Ok(false);
+        };
+        if expected_parameters.len() != canonical_parameters.len()
+            || actual_parameters.len() != canonical_parameters.len()
+            || !same_kinded_type_parameters_with_budget(
+                expected_parameters,
+                canonical_parameters,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+        {
+            return Ok(false);
+        }
+        let mut actual_ids = HashSet::new();
+        let alpha_carrier_work =
+            actual_parameters
+                .len()
+                .checked_mul(2)
+                .ok_or(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted,
+                ))?;
+        self.type_work
+            .charge(alpha_carrier_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        actual_ids
+            .try_reserve(actual_parameters.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut replacements = TypeReplacementBuffer::new();
+        replacements
+            .try_reserve(actual_parameters.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (((expected, expected_kind), (actual, actual_kind)), (canonical, _)) in
+            expected_parameters
+                .iter()
+                .zip(actual_parameters)
+                .zip(canonical_parameters)
+        {
+            if expected != canonical
+                || !matches!(actual, TypeVariableId::Generated(_))
+                || !actual_ids.insert(*actual)
+                || !same_kind_with_budget(expected_kind, actual_kind, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                || self.type_contains_any_variable(expected_body, &actual_ids)?
+                || replacements
+                    .try_insert_unique(*expected, Type::Variable(*actual))
+                    .is_err()
+            {
+                return Ok(false);
+            }
+        }
+        let renamed = IterativeTypeOwner::new(
+            substitute_type_variables_with(expected_body, replacements.as_map(), |cells| {
+                self.type_work.charge(cells)
+            })
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+        same_type_with_budget(&renamed, actual_body, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn type_contains_any_variable(
+        &mut self,
+        ty: &Type,
+        variables: &HashSet<TypeVariableId>,
+    ) -> Result<bool, TypeError> {
+        let mut pending = Vec::new();
+        pending
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        pending.push(ty);
+        while let Some(ty) = pending.pop() {
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            match ty {
+                Type::Variable(variable) if variables.contains(variable) => return Ok(true),
+                Type::Application(function, argument) | Type::Function(function, argument) => {
+                    pending.try_reserve(2).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    pending.push(argument);
+                    pending.push(function);
+                }
+                Type::Tuple(elements) => {
+                    pending.try_reserve(elements.len()).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    pending.extend(elements);
+                }
+                Type::Forall(_, body) => {
+                    pending.try_reserve(1).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    pending.push(body);
+                }
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_) => {}
+            }
+        }
+        Ok(false)
+    }
+
     fn lower_evidence_selection(
         &mut self,
         selection: &EvidenceSelection,
         lowering: &mut EvidenceLowering,
         origin: &Origin,
         root_method: Option<MethodId>,
+        occurrence: usize,
     ) -> Result<Vec<LoweredEvidenceMethod>, TypeError> {
         enum Task {
             Visit(crate::interface::EvidenceNodeId),
             Build(crate::interface::EvidenceNodeId),
         }
 
-        let mut tasks = vec![Task::Visit(selection.root())];
+        let mut tasks = Vec::new();
+        self.type_work
+            .charge(selection.node_count())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks
+            .try_reserve(selection.node_count())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks.push(Task::Visit(selection.root()));
         let mut values: HashMap<crate::interface::EvidenceNodeId, Vec<LoweredEvidenceMethod>> =
             HashMap::new();
+        self.type_work
+            .charge(selection.node_count())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         values
             .try_reserve(selection.node_count())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -3497,8 +4000,17 @@ impl Elaborator {
                         continue;
                     }
                     let evidence = selection.node(node).ok_or_else(invalid_state)?;
+                    self.type_work.charge(1).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    tasks.try_reserve(1).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
                     tasks.push(Task::Build(node));
                     if let EvidenceNode::Implementation { prerequisites, .. } = evidence {
+                        self.type_work.charge(prerequisites.len()).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
                         tasks.try_reserve(prerequisites.len()).map_err(|_| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?;
@@ -3517,11 +4029,13 @@ impl Elaborator {
                             let requested =
                                 (node == selection.root()).then_some(root_method).flatten();
                             let mut results = Vec::new();
-                            results
-                                .try_reserve(requested.map_or(methods.len(), |_| 1))
-                                .map_err(|_| {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                })?;
+                            let result_count = requested.map_or(methods.len(), |_| 1);
+                            self.type_work.charge(result_count).map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                            results.try_reserve(result_count).map_err(|_| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
                             for method in methods {
                                 if requested.is_some_and(|requested| requested != *method) {
                                     continue;
@@ -3540,13 +4054,17 @@ impl Elaborator {
                                 results.push(LoweredEvidenceMethod {
                                     method: *method,
                                     node,
+                                    producer: PolymorphicEvidenceProducer::Abstract { requirement },
+                                    adapter_interface_argument: Some(
+                                        self.clone_type(&active.interface_argument)?,
+                                    ),
                                     ty: ty.into_inner(),
                                 });
                             }
                             results
                         }
                         EvidenceNode::Implementation {
-                            implementation: _,
+                            implementation,
                             substitution,
                             prerequisites,
                             methods,
@@ -3554,14 +4072,19 @@ impl Elaborator {
                             let requested =
                                 (node == selection.root()).then_some(root_method).flatten();
                             let mut results = Vec::new();
-                            results
-                                .try_reserve(requested.map_or(methods.len(), |_| 1))
-                                .map_err(|_| {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                })?;
+                            let result_count = requested.map_or(methods.len(), |_| 1);
+                            self.type_work.charge(result_count).map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                            results.try_reserve(result_count).map_err(|_| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
                             for method in methods {
                                 if requested.is_some_and(|requested| requested != method.method()) {
                                     continue;
+                                }
+                                if method.implementation() != implementation {
+                                    return Err(invalid_state());
                                 }
                                 let lowered = lowering
                                     .implementation_methods
@@ -3571,12 +4094,21 @@ impl Elaborator {
                                     .scheme
                                     .source_binder_parameters()
                                     .ok_or_else(invalid_state)?;
-                                if source_parameters.len() != substitution.len()
-                                    || source_parameters.iter().zip(substitution).any(
-                                        |(parameter, substitution)| {
+                                let interface_method = lowering
+                                    .interface_methods
+                                    .get(&method.method())
+                                    .ok_or_else(invalid_state)?;
+                                let method_parameter_count = interface_method.type_parameters.len();
+                                if lowered.head_type_parameter_count != substitution.len()
+                                    || source_parameters.len()
+                                        != substitution.len().saturating_add(method_parameter_count)
+                                    || source_parameters
+                                        .iter()
+                                        .take(substitution.len())
+                                        .zip(substitution)
+                                        .any(|(parameter, substitution)| {
                                             parameter.0 != substitution.parameter()
-                                        },
-                                    )
+                                        })
                                 {
                                     return Err(invalid_state());
                                 }
@@ -3596,15 +4128,71 @@ impl Elaborator {
                                     ty: core_scheme.into_inner(),
                                     provenance,
                                 });
-                                if !substitution.is_empty() {
-                                    let mut arguments = OwnedTypeBuffer(Vec::new());
-                                    arguments.try_reserve(substitution.len()).map_err(|_| {
+                                let mut adapter_parameters = Vec::new();
+                                self.type_work
+                                    .charge(method_parameter_count)
+                                    .map_err(|()| {
                                         TypeError::Internal(
                                             ElaborationFailure::TypeResourceExhausted,
                                         )
                                     })?;
+                                adapter_parameters
+                                    .try_reserve(method_parameter_count)
+                                    .map_err(|_| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?;
+                                for (_, kind) in &interface_method.type_parameters {
+                                    let identity = self.fresh_type_variable(kind, lowered.span)?;
+                                    adapter_parameters.push((
+                                        identity,
+                                        clone_kind_with_budget(kind, &mut self.type_work).map_err(
+                                            |()| {
+                                                TypeError::Internal(
+                                                    ElaborationFailure::TypeResourceExhausted,
+                                                )
+                                            },
+                                        )?,
+                                    ));
+                                }
+                                let mut current_arguments = OwnedTypeBuffer(Vec::new());
+                                if !source_parameters.is_empty() {
+                                    let mut arguments = OwnedTypeBuffer(Vec::new());
+                                    self.type_work.charge(source_parameters.len()).map_err(
+                                        |()| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        },
+                                    )?;
+                                    arguments.try_reserve(source_parameters.len()).map_err(
+                                        |_| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        },
+                                    )?;
                                     for substitution in substitution {
                                         arguments.push(self.clone_type(substitution.argument())?);
+                                    }
+                                    for (parameter, _) in &adapter_parameters {
+                                        arguments.push(Type::Variable(*parameter));
+                                    }
+                                    self.type_work.charge(arguments.len()).map_err(|()| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?;
+                                    current_arguments.try_reserve(arguments.len()).map_err(
+                                        |_| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        },
+                                    )?;
+                                    for argument in arguments.iter() {
+                                        current_arguments.push(self.clone_type(argument)?);
                                     }
                                     let instantiated = IterativeTypeOwner::new(
                                         self.instantiate_lowered_core_body(
@@ -3622,22 +4210,119 @@ impl Elaborator {
                                     current.set_node(node);
                                     current.replace_type(instantiated.into_inner());
                                 }
-                                for prerequisite in prerequisites {
+                                if prerequisites.len() != lowered.scheme.requirements.len() {
+                                    return Err(invalid_state());
+                                }
+                                let mut adapter_edge_ordinal = 0usize;
+                                for (prerequisite, target_requirement) in
+                                    prerequisites.iter().zip(&lowered.scheme.requirements)
+                                {
                                     let prerequisite_methods =
                                         values.get(prerequisite).ok_or_else(invalid_state)?;
-                                    for argument in prerequisite_methods {
-                                        current =
-                                            TypedNodeOwner::new(self.apply_lowered_argument(
+                                    if prerequisite_methods.len()
+                                        != target_requirement.methods.len()
+                                    {
+                                        return Err(invalid_state());
+                                    }
+                                    for (argument, target_method) in
+                                        prerequisite_methods.iter().zip(&target_requirement.methods)
+                                    {
+                                        let target_interface_argument = IterativeTypeOwner::new(
+                                            self.instantiate_lowered_source_type(
+                                                source_parameters,
+                                                &target_method.interface_argument,
+                                                &current_arguments,
+                                            )?,
+                                        );
+                                        let canonical_method = lowering
+                                            .interface_methods
+                                            .get(&target_method.method)
+                                            .ok_or_else(invalid_state)?;
+                                        current = TypedNodeOwner::new(
+                                            self.apply_lowered_argument(
                                                 current.into_inner(),
                                                 argument,
+                                                target_requirement.owner,
+                                                target_requirement.id,
+                                                target_method,
+                                                &target_interface_argument,
+                                                canonical_method,
+                                                (!interface_method.type_parameters.is_empty())
+                                                    .then_some((*method, adapter_edge_ordinal)),
                                                 origin,
-                                            )?);
+                                                occurrence,
+                                            )?,
+                                        );
+                                        adapter_edge_ordinal = adapter_edge_ordinal
+                                            .checked_add(1)
+                                            .ok_or_else(invalid_state)?;
                                     }
+                                }
+                                let adapter_interface_argument =
+                                    (!interface_method.type_parameters.is_empty())
+                                        .then(|| {
+                                            self.instantiate_lowered_source_type(
+                                                source_parameters,
+                                                &lowered.interface_argument,
+                                                &current_arguments,
+                                            )
+                                        })
+                                        .transpose()?;
+                                if !adapter_parameters.is_empty() {
+                                    self.type_work.charge(1).map_err(|()| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?;
+                                    let scheme_parameters =
+                                        clone_kinded_type_parameters_with_budget(
+                                            &adapter_parameters,
+                                            &mut self.type_work,
+                                        )
+                                        .map_err(|()| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        })?;
+                                    let scheme_body = self.clone_type(&current.ty)?;
+                                    let scheme = IterativeTypeOwner::new(Type::Forall(
+                                        scheme_parameters.into_boxed_slice(),
+                                        Box::new(scheme_body),
+                                    ));
+                                    let abstraction_type = self.clone_type(&scheme)?;
+                                    let abstraction = self.builder.type_abstraction(
+                                        adapter_parameters,
+                                        current.node,
+                                        abstraction_type,
+                                        origin.clone(),
+                                    )?;
+                                    let interface_argument = self.clone_type(
+                                        adapter_interface_argument
+                                            .as_ref()
+                                            .ok_or_else(invalid_state)?,
+                                    )?;
+                                    self.builder.authenticate_method_evidence(
+                                        abstraction,
+                                        None,
+                                        None,
+                                        method.method(),
+                                        interface_argument,
+                                        MethodEvidenceAnchorRole::Adapter {
+                                            implementation: *method,
+                                        },
+                                        Some(occurrence),
+                                    )?;
+                                    current.set_node(abstraction);
+                                    current.replace_type(scheme.into_inner());
                                 }
                                 let current = current.into_inner();
                                 results.push(LoweredEvidenceMethod {
                                     method: method.method(),
                                     node: current.node,
+                                    producer: PolymorphicEvidenceProducer::Adapter {
+                                        implementation: *method,
+                                    },
+                                    adapter_interface_argument,
                                     ty: current.ty,
                                 });
                             }
@@ -4324,7 +5009,7 @@ impl Elaborator {
             return Err(invalid_state());
         }
         let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
-        let mut core_type_replacements = TypeReplacementBuffer::new();
+        let mut core_type_replacements = Vec::new();
         {
             let lowered = self
                 .evidence_lowering
@@ -4339,21 +5024,29 @@ impl Elaborator {
                 return Err(invalid_state());
             }
             self.type_work
-                .charge(lowered.scheme.binder_parameters().len())
+                .charge(
+                    lowered
+                        .scheme
+                        .binder_parameters()
+                        .len()
+                        .checked_mul(2)
+                        .ok_or_else(invalid_state)?,
+                )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             core_type_replacements
-                .try_reserve(lowered.scheme.binder_parameters().len())
+                .try_reserve_exact(lowered.scheme.binder_parameters().len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             for ((source, _), (core, _)) in source_type_parameters
                 .iter()
                 .zip(lowered.scheme.binder_parameters())
             {
                 if core_type_replacements
-                    .try_insert_unique(*source, Type::Variable(*core))
-                    .is_err()
+                    .iter()
+                    .any(|(retained, _)| retained == source)
                 {
                     return Err(invalid_state());
                 }
+                core_type_replacements.push((*source, *core));
             }
         }
         let evidence = self.enter_lowered_implementation_evidence_scope(fact.id, &fact.origin)?;
@@ -4419,24 +5112,21 @@ impl Elaborator {
                         }),
                     },
                 )?;
-                let renamed = substitute_type_variables_with(
+                let renamed = substitute_fresh_type_variables_in_order(
                     &zonked,
-                    core_type_replacements.as_map(),
-                    |cells| {
-                        type_work
-                            .charge(cells)
-                            .map_err(|()| BuildError::TypeWorkExceeded)
-                    },
-                );
+                    &core_type_replacements,
+                    type_work,
+                )
+                .map_err(|()| BuildError::TypeWorkExceeded);
                 discard_type_iteratively(zonked);
                 renamed
             })?;
             let zonked_function_type = IterativeTypeOwner::new(self.zonk(&function.ty)?);
             let renamed_function_type = IterativeTypeOwner::new(
-                substitute_type_variables_with(
+                substitute_fresh_type_variables_in_order(
                     &zonked_function_type,
-                    core_type_replacements.as_map(),
-                    |cells| self.type_work.charge(cells),
+                    &core_type_replacements,
+                    &mut self.type_work,
                 )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
             );
@@ -4453,6 +5143,28 @@ impl Elaborator {
         if lowered.scheme.binder_parameters().is_empty() {
             if !same_type(&function.ty, &lowered.scheme.core_scheme) {
                 return Err(invalid_state());
+            }
+            if self
+                .builder
+                .requires_method_evidence_implementation_owner(fact.id)?
+            {
+                let interface_argument =
+                    clone_type_with_budget(&lowered.interface_argument, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                self.builder.authenticate_method_evidence(
+                    function.node,
+                    Some(MethodEvidenceOwner::Implementation(fact.id)),
+                    None,
+                    fact.id.method(),
+                    interface_argument,
+                    MethodEvidenceAnchorRole::ImplementationOwner {
+                        implementation: fact.id,
+                        binder: fact.binder,
+                    },
+                    None,
+                )?;
             }
         } else {
             let Type::Forall(_, expected_body) = &lowered.scheme.core_scheme else {
@@ -4475,6 +5187,28 @@ impl Elaborator {
                 core_scheme,
                 fact.origin.clone(),
             )?;
+            if self
+                .builder
+                .requires_method_evidence_implementation_owner(fact.id)?
+            {
+                let interface_argument =
+                    clone_type_with_budget(&lowered.interface_argument, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                self.builder.authenticate_method_evidence(
+                    node,
+                    Some(MethodEvidenceOwner::Implementation(fact.id)),
+                    None,
+                    fact.id.method(),
+                    interface_argument,
+                    MethodEvidenceAnchorRole::ImplementationOwner {
+                        implementation: fact.id,
+                        binder: fact.binder,
+                    },
+                    None,
+                )?;
+            }
             function.set_node(node);
             let rewritten =
                 clone_type_with_budget(&lowered.scheme.core_scheme, &mut self.type_work)
@@ -5028,6 +5762,22 @@ impl Elaborator {
                                         ty: core_scheme.into_inner(),
                                         provenance: provenance.clone(),
                                     });
+                                    let mut current_arguments = OwnedTypeBuffer(Vec::new());
+                                    self.type_work.charge(arguments.len()).map_err(|()| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?;
+                                    current_arguments.try_reserve(arguments.len()).map_err(
+                                        |_| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        },
+                                    )?;
+                                    for argument in arguments.iter() {
+                                        current_arguments.push(self.clone_type(argument)?);
+                                    }
                                     if !arguments.is_empty() {
                                         let core_ty = IterativeTypeOwner::new(
                                             self.instantiate_lowered_core_body(scheme, &arguments)?,
@@ -5042,7 +5792,18 @@ impl Elaborator {
                                         current.set_node(node);
                                         current.replace_type(core_ty.into_inner());
                                     }
-                                    for slot in &occurrence.evidence {
+                                    let requirement_count = lowering
+                                        .global_schemes
+                                        .get(&binder)
+                                        .ok_or_else(invalid_state)?
+                                        .requirements
+                                        .len();
+                                    if occurrence.evidence.len() != requirement_count {
+                                        return Err(invalid_state());
+                                    }
+                                    for (requirement_index, slot) in
+                                        occurrence.evidence.iter().enumerate()
+                                    {
                                         let selection =
                                             slot.selection().ok_or_else(invalid_state)?;
                                         let methods = self.lower_evidence_selection(
@@ -5050,13 +5811,48 @@ impl Elaborator {
                                             &mut lowering,
                                             &occurrence.origin,
                                             None,
+                                            slot.storage_id(),
                                         )?;
-                                        for method in &methods {
+                                        let target_requirement = lowering
+                                            .global_schemes
+                                            .get(&binder)
+                                            .and_then(|scheme| {
+                                                scheme.requirements.get(requirement_index)
+                                            })
+                                            .ok_or_else(invalid_state)?;
+                                        if methods.len() != target_requirement.methods.len() {
+                                            return Err(invalid_state());
+                                        }
+                                        for (method, target_method) in
+                                            methods.iter().zip(&target_requirement.methods)
+                                        {
+                                            let target_interface_argument = IterativeTypeOwner::new(
+                                                self.instantiate_lowered_source_type(
+                                                    lowering
+                                                        .global_schemes
+                                                        .get(&binder)
+                                                        .ok_or_else(invalid_state)?
+                                                        .binder_parameters(),
+                                                    &target_method.interface_argument,
+                                                    &current_arguments,
+                                                )?,
+                                            );
+                                            let canonical_method = lowering
+                                                .interface_methods
+                                                .get(&target_method.method)
+                                                .ok_or_else(invalid_state)?;
                                             current =
                                                 TypedNodeOwner::new(self.apply_lowered_argument(
                                                     current.into_inner(),
                                                     method,
+                                                    target_requirement.owner,
+                                                    target_requirement.id,
+                                                    target_method,
+                                                    &target_interface_argument,
+                                                    canonical_method,
+                                                    None,
                                                     &occurrence.origin,
+                                                    slot.storage_id(),
                                                 )?);
                                         }
                                     }
@@ -9368,10 +10164,10 @@ impl Drop for ProvenancedTypeBuffer {
     }
 }
 
-struct EvidenceSpecificationBuffer(Vec<(RequirementId, MethodId, Type)>);
+struct EvidenceSpecificationBuffer(Vec<(MethodEvidenceOwner, RequirementId, MethodId, Type, Type)>);
 
 impl Deref for EvidenceSpecificationBuffer {
-    type Target = Vec<(RequirementId, MethodId, Type)>;
+    type Target = Vec<(MethodEvidenceOwner, RequirementId, MethodId, Type, Type)>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -9379,7 +10175,7 @@ impl Deref for EvidenceSpecificationBuffer {
 }
 
 impl EvidenceSpecificationBuffer {
-    fn push(&mut self, specification: (RequirementId, MethodId, Type)) {
+    fn push(&mut self, specification: (MethodEvidenceOwner, RequirementId, MethodId, Type, Type)) {
         self.0.push(specification);
     }
 
@@ -9394,16 +10190,19 @@ impl EvidenceSpecificationBuffer {
 
 impl Drop for EvidenceSpecificationBuffer {
     fn drop(&mut self) {
-        for (_, _, ty) in self.0.drain(..) {
+        for (_, _, _, interface_argument, ty) in self.0.drain(..) {
+            discard_type_iteratively(interface_argument);
             discard_type_iteratively(ty);
         }
     }
 }
 
-struct EvidenceSpecificationSequence(std::vec::IntoIter<(RequirementId, MethodId, Type)>);
+struct EvidenceSpecificationSequence(
+    std::vec::IntoIter<(MethodEvidenceOwner, RequirementId, MethodId, Type, Type)>,
+);
 
 impl Iterator for EvidenceSpecificationSequence {
-    type Item = (RequirementId, MethodId, Type);
+    type Item = (MethodEvidenceOwner, RequirementId, MethodId, Type, Type);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
@@ -9412,7 +10211,8 @@ impl Iterator for EvidenceSpecificationSequence {
 
 impl Drop for EvidenceSpecificationSequence {
     fn drop(&mut self) {
-        for (_, _, ty) in self.0.by_ref() {
+        for (_, _, _, interface_argument, ty) in self.0.by_ref() {
+            discard_type_iteratively(interface_argument);
             discard_type_iteratively(ty);
         }
     }
@@ -11219,7 +12019,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        interface::EvidenceSelectionBuilder,
+        interface::{EvidenceSelectionBuilder, RequirementOwner},
         module::{ModuleId, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{
@@ -11232,6 +12032,101 @@ mod tests {
     };
 
     static MODULE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn scoped_evidence_binders_dispose_deep_interface_arguments_on_success_and_failure() {
+        const DEPTH: usize = 32_768;
+        for accepted in [false, true] {
+            std::thread::Builder::new()
+                .name(format!("scoped-evidence-disposal-{accepted}"))
+                .stack_size(256 * 1024)
+                .spawn(move || {
+                    let source = SourceFile::new("scoped-evidence.ash", "()")
+                        .expect("the fixture should fit");
+                    let span = source
+                        .span(ByteRange::new(0, 2).expect("the range is ordered"))
+                        .expect("the span belongs to the fixture");
+                    let origin = Origin::Source(span);
+                    let module = ModuleId::new(0);
+                    let owner = BinderId::resolved(module, 0);
+                    let interface = InterfaceId::new(module, 0);
+                    let method = MethodId::new(interface, 0);
+                    let requirement = RequirementId::new(RequirementOwner::Global(owner), 0);
+                    let mut builder = CoreBuilder::new();
+                    let binder = builder
+                        .binder(Type::Unit, origin)
+                        .expect("the evidence binder should fit");
+                    let mut interface_argument = Type::Unit;
+                    for _ in 0..DEPTH {
+                        interface_argument =
+                            Type::Function(Box::new(Type::Unit), Box::new(interface_argument));
+                    }
+                    let scoped = vec![ScopedEvidenceBinder {
+                        owner: MethodEvidenceOwner::Global(owner),
+                        requirement,
+                        method,
+                        interface_argument: IterativeTypeOwner::new(interface_argument),
+                        binder,
+                    }];
+                    let result = if accepted { Ok(scoped) } else { Err(scoped) };
+                    drop(result);
+                })
+                .expect("the scoped-evidence worker should start")
+                .join()
+                .expect("both accepted and rejected scope owners must tear down iteratively");
+        }
+    }
+
+    #[test]
+    fn evidence_scope_entry_has_an_exact_carrier_boundary_and_fresh_retry() {
+        const EXACT_WORK: usize = 4 + 2;
+
+        fn enter_with_limit(limit: usize) -> Result<usize, TypeError> {
+            let resolved = resolved_module_fixture("evidence-scope-budget.ash", "", "Unit", "()");
+            let span = fixture_result(&resolved).span;
+            let module = ModuleId::new(902);
+            let owner = BinderId::resolved(module, 0);
+            let interface = InterfaceId::new(module, 0);
+            let method = MethodId::new(interface, 0);
+            let requirement = RequirementId::new(RequirementOwner::Global(owner), 0);
+            let mut elaborator =
+                Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
+            elaborator.evidence_lowering = Some(EvidenceLowering {
+                interfaces: HashMap::new(),
+                interface_methods: HashMap::new(),
+                global_schemes: HashMap::new(),
+                implementation_methods: HashMap::new(),
+                active_binders: HashMap::new(),
+            });
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let mut specifications = EvidenceSpecificationBuffer(Vec::new());
+            elaborator.reserve_evidence_specifications(&mut specifications, 1)?;
+            specifications.push((
+                MethodEvidenceOwner::Global(owner),
+                requirement,
+                method,
+                Type::Unit,
+                Type::Unit,
+            ));
+            let binders = elaborator
+                .enter_lowered_evidence_specifications(specifications, &Origin::Source(span))?;
+            elaborator.clear_lowered_evidence_scope(binders)?;
+            Ok(elaborator.type_work.used())
+        }
+
+        assert!(matches!(
+            enter_with_limit(EXACT_WORK - 1),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+        ));
+        for _ in 0..2 {
+            assert_eq!(
+                enter_with_limit(EXACT_WORK).expect("a fresh exact scope stage should fit"),
+                EXACT_WORK,
+            );
+        }
+    }
 
     #[test]
     fn lowered_scheme_retains_source_and_core_binder_kinds() {
@@ -15812,17 +16707,28 @@ mod tests {
                     .expect("the evidence root should exist");
                 let mut lowering = EvidenceLowering {
                     interfaces: HashMap::new(),
-                    interface_methods: HashMap::new(),
+                    interface_methods: HashMap::from([(
+                        method,
+                        LoweredInterfaceMethod {
+                            interface,
+                            parameter: TypeVariableId::resolved(module, 0),
+                            type_parameters: Box::new([]),
+                            value_type: Type::Unit,
+                            declaration_span: span,
+                        },
+                    )]),
                     global_schemes: HashMap::new(),
                     implementation_methods: HashMap::from([(
                         implementation_method,
                         LoweredImplementationMethod {
                             binder: BinderId::resolved(module, 0),
+                            head_type_parameter_count: 0,
+                            interface_argument: Type::Unit,
                             scheme: LoweredScheme {
                                 source_type_parameters: Some(Box::new([])),
                                 type_parameters: Box::new([]),
                                 requirements: Box::new([]),
-                                value_type: Type::Unit,
+                                value_type: deep_application_type(DEPTH),
                                 core_scheme: deep_application_type(DEPTH),
                             },
                             span,
@@ -15834,17 +16740,22 @@ mod tests {
                     Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
                 elaborator.type_work = TypeWorkBudget::with_limit(ONE_DEEP_TYPE * 2);
 
-                assert!(matches!(
-                    elaborator.lower_evidence_selection(
-                        &selection,
-                        &mut lowering,
-                        &Origin::Source(span),
-                        None,
+                let result = elaborator.lower_evidence_selection(
+                    &selection,
+                    &mut lowering,
+                    &Origin::Source(span),
+                    None,
+                    0,
+                );
+                assert!(
+                    matches!(
+                        result,
+                        Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted
+                        )),
                     ),
-                    Err(TypeError::Internal(
-                        ElaborationFailure::TypeResourceExhausted
-                    )),
-                ));
+                    "{result:?}"
+                );
             })
             .expect("the lowered-evidence thread should start")
             .join()

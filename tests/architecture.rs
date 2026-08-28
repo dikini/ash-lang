@@ -397,7 +397,29 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/data.rs::CorePatternKind.Tuple.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/data.rs::MatchNode.arms", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::CoreBuilder.nodes", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::CoreBuilder.method_evidence", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
+    kind_site!("src/core/dialect.rs::CoreBuilder.method_evidence_anchors", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::CoreBuilder.registry", FieldRegistryCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeRegistryTree, Shared),
+    kind_site!("src/core/dialect.rs::MethodEvidenceAdapter.head_arguments", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceAdapter.prerequisites", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.method_parameters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.value_type", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceAnchor.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.adapters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.domains", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.implementation_owners", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.methods", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.occurrences", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Mixed),
+    kind_site!("src/core/dialect.rs::MethodEvidenceDomain.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceImplementationOwner.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceImplementationOwner.source_parameters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceMethod.parameters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceMethod.value_type", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceOccurrence.checked_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceOccurrence.checked_value_type", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceOccurrence.method_arguments", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceOccurrence.selection", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
     kind_site!("src/core/dialect.rs::PatternAdmissionTask.FinishConstructor.ty", FieldTransientValueTypeValueCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/dialect.rs::PatternAdmissionTask.FinishTuple.ty", FieldTransientValueTypeValueCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/dialect.rs::PatternAdmissionTask.Visit.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
@@ -417,6 +439,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/dialect.rs::PureExprKind.Computation.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::PureExprKind.Value.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::PureProgram.nodes", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::PureProgram.method_evidence", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
+    kind_site!("src/core/dialect.rs::PureProgram.method_evidence_anchors", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::PureProgram.registry", FieldRegistryCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeRegistryTree, Shared),
     kind_site!("src/core/dialect.rs::PureValue.Function.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::StoredNode.kind", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -427,7 +451,10 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/dialect.rs::TypeToken.Forall.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/dialect.rs::TypedExpr.kind", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::TypedExpr.ty", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::UnvalidatedParts.$alias", FieldMixedCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTreeAndRegistryTree),
     kind_site!("src/core/dialect.rs::UnvalidatedProgram.nodes", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::UnvalidatedProgram.method_evidence", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
+    kind_site!("src/core/dialect.rs::UnvalidatedProgram.method_evidence_anchors", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::UnvalidatedProgram.registry", FieldRegistryCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeRegistryTree, Shared),
     kind_site!("src/core/dialect.rs::ValidatedProgram.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
     kind_site!("src/core/function.rs::FunctionNode.parameter", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -519,6 +546,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::$fn_zonk_type_with_status_and_inference::ChargeTask.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_zonk_type_with_status_and_inference::ChargeTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::ActiveEvidenceBinder.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::ActiveEvidenceBinder.interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CheckedBodyBuffers.definitions", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Mixed),
     kind_site!("src/elaborate.rs::CheckedBodyBuffers.implementations", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Mixed),
     kind_site!("src/elaborate.rs::CheckedImplementationFactBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -605,10 +633,14 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::InferenceVariableRegistry.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::KindedTypeParameters.$alias", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredEvidenceMethod.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::LoweredEvidenceMethod.adapter_interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::LoweredImplementationMethod.interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredImplementationMethod.scheme", FieldTransientSchemeSchemeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredInterfaceMethod.value_type", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::LoweredInterfaceMethod.type_parameters", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredRequirement.methods", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredRequirementMethod.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::LoweredRequirementMethod.interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredScheme.core_scheme", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredScheme.requirements", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredScheme.source_type_parameters", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
@@ -628,6 +660,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::PreparedGlobals.quantifiers", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::ProvenancedType.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::ScopedEvidenceBinder.binder", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::ScopedEvidenceBinder.interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::TypeContext.binders", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::TypeError.Mismatch.0", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
     kind_site!("src/elaborate.rs::TypeFact.quantified", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
@@ -732,6 +765,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/evidence_validation.rs::PendingGoals.0", FieldTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTransientWork),
     kind_site!("src/evidence_validation.rs::TypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTransientWork),
     kind_site!("src/evidence_validation.rs::ValidatedInterfaceProgram.source", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeEvidenceTree, Mixed),
+    kind_site!("src/evidence_validation.rs::ValidatedInterfaceProgram.method_evidence", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeEvidenceTree, Shared),
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_type::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_equal_types::Task.Compare.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
@@ -1650,7 +1684,7 @@ const DRIVER_SOURCE: &str = include_str!("../src/driver.rs");
 const PARSER_EXPORTS: &str = include_str!("../src/parser/mod.rs");
 const PARSER_GRAMMAR: &str = include_str!("../src/parser/grammar.rs");
 const PARSER_PROJECTION: &str = include_str!("../src/parser/project.rs");
-const CORE_AND_EVALUATOR_SOURCES: &[(&str, &str)] = &[
+const CORE_SOURCES: &[(&str, &str)] = &[
     (
         "src/core/binding.rs",
         include_str!("../src/core/binding.rs"),
@@ -1693,6 +1727,8 @@ const CORE_AND_EVALUATOR_SOURCES: &[(&str, &str)] = &[
         "src/core/variable.rs",
         include_str!("../src/core/variable.rs"),
     ),
+];
+const EVALUATOR_SOURCES: &[(&str, &str)] = &[
     (
         "src/eval/machine.rs",
         include_str!("../src/eval/machine.rs"),
@@ -4066,14 +4102,128 @@ fn abstract_nominal_kind_publication_transfers_the_reserved_allocation() {
 
 #[test]
 fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories() {
-    for (path, source) in CORE_AND_EVALUATOR_SOURCES {
-        for identifier in rust_code_identifiers(source) {
+    for (path, source) in EVALUATOR_SOURCES {
+        for identifier in production_rust_code_tokens(source)
+            .into_iter()
+            .filter(|token| is_rust_identifier(token))
+        {
             assert!(
                 !is_forbidden_interface_identifier(identifier),
                 "{path} must not gain the {identifier} interface runtime mechanism"
             );
         }
     }
+    for (path, source) in CORE_SOURCES {
+        for identifier in production_rust_code_tokens(source)
+            .into_iter()
+            .filter(|token| is_rust_identifier(token))
+        {
+            assert!(
+                !is_forbidden_interface_identifier(identifier)
+                    || is_allowed_private_core_method_evidence_identifier(path, identifier),
+                "{path} must not gain the {identifier} interface runtime mechanism"
+            );
+        }
+    }
+}
+
+fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &str) -> bool {
+    let shared = matches!(
+        identifier,
+        "EvidenceNode"
+            | "EvidenceNodeId"
+            | "EvidenceSelection"
+            | "Implementation"
+            | "ImplementationOwner"
+            | "Impl"
+            | "ImplMethodId"
+            | "RequirementId"
+            | "actual_interface"
+            | "expected_anchor_interface"
+            | "expected_interface"
+            | "interface_argument"
+            | "interface_parameter"
+            | "interface_replacement"
+            | "interface"
+            | "implementation"
+            | "implementation_owner"
+            | "implementation_owners"
+            | "implementation_replacements"
+            | "requirement"
+            | "requirements"
+            | "selection_contains_implementation_method"
+            | "selected_interface"
+    );
+    shared && matches!(path, "src/core/dialect.rs" | "src/core/validate.rs")
+        || match path {
+            "src/core/dialect.rs" => matches!(
+                identifier,
+                "MethodEvidenceAdapter"
+                    | "MethodEvidenceAdapterEdge"
+                    | "MethodEvidenceAnchor"
+                    | "MethodEvidenceAnchorRole"
+                    | "MethodEvidenceCatalog"
+                    | "MethodEvidenceCatalogMutationForTest"
+                    | "MethodEvidenceDomain"
+                    | "MethodEvidenceExpectation"
+                    | "MethodEvidenceExpectedProducer"
+                    | "MethodEvidenceExpectedRole"
+                    | "MethodEvidenceImplementationOwner"
+                    | "MethodEvidenceMethod"
+                    | "MethodEvidenceOccurrence"
+                    | "MethodEvidenceOwner"
+                    | "MethodEvidenceProducer"
+                    | "WrongRequirementPosition"
+                    | "authenticate_method_evidence"
+                    | "consumed_method_evidence"
+                    | "empty_method_evidence"
+                    | "implementation_owner_count"
+                    | "method_evidence"
+                    | "method_evidence_adapter_interface_matches"
+                    | "method_evidence_anchor_matches_expectation"
+                    | "method_evidence_anchors"
+                    | "method_evidence_expected_producer_matches"
+                    | "method_evidence_producer_matches"
+                    | "requires_method_evidence_implementation_owner"
+                    | "requirement_position"
+                    | "target_requirement"
+                    | "with_registry_and_method_evidence"
+            ),
+            "src/core/validate.rs" => matches!(
+                identifier,
+                "MethodEvidenceAnchor"
+                    | "MethodEvidenceAnchorRole"
+                    | "MethodEvidenceCatalog"
+                    | "MethodEvidenceCatalogMutationForTest"
+                    | "MethodEvidenceExpectedProducer"
+                    | "MethodEvidenceExpectedRole"
+                    | "MethodEvidenceOwner"
+                    | "MethodEvidenceProducer"
+                    | "authenticated_method_evidence"
+                    | "implementation_replacements"
+                    | "method_evidence"
+                    | "method_evidence_anchor_matches_expectation"
+                    | "method_evidence_anchors"
+                    | "method_evidence_producer_matches"
+                    | "validate_implementation_owner_anchor"
+                    | "validate_method_evidence_authority"
+                    | "validate_method_evidence_carrier_incoming"
+                    | "validate_method_evidence_domain"
+                    | "validate_method_evidence_domain_order"
+                    | "validate_method_evidence_owner_envelopes"
+                    | "validate_method_evidence_type_owners"
+            ),
+            "src/core/transform.rs" => matches!(
+                identifier,
+                "authenticate_method_evidence"
+                    | "interface_argument"
+                    | "method_evidence"
+                    | "method_evidence_anchors"
+                    | "requirement"
+                    | "with_registry_and_method_evidence"
+            ),
+            _ => false,
+        }
 }
 
 fn custom_drop_owner_names(tokens: &[&str]) -> BTreeSet<String> {
