@@ -147,6 +147,29 @@ and evaluator semantic or state-machine changes.
   all-target test-fixture initializers and found no remaining actionable issue.
   Independent semantic and Rust/resource reviews remain pending. Cumulative
   reserved use is 14/70; 56 units remain and Checkpoint 3 is not reserved.
+- The independent Rust/resource review of Checkpoint 2 reported two important
+  findings and one minor finding. First, repeated interface-parameter
+  installation charged an unchanged absent-list method once per method.
+  `kind::tests::absent_method_lists_preserve_predecessor_owner_install_accounting`
+  failed at the predecessor formula of one owner installation plus each
+  method's unchanged work. Second, present method-list validation allocated and
+  traversed proportional duplicate indexes without type-work accounting or
+  fallible reservation. The exact validation test showed that a one-short
+  two-binder fixture succeeded. Third, the resolved boolean discriminator
+  admitted the impossible state `explicit + empty` through kind checking.
+- The corrections retain one interface-only environment across consecutive
+  absent-list methods, reset it for every explicit method and after explicit
+  locals, and reject `explicit + empty` at resolved kind admission. A present
+  list with `P` binders now charges `1 + P` validation units atomically before
+  fallible declaration and duplicate-index reservation. Exact duplicate-owner
+  and duplicate-local failures retain their spans; one-short failure leaves no
+  method binder identity published and an exact fresh retry succeeds. The new
+  exact unit tests and the four focused integration suites pass, as do
+  formatting, all-target checking, Clippy with warnings denied, and diff
+  hygiene. Self-review found no remaining correction issue. Independent
+  semantic and Rust/resource re-reviews remain pending. The correction does
+  not reserve more work: cumulative use remains 14/70, with 56 units remaining
+  and Checkpoint 3 unreserved.
 
 ## Verification
 

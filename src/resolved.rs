@@ -12830,7 +12830,7 @@ pub struct ResolvedInterfaceMethod {
     pub annotation: ResolvedType,
     /// Ordered method-local binders or absent-list rejection candidates.
     pub type_parameters: Box<[ResolvedTypeVariable]>,
-    /// Whether `type_parameters` came from a present complete source list.
+    /// Whether `type_parameters` came from a present, nonempty complete source list.
     pub has_explicit_type_parameters: bool,
     /// Causal method provenance.
     pub origin: Origin,

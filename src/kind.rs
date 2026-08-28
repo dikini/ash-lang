@@ -2419,11 +2419,19 @@ fn check_interface<'a>(
     environments: &mut KindEnvironments<'a>,
     budget: &mut TypeWorkBudget,
 ) -> Result<DeclarationKindOutcome, KindFailure> {
+    let mut interface_only = false;
     for method in &interface.methods {
+        if method.has_explicit_type_parameters && method.type_parameters.is_empty() {
+            charge_lookup_attempt(method.span, budget)?;
+            return Err(KindFailure::internal(
+                method.span,
+                "a resolved explicit method binder list is empty",
+            ));
+        }
         authenticate_owner_parameters(registry, &method.type_parameters, budget)?;
-        environments
-            .install_owner_parameters(std::slice::from_ref(&interface.parameter), budget)?;
         if method.has_explicit_type_parameters {
+            environments
+                .install_owner_parameters(std::slice::from_ref(&interface.parameter), budget)?;
             for parameter in &method.type_parameters {
                 environments.insert_declared(
                     parameter.id,
@@ -2432,8 +2440,16 @@ fn check_interface<'a>(
                     budget,
                 )?;
             }
-        } else if !method.type_parameters.is_empty() {
-            return Ok(DeclarationKindOutcome::Deferred);
+            interface_only = false;
+        } else {
+            if !interface_only {
+                environments
+                    .install_owner_parameters(std::slice::from_ref(&interface.parameter), budget)?;
+                interface_only = true;
+            }
+            if !method.type_parameters.is_empty() {
+                return Ok(DeclarationKindOutcome::Deferred);
+            }
         }
         environments.expect_value_type(&method.annotation, budget)?;
     }
@@ -3220,12 +3236,14 @@ fn require_fact_node(
 mod tests {
     use super::*;
     use crate::{
+        interface::{InterfaceId, MethodId},
         module::ModuleId,
         resolved::{
             ImportedFacts, ResolvedApplicationExpr, ResolvedBlock, ResolvedConstructor,
             ResolvedDeclarationIndex, ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind,
-            ResolvedNominalType, ResolvedRegistry, ResolvedTypeVariable,
-            discard_resolved_expression_iteratively,
+            ResolvedInterfaceDeclaration, ResolvedInterfaceMethod, ResolvedNominalType,
+            ResolvedRegistry, ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+            ResolvedTypeVariable, discard_resolved_expression_iteratively,
         },
         source::{ByteRange, Origin, SourceFile},
         types::{ConstructorId, TypeVariableId},
@@ -3247,6 +3265,210 @@ mod tests {
             kind = Kind::Arrow(Box::new(Kind::Type), Box::new(kind));
         }
         kind
+    }
+
+    fn fact_type(ty: Type, span: Span) -> ResolvedType {
+        ResolvedType {
+            ty,
+            provenance: ResolvedTypeProvenance::new(
+                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                0,
+            ),
+            origin: Origin::Source(span),
+            span,
+        }
+    }
+
+    fn method_fixture(
+        span: Span,
+        methods: Vec<(Box<[ResolvedTypeVariable]>, bool, Type)>,
+    ) -> (ResolvedRegistry, ResolvedInterfaceDeclaration) {
+        let module = ModuleId::new(0);
+        let interface_id = InterfaceId::new(module, 0);
+        let parameter = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(module, 0),
+            spelling: "A".into(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let mut canonical = vec![parameter.clone()];
+        canonical.extend(
+            methods
+                .iter()
+                .flat_map(|(parameters, _, _)| parameters.iter().cloned()),
+        );
+        let methods = methods
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, (type_parameters, has_explicit_type_parameters, ty))| {
+                    ResolvedInterfaceMethod {
+                        id: MethodId::new(interface_id, index as u32),
+                        spelling: format!("method_{index}"),
+                        annotation: fact_type(ty, span),
+                        type_parameters,
+                        has_explicit_type_parameters,
+                        origin: Origin::Source(span),
+                        span,
+                    }
+                },
+            )
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        (
+            ResolvedRegistry::new(Vec::new(), Vec::new()).with_additional_type_variables(canonical),
+            ResolvedInterfaceDeclaration {
+                id: interface_id,
+                public: false,
+                spelling: "Fixture".into(),
+                parameter,
+                methods,
+                origin: Origin::Source(span),
+                span,
+            },
+        )
+    }
+
+    #[test]
+    fn absent_method_lists_preserve_predecessor_owner_install_accounting() {
+        let span = span();
+        let parameter = TypeVariableId::resolved(ModuleId::new(0), 0);
+        let (registry, one_method) =
+            method_fixture(span, vec![(Box::new([]), false, Type::Variable(parameter))]);
+        let mut environments = KindEnvironments::new();
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(matches!(
+            check_interface(&one_method, &registry, &mut environments, &mut measured),
+            Ok(DeclarationKindOutcome::Checked)
+        ));
+        let one_method_work = measured.used();
+
+        let (registry, two_methods) = method_fixture(
+            span,
+            vec![
+                (Box::new([]), false, Type::Variable(parameter)),
+                (Box::new([]), false, Type::Variable(parameter)),
+            ],
+        );
+        let predecessor_work = one_method_work
+            .checked_sub(1)
+            .and_then(|method_work| method_work.checked_mul(2))
+            .and_then(|method_work| method_work.checked_add(1))
+            .expect("the predecessor accounting formula should fit");
+        let mut environments = KindEnvironments::new();
+        let mut exact = TypeWorkBudget::with_limit(predecessor_work);
+        check_interface(&two_methods, &registry, &mut environments, &mut exact)
+            .expect("one owner install plus both unchanged methods should fit exactly");
+        assert_eq!(exact.used(), predecessor_work);
+    }
+
+    #[test]
+    fn following_methods_cannot_see_an_explicit_predecessor_local() {
+        let span = span();
+        let module = ModuleId::new(0);
+        let local = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(module, 1),
+            spelling: "B".into(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let (registry, interface) = method_fixture(
+            span,
+            vec![
+                (
+                    vec![local.clone()].into_boxed_slice(),
+                    true,
+                    Type::Variable(local.id),
+                ),
+                (Box::new([]), false, Type::Variable(local.id)),
+            ],
+        );
+        let mut environments = KindEnvironments::new();
+        let mut budget = TypeWorkBudget::unbounded();
+        let error = match check_interface(&interface, &registry, &mut environments, &mut budget) {
+            Err(error) => error,
+            Ok(_) => panic!("the following absent-list method must not inherit B"),
+        };
+        assert!(matches!(error, KindFailure::Internal(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("type variable has no canonical kind"),
+            "found: {error}",
+        );
+    }
+
+    #[test]
+    fn method_parameter_state_rejects_explicit_empty_and_preserves_valid_states() {
+        let span = span();
+        let module = ModuleId::new(0);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+
+        let (registry, forged) = method_fixture(
+            span,
+            vec![(Box::new([]), true, Type::Variable(interface_parameter))],
+        );
+        let mut environments = KindEnvironments::new();
+        let mut budget = TypeWorkBudget::unbounded();
+        let error = match check_interface(&forged, &registry, &mut environments, &mut budget) {
+            Err(error) => error,
+            Ok(_) => panic!("an explicit empty method binder state must be rejected"),
+        };
+        assert!(matches!(error, KindFailure::Internal(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("explicit method binder list is empty"),
+            "found: {error}",
+        );
+
+        let local = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(module, 1),
+            spelling: "B".into(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        for (parameters, explicit, expected) in [
+            (
+                Box::new([]) as Box<[ResolvedTypeVariable]>,
+                false,
+                DeclarationKindOutcome::Checked,
+            ),
+            (
+                vec![local.clone()].into_boxed_slice(),
+                false,
+                DeclarationKindOutcome::Deferred,
+            ),
+            (
+                vec![local.clone()].into_boxed_slice(),
+                true,
+                DeclarationKindOutcome::Checked,
+            ),
+        ] {
+            let ty = if explicit {
+                Type::Variable(local.id)
+            } else {
+                Type::Variable(interface_parameter)
+            };
+            let (registry, interface) = method_fixture(span, vec![(parameters, explicit, ty)]);
+            let mut environments = KindEnvironments::new();
+            let mut budget = TypeWorkBudget::unbounded();
+            let outcome = check_interface(&interface, &registry, &mut environments, &mut budget)
+                .expect("each representable method parameter state should pass kind admission");
+            assert!(
+                matches!(
+                    (outcome, expected),
+                    (
+                        DeclarationKindOutcome::Checked,
+                        DeclarationKindOutcome::Checked
+                    ) | (
+                        DeclarationKindOutcome::Deferred,
+                        DeclarationKindOutcome::Deferred
+                    )
+                ),
+                "the valid method state must retain its expected outcome",
+            );
+        }
     }
 
     #[test]

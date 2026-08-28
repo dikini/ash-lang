@@ -1689,7 +1689,11 @@ impl Resolver {
             let explicit = method.type_parameters.as_deref();
             let mut names = Vec::new();
             let mut seen = HashSet::from([declaration.parameter.name.text.as_str()]);
-            let declared = validate_method_type_parameters(&declaration.parameter, explicit)?;
+            let declared = validate_method_type_parameters(
+                &declaration.parameter,
+                explicit,
+                &mut self.type_work,
+            )?;
             collect_free_type_names(
                 &method.annotation,
                 &self.type_names,
@@ -6608,12 +6612,50 @@ fn validate_explicit_type_parameters(
 fn validate_method_type_parameters<'a>(
     owner: &'a SurfaceTypeParameter,
     parameters: Option<&'a [SurfaceTypeParameter]>,
+    budget: &mut TypeWorkBudget,
 ) -> Result<HashSet<&'a str>, ResolveError> {
     let Some(parameters) = parameters else {
-        return Ok(HashSet::from([owner.name.text.as_str()]));
+        let mut declared = HashSet::new();
+        declared.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                owner.name.span,
+                "method type-parameter validation could not reserve owner storage",
+            )
+        })?;
+        declared.insert(owner.name.text.as_str());
+        return Ok(declared);
     };
-    let mut declared = HashSet::with_capacity(parameters.len().saturating_add(1));
-    let mut first = HashMap::with_capacity(parameters.len().saturating_add(1));
+    let validation_work = parameters.len().checked_add(1).ok_or_else(|| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            owner.name.span,
+            "method type-parameter validation size is not representable",
+        )
+    })?;
+    budget.charge(validation_work).map_err(|()| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            owner.name.span,
+            "method type-parameter validation exceeded its type-work budget",
+        )
+    })?;
+    let mut declared = HashSet::new();
+    declared.try_reserve(validation_work).map_err(|_| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            owner.name.span,
+            "method type-parameter validation could not reserve declaration storage",
+        )
+    })?;
+    let mut first = HashMap::new();
+    first.try_reserve(validation_work).map_err(|_| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            owner.name.span,
+            "method type-parameter validation could not reserve duplicate storage",
+        )
+    })?;
     declared.insert(owner.name.text.as_str());
     first.insert(owner.name.text.as_str(), owner.name.span);
     for parameter in parameters {
@@ -9435,6 +9477,119 @@ mod tests {
             retained.kind,
             Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
         );
+    }
+
+    #[test]
+    fn method_parameter_validation_is_exact_atomic_and_retryable() {
+        // A present method list validates one interface owner plus each of P
+        // written binders before free-name discovery or binder publication.
+        const OWNER_AND_BINDERS: usize = 3;
+        // Interface A costs two units, the method type has six surface nodes,
+        // and omitted-kind B and C cost two units each.
+        const COMPLETE_WORK: usize = 2 + OWNER_AND_BINDERS + 6 + 2 * 2;
+        let surface = declaration_fixture(
+            "method-parameter-validation-budget.ash",
+            "interface Fixture<A> {\nmethod<B, C> : (A, B, C) -> A\n}\n",
+        );
+        let declaration = &surface.interfaces[0];
+
+        let mut short = Resolver::with_type_work(
+            ModuleId::new(0),
+            TypeWorkBudget::with_limit(COMPLETE_WORK - 1),
+        );
+        let failure = match short.prepare_interface_type_parameters(declaration) {
+            Err(failure) => failure,
+            Ok(_) => {
+                panic!("one missing validation or retention unit must reject the method binders")
+            }
+        };
+        assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(short.type_work.used(), COMPLETE_WORK - 1);
+
+        let mut exact =
+            Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(COMPLETE_WORK));
+        let prepared = exact
+            .prepare_interface_type_parameters(declaration)
+            .expect("the exact validation and retention budget should fit");
+        assert_eq!(exact.type_work.used(), COMPLETE_WORK);
+        assert_eq!(exact.next_type_variable, 3);
+        assert_eq!(
+            prepared.methods[0]
+                .iter()
+                .map(|parameter| parameter.spelling.as_str())
+                .collect::<Vec<_>>(),
+            ["B", "C"],
+        );
+
+        for (source, validation_work, spelling, primary_occurrence, related_occurrence) in [
+            (
+                "interface Duplicate<A> {\nmethod<A> : A -> A\n}\n",
+                2,
+                "A",
+                1,
+                0,
+            ),
+            (
+                "interface Duplicate<A> {\nmethod<B, B> : (A, B) -> B\n}\n",
+                3,
+                "B",
+                1,
+                0,
+            ),
+        ] {
+            let surface = declaration_fixture("duplicate-method-parameter.ash", source);
+            let declaration = &surface.interfaces[0];
+            let exact_work = 2 + validation_work;
+
+            let mut short = Resolver::with_type_work(
+                ModuleId::new(0),
+                TypeWorkBudget::with_limit(exact_work - 1),
+            );
+            let failure = match short.prepare_interface_type_parameters(declaration) {
+                Err(failure) => failure,
+                Ok(_) => panic!("one-short validation must fail before duplicate publication"),
+            };
+            assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+            assert_eq!(
+                short.type_work.used(),
+                2,
+                "the all-at-once validation charge must not partially publish",
+            );
+            short
+                .type_work
+                .charge(exact_work - 3)
+                .expect("the rejected validation charge must leave its capacity reusable");
+            assert_eq!(short.type_work.used(), exact_work - 1);
+            assert_eq!(short.next_type_variable, 1);
+
+            let mut exact =
+                Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(exact_work));
+            let failure = match exact.prepare_interface_type_parameters(declaration) {
+                Err(failure) => failure,
+                Ok(_) => panic!("the exact validation budget should reach the duplicate"),
+            };
+            assert_eq!(failure.reason, ResolveReason::DuplicateTypeParameter);
+            assert_eq!(exact.type_work.used(), exact_work);
+            assert_eq!(exact.next_type_variable, 1);
+            assert_eq!(failure.related.len(), 1);
+            let expected_primary = source
+                .match_indices(spelling)
+                .nth(primary_occurrence)
+                .map(|(offset, _)| offset as u32)
+                .expect("the duplicate primary marker should exist");
+            let expected_related = source
+                .match_indices(spelling)
+                .nth(related_occurrence)
+                .map(|(offset, _)| offset as u32)
+                .expect("the duplicate related marker should exist");
+            assert_eq!(failure.primary.span().range().start(), expected_primary,);
+            assert_eq!(failure.primary.span().range().end(), expected_primary + 1);
+            assert_eq!(failure.related[0].span().range().start(), expected_related);
+            assert_eq!(
+                failure.related[0].span().range().end(),
+                expected_related + 1
+            );
+        }
     }
 
     #[test]
