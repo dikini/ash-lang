@@ -15,7 +15,8 @@ use crate::{
     },
     diagnostic::{Diagnostic, SourceLabel},
     evidence::{
-        EvidenceSelector, PendingEvidencePublication, SelectionCauseKind, SelectionError,
+        EvidenceSelector, MethodObligationMetadata, MethodRigidityCheck, MethodRigidityCondition,
+        MethodRigiditySite, PendingEvidencePublication, SelectionCauseKind, SelectionError,
         SelectionFailure, SelectionSite,
     },
     evidence_audit::{EvidenceAuditFailure, audit_checked_body_evidence},
@@ -2204,15 +2205,46 @@ impl Elaborator {
                 return Err(invalid_state());
             }
             drop(current_method);
-            let close_result = if body_result.is_ok() {
-                self.close_evidence_obligations(evidence_marker)
-            } else {
-                Ok(())
+            let checked_body = match body_result {
+                Ok(body) => {
+                    self.close_evidence_obligations(evidence_marker)?;
+                    self.leave_evidence_scope()?;
+                    TypedNodeOwner::new(body)
+                }
+                Err(body_error) => {
+                    let failure_span = match &body_error {
+                        TypeError::Source(diagnostic) => Some(diagnostic.primary.span()),
+                        TypeError::Interface(diagnostic) => Some(diagnostic.primary.span()),
+                        TypeError::Mismatch(mismatch) => Some(mismatch.span),
+                        TypeError::Internal(_) => None,
+                    };
+                    let has_matching_rigidity = match failure_span {
+                        Some(failure_span) => self
+                            .selection
+                            .as_ref()
+                            .ok_or_else(invalid_state)?
+                            .pending_method_rigidity_matches(
+                                evidence_marker,
+                                failure_span,
+                                &mut self.constraint_work,
+                            )
+                            .map_err(|failure| selection_failure(failure, Some(failure_span)))?,
+                        None => false,
+                    };
+                    if has_matching_rigidity {
+                        let close_result = self.close_evidence_obligations_for_failed_body(
+                            evidence_marker,
+                            failure_span.ok_or_else(invalid_state)?,
+                        );
+                        if let Err(close_error) = close_result
+                            && is_polymorphic_recursion_error(&close_error)
+                        {
+                            return Err(close_error);
+                        }
+                    }
+                    return Err(body_error);
+                }
             };
-            let leave_result = self.leave_evidence_scope();
-            let checked_body = TypedNodeOwner::new(body_result?);
-            close_result?;
-            leave_result?;
             let scheme = self.checked_implementation_method_scheme(
                 implementation,
                 method.type_parameters(),
@@ -2608,31 +2640,6 @@ impl Elaborator {
         result
     }
 
-    fn instantiate_with_arguments(
-        &mut self,
-        fact: &TypeFact,
-        arguments: Vec<Type>,
-    ) -> Result<(Type, Vec<Type>), TypeError> {
-        if fact.quantified.len() != arguments.len() {
-            return Err(invalid_state());
-        }
-        self.type_work
-            .charge(arguments.len())
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut replacements = HashMap::new();
-        replacements
-            .try_reserve(arguments.len())
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for ((binder, _), argument) in fact.quantified.iter().zip(arguments.iter()) {
-            replacements.insert(*binder, self.clone_type(argument)?);
-        }
-        let instantiated = substitute_type_variables_with(&fact.ty, &replacements, |cells| {
-            self.type_work.charge(cells)
-        })
-        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        Ok((instantiated, arguments))
-    }
-
     fn enter_global_evidence_scope(&mut self, binder: BinderId) -> Result<usize, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
@@ -2676,14 +2683,31 @@ impl Elaborator {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
-        self.selection
-            .as_mut()
-            .ok_or_else(invalid_state)?
-            .clear_scope();
+        let selector = self.selection.as_mut().ok_or_else(invalid_state)?;
+        if selector.method_rigidity_count() != 0 {
+            return Err(invalid_state());
+        }
+        selector.clear_scope();
         Ok(())
     }
 
     fn close_evidence_obligations(&mut self, marker: usize) -> Result<(), TypeError> {
+        self.close_evidence_obligations_matching(marker, None)
+    }
+
+    fn close_evidence_obligations_for_failed_body(
+        &mut self,
+        marker: usize,
+        failure_span: Span,
+    ) -> Result<(), TypeError> {
+        self.close_evidence_obligations_matching(marker, Some(failure_span))
+    }
+
+    fn close_evidence_obligations_matching(
+        &mut self,
+        marker: usize,
+        failure_span: Option<Span>,
+    ) -> Result<(), TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -2720,8 +2744,80 @@ impl Elaborator {
             &mut self.constraint_work,
             &mut self.type_work,
         );
+        if let Err(error) = result {
+            self.selection = Some(selector);
+            return Err(selected_obligation_error(error));
+        }
+        for index in 0..selector.method_rigidity_count() {
+            let check = selector.method_rigidity(index).ok_or_else(invalid_state)?;
+            if failure_span.is_some_and(|span| !check.site().matches_failure_span(span)) {
+                continue;
+            }
+            if let Err(error) = self.enforce_selected_method_rigidity(check) {
+                self.selection = Some(selector);
+                return Err(error);
+            }
+        }
+        selector.clear_method_rigidities();
         self.selection = Some(selector);
-        result.map_err(selected_obligation_error)
+        Ok(())
+    }
+
+    fn enforce_selected_method_rigidity(
+        &mut self,
+        check: MethodRigidityCheck<'_>,
+    ) -> Result<(), TypeError> {
+        if check.method_arguments().len() != check.rigid_arguments().len() {
+            return Err(invalid_state());
+        }
+        self.type_work
+            .charge(check.method_arguments().len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (method_argument, rigid_argument) in
+            check.method_arguments().iter().zip(check.rigid_arguments())
+        {
+            match self.unify(method_argument, rigid_argument) {
+                Ok(()) => {}
+                Err(UnificationFailure::Resource) => {
+                    return Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ));
+                }
+                Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+                Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                    let expected = IterativeTypeOwner::new(self.zonk(rigid_argument)?);
+                    let found = IterativeTypeOwner::new(self.zonk(method_argument)?);
+                    let site = check.site();
+                    let primary = site.argument_span().unwrap_or(site.occurrence_span());
+                    let mut diagnostic = Diagnostic::new(
+                        TypeReason::PolymorphicRecursion,
+                        SourceLabel::new(
+                            primary,
+                            "this recursive call requires a different type instantiation",
+                        ),
+                    );
+                    if primary != site.occurrence_span() {
+                        diagnostic.related.push(SourceLabel::new(
+                            site.occurrence_span(),
+                            "this recursive function is checked monomorphically",
+                        ));
+                    }
+                    if let Some(application_span) = site.application_span()
+                        && application_span != primary
+                        && application_span != site.occurrence_span()
+                    {
+                        diagnostic.related.push(SourceLabel::new(
+                            application_span,
+                            "this application supplies the recursive argument",
+                        ));
+                    }
+                    diagnostic.expected = Some(self.registry.display_source_type(&expected));
+                    diagnostic.found = Some(self.registry.display_source_type(&found));
+                    return Err(TypeError::Source(Box::new(diagnostic)));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn prepare_evidence_publication(&mut self) -> Result<PendingEvidencePublication, TypeError> {
@@ -2859,6 +2955,7 @@ impl Elaborator {
         method: MethodId,
         occurrence: &crate::resolved::ResolvedOccurrence,
         span: Span,
+        cause: Option<SynthesisCause>,
     ) -> Result<TypedNode, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck || occurrence.evidence.len() != 1 {
             return Err(invalid_state());
@@ -2882,48 +2979,7 @@ impl Elaborator {
                 ty: value_type.into_inner(),
                 quantified: fact_parameters,
             });
-            let current_method = self.current_implementation_method.take();
-            let rigid_arguments = current_method
-                .as_ref()
-                .filter(|current| current.method == method)
-                .map(|current| {
-                    let count = current
-                        .method_arguments
-                        .len()
-                        .checked_add(1)
-                        .ok_or_else(|| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                    self.type_work.charge(count).map_err(|()| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                    let mut arguments = Vec::new();
-                    arguments.try_reserve(count).map_err(|_| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                    arguments.push(
-                        self.fresh_inference_reserved(
-                            method_fact.interface_parameter_kind(),
-                            span,
-                        )?,
-                    );
-                    for argument in &current.method_arguments {
-                        arguments.push(
-                            clone_type_with_budget(argument, &mut self.type_work).map_err(
-                                |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
-                            )?,
-                        );
-                    }
-                    Ok::<Vec<Type>, TypeError>(arguments)
-                })
-                .transpose();
-            self.current_implementation_method = current_method;
-            let rigid_arguments = rigid_arguments?;
-            let (ty, arguments) = if let Some(arguments) = rigid_arguments {
-                self.instantiate_with_arguments(&fact, arguments)?
-            } else {
-                self.instantiate(&fact, false, span)?
-            };
+            let (ty, arguments) = self.instantiate(&fact, false, span)?;
             let ty = IterativeTypeOwner::new(ty);
             let arguments = OwnedTypeBuffer(arguments);
             let Some((argument, method_arguments)) = arguments.as_slice().split_first() else {
@@ -2939,11 +2995,52 @@ impl Elaborator {
             for method_argument in method_arguments {
                 retained_method_arguments.push(self.clone_type(method_argument)?);
             }
+            let current_method = self.current_implementation_method.take();
+            let method_rigidity = current_method
+                .as_ref()
+                .filter(|current| current.method == method)
+                .map(|current| {
+                    self.type_work
+                        .charge(current.method_arguments.len())
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    let mut rigid_arguments = OwnedTypeBuffer(Vec::new());
+                    rigid_arguments
+                        .try_reserve(current.method_arguments.len())
+                        .map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    for argument in &current.method_arguments {
+                        rigid_arguments.push(
+                            clone_type_with_budget(argument, &mut self.type_work).map_err(
+                                |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                            )?,
+                        );
+                    }
+                    let site = match cause {
+                        Some(SynthesisCause::Application {
+                            whole_span,
+                            argument_span,
+                        }) => MethodRigiditySite::application(span, whole_span, argument_span),
+                        _ => MethodRigiditySite::occurrence(span),
+                    };
+                    Ok::<MethodRigidityCondition, TypeError>(MethodRigidityCondition::new(
+                        rigid_arguments.into_boxed_slice(),
+                        site,
+                    ))
+                })
+                .transpose();
+            self.current_implementation_method = current_method;
+            let method_rigidity = method_rigidity?;
             selector
                 .push_cloned_obligation(
                     interface,
                     argument,
-                    retained_method_arguments.into_boxed_slice(),
+                    MethodObligationMetadata::new(
+                        retained_method_arguments.into_boxed_slice(),
+                        method_rigidity,
+                    ),
                     SelectionSite::contextual(
                         occurrence.evidence[0].handle(),
                         span,
@@ -4987,6 +5084,7 @@ impl Elaborator {
                                     method,
                                     occurrence,
                                     current.span,
+                                    cause,
                                 )?);
                             }
                         }
@@ -5131,14 +5229,6 @@ impl Elaborator {
                             ResolvedExprKind::Occurrence(occurrence)
                                 if occurrence.global_binder().is_some_and(|binder|
                                     self.monomorphic_recursive.contains(&binder))
-                        ) || matches!(
-                            &application.function.kind,
-                            ResolvedExprKind::Occurrence(occurrence)
-                                if matches!(occurrence.term,
-                                    crate::resolved::ResolvedTermName::Method(method)
-                                        if self.current_implementation_method
-                                            .as_ref()
-                                            .is_some_and(|current| current.method == method))
                         );
                         tasks.push(ElaborationTask::AfterApplicationFunction {
                             whole_span: current.span,
@@ -5148,7 +5238,10 @@ impl Elaborator {
                         });
                         tasks.push(ElaborationTask::Synthesize {
                             expression: &application.function,
-                            cause: Some(SynthesisCause::Application(current.span)),
+                            cause: Some(SynthesisCause::Application {
+                                whole_span: current.span,
+                                argument_span: application.argument.span,
+                            }),
                         });
                     }
                     ResolvedExprKind::Block(block) => {
@@ -8006,6 +8099,13 @@ fn selected_obligation_error(error: SelectionError) -> TypeError {
     TypeError::Interface(Box::new(diagnostic))
 }
 
+fn is_polymorphic_recursion_error(error: &TypeError) -> bool {
+    matches!(
+        error,
+        TypeError::Source(diagnostic) if diagnostic.reason == TypeReason::PolymorphicRecursion
+    )
+}
+
 const fn selection_reason_message(reason: InterfaceReason) -> &'static str {
     match reason {
         InterfaceReason::Unsatisfied => {
@@ -8836,7 +8936,10 @@ enum SynthesisCause {
     Binding(Span),
     NestedBinding(Span),
     ProgramResult(Span),
-    Application(Span),
+    Application {
+        whole_span: Span,
+        argument_span: Span,
+    },
     Operator(Span),
 }
 
@@ -9629,8 +9732,8 @@ fn function_needs_context(span: Span, cause: Option<SynthesisCause>) -> TypeErro
                 "the program result requires this expression to synthesize a type",
                 None,
             ),
-            SynthesisCause::Application(span) => (
-                span,
+            SynthesisCause::Application { whole_span, .. } => (
+                whole_span,
                 "this application requires its function position to synthesize a type",
                 None,
             ),
@@ -11277,6 +11380,38 @@ mod tests {
             .first()
             .expect("the module fixture should retain one result body")
             .body
+    }
+
+    #[test]
+    fn selected_method_rigidity_has_exact_retryable_traversal_boundary() {
+        const EXACT_TYPE_WORK: usize = 1 + 2;
+
+        let resolved =
+            resolved_module_fixture("selected-method-rigidity-budget.ash", "", "Unit", "()");
+        let span = fixture_result(&resolved).span;
+        let method_arguments = [Type::Int];
+        let rigid_arguments = [Type::Int];
+        let check = MethodRigidityCheck::for_test(
+            &method_arguments,
+            &rigid_arguments,
+            MethodRigiditySite::application(span, span, span),
+        );
+        let mut elaborator =
+            Elaborator::for_module(&resolved).expect("the rigidity fixture should initialize");
+
+        elaborator.type_work = TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1);
+        assert!(matches!(
+            elaborator.enforce_selected_method_rigidity(check),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+
+        elaborator.type_work = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        elaborator
+            .enforce_selected_method_rigidity(check)
+            .expect("the exact traversal and one concrete comparison should fit");
+        assert_eq!(elaborator.type_work.used(), EXACT_TYPE_WORK);
     }
 
     #[test]

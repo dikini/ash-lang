@@ -230,7 +230,7 @@ and evaluator semantic or state-machine changes.
   `elaborate`-filtered library tests; and 122 `evidence`-filtered library tests.
   `cargo fmt --check`, `cargo check --locked --all-targets`, locked workspace
   all-target/all-feature Clippy with warnings denied, and `git diff --check`
-  also pass. The implementation agent used `gpt-5.6-sol` at high reasoning.
+  also pass. The implementation agent used `gpt-5.6-sol` at xhigh reasoning.
   Self-review found no proposal semantic gap, persistent Core choice, resource
   limit change, selection change, evaluator change, or admitted higher-rank or
   polymorphic-recursive behavior. It corrected an over-rigid interface
@@ -246,6 +246,54 @@ and evaluator semantic or state-machine changes.
   unchanged. Independent semantic and Rust/resource reviews remain pending.
   Cumulative reserved use is 26/70 and 44 units remain unreserved; Checkpoint 4
   is not reserved.
+- Checkpoint 3 semantic review rejected `a9d5812`. The exact identity-equal
+  prerequisite RED `cargo test --locked --test interface_selection
+  identity_equal_abstract_prerequisite_dispatch_instantiates_method_locals_normally
+  -- --exact --nocapture` exited 101 with `type.polymorphic-recursion`, expected
+  `(_, A)`, found `(Int, Int)`. The root cause was pre-selection rigidity keyed
+  only by `MethodId`, so a declared `Use<Int>` prerequisite could not exercise
+  its unchanged priority over exact-current evidence. The correction freshens
+  every occurrence method local before selection, retains a private conditional
+  relation, and activates it only when the selected evidence root is the
+  current implementation identity. Abstract prerequisites and other dispatch
+  discard the condition and keep their fresh locals; method arguments remain
+  outside candidate choice.
+- Failure-order TDD found two further consequences of the staged relation. The
+  exact RED `cargo test --locked --test polymorphism
+  unrelated_method_body_failure_is_not_displaced_by_staged_recursive_dispatch
+  -- --exact --nocapture` returned `type.polymorphic-recursion` instead of the
+  earlier `type.definition-result`; a second exact RED showed that closing two
+  staged recursive occurrences could report a different application from the
+  failed body. Failed bodies now enter the extra close path only when a charged
+  pending condition matches that diagnostic's application or argument span,
+  and post-selection enforcement is restricted to that same site. Direct
+  exact-current recursion still reuses rigid locals and reports the established
+  expected/found diagnostic; unrelated body failures retain predecessor order.
+- Conditional ingress for `m` method locals charges
+  `2m + 2 + C(I) + sum(C(M_i))` constraint units and `|I|` type units, where
+  `C` is the existing constraint Type traversal and `|I|` is the cloned
+  interface-argument cell count. Atomic arguments therefore use exactly
+  `4m + 4` constraint units and one type unit; the exact `m = 1` retry witness
+  is 8/1 and the wide `m = 1,024` witness is 4,100/1. Selection close adds one
+  precharged record per pending obligation and per conditional relation.
+  Conditional enforcement charges `m` ordered traversal units plus existing
+  transactional unification work. Failed-body site lookup costs zero when no
+  condition exists and otherwise exactly the pending slice length. One-short
+  retry tests leave pending state and slots unchanged; publication rejects
+  while a selected condition remains. Both rejected and selected 32,768-deep
+  conditions dismantle iteratively on 256 KiB stacks.
+- Correction verification passes 21 architecture tests, 44 implementation
+  tests, 23 interface-selection tests, 33 interface tests, and 40 polymorphism
+  tests; 64 `interface`-filtered, 115 `elaborate`-filtered, and 128
+  `evidence`-filtered library tests also pass. Formatting, all-target checking,
+  strict locked workspace/all-target/all-feature Clippy, Markdown task lint,
+  and diff hygiene pass. The correction agent used `gpt-5.6-sol` at xhigh
+  reasoning. Self-review found no selection-precedence, Core, evaluator,
+  higher-rank, polymorphic-recursion admission, resource-limit, or specification
+  change. The specification remains unchanged; independent semantic and
+  Rust/resource re-reviews remain pending. The Checkpoint 3 reservation remains
+  12 units, cumulative reserved use remains 26/70, and 44 units remain
+  unreserved.
 
 ## Verification
 

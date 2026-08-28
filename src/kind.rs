@@ -694,7 +694,8 @@ impl<'a> KindEnvironments<'a> {
 
     /// Checks one body-free interface method in a single type walk. The
     /// method must be a function, may mention only its owning interface
-    /// parameter, must mention that parameter, and must end at kind `Type`.
+    /// parameter and declared method parameters, must mention the interface
+    /// parameter, and must end at kind `Type`.
     pub(crate) fn expect_body_free_interface_method_with_ledger(
         &self,
         ty: &Type,

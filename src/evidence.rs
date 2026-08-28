@@ -7,10 +7,10 @@ use std::{
 
 use crate::{
     interface::{
-        CheckedImplementation, ConstrainedScheme, EvidenceSelection, EvidenceSelectionBuilder,
-        EvidenceSlotHandle, EvidenceSubstitution, HeadMatchFailure, ImplId, ImplMethodId,
-        InterfaceConstraintBudget, InterfaceId, InterfaceOperationWork, InterfaceReason, MethodId,
-        RequirementId, match_implementation_head_in_environment,
+        CheckedImplementation, ConstrainedScheme, EvidenceNode, EvidenceSelection,
+        EvidenceSelectionBuilder, EvidenceSlotHandle, EvidenceSubstitution, HeadMatchFailure,
+        ImplId, ImplMethodId, InterfaceConstraintBudget, InterfaceId, InterfaceOperationWork,
+        InterfaceReason, MethodId, RequirementId, match_implementation_head_in_environment,
     },
     kind::{
         CanonicalEnvironmentFailure, KindEnvironments, KindFailure,
@@ -159,10 +159,141 @@ struct PendingObligation {
     interface: InterfaceId,
     argument: Type,
     method_arguments: Box<[Type]>,
+    method_rigidity: Option<MethodRigidityCondition>,
     slot: EvidenceSlotHandle,
     span: Span,
     declaration_span: Option<Span>,
     import_span: Option<Span>,
+}
+
+/// Diagnostic location retained until selection determines whether a same-method
+/// occurrence is an exact-current recursive dispatch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MethodRigiditySite {
+    occurrence_span: Span,
+    application_span: Option<Span>,
+    argument_span: Option<Span>,
+}
+
+impl MethodRigiditySite {
+    pub(crate) const fn occurrence(occurrence_span: Span) -> Self {
+        Self {
+            occurrence_span,
+            application_span: None,
+            argument_span: None,
+        }
+    }
+
+    pub(crate) const fn application(
+        occurrence_span: Span,
+        application_span: Span,
+        argument_span: Span,
+    ) -> Self {
+        Self {
+            occurrence_span,
+            application_span: Some(application_span),
+            argument_span: Some(argument_span),
+        }
+    }
+
+    pub(crate) const fn occurrence_span(self) -> Span {
+        self.occurrence_span
+    }
+
+    pub(crate) const fn application_span(self) -> Option<Span> {
+        self.application_span
+    }
+
+    pub(crate) const fn argument_span(self) -> Option<Span> {
+        self.argument_span
+    }
+
+    pub(crate) fn matches_failure_span(self, span: Span) -> bool {
+        self.application_span == Some(span) || self.argument_span == Some(span)
+    }
+}
+
+/// Same-method rigid arguments that become relevant only after exact-current
+/// evidence wins selection.
+#[derive(Debug)]
+pub(crate) struct MethodRigidityCondition {
+    rigid_arguments: Box<[Type]>,
+    site: MethodRigiditySite,
+}
+
+#[derive(Debug)]
+pub(crate) struct MethodObligationMetadata {
+    method_arguments: Box<[Type]>,
+    method_rigidity: Option<MethodRigidityCondition>,
+}
+
+impl MethodObligationMetadata {
+    pub(crate) const fn new(
+        method_arguments: Box<[Type]>,
+        method_rigidity: Option<MethodRigidityCondition>,
+    ) -> Self {
+        Self {
+            method_arguments,
+            method_rigidity,
+        }
+    }
+}
+
+impl MethodRigidityCondition {
+    pub(crate) const fn new(rigid_arguments: Box<[Type]>, site: MethodRigiditySite) -> Self {
+        Self {
+            rigid_arguments,
+            site,
+        }
+    }
+}
+
+impl Drop for MethodRigidityCondition {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.rigid_arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SelectedMethodRigidity {
+    selected_index: usize,
+    condition: MethodRigidityCondition,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MethodRigidityCheck<'a> {
+    method_arguments: &'a [Type],
+    rigid_arguments: &'a [Type],
+    site: MethodRigiditySite,
+}
+
+impl<'a> MethodRigidityCheck<'a> {
+    #[cfg(test)]
+    pub(crate) const fn for_test(
+        method_arguments: &'a [Type],
+        rigid_arguments: &'a [Type],
+        site: MethodRigiditySite,
+    ) -> Self {
+        Self {
+            method_arguments,
+            rigid_arguments,
+            site,
+        }
+    }
+
+    pub(crate) const fn method_arguments(self) -> &'a [Type] {
+        self.method_arguments
+    }
+
+    pub(crate) const fn rigid_arguments(self) -> &'a [Type] {
+        self.rigid_arguments
+    }
+
+    pub(crate) const fn site(self) -> MethodRigiditySite {
+        self.site
+    }
 }
 
 #[derive(Debug)]
@@ -328,7 +459,9 @@ pub(crate) struct EvidenceSelector {
     abstracts: Vec<RequirementEntry>,
     current: Option<ImplId>,
     pending: Vec<PendingObligation>,
+    pending_method_rigidity_count: usize,
     selected: Vec<SelectedOccurrence>,
+    method_rigidities: Vec<SelectedMethodRigidity>,
 }
 
 struct ImplementationCandidateAuthentication<'a, P> {
@@ -353,7 +486,9 @@ impl EvidenceSelector {
             abstracts: Vec::new(),
             current: None,
             pending: Vec::new(),
+            pending_method_rigidity_count: 0,
             selected: Vec::new(),
+            method_rigidities: Vec::new(),
         }
     }
 
@@ -873,6 +1008,47 @@ impl EvidenceSelector {
         self.current = None;
     }
 
+    pub(crate) fn method_rigidity_count(&self) -> usize {
+        self.method_rigidities.len()
+    }
+
+    pub(crate) fn method_rigidity(&self, index: usize) -> Option<MethodRigidityCheck<'_>> {
+        let selected = self.method_rigidities.get(index)?;
+        let occurrence = self.selected.get(selected.selected_index)?;
+        Some(MethodRigidityCheck {
+            method_arguments: &occurrence.method_arguments,
+            rigid_arguments: &selected.condition.rigid_arguments,
+            site: selected.condition.site,
+        })
+    }
+
+    pub(crate) fn clear_method_rigidities(&mut self) {
+        self.method_rigidities.clear();
+    }
+
+    pub(crate) fn pending_method_rigidity_matches(
+        &self,
+        marker: usize,
+        failure_span: Span,
+        constraint_work: &mut InterfaceConstraintBudget,
+    ) -> Result<bool, SelectionFailure> {
+        if marker > self.pending.len() {
+            return Err(SelectionFailure::InvalidState);
+        }
+        if self.pending_method_rigidity_count == 0 {
+            return Ok(false);
+        }
+        constraint_work
+            .charge(self.pending.len() - marker)
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        Ok(self.pending[marker..].iter().any(|obligation| {
+            obligation
+                .method_rigidity
+                .as_ref()
+                .is_some_and(|condition| condition.site.matches_failure_span(failure_span))
+        }))
+    }
+
     pub(crate) fn enter_global_scope(
         &mut self,
         binder: BinderId,
@@ -1006,6 +1182,7 @@ impl EvidenceSelector {
             interface,
             argument: argument.into_inner(),
             method_arguments: Box::new([]),
+            method_rigidity: None,
             slot: site.slot,
             span: site.span,
             declaration_span: site.declaration_span,
@@ -1018,14 +1195,40 @@ impl EvidenceSelector {
         &mut self,
         interface: InterfaceId,
         argument: &Type,
-        method_arguments: Box<[Type]>,
+        metadata: MethodObligationMetadata,
         site: SelectionSite,
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
+        let MethodObligationMetadata {
+            method_arguments,
+            method_rigidity,
+        } = metadata;
+        if method_rigidity
+            .as_ref()
+            .is_some_and(|rigidity| rigidity.rigid_arguments.len() != method_arguments.len())
+        {
+            return Err(SelectionFailure::InvalidState);
+        }
+        let pending_method_rigidity_count = if method_rigidity.is_some() {
+            self.pending_method_rigidity_count
+                .checked_add(1)
+                .ok_or(SelectionFailure::ConstraintResource)?
+        } else {
+            self.pending_method_rigidity_count
+        };
+        let rigidity_work = match &method_rigidity {
+            Some(rigidity) => rigidity
+                .rigid_arguments
+                .len()
+                .checked_add(1)
+                .ok_or(SelectionFailure::ConstraintResource)?,
+            None => 0,
+        };
         let retained_work = method_arguments
             .len()
             .checked_add(1)
+            .and_then(|work| work.checked_add(rigidity_work))
             .ok_or(SelectionFailure::ConstraintResource)?;
         constraint_work
             .charge(retained_work)
@@ -1047,11 +1250,13 @@ impl EvidenceSelector {
             interface,
             argument: argument.into_inner(),
             method_arguments,
+            method_rigidity,
             slot: site.slot,
             span: site.span,
             declaration_span: site.declaration_span,
             import_span: site.import_span,
         });
+        self.pending_method_rigidity_count = pending_method_rigidity_count;
         Ok(())
     }
 
@@ -1120,9 +1325,41 @@ impl EvidenceSelector {
                 causes: Vec::new(),
             });
         }
+        if !self.method_rigidities.is_empty() {
+            return Err(SelectionError {
+                failure: SelectionFailure::InvalidState,
+                span: None,
+                declaration_span: None,
+                import_span: None,
+                causes: Vec::new(),
+            });
+        }
+        let conditional_count = self.pending[marker..]
+            .iter()
+            .filter(|obligation| obligation.method_rigidity.is_some())
+            .count();
         constraint_work
-            .charge(self.pending.len() - marker)
+            .charge(
+                (self.pending.len() - marker)
+                    .checked_add(conditional_count)
+                    .ok_or(SelectionError {
+                        failure: SelectionFailure::ConstraintResource,
+                        span: None,
+                        declaration_span: None,
+                        import_span: None,
+                        causes: Vec::new(),
+                    })?,
+            )
             .map_err(|()| SelectionError {
+                failure: SelectionFailure::ConstraintResource,
+                span: None,
+                declaration_span: None,
+                import_span: None,
+                causes: Vec::new(),
+            })?;
+        self.method_rigidities
+            .try_reserve(conditional_count)
+            .map_err(|_| SelectionError {
                 failure: SelectionFailure::ConstraintResource,
                 span: None,
                 declaration_span: None,
@@ -1138,6 +1375,18 @@ impl EvidenceSelector {
                 import_span: None,
                 causes: Vec::new(),
             })?;
+            if obligation.method_rigidity.is_some() {
+                self.pending_method_rigidity_count = self
+                    .pending_method_rigidity_count
+                    .checked_sub(1)
+                    .ok_or(SelectionError {
+                        failure: SelectionFailure::InvalidState,
+                        span: Some(obligation.span),
+                        declaration_span: obligation.declaration_span,
+                        import_span: obligation.import_span,
+                        causes: Vec::new(),
+                    })?;
+            }
             let argument = std::mem::replace(&mut obligation.argument, Type::Unit);
             let argument = zonk(argument, type_work).map_err(|failure| SelectionError {
                 failure,
@@ -1178,6 +1427,29 @@ impl EvidenceSelector {
                 import_span: obligation.import_span,
                 causes: Vec::new(),
             })?;
+            let selected_index = self.selected.len();
+            let exact_current = self.current.is_some_and(|current| {
+                matches!(
+                    selection.node(selection.root()),
+                    Some(EvidenceNode::Implementation { implementation, .. })
+                        if implementation == current
+                )
+            });
+            if exact_current && let Some(condition) = obligation.method_rigidity.take() {
+                if condition.rigid_arguments.len() != obligation.method_arguments.len() {
+                    return Err(SelectionError {
+                        failure: SelectionFailure::InvalidState,
+                        span: Some(obligation.span),
+                        declaration_span: obligation.declaration_span,
+                        import_span: obligation.import_span,
+                        causes: Vec::new(),
+                    });
+                }
+                self.method_rigidities.push(SelectedMethodRigidity {
+                    selected_index,
+                    condition,
+                });
+            }
             self.selected.push(SelectedOccurrence {
                 checked_argument,
                 method_arguments: std::mem::take(&mut obligation.method_arguments),
@@ -1197,7 +1469,10 @@ impl EvidenceSelector {
     where
         F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
     {
-        if !self.pending.is_empty() {
+        if !self.pending.is_empty()
+            || self.pending_method_rigidity_count != 0
+            || !self.method_rigidities.is_empty()
+        {
             return Err(SelectionFailure::InvalidState);
         }
         let method_argument_count = self.selected.iter().try_fold(0usize, |total, selected| {
@@ -2580,6 +2855,448 @@ mod tests {
         assert_eq!(types, EXACT_TYPE_WORK);
         assert_eq!(slot.method_arguments(), &[Type::Bool, Type::Int]);
         assert!(slot.selection().is_some());
+    }
+
+    #[test]
+    fn conditional_method_rigidity_ingress_has_exact_atomic_retry_boundaries() {
+        // One method argument, one occurrence record, one rigid argument, one
+        // condition record, plus the two-record traversals of the retained
+        // interface Int and fresh method Bool arguments.
+        const EXACT_CONSTRAINT_WORK: usize = 8;
+        // Only the interface argument is cloned at this ownership boundary.
+        const EXACT_TYPE_WORK: usize = 1;
+        let (interface, _, _) = ids();
+        let source = SourceFile::new("method-rigidity-ingress.ash", "use")
+            .expect("the ingress source should fit");
+        let span = source
+            .span(ByteRange::new(0, 3).expect("the ingress range should be ordered"))
+            .expect("the ingress span should fit");
+        let slot = EvidenceSlot::empty();
+        let mut selector = EvidenceSelector::new();
+
+        let mut short_constraints =
+            InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1);
+        assert_eq!(
+            selector.push_cloned_obligation(
+                interface,
+                &Type::Int,
+                MethodObligationMetadata::new(
+                    Box::new([Type::Bool]),
+                    Some(MethodRigidityCondition::new(
+                        Box::new([Type::Bool]),
+                        MethodRigiditySite::application(span, span, span),
+                    )),
+                ),
+                SelectionSite::plain(slot.handle(), span),
+                &mut short_constraints,
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+            ),
+            Err(SelectionFailure::ConstraintResource)
+        );
+        assert!(selector.pending.is_empty());
+        assert_eq!(selector.pending_method_rigidity_count, 0);
+        assert!(slot.selection().is_none());
+
+        assert_eq!(
+            selector.push_cloned_obligation(
+                interface,
+                &Type::Int,
+                MethodObligationMetadata::new(
+                    Box::new([Type::Bool]),
+                    Some(MethodRigidityCondition::new(
+                        Box::new([Type::Bool]),
+                        MethodRigiditySite::application(span, span, span),
+                    )),
+                ),
+                SelectionSite::plain(slot.handle(), span),
+                &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1),
+            ),
+            Err(SelectionFailure::TypeResource)
+        );
+        assert!(selector.pending.is_empty());
+        assert_eq!(selector.pending_method_rigidity_count, 0);
+        assert!(slot.selection().is_none());
+
+        let mut exact_constraints = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let mut exact_types = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        selector
+            .push_cloned_obligation(
+                interface,
+                &Type::Int,
+                MethodObligationMetadata::new(
+                    Box::new([Type::Bool]),
+                    Some(MethodRigidityCondition::new(
+                        Box::new([Type::Bool]),
+                        MethodRigiditySite::application(span, span, span),
+                    )),
+                ),
+                SelectionSite::plain(slot.handle(), span),
+                &mut exact_constraints,
+                &mut exact_types,
+            )
+            .expect("the exact conditional ingress budgets should retain one obligation");
+        assert_eq!(exact_constraints.used(), EXACT_CONSTRAINT_WORK);
+        assert_eq!(exact_types.used(), EXACT_TYPE_WORK);
+        assert_eq!(selector.pending.len(), 1);
+        assert_eq!(selector.pending_method_rigidity_count, 1);
+        assert!(slot.selection().is_none());
+    }
+
+    #[test]
+    fn failed_body_rigidity_site_lookup_has_exact_retryable_boundary() {
+        let (interface, _, _) = ids();
+        let source = SourceFile::new("method-rigidity-failure-site.ash", "use argument")
+            .expect("the failure-site source should fit");
+        let occurrence = source
+            .span(ByteRange::new(0, 3).expect("the occurrence range should be ordered"))
+            .expect("the occurrence span should fit");
+        let application = source
+            .span(ByteRange::new(0, 12).expect("the application range should be ordered"))
+            .expect("the application span should fit");
+        let argument = source
+            .span(ByteRange::new(4, 12).expect("the argument range should be ordered"))
+            .expect("the argument span should fit");
+
+        let empty = EvidenceSelector::new();
+        assert!(
+            !empty
+                .pending_method_rigidity_matches(
+                    0,
+                    argument,
+                    &mut InterfaceConstraintBudget::with_limit(0),
+                )
+                .expect("the no-condition fast path should consume no resource")
+        );
+
+        let slot = EvidenceSlot::empty();
+        let mut selector = EvidenceSelector::new();
+        selector
+            .push_cloned_obligation(
+                interface,
+                &Type::Int,
+                MethodObligationMetadata::new(
+                    Box::new([Type::Bool]),
+                    Some(MethodRigidityCondition::new(
+                        Box::new([Type::Bool]),
+                        MethodRigiditySite::application(occurrence, application, argument),
+                    )),
+                ),
+                SelectionSite::plain(slot.handle(), occurrence),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the conditional lookup fixture should stage");
+        assert_eq!(
+            selector.pending_method_rigidity_matches(
+                0,
+                argument,
+                &mut InterfaceConstraintBudget::with_limit(0),
+            ),
+            Err(SelectionFailure::ConstraintResource)
+        );
+        assert_eq!(selector.pending.len(), 1);
+        assert_eq!(selector.pending_method_rigidity_count, 1);
+        let mut exact = InterfaceConstraintBudget::with_limit(1);
+        assert!(
+            selector
+                .pending_method_rigidity_matches(0, argument, &mut exact)
+                .expect("the exact one-record lookup traversal should fit on retry")
+        );
+        assert_eq!(exact.used(), 1);
+        assert_eq!(selector.pending.len(), 1);
+        assert!(slot.selection().is_none());
+    }
+
+    #[test]
+    fn wide_conditional_method_rigidity_ingress_is_exact_and_atomic() {
+        const WIDTH: usize = 1_024;
+        const EXACT_CONSTRAINT_WORK: usize = WIDTH * 4 + 4;
+        const EXACT_TYPE_WORK: usize = 1;
+        let (interface, _, _) = ids();
+        let source = SourceFile::new("wide-method-rigidity-ingress.ash", "use")
+            .expect("the wide ingress source should fit");
+        let span = source
+            .span(ByteRange::new(0, 3).expect("the wide ingress range should be ordered"))
+            .expect("the wide ingress span should fit");
+        let slot = EvidenceSlot::empty();
+        let make_arguments = || vec![Type::Bool; WIDTH].into_boxed_slice();
+
+        let mut short = EvidenceSelector::new();
+        assert_eq!(
+            short.push_cloned_obligation(
+                interface,
+                &Type::Int,
+                MethodObligationMetadata::new(
+                    make_arguments(),
+                    Some(MethodRigidityCondition::new(
+                        make_arguments(),
+                        MethodRigiditySite::application(span, span, span),
+                    )),
+                ),
+                SelectionSite::plain(slot.handle(), span),
+                &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1),
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+            ),
+            Err(SelectionFailure::ConstraintResource)
+        );
+        assert!(short.pending.is_empty());
+        assert!(slot.selection().is_none());
+
+        let mut exact = EvidenceSelector::new();
+        let mut exact_constraints = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        exact
+            .push_cloned_obligation(
+                interface,
+                &Type::Int,
+                MethodObligationMetadata::new(
+                    make_arguments(),
+                    Some(MethodRigidityCondition::new(
+                        make_arguments(),
+                        MethodRigiditySite::application(span, span, span),
+                    )),
+                ),
+                SelectionSite::plain(slot.handle(), span),
+                &mut exact_constraints,
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+            )
+            .expect("the exact wide conditional ingress budget should fit");
+        assert_eq!(exact_constraints.used(), EXACT_CONSTRAINT_WORK);
+        assert_eq!(exact.pending.len(), 1);
+        assert_eq!(exact.pending_method_rigidity_count, 1);
+        assert!(slot.selection().is_none());
+    }
+
+    #[test]
+    fn deep_method_rigidity_condition_failure_discards_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("deep-method-rigidity-condition".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let (interface, _, _) = ids();
+                let source = SourceFile::new("deep-method-rigidity.ash", "use")
+                    .expect("the deep condition source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 3).expect("the deep range should be ordered"))
+                    .expect("the deep span should fit");
+                let slot = EvidenceSlot::empty();
+                let mut selector = EvidenceSelector::new();
+                assert_eq!(
+                    selector.push_cloned_obligation(
+                        interface,
+                        &Type::Int,
+                        MethodObligationMetadata::new(
+                            Box::new([Type::Bool]),
+                            Some(MethodRigidityCondition::new(
+                                Box::new([deep_value_type(DEPTH)]),
+                                MethodRigiditySite::application(span, span, span),
+                            )),
+                        ),
+                        SelectionSite::plain(slot.handle(), span),
+                        &mut InterfaceConstraintBudget::with_limit(0),
+                        &mut TypeWorkBudget::default(),
+                    ),
+                    Err(SelectionFailure::ConstraintResource)
+                );
+                assert!(selector.pending.is_empty());
+                assert!(slot.selection().is_none());
+            })
+            .expect("the small-stack condition thread should start")
+            .join()
+            .expect("a rejected deep rigidity condition must dismantle iteratively");
+    }
+
+    #[test]
+    fn selected_deep_method_rigidity_condition_discards_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("selected-deep-method-rigidity-condition".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("selected-deep-method-rigidity.ash", "use")
+                    .expect("the selected deep condition source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 3).expect("the selected deep range is ordered"))
+                    .expect("the selected deep span should fit");
+                let mut selector = EvidenceSelector::new();
+                selector.selected.push(SelectedOccurrence {
+                    checked_argument: Type::Int,
+                    method_arguments: Box::new([Type::Bool]),
+                    selection: None,
+                    slot: None,
+                });
+                selector.method_rigidities.push(SelectedMethodRigidity {
+                    selected_index: 0,
+                    condition: MethodRigidityCondition::new(
+                        Box::new([deep_value_type(DEPTH)]),
+                        MethodRigiditySite::application(span, span, span),
+                    ),
+                });
+                drop(selector);
+            })
+            .expect("the selected small-stack condition thread should start")
+            .join()
+            .expect("a selected deep rigidity condition must dismantle iteratively");
+    }
+
+    #[test]
+    fn conditional_method_rigidity_is_gated_by_selected_exact_current_identity() {
+        let (interface, method, _) = ids();
+        let module = interface.module();
+        let current = ImplId::new(module, 0);
+        let prerequisite = RequirementId::new(RequirementOwner::Impl(current), 0);
+        let source = SourceFile::new("conditional-rigidity-selection.ash", "use")
+            .expect("the conditional selection source should fit");
+        let span = source
+            .span(ByteRange::new(0, 3).expect("the conditional range should be ordered"))
+            .expect("the conditional span should fit");
+
+        let mut abstract_selector = EvidenceSelector::new();
+        abstract_selector.add_interface_raw(
+            interface,
+            TypeVariableId::new(0),
+            vec![(method, Type::Unit)],
+        );
+        abstract_selector.add_implementation_raw(implementation(
+            current,
+            interface,
+            Vec::new(),
+            Type::Int,
+            vec![(prerequisite, interface, Type::Int)],
+            vec![ImplMethodId::new(current, method)],
+        ));
+        let abstract_registry = abstract_selector.canonical_registry_for_test();
+        abstract_selector
+            .enter_implementation_scope(
+                current,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the identity-equal prerequisite scope should fit");
+        let abstract_marker = abstract_selector.pending_marker();
+        let abstract_slot = EvidenceSlot::empty();
+        abstract_selector
+            .push_cloned_obligation(
+                interface,
+                &Type::Int,
+                MethodObligationMetadata::new(
+                    Box::new([Type::Bool]),
+                    Some(MethodRigidityCondition::new(
+                        Box::new([Type::Int]),
+                        MethodRigiditySite::application(span, span, span),
+                    )),
+                ),
+                SelectionSite::plain(abstract_slot.handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the abstract-dispatch conditional occurrence should stage");
+        abstract_selector
+            .close_with_registry(
+                &abstract_registry,
+                abstract_marker,
+                |ty, _| Ok(ty),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("abstract evidence should retain its existing priority");
+        assert_eq!(abstract_selector.method_rigidity_count(), 0);
+        assert_eq!(abstract_selector.pending_method_rigidity_count, 0);
+        let abstract_selection = abstract_selector.selected[0]
+            .selection
+            .as_ref()
+            .expect("the abstract occurrence should retain private selection");
+        assert!(matches!(
+            abstract_selection.node(abstract_selection.root()),
+            Some(EvidenceNode::Abstract {
+                requirement: selected,
+                ..
+            }) if selected == prerequisite
+        ));
+        assert!(abstract_slot.selection().is_none());
+        abstract_selector
+            .prepare_publication(
+                |ty, _| Ok(ty),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("abstract dispatch needs no rigidity relation")
+            .publish()
+            .expect("the abstract occurrence should publish atomically");
+        assert_eq!(abstract_slot.method_arguments(), &[Type::Bool]);
+
+        let mut current_selector = EvidenceSelector::new();
+        current_selector.add_interface_raw(
+            interface,
+            TypeVariableId::new(0),
+            vec![(method, Type::Unit)],
+        );
+        current_selector.add_implementation_raw(implementation(
+            current,
+            interface,
+            Vec::new(),
+            Type::Int,
+            Vec::new(),
+            vec![ImplMethodId::new(current, method)],
+        ));
+        let current_registry = current_selector.canonical_registry_for_test();
+        current_selector
+            .enter_implementation_scope(
+                current,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the exact-current scope should fit");
+        let current_marker = current_selector.pending_marker();
+        let current_slot = EvidenceSlot::empty();
+        current_selector
+            .push_cloned_obligation(
+                interface,
+                &Type::Int,
+                MethodObligationMetadata::new(
+                    Box::new([Type::Bool]),
+                    Some(MethodRigidityCondition::new(
+                        Box::new([Type::Int]),
+                        MethodRigiditySite::application(span, span, span),
+                    )),
+                ),
+                SelectionSite::plain(current_slot.handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the exact-current conditional occurrence should stage");
+        current_selector
+            .close_with_registry(
+                &current_registry,
+                current_marker,
+                |ty, _| Ok(ty),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the exact-current implementation should select unchanged");
+        assert_eq!(current_selector.method_rigidity_count(), 1);
+        let check = current_selector
+            .method_rigidity(0)
+            .expect("exact-current selection should expose one private rigidity check");
+        assert_eq!(check.method_arguments(), &[Type::Bool]);
+        assert_eq!(check.rigid_arguments(), &[Type::Int]);
+        assert_eq!(
+            check.site(),
+            MethodRigiditySite::application(span, span, span)
+        );
+        assert!(current_slot.selection().is_none());
+        assert!(matches!(
+            current_selector.prepare_publication(
+                |ty, _| Ok(ty),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(SelectionFailure::InvalidState)
+        ));
+        assert!(current_slot.selection().is_none());
     }
 
     #[test]

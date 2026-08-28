@@ -798,6 +798,22 @@ fn polymorphic_recursive_method_self_use_is_rejected() {
 }
 
 #[test]
+fn unrelated_method_body_failure_is_not_displaced_by_staged_recursive_dispatch() {
+    assert_eq!(
+        reason(concat!(
+            "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n\n",
+            "impl Repeat<Int> {\n",
+            "repeat (owner, value) = {\n",
+            "let ignored = repeat((owner, (value, value)))\n",
+            "false\n",
+            "}\n",
+            "}\n",
+        )),
+        "type.definition-result"
+    );
+}
+
+#[test]
 fn recursive_global_self_uses_apply_the_same_rigid_parameters() {
     let observation =
         run("repeat : A -> A\nrepeat value = repeat value\n\nmain : Unit -> Int\nmain () = 0\n");

@@ -23,7 +23,8 @@ pub(crate) enum EvidenceAuditFailure {
 /// A global occurrence owns one slot per requirement in its checked scheme. A
 /// lexical or unconstrained global is absent from `global_scheme` and owns no
 /// slots. A known interface method owns exactly one slot. Every expected slot
-/// must already contain a selection.
+/// must be authenticated by the caller's staged-publication membership; the
+/// audit does not require the one-shot slot to be filled yet.
 pub(crate) fn audit_checked_body_evidence<'a, G, M, S>(
     definitions: &[ResolvedDefinition],
     implementations: &[ResolvedImplementation],

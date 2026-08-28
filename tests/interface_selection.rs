@@ -921,6 +921,99 @@ fn direct_recursive_polymorphic_method_reuses_rigid_arguments() {
 }
 
 #[test]
+fn identity_equal_abstract_prerequisite_dispatch_instantiates_method_locals_normally() {
+    let checked = check(concat!(
+        "interface Use<I> {\nuse<A> : (I, A) -> I\n}\n\n",
+        "impl Use<Int> where Use<Int> {\n",
+        "use (owner, ignored) = use((owner, 42))\n",
+        "}\n\n",
+        "main : Unit -> Unit\nmain () = ()\n",
+    ))
+    .expect("identity-equal abstract evidence should shadow exact-current dispatch");
+
+    let use_method = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let [method_parameter] = checked.interface_facts()[0].methods[0].type_parameters() else {
+        panic!("the polymorphic method should retain one rigid local parameter");
+    };
+    let [requirement] = checked.implementation_facts()[0].prerequisites.as_ref() else {
+        panic!("the implementation should retain its identity-equal prerequisite");
+    };
+    let occurrences = implementation_occurrence_selections(
+        &checked.implementations()[0],
+        ResolvedTermName::Method(use_method),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("the implementation method should retain one prerequisite-dispatched occurrence");
+    };
+    let [slot] = occurrence.evidence.as_ref() else {
+        panic!("the method occurrence should retain one interface obligation");
+    };
+
+    assert_eq!(slot.method_arguments(), &[Type::Int]);
+    assert_ne!(
+        slot.method_arguments(),
+        &[Type::Variable(method_parameter.id)]
+    );
+    assert_abstract_selection(occurrence, requirement.id, &[use_method], &Type::Int);
+}
+
+#[test]
+fn exact_current_polymorphic_recursion_retains_the_method_local_diagnostic() {
+    let text = concat!(
+        "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n\n",
+        "impl Repeat<Int> {\n",
+        "repeat (owner, value) = repeat((owner, (value, value)))\n",
+        "}\n",
+    );
+    let TypeError::Source(diagnostic) =
+        check(text).expect_err("exact-current polymorphic recursion should be rejected")
+    else {
+        panic!("polymorphic recursion should retain a source diagnostic");
+    };
+
+    assert_eq!(diagnostic.reason.to_string(), "type.polymorphic-recursion");
+    assert_eq!(diagnostic.expected.as_deref(), Some("A"));
+    assert_eq!(diagnostic.found.as_deref(), Some("(A, A)"));
+    assert_eq!(
+        diagnostic.primary.message(),
+        "this recursive call requires a different type instantiation"
+    );
+    assert!(
+        diagnostic.related.iter().any(|label| {
+            label.message() == "this recursive function is checked monomorphically"
+        })
+    );
+}
+
+#[test]
+fn failed_body_rigidity_diagnostic_matches_the_same_recursive_application() {
+    let text = concat!(
+        "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n\n",
+        "impl Repeat<Int> {\n",
+        "repeat (owner, value) = {\n",
+        "let earlier = repeat((owner, (value, value)))\n",
+        "repeat((owner, (value, value, value)))\n",
+        "}\n",
+        "}\n",
+    );
+    let final_call = text
+        .rfind("repeat((owner, (value, value, value)))")
+        .and_then(|offset| u32::try_from(offset).ok())
+        .expect("the fixture should retain its representable final recursive application");
+    let TypeError::Source(diagnostic) =
+        check(text).expect_err("both polymorphic recursive applications should be rejected")
+    else {
+        panic!("polymorphic recursion should retain a source diagnostic");
+    };
+
+    assert_eq!(diagnostic.reason.to_string(), "type.polymorphic-recursion");
+    assert!(
+        diagnostic.primary.span().range().start() >= final_call,
+        "the failed body must be correlated with the recursive application that caused it"
+    );
+}
+
+#[test]
 fn polymorphic_method_arguments_never_influence_candidate_selection() {
     let checked = check(concat!(
         "interface Choose<I> {\nchoose<A> : (I, A) -> I\n}\n\n",
