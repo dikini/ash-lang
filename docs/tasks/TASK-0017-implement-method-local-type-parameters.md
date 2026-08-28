@@ -2,7 +2,24 @@
 
 - ID: `TASK-0017`
 - Status: active
-- Related: [CP-0010: Method-Local Type Parameters](../proposals/CP-0010-method-local-type-parameters.md), [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0009: Ordered Resolved-Global Binder Authority](../decisions/AD-0009-ordered-resolved-global-binder-authority.md), the [explicit-import evidence](../design/lib-ash/imports-evidence.md), the [explicit-kind evidence](../design/lib-ash/kinds-evidence.md), and the [execution plan](../plans/2026-08-28-method-local-type-parameters.md)
+- Related:
+  [CP-0010: Method-Local Type Parameters][cp-0010],
+  [DN-0025: Library and Package Milestones][dn-0025],
+  [AD-0006: Front-End Semantic Boundaries][ad-0006],
+  [AD-0007: Typed Core Dialects][ad-0007],
+  [AD-0009: Ordered Resolved-Global Binder Authority][ad-0009],
+  the [explicit-import evidence][import-evidence],
+  the [explicit-kind evidence][kind-evidence], and
+  the [execution plan][execution-plan]
+
+[cp-0010]: ../proposals/CP-0010-method-local-type-parameters.md
+[dn-0025]: ../design/DN-0025-library-and-package-milestones.md
+[ad-0006]: ../decisions/AD-0006-front-end-semantic-boundaries.md
+[ad-0007]: ../decisions/AD-0007-typed-core-dialects.md
+[ad-0009]: ../decisions/AD-0009-ordered-resolved-global-binder-authority.md
+[import-evidence]: ../design/lib-ash/imports-evidence.md
+[kind-evidence]: ../design/lib-ash/kinds-evidence.md
+[execution-plan]: ../plans/2026-08-28-method-local-type-parameters.md
 
 > This task organizes work. It does not define Ash semantics.
 
@@ -536,6 +553,75 @@ and evaluator semantic or state-machine changes.
   12 units, cumulative reserved use remains 38/70, 32 units remain unreserved,
   independent semantic and Rust/resource re-reviews remain pending, and
   Checkpoint 5 is not reserved.
+- Checkpoint 4 quality review rejected correction `2bf317a` with one important
+  and one minor finding. The accepted-capacity RED,
+  `cargo test --locked --test interface_resources
+  monomorphic_interface_capacity_preserves_predecessor_default_acceptance
+  -- --exact`, failed at linked evidence validation under the unchanged
+  327,680-unit production limit: 2,800 public monomorphic interfaces reached
+  344,469 cumulative constraint units because the private authority vector
+  allocated and traversed one scalar row per method. The focused unused-buffer
+  RED, `cargo test --locked --lib
+  evidence_validation::tests::generic_implementation_validation_excludes_discarded_head_scope_buffer_work
+  -- --exact`, measured seven units instead of six because implementation-body
+  validation charged, allocated, and filled a head-parameter vector that no
+  consumer read.
+- The second correction attaches a module-private
+  `Option<Box<[ResolvedTypeVariable]>>` directly to each existing checked
+  method fact. `None` is exact for a monomorphic method and owns no allocation,
+  scalar graph fact, or authority traversal. `Some` is exact for a polymorphic
+  method and owns an independently cloned, source-derived binder payload.
+  Local checking can mint it only through a resolved-source constructor;
+  import and summary retention can clone it only through a constructor whose
+  source is an already-authenticated checked method. Public and hidden summary
+  facts, facade and diamond routes, checker views, the combined registry,
+  selection ingress, linked consistency, implementation relations, and
+  occurrence validation consume the private slice. Missing polymorphic
+  payloads and surplus empty payloads reject, while deep payload teardown stays
+  iterative.
+- The source-to-summary invariant remains complete without reinstating
+  per-monomorphic authority work. Freeze checks every method's defining
+  identity, spelling, declaration order, owner, and span. For a polymorphic
+  method it additionally checks resolved-source origin and monotype, exact
+  source-to-private binders, and exact private-to-checked binders before
+  publication. Detached summary authentication checks the private/public
+  binder biconditional, identity, order, spelling, origin, kind, canonical
+  owner, and value-type body scope; its interface owner and declaration-
+  ordinal checks make method alignment structural. At the linked boundary,
+  `validate_group_consistency` independently checks method identity, spelling,
+  span, origin, monotype, source-to-private binders, and private-to-checked
+  binders. The existing
+  `rejects_every_task8_kinded_linked_diamond_carrier_before_core` matrix covers
+  source method identity, spelling, span, local binder, checked method origin,
+  and checked method type mutations; the summary carrier and hidden-diamond
+  matrices cover public/hidden method type, free-binder, kind, identity, owner,
+  origin, and span mutations. The coherent pre-freeze forge and complete
+  detached binder-tampering matrix remain GREEN.
+- Monomorphic accounting returns exactly to the predecessor boundary:
+  dependency checking is `37W`, entry resolution is `52W + 1`, entry checking
+  is `62W + 12`, linking is `65W + 24`, and linked validation is `110W + 69`.
+  The sole scalar `+1` is the already-recorded successful validation
+  capability, not per-method authority work. The default 2,800-interface
+  witness therefore succeeds at 308,069, leaving 19,611 units, and both
+  predecessor width-5,000 rejection fixtures again reach their intended
+  validation-exhaustion and cycle owners. A polymorphic payload still clones
+  at exact constraint/type limits `1/4`, and the generic hidden-import boundary
+  remains `18/19`. Removing the obsolete implementation-head buffer saves
+  exactly head width `H` constraint units, one allocation, and `H` writes with
+  no TypeWork change; the one-head, one-method witness rejects at five and
+  succeeds reproducibly at six.
+- Second-correction focused GREEN evidence passes 679 library tests, the
+  planned 47 product tests with counts 2/20/1/14/2/8, all 21 architecture
+  tests, and all four cross-stage resource tests. The correction agent and
+  independent capacity audit used `gpt-5.6-sol` at xhigh reasoning. Complete
+  workspace verification passes all 1,480 tests, strict Clippy with warnings
+  denied, formatting, metadata, documentation generation, Markdown lint, and
+  diff hygiene. Self-review additionally changed imported implementation-body
+  checking to consume the private authoritative binder slice directly; the
+  local path continues to consume resolved source authority. Independent
+  semantic and Rust/resource re-reviews remain pending. The Checkpoint 4
+  reservation remains 12 units, cumulative reserved use remains 38/70, 32
+  units remain unreserved, and Checkpoint 5 is not reserved.
 
 ## Verification
 

@@ -8019,7 +8019,7 @@ impl<'a> CheckedInterfaceMethodRef<'a> {
     const fn type_parameters(self) -> &'a [crate::resolved::ResolvedTypeVariable] {
         match self {
             Self::Local(method) => &method.type_parameters,
-            Self::Imported(method) => method.type_parameters(),
+            Self::Imported(method) => method.authoritative_type_parameters(),
         }
     }
 
@@ -8518,33 +8518,34 @@ fn checked_interface_facts(
                     )?,
                 );
             }
-            methods.push(CheckedInterfaceMethodFact {
-                id: method.id,
-                spelling: method.spelling.clone(),
-                type_parameters: method_parameters.into_boxed_slice(),
-                value_type: clone_type_with_budget(&method.annotation.ty, type_work)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
-                origin: method.origin.clone(),
-                span: method.span,
-            });
+            let value_type = clone_type_with_budget(&method.annotation.ty, type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            methods.push(
+                CheckedInterfaceMethodFact::with_resolved_binder_authority(
+                    method,
+                    method_parameters.into_boxed_slice(),
+                    value_type,
+                    type_work,
+                    constraint_work,
+                )
+                .map_err(|failure| match failure {
+                    ResolvedBuildFailure::TypeResource => {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    }
+                    ResolvedBuildFailure::ConstraintResource => constraint_resource(),
+                    ResolvedBuildFailure::InvalidState => invalid_state(),
+                })?,
+            );
         }
-        facts.push(
-            CheckedInterfaceFact::with_resolved_method_binder_authority(
-                interface,
-                clone_resolved_type_variable_with_budget(&interface.parameter, type_work)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
-                methods.into_boxed_slice(),
-                type_work,
-                constraint_work,
-            )
-            .map_err(|failure| match failure {
-                ResolvedBuildFailure::TypeResource => {
-                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                }
-                ResolvedBuildFailure::ConstraintResource => constraint_resource(),
-                ResolvedBuildFailure::InvalidState => invalid_state(),
-            })?,
-        );
+        facts.push(CheckedInterfaceFact {
+            id: interface.id,
+            spelling: interface.spelling.clone(),
+            parameter: clone_resolved_type_variable_with_budget(&interface.parameter, type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            methods: methods.into_boxed_slice(),
+            origin: interface.origin.clone(),
+            span: interface.span,
+        });
     }
     Ok(facts.into_boxed_slice())
 }
@@ -11796,10 +11797,8 @@ mod tests {
         let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        // One private interface requires 48 cells: the predecessor's 39 plus
-        // nine canonical source-method authentication cells. No public
-        // summary clone is retained.
-        const EXACT_WORK: usize = 48;
+        // A monomorphic private interface retains no method-binder authority.
+        const EXACT_WORK: usize = 39;
         let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
 
         let failure =
@@ -11894,9 +11893,9 @@ mod tests {
 
     #[test]
     fn impl_method_substitution_uses_the_exact_constraint_budget() {
-        // The predecessor's 84 cells plus nine canonical source-method
-        // authentication cells form the complete private-interface boundary.
-        const EXACT_WORK: usize = 93;
+        // The interface and implementation method relation form one complete
+        // check-and-freeze boundary.
+        const EXACT_WORK: usize = 84;
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
             "impl Keep<Int> {\nkeep value = value\n}\n",

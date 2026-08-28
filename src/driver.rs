@@ -1219,24 +1219,23 @@ mod tests {
 
     #[test]
     fn wide_interface_graph_records_the_exact_validation_prefix() {
-        const WIDTH: usize = 4_000;
-        // Dependency checking is declaration 8W + checked facts 10W +
-        // selector admission 10W + summary freeze 20W. Checked facts retain
-        // one private method-authority row each; freeze authenticates every
-        // source method relation and clones/authenticates those rows.
-        const DEPENDENCY_CHECKED: usize = 48 * WIDTH;
-        // Entry resolution adds summary authentication 7W, first-route
-        // interface retention 10W, and one dependency-route cell.
-        const ENTRY_RESOLVED: usize = 65 * WIDTH + 1;
-        const ENTRY_CHECKED: usize = 75 * WIDTH + 12;
+        const WIDTH: usize = 5_000;
+        // Dependency checking is declaration 8W + checked facts 9W +
+        // selector admission 10W + summary freeze 10W. A monomorphic method
+        // has no private binder payload and therefore adds no authority work.
+        const DEPENDENCY_CHECKED: usize = 37 * WIDTH;
+        // Entry resolution adds summary authentication 6W, first-route
+        // interface retention 9W, and one dependency-route cell.
+        const ENTRY_RESOLVED: usize = 52 * WIDTH + 1;
+        const ENTRY_CHECKED: usize = 62 * WIDTH + 12;
         // Linking adds its W+7 graph/carrier prefix, W+5 structural
         // authentication, and the W-cell canonical-owner uniqueness index.
         // It does not repeat the 3W complete interface mirror owned by the
         // consuming evidence validator.
-        const LINKED: usize = 78 * WIDTH + 24;
+        const LINKED: usize = 65 * WIDTH + 24;
         // Validation ends by publishing one private method-evidence
         // authentication capability after the complete graph succeeds.
-        const VALIDATED: usize = 123 * WIDTH + 69;
+        const VALIDATED: usize = 110 * WIDTH + 69;
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
             "main : Unit -> Int\n",

@@ -901,8 +901,14 @@ fn validate_group_consistency<'a>(
             if method.id != source_method.id
                 || method.spelling != source_method.spelling
                 || !same_binders_charged(
-                    method.type_parameters(),
+                    method.authoritative_type_parameters(),
                     &source_method.type_parameters,
+                    budget,
+                    method.span,
+                )?
+                || !same_binders_charged(
+                    method.authoritative_type_parameters(),
+                    method.type_parameters(),
                     budget,
                     method.span,
                 )?
@@ -917,7 +923,7 @@ fn validate_group_consistency<'a>(
             {
                 return Err(unknown(method.span));
             }
-            for parameter in method.type_parameters() {
+            for parameter in method.authoritative_type_parameters() {
                 let canonical = program
                     .registry()
                     .type_variable(parameter.id)
@@ -932,11 +938,11 @@ fn validate_group_consistency<'a>(
                 }
             }
             let mut variables = Vec::new();
-            let variable_ids = if method.type_parameters().is_empty() {
+            let variable_ids = if method.authoritative_type_parameters().is_empty() {
                 std::slice::from_ref(&fact.parameter.id)
             } else {
                 let variable_count = method
-                    .type_parameters()
+                    .authoritative_type_parameters()
                     .len()
                     .checked_add(1)
                     .ok_or_else(|| resource(method.span))?;
@@ -947,7 +953,7 @@ fn validate_group_consistency<'a>(
                 variables.push(fact.parameter.id);
                 variables.extend(
                     method
-                        .type_parameters()
+                        .authoritative_type_parameters()
                         .iter()
                         .map(|parameter| parameter.id),
                 );
@@ -1313,7 +1319,7 @@ fn validate_implementation_consistency<'a>(
         if !same_parameter_pairs_to_two_record_slices_charged(
             &method.scheme.type_parameters,
             &fact.head_parameters,
-            interface_method.type_parameters(),
+            interface_method.authoritative_type_parameters(),
             budget,
             method.span,
         )? {
@@ -1321,7 +1327,7 @@ fn validate_implementation_consistency<'a>(
         }
         let method_variable_count = variables
             .len()
-            .checked_add(interface_method.type_parameters().len())
+            .checked_add(interface_method.authoritative_type_parameters().len())
             .ok_or_else(|| resource(method.span))?;
         charge(budget, method_variable_count, method.span)?;
         let mut method_variables = Vec::new();
@@ -1331,7 +1337,7 @@ fn validate_implementation_consistency<'a>(
         method_variables.extend_from_slice(&variables);
         method_variables.extend(
             interface_method
-                .type_parameters()
+                .authoritative_type_parameters()
                 .iter()
                 .map(|parameter| parameter.id),
         );
@@ -1620,11 +1626,11 @@ fn validate_linked_value_schemes<'a>(
                     .get(method_index)
                     .ok_or_else(|| unknown(fact.span))?;
                 let mut variables = Vec::new();
-                let variable_ids = if method.type_parameters().is_empty() {
+                let variable_ids = if method.authoritative_type_parameters().is_empty() {
                     std::slice::from_ref(&fact.parameter.id)
                 } else {
                     let variable_count = method
-                        .type_parameters()
+                        .authoritative_type_parameters()
                         .len()
                         .checked_add(1)
                         .ok_or_else(|| resource(method.span))?;
@@ -1635,7 +1641,7 @@ fn validate_linked_value_schemes<'a>(
                     variables.push(fact.parameter.id);
                     variables.extend(
                         method
-                            .type_parameters()
+                            .authoritative_type_parameters()
                             .iter()
                             .map(|parameter| parameter.id),
                     );
@@ -2217,7 +2223,7 @@ fn authenticate_linked_registry_facts(
                 return Err(unknown(interface.span));
             }
             for method in &interface.methods {
-                for parameter in method.type_parameters() {
+                for parameter in method.authoritative_type_parameters() {
                     charge(budget, 1, parameter.origin.primary_span())?;
                     let canonical = registry
                         .type_variable(parameter.id)
@@ -2489,12 +2495,6 @@ fn validate_implementation<'a>(
     let fact = registry
         .implementation(program, implementation.id())
         .ok_or_else(|| unknown(implementation.span()))?;
-    charge(budget, fact.head_parameters.len(), implementation.span())?;
-    let mut parameters = Vec::new();
-    parameters
-        .try_reserve(fact.head_parameters.len())
-        .map_err(|_| resource(implementation.span()))?;
-    parameters.extend(fact.head_parameters.iter().map(|parameter| parameter.id));
     for method_index in 0..implementation.method_groups().len() {
         charge(budget, 1, implementation.span())?;
         let method = implementation
@@ -2715,13 +2715,17 @@ fn validate_occurrence<'a>(
             if !authentic_method_relation {
                 return Err(invalid_root(span));
             }
-            if method_arguments.len() != method.type_parameters().len() {
+            if method_arguments.len() != method.authoritative_type_parameters().len() {
                 return Err(invalid_root(span));
             }
             kind_environments
                 .install_canonical_owner_ids(program.registry(), scope.variables, type_work, span)
                 .map_err(|failure| map_selected_kind_type_failure(failure, span))?;
-            for (parameter, argument) in method.type_parameters().iter().zip(method_arguments) {
+            for (parameter, argument) in method
+                .authoritative_type_parameters()
+                .iter()
+                .zip(method_arguments)
+            {
                 validate_linked_type_with_policy(
                     argument,
                     program.registry(),
@@ -2768,7 +2772,7 @@ fn validate_occurrence<'a>(
                     .parameter
                     .id,
                 checked_argument,
-                method.type_parameters(),
+                method.authoritative_type_parameters(),
                 method_arguments,
                 checked_value_type,
                 budget,
@@ -4959,6 +4963,60 @@ mod tests {
         ));
         let graph = fixture.graph();
         link_modules(check_graph(&graph), graph.entry()).expect("the local fixture should link")
+    }
+
+    #[test]
+    fn generic_implementation_validation_excludes_discarded_head_scope_buffer_work() {
+        const EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER: usize = 6;
+        let program = entry_program(concat!(
+            "type Wrap<A> = Wrap(A)\n\n",
+            "interface Marker<I> {\nmarker : I -> I\n}\n\n",
+            "impl<A> Marker<Wrap<A>> {\nmarker value = value\n}\n\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
+        ));
+        let group = &program.groups()[0];
+        let implementation = &group.implementations()[0];
+        assert_eq!(
+            group.implementation_facts()[0].head_parameters.len(),
+            1,
+            "the fixture must expose the obsolete head-scope allocation",
+        );
+        assert_eq!(implementation.method_groups().len(), 1);
+        let run = |limit| {
+            let registry =
+                LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                    .expect("the generic implementation registry should authenticate");
+            let mut type_work = TypeWorkBudget::default();
+            let mut environments =
+                build_linked_kind_environments(program.registry(), &mut type_work, group.span())
+                    .expect("the nominal environment should fit");
+            let mut budget = InterfaceConstraintBudget::with_limit(limit);
+            let result = validate_implementation(
+                &program,
+                &registry,
+                group,
+                implementation,
+                &mut environments,
+                &mut budget,
+                &mut type_work,
+            );
+            (result, budget.used())
+        };
+
+        let (one_short, one_short_used) = run(EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER - 1);
+        assert_eq!(
+            one_short
+                .expect_err("one missing body-validation cell must reject")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(one_short_used, EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER - 1);
+        for _ in 0..2 {
+            let (exact, exact_used) = run(EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER);
+            exact.expect("the exact implementation-body validation budget should fit");
+            assert_eq!(exact_used, EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER);
+        }
     }
 
     fn entry_program(source: &str) -> ResolvedModuleProgram {

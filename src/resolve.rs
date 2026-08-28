@@ -2503,7 +2503,9 @@ impl Resolver {
             .methods
             .iter()
             .try_fold(0usize, |count, method| {
-                count.checked_add(method.type_parameters().len()).ok_or(())
+                count
+                    .checked_add(method.authoritative_type_parameters().len())
+                    .ok_or(())
             })
             .map_err(|()| {
                 error(
@@ -2586,44 +2588,46 @@ impl Resolver {
                     "imported method parameters exceeded their type-work budget",
                 )
             })?;
-            methods.push(CheckedInterfaceMethodFact {
-                id: method.id,
-                spelling: method.spelling.clone(),
-                type_parameters: type_parameters.into_boxed_slice(),
-                value_type: value_type.into_inner(),
-                origin: method.origin.clone(),
-                span: method.span,
-            });
+            methods.push(
+                CheckedInterfaceMethodFact::clone_with_binder_authority(
+                    method,
+                    type_parameters.into_boxed_slice(),
+                    value_type.into_inner(),
+                    &mut self.type_work,
+                    &mut self.constraint_work,
+                )
+                .map_err(|failure| match failure {
+                    ResolvedBuildFailure::TypeResource => error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "imported method authority exceeded its type-work budget",
+                    ),
+                    ResolvedBuildFailure::ConstraintResource => error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported method authority exceeded its work budget",
+                    ),
+                    ResolvedBuildFailure::InvalidState => error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an imported method authority disagrees with its checked mirror",
+                    ),
+                })?,
+            );
         }
         let parameter = self.clone_type_variable_for_retention(
             &exported.parameter,
             span,
             "imported interface parameter exceeded its type-work budget",
         )?;
-        let retained = CheckedInterfaceFact::with_cloned_method_binder_authority(
-            exported,
+        let retained = CheckedInterfaceFact {
+            id: exported.id,
+            spelling: exported.spelling.clone(),
             parameter,
-            methods.into_boxed_slice(),
-            &mut self.type_work,
-            &mut self.constraint_work,
-        )
-        .map_err(|failure| match failure {
-            ResolvedBuildFailure::TypeResource => error(
-                ResolveReason::TypeResourceExhausted,
-                span,
-                "imported method authority exceeded its type-work budget",
-            ),
-            ResolvedBuildFailure::ConstraintResource => error(
-                ResolveReason::ConstraintResourceExhausted,
-                span,
-                "imported method authority exceeded its work budget",
-            ),
-            ResolvedBuildFailure::InvalidState => error(
-                ResolveReason::InternalState,
-                span,
-                "an imported method authority disagrees with its checked mirror",
-            ),
-        })?;
+            methods: methods.into_boxed_slice(),
+            origin: exported.origin.clone(),
+            span: exported.span,
+        };
         self.imported.insert_interface(
             retained,
             direct_dependency,
@@ -2989,7 +2993,7 @@ impl Resolver {
             let expected_parameter_count = fact
                 .head_parameters
                 .len()
-                .checked_add(interface_method.type_parameters().len())
+                .checked_add(interface_method.authoritative_type_parameters().len())
                 .ok_or_else(|| {
                     error(
                         ResolveReason::ConstraintResourceExhausted,
@@ -3015,7 +3019,7 @@ impl Resolver {
             let parameters_match = same_kinded_parameters_with_two_binder_slices(
                 &method.scheme.type_parameters,
                 &fact.head_parameters,
-                interface_method.type_parameters(),
+                interface_method.authoritative_type_parameters(),
                 &mut self.constraint_work,
             )
             .map_err(|()| {
@@ -8679,10 +8683,10 @@ mod tests {
         );
         // Route 1; fact metadata 2; parameter record, Source-Origin, and Type
         // Kind 3; interface Source-Origin 1; method Source-Origin 1; the
-        // seven-node Type pair 14 plus its 2U nominal indexes; the two private
-        // method-authority rows; and Secret D=5 (header, one parameter
+        // seven-node Type pair 14 plus its 2U nominal indexes; and Secret D=5
+        // (header, one parameter
         // record/Origin/Kind, defining Origin).
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 3 + 1 + 1 + (14 + 2) + 2 + 5;
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 3 + 1 + 1 + (14 + 2) + 5;
 
         let fixture = ImportBudgetFixture::create(ENTRY, FACADE);
         fs::write(fixture.0.join("base.ash"), BASE)
@@ -9337,8 +9341,8 @@ mod tests {
         assert_eq!(constraint_short.constraint_used, EXACT_CONSTRAINT_WORK - 1,);
         assert_eq!(
             constraint_short.type_used,
-            EXACT_TYPE_WORK - (1 + 1),
-            "the private binder copy begins only after its authority row reserves",
+            EXACT_TYPE_WORK - 2 * (1 + 1),
+            "constraint failure precedes the final four method-binder TypeWork cells",
         );
         assert!(constraint_short.retained.is_none());
 

@@ -670,8 +670,8 @@ impl EvidenceSelector {
             constraint_work
                 .charge_type(&method.value_type)
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
-            let method_parameter_records = method
-                .type_parameters
+            let method_parameters = method.authoritative_type_parameters();
+            let method_parameter_records = method_parameters
                 .len()
                 .checked_mul(2)
                 .ok_or(SelectionFailure::ConstraintResource)?;
@@ -681,16 +681,16 @@ impl EvidenceSelector {
                 .charge(method_parameter_records)
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
             type_work
-                .charge(method.type_parameters.len())
+                .charge(method_parameters.len())
                 .map_err(|()| SelectionFailure::TypeResource)?;
             let mut type_parameters = Vec::new();
             let mut seen = HashSet::new();
             type_parameters
-                .try_reserve(method.type_parameters.len())
+                .try_reserve(method_parameters.len())
                 .map_err(|_| SelectionFailure::ConstraintResource)?;
-            seen.try_reserve(method.type_parameters.len())
+            seen.try_reserve(method_parameters.len())
                 .map_err(|_| SelectionFailure::ConstraintResource)?;
-            for parameter in method.type_parameters() {
+            for parameter in method_parameters {
                 if parameter.id == fact.parameter.id || !seen.insert(parameter.id) {
                     return Err(SelectionFailure::InvalidState);
                 }
@@ -3004,14 +3004,17 @@ mod tests {
             origin: fact.parameter.origin.clone(),
         }];
         for method in &fact.methods {
-            variables.extend(method.type_parameters().iter().map(|parameter| {
-                ResolvedTypeVariable {
-                    id: parameter.id,
-                    spelling: parameter.spelling.clone(),
-                    kind: parameter.kind.clone(),
-                    origin: parameter.origin.clone(),
-                }
-            }));
+            variables.extend(
+                method
+                    .authoritative_type_parameters()
+                    .iter()
+                    .map(|parameter| ResolvedTypeVariable {
+                        id: parameter.id,
+                        spelling: parameter.spelling.clone(),
+                        kind: parameter.kind.clone(),
+                        origin: parameter.origin.clone(),
+                    }),
+            );
         }
         ResolvedRegistry::new(Vec::new(), Vec::new()).with_additional_type_variables(variables)
     }
@@ -3511,25 +3514,27 @@ mod tests {
         let setup = || {
             let mut fact = interface_fact_with_kind(Kind::Type);
             let method_parameter = TypeVariableId::resolved(fact.id.module(), 1);
-            fact.methods = Box::new([CheckedInterfaceMethodFact {
-                id: MethodId::new(fact.id, 0),
-                spelling: "apply".to_owned(),
-                type_parameters: Box::new([ResolvedTypeVariable {
-                    id: method_parameter,
-                    spelling: "F".to_owned(),
-                    kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
-                    origin: Origin::Source(fact.span),
-                }]),
-                value_type: Type::Function(
-                    Box::new(Type::Variable(fact.parameter.id)),
-                    Box::new(Type::Application(
-                        Box::new(Type::Variable(method_parameter)),
+            fact.methods = Box::new([
+                CheckedInterfaceMethodFact::with_mirrored_binder_authority_for_test(
+                    MethodId::new(fact.id, 0),
+                    "apply".to_owned(),
+                    Box::new([ResolvedTypeVariable {
+                        id: method_parameter,
+                        spelling: "F".to_owned(),
+                        kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                        origin: Origin::Source(fact.span),
+                    }]),
+                    Type::Function(
                         Box::new(Type::Variable(fact.parameter.id)),
-                    )),
+                        Box::new(Type::Application(
+                            Box::new(Type::Variable(method_parameter)),
+                            Box::new(Type::Variable(fact.parameter.id)),
+                        )),
+                    ),
+                    Origin::Source(fact.span),
+                    fact.span,
                 ),
-                origin: Origin::Source(fact.span),
-                span: fact.span,
-            }]);
+            ]);
             let registry = registry_for_interface_fact(&fact);
             (fact, registry, method_parameter)
         };
@@ -3612,17 +3617,19 @@ mod tests {
                 .map(|parameter| Type::Variable(parameter.id))
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
-            fact.methods = Box::new([CheckedInterfaceMethodFact {
-                id: MethodId::new(fact.id, 0),
-                spelling: "wide".to_owned(),
-                type_parameters: parameters.into_boxed_slice(),
-                value_type: Type::Function(
-                    Box::new(Type::Variable(fact.parameter.id)),
-                    Box::new(Type::Tuple(values)),
+            fact.methods = Box::new([
+                CheckedInterfaceMethodFact::with_mirrored_binder_authority_for_test(
+                    MethodId::new(fact.id, 0),
+                    "wide".to_owned(),
+                    parameters.into_boxed_slice(),
+                    Type::Function(
+                        Box::new(Type::Variable(fact.parameter.id)),
+                        Box::new(Type::Tuple(values)),
+                    ),
+                    Origin::Source(fact.span),
+                    fact.span,
                 ),
-                origin: Origin::Source(fact.span),
-                span: fact.span,
-            }]);
+            ]);
             let registry = registry_for_interface_fact(&fact);
             (fact, registry)
         };
@@ -4330,13 +4337,15 @@ mod tests {
         let mut fact = interface_fact_with_kind(Kind::Type);
         let method = MethodId::new(fact.id, 0);
         fact.methods = (0..2)
-            .map(|_| CheckedInterfaceMethodFact {
-                id: method,
-                spelling: "method".into(),
-                type_parameters: Box::new([]),
-                value_type: Type::Unit,
-                origin: Origin::Source(fact.span),
-                span: fact.span,
+            .map(|_| {
+                CheckedInterfaceMethodFact::with_mirrored_binder_authority_for_test(
+                    method,
+                    "method".into(),
+                    Box::new([]),
+                    Type::Unit,
+                    Origin::Source(fact.span),
+                    fact.span,
+                )
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
