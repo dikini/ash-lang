@@ -2554,21 +2554,22 @@ fn build_method_evidence_concrete_sources(
         {
             return Err(invalid_root(span));
         }
-        let prerequisite_count = prerequisites
-            .iter()
-            .try_fold(0usize, |count, prerequisite| {
-                let methods = match occurrence.selection.node(*prerequisite)? {
-                    EvidenceNode::Abstract { methods, .. } => methods.len(),
-                    EvidenceNode::Implementation { methods, .. } => methods.len(),
-                };
-                count.checked_add(methods)
-            })
-            .ok_or_else(|| invalid_root(span))?;
-        let prerequisite_scan_work = prerequisites
-            .len()
-            .checked_add(prerequisite_count)
-            .ok_or_else(|| resource(span))?;
-        charge(constraint_work, prerequisite_scan_work, span)?;
+        charge(constraint_work, prerequisites.len(), span)?;
+        let mut prerequisite_count = 0usize;
+        for prerequisite in prerequisites {
+            let methods = match occurrence
+                .selection
+                .node(*prerequisite)
+                .ok_or_else(|| invalid_root(span))?
+            {
+                EvidenceNode::Abstract { methods, .. } => methods.len(),
+                EvidenceNode::Implementation { methods, .. } => methods.len(),
+            };
+            prerequisite_count = prerequisite_count
+                .checked_add(methods)
+                .ok_or_else(|| resource(span))?;
+        }
+        charge(constraint_work, prerequisite_count, span)?;
         let retained_work = 5usize
             .checked_add(
                 prerequisite_count
@@ -2843,12 +2844,21 @@ fn build_method_evidence_expectations(
     }
 
     for occurrence in occurrences {
+        let producer_method_width = match occurrence
+            .selection
+            .node(occurrence.selection.root())
+            .ok_or_else(|| invalid_root(span))?
+        {
+            EvidenceNode::Abstract { methods, .. } => methods.len(),
+            EvidenceNode::Implementation { methods, .. } => methods.len(),
+        };
         if let Some(method) = occurrence.checked_method {
             charge(
                 constraint_work,
                 domains
                     .len()
                     .checked_add(adapter_expectations.len())
+                    .and_then(|work| work.checked_add(producer_method_width))
                     .ok_or_else(|| resource(span))?,
                 span,
             )?;
@@ -2888,6 +2898,7 @@ fn build_method_evidence_expectations(
                     domains
                         .len()
                         .checked_add(adapter_expectations.len())
+                        .and_then(|count| count.checked_add(producer_method_width))
                         .and_then(|count| count.checked_add(1))
                         .ok_or_else(|| resource(span))?,
                     span,
@@ -2978,22 +2989,22 @@ fn build_method_evidence_expectations(
                     pending.extend(prerequisites.iter().copied());
                     continue;
                 }
-                let adapter_edge_count = prerequisites
-                    .iter()
-                    .try_fold(0usize, |count, prerequisite| {
-                        let child = occurrence.selection.node(*prerequisite)?;
-                        let methods = match child {
-                            EvidenceNode::Abstract { methods, .. } => methods.len(),
-                            EvidenceNode::Implementation { methods, .. } => methods.len(),
-                        };
-                        count.checked_add(methods)
-                    })
-                    .ok_or_else(|| invalid_root(span))?;
-                let adapter_edge_capacity_work = prerequisites
-                    .len()
-                    .checked_add(adapter_edge_count)
-                    .ok_or_else(|| resource(span))?;
-                charge(constraint_work, adapter_edge_capacity_work, span)?;
+                charge(constraint_work, prerequisites.len(), span)?;
+                let mut adapter_edge_count = 0usize;
+                for prerequisite in prerequisites {
+                    let child = occurrence
+                        .selection
+                        .node(*prerequisite)
+                        .ok_or_else(|| invalid_root(span))?;
+                    let methods = match child {
+                        EvidenceNode::Abstract { methods, .. } => methods.len(),
+                        EvidenceNode::Implementation { methods, .. } => methods.len(),
+                    };
+                    adapter_edge_count = adapter_edge_count
+                        .checked_add(methods)
+                        .ok_or_else(|| resource(span))?;
+                }
+                charge(constraint_work, adapter_edge_count, span)?;
                 let mut adapter_edges = Vec::new();
                 adapter_edges
                     .try_reserve_exact(adapter_edge_count)
@@ -6740,6 +6751,19 @@ mod tests {
         ))
     }
 
+    fn widened_abstract_method_source_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "interface Use<I> {\n",
+            "first<X> : (I, X) -> I\n",
+            "second<Y> : (I, Y) -> I\n",
+            "}\n\n",
+            "relay<I> : I -> I where Use<I>\n",
+            "relay value = first((second((value, true)), 42))\n\n",
+            "main : Unit -> Unit\n",
+            "main value = value\n",
+        ))
+    }
+
     #[test]
     fn authenticates_polymorphic_method_occurrence_arguments_before_core() {
         validate_interface_evidence(polymorphic_method_program())
@@ -6769,8 +6793,9 @@ mod tests {
         // charges one search slot. Its checked width derivations first admit
         // B=3 implementation/interface header reads, before traversing
         // those rows:
-        // 87 + C + 2A + 2E + G + M + J + B = 105.
-        assert_eq!(constraint_work, 105);
+        // Its producer lookups additionally read P=2 selected-node method
+        // cells: 87 + C + 2A + 2E + G + M + J + B + P = 107.
+        assert_eq!(constraint_work, 107);
         assert_eq!(type_work, 74);
         drop(catalog);
 
@@ -6810,6 +6835,78 @@ mod tests {
     }
 
     #[test]
+    fn widened_abstract_producer_lookup_has_an_exact_retry_boundary() {
+        let program = widened_abstract_method_source_program();
+        let mut measured_constraint = InterfaceConstraintBudget::default();
+        let mut measured_type = TypeWorkBudget::default();
+        let catalog = build_core_method_evidence_catalog(
+            &program,
+            &mut measured_constraint,
+            &mut measured_type,
+        )
+        .expect("the widened abstract-only catalog should build");
+        assert_eq!(catalog.domains().len(), 2);
+        assert!(catalog.adapters().is_empty());
+        let producer_lookups = catalog
+            .expectations()
+            .iter()
+            .filter(|expectation| {
+                matches!(
+                    expectation.role,
+                    MethodEvidenceExpectedRole::Instantiation { .. }
+                        | MethodEvidenceExpectedRole::Application { .. }
+                )
+            })
+            .count();
+        assert_eq!(producer_lookups, 2);
+        // The fixed abstract-only catalog costs 85 constraint units. Its two
+        // producer lookups each read the exact W=2 selected-node method list;
+        // D=2 domain scans were already charged and A=0:
+        // 85 + L*W = 85 + 2*2 = 89.
+        const CONSTRAINT_WORK: usize = 85 + 2 * 2;
+        const TYPE_WORK: usize = 32;
+        assert_eq!(measured_constraint.used(), CONSTRAINT_WORK);
+        assert_eq!(measured_type.used(), TYPE_WORK);
+        drop(catalog);
+
+        let mut constraint_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+        assert_eq!(
+            build_core_method_evidence_catalog(
+                &program,
+                &mut constraint_short,
+                &mut TypeWorkBudget::default(),
+            )
+            .expect_err("one missing selected-method scan unit rejects publication")
+            .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+        assert_eq!(
+            build_core_method_evidence_catalog(
+                &program,
+                &mut InterfaceConstraintBudget::default(),
+                &mut type_short,
+            )
+            .expect_err("one missing abstract-only Type cell rejects publication")
+            .reason(),
+            EvidenceValidationReason::TypeResourceExhausted,
+        );
+        for _ in 0..2 {
+            let mut constraint_exact = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+            let mut type_exact = TypeWorkBudget::with_limit(TYPE_WORK);
+            let retry = build_core_method_evidence_catalog(
+                &program,
+                &mut constraint_exact,
+                &mut type_exact,
+            )
+            .expect("a fresh exact widened producer stage retries");
+            assert_eq!(constraint_exact.used(), CONSTRAINT_WORK);
+            assert_eq!(type_exact.used(), TYPE_WORK);
+            drop(retry);
+        }
+    }
+
+    #[test]
     fn concrete_adapter_source_catalog_has_an_exact_retry_boundary() {
         let program = concrete_monomorphic_source_program();
         let mut measured_constraint = InterfaceConstraintBudget::default();
@@ -6821,7 +6918,7 @@ mod tests {
         )
         .expect("the concrete source catalog should build");
         assert_eq!(catalog.concrete_sources().len(), 1);
-        // The fixed linked adapter pipeline costs 121 constraint units after
+        // The fixed linked adapter pipeline costs 122 constraint units after
         // separately charging every count/search pass over checked methods,
         // interface methods, owner candidates, and requirement interfaces,
         // including checked outer row reads before deriving widths. The
@@ -6829,7 +6926,7 @@ mod tests {
         // occurrence lookup, J=2 checked-method reads, M=1 selected-method
         // membership, P=1 polymorphic-method classification, and five retained
         // scalar identities. This ground source has H=0 cloned head Types.
-        const CONSTRAINT_WORK: usize = 121 + 8 + 1 + 1 + 2 + 1 + 1 + 5;
+        const CONSTRAINT_WORK: usize = 122 + 8 + 1 + 1 + 2 + 1 + 1 + 5;
         const TYPE_WORK: usize = 36;
         assert_eq!(measured_constraint.used(), CONSTRAINT_WORK);
         assert_eq!(measured_type.used(), TYPE_WORK);

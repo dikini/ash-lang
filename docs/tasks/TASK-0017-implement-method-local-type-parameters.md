@@ -983,6 +983,34 @@ and evaluator semantic or state-machine changes.
   cumulative reserved use remains 52/70, 18 units remain unreserved, and
   Checkpoint 6 is not reserved. CP5 remains open for review and final root
   verification.
+- Final quality re-review of `8eccef4` found one localized catalog-metering
+  gap: two root producer lookups charged domains and adapters but not the
+  selected evidence node's method width, and two prerequisite counts inspected
+  their child rows before charging the count pass. The correction charges the
+  exact root method width before each producer lookup. Concrete-source and
+  adapter-edge prerequisite counts now charge the prerequisite rows before
+  reading children, then charge the derived method-edge capacity before
+  reserve. The already-budgeted sibling semantic-producer path is unchanged.
+- A reachable abstract-only witness retains `W = 2` selected methods, `D = 2`
+  domains, `A = 0` adapters, and two producer lookups. Its exact catalog
+  boundary is 89 constraint and 32 type units: 85 fixed units plus
+  `L * W = 2 * 2`. General catalog construction moves from 105 to 107
+  constraint units while type work remains 74; concrete-source construction
+  moves from 140 to 141 while type work remains 36. Both new and revised
+  boundaries reject one-short work and succeed on two fresh retries. The
+  approved Builder 4/14, validator 633/1,088/2,339, transform 686, and
+  elaborator 10 boundaries remain unchanged. No production limit changed.
+- Final-review verification passes 711 library tests, all 62 Core-validation
+  integration tests, all 21 architecture tests, and the complete 1,518-test
+  quiet locked workspace/all-target/all-feature matrix. Formatting, locked
+  workspace/all-target/all-feature checking, and strict Clippy with warnings
+  denied pass, as do `cargo xtask verify` including rustdoc, Markdown lint,
+  relative-link verification, and diff hygiene. The evaluator tree remains
+  byte-identical to `5ce71d1`; no specification file or production
+  resource-limit assignment changed. The CP5 reservation remains 14 units,
+  cumulative reserved use remains 52/70, 18 units remain unreserved, and
+  Checkpoint 6 is not reserved. CP5 remains open for review and final root
+  verification.
 
 ## Verification
 
