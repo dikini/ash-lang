@@ -1052,6 +1052,72 @@ and evaluator semantic or state-machine changes.
   reservation does not authorize specification changes, production resource
   limit changes, new evaluator state or behavior, new Core forms, selection
   changes, or a new language rule.
+- The complete product RED first lacked its retained three-module fixture and
+  resource target. Once those existed, it exposed two earlier-checkpoint
+  authentication defects. Imported checked method facts retained the whole
+  declaration span instead of the exact annotation subspan, so linked
+  implementation evidence could not reconstruct the selected interface-method
+  identity. Retaining and authenticating that copy-only span closes the gap.
+  Full cross-module implementation provenance then reached Core, whose accepted
+  invariant permits only source-local related spans. Linked validation still
+  authenticates the complete cross-module origin; final Core lowering projects
+  its already-authenticated primary span. Core validation, evaluator behavior,
+  and every source provenance carrier remain unchanged.
+- The retained `Functor<F>.map<A, B>` product uses unrelated `Int`-to-`Bool`
+  and `Bool`-to-`Int` instantiations inside one separately checked constrained
+  global, a generic `Box<A>` implementation, and explicit entry-module
+  selection. The same source fixture evaluates to
+  `(Box(true), Box(42)) : (Box<Bool>, Box<Int>)` through the library and CLI.
+  Its original, identity-transformed, and folded Core programs independently
+  validate and evaluate equally. Exact evidence-node traces and an exhaustive
+  runtime-carrier inventory retain only existing type erasure, lookup, and
+  application transitions; no evaluator value, environment entry, frame,
+  lookup class, failure, or runtime interface state was added.
+- Diagnostic and migration evidence covers all twelve unavailable higher-rank
+  routes, exact typed reasons and spans, failure precedence, the absent-list
+  predecessor rejection, and the explicit-list accepted migration through both
+  library and CLI paths. Because `interface` is a reserved module token, the
+  mandated retained `interface.ash` and `implementation.ash` sources are staged
+  as `api.ash` and `carrier.ash`; their contents and the retained `entry.ash`
+  remain the one product fixture used by both paths.
+- Resource evidence retains the exact syntax formula `66 + 14P` at
+  `P = 1, 2, 3, 512` and a bidirectional manifest for all syntax, resolved,
+  summary, linked, adapter, Core, transform, and teardown carriers. Its 27
+  unique owner probes include exact selector, publication, rigidity,
+  conditional, evidence-scope, catalog, Builder, validator, worklist,
+  transform, discarded-buffer, and pending-zonk formulas. Deep accepted and
+  rejected depth 96, wide accepted and rejected width 128, width-64 adapter
+  transforms, a prebuilt rejected adapter-bearing Core program, and pending
+  zonk teardown all dispose on a 256 KiB stack. Public width 1,024 succeeds;
+  width 5,000 fails twice at the unchanged typing constraint budget and a fresh
+  width-1,024 retry succeeds.
+- The complete public adapter pipeline cannot be constructed on a 256 KiB
+  stack even at width two because of a width-independent construction frame.
+  That boundary is intentionally excluded from the teardown claim: retained
+  small-stack evidence consumes prebuilt accepted and rejected adapter states.
+  It is not a teardown defect, semantic gap, or reason to change a production
+  limit.
+- Independent semantic review approves exact binder authority, linked
+  provenance authentication before source-local Core projection, shared
+  product observations, transform revalidation, runtime erasure, diagnostics,
+  migration, and exclusions with no findings. Independent quality and resource
+  review first rejected an incomplete formula manifest, a one-way carrier
+  inventory, and insufficient rejected-lifecycle evidence. The same
+  implementation pass added the complete formulas, bidirectional inventories,
+  prebuilt rejected-Core disposal, and the two omitted hidden-import and
+  discarded-head-buffer probes. Re-review approves the corrected boundary with
+  no findings.
+- Fresh root verification passes all 711 library tests, 62 Core-validation
+  tests, 34 interface tests, 41 polymorphism tests, 23 architecture tests, and
+  the combined 240-test Checkpoint 6 focus. The locked
+  workspace/all-target/all-feature run and exact listing pass all 1,531 tests.
+  Formatting, locked checking, strict Clippy with warnings denied,
+  `cargo xtask verify` including warning-denied rustdoc, Markdown lint, all
+  relative-link targets in 84 Markdown files, and diff hygiene pass. The
+  specification, evaluator, Core validator, and production limits remain
+  unchanged. Checkpoint 6 is complete in `dab6e93`; its reserved use is ten
+  units, cumulative reserved use is 62/70, eight units remain unreserved, and
+  Checkpoint 7 is not reserved.
 
 ## Verification
 
@@ -1092,6 +1158,19 @@ The current evidence-closure boundary selects and fills method evidence before
 whole-module inference closure. The implementation must retain selection as
 private pending state and fill the occurrence slot only after every method
 argument is inference-free.
+
+A body-free checked interface-method fact must retain the exact annotation
+subspan. The whole declaration span is insufficient to reconstruct and
+authenticate imported implementation provenance.
+
+Cross-module related spans belong to linked evidence, where source identities
+are available for authentication. After that check, Core receives the
+source-local primary span required by its existing provenance invariant.
+
+Small-stack teardown evidence may consume prebuilt states when a
+width-independent construction frame exceeds the target stack. The retained
+claim must name that construction exclusion and separately cover both accepted
+and rejected lifecycle states.
 
 ## Deviations
 
