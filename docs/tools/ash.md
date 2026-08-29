@@ -192,10 +192,11 @@ Its exact standard output is:
 (Some(42), true, ()) : (Option<Int>, Bool, Unit)
 ```
 
-Kinds, scheme instantiation, and selected interface evidence add no runtime
-value or state. The existing evaluator erases their Core type operations before
-producing the observation. They add no CLI configuration, runtime lookup, or
-output field.
+Selected interface evidence flows as ordinary function values and applications.
+It adds no new runtime value class or interface-specific state. Kinds and scheme
+instantiation add no runtime state; the existing evaluator erases their Core
+type operations before producing the observation. They add no CLI
+configuration, runtime lookup, or output field.
 
 ### Method-local type parameters
 

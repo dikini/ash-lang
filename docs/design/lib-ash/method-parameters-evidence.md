@@ -231,11 +231,12 @@ type-application-erasure
 variable-lookup
 ```
 
-Polymorphic method evidence adds no evaluator value, environment-entry class,
-frame kind, lookup class, transition class, failure reason, runtime interface
-state, dictionary, registry, registration, or dispatch. The trace contains
-additional instances of existing erasure, lookup, and strict-application
-transitions, not a new transition rule.
+Polymorphic method evidence flows as ordinary function values and applications,
+but adds no new evaluator value class, environment-entry class, frame kind,
+lookup class, transition class, failure reason, runtime interface state,
+dictionary, registry, registration, or dispatch. The trace contains additional
+instances of existing erasure, lookup, and strict-application transitions, not
+a new transition rule.
 
 ## Diagnostics, migration, and unavailable routes
 

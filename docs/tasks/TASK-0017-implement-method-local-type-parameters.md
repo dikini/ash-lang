@@ -1163,6 +1163,12 @@ and evaluator semantic or state-machine changes.
   definitions, states the non-inspection and no-runtime-state boundary, and
   extends the lexical inventory and executable fragment manifest. Semantic
   re-review remains pending.
+- Semantic re-review approves those three repairs but rejects one remaining
+  tool-guide overstatement: selected evidence does flow as ordinary function
+  values and applications even though it adds no new runtime value class or
+  interface-specific state. The correction states that distinction in the
+  tool guide and aligns the normative dynamic and retained-evidence wording.
+  Another semantic re-review remains pending.
 
 ## Verification
 

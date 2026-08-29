@@ -98,12 +98,13 @@ function lookup and closure materialization.
 
 There is no runtime interface value, dictionary, interface or implementation
 registry, implementation lookup, interface dispatch, registration step, or
-interface-specific failure mode. Polymorphic method evidence adds no evaluator
-value, environment-entry class, frame kind, lookup class, transition class,
-failure reason, or runtime interface state. Evidence construction uses only
-type erasure, recursive binding, ordinary binder lookup and closure
-materialization, and the strict application transitions below. It adds no Core
-node and requires no new evaluation rule.
+interface-specific failure mode. Polymorphic method evidence uses ordinary
+function values and applications but adds no new evaluator value class,
+environment-entry class, frame kind, lookup class, transition class, failure
+reason, or runtime interface state. Evidence construction uses only type
+erasure, recursive binding, ordinary binder lookup and closure materialization,
+and the strict application transitions below. It adds no Core node and requires
+no new evaluation rule.
 
 The executable test
 `generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace`
