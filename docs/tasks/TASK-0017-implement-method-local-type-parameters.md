@@ -45,9 +45,10 @@
 
 ## Work budget
 
-The authorized work budget is 70 notional units relative to 100 units for the
-preceding explicit-kind increment. Units compare checkpoint scope and risk;
-they are not elapsed time, tokens, or lines changed.
+The initial authorized work budget was 70 notional units relative to 100 units
+for the preceding explicit-kind increment. The user later authorized ten more
+units, raising this increment's authorization to 80/100. Units compare
+checkpoint scope and risk; they are not elapsed time, tokens, or lines changed.
 
 | Checkpoint | Units | Cumulative |
 | --- | ---: | ---: |
@@ -58,6 +59,10 @@ they are not elapsed time, tokens, or lines changed.
 | Core adapters, authentication, and transforms | 14 | 52 |
 | Resources, migration, diagnostics, and corpus | 10 | 62 |
 | Specification, evidence, reviews, and closure | 8 | 70 |
+| Concrete-source prerequisite provenance correction | 8 | 78 |
+
+The corrective checkpoint reserves eight of the ten added units. Cumulative
+reserved use is 78/80, and two units remain unreserved.
 
 Starting any checkpoint, including a documentation checkpoint, reserves its
 full allocation through corrections and review. A checkpoint may finish inside
@@ -66,7 +71,7 @@ every checkpoint boundary, record the cumulative reserved units, commit,
 witnessed RED and GREEN commands, review findings, and remaining units here.
 
 Stop without reallocating or expanding scope when a checkpoint cannot finish
-inside its reserved units, when any additional work would exceed 70, when a
+inside its reserved units, when any additional work would exceed 80, when a
 required evidence category remains open at its checkpoint boundary, or when
 implementation needs a semantic rule absent from CP-0010. Return to proposal
 or design work before adding a persistent Core representation choice outside
@@ -1169,6 +1174,13 @@ and evaluator semantic or state-machine changes.
   interface-specific state. The correction states that distinction in the
   tool guide and aligns the normative dynamic and retained-evidence wording.
   Another semantic re-review remains pending.
+- The user authorizes ten additional units for a bounded independent-Core
+  correction to concrete-source prerequisite provenance. Eight units are
+  reserved for the correction, its resource remeasurement, evidence, and
+  verification. Cumulative reserved use is 78/80, and two units remain
+  unreserved. The checkpoint does not authorize a new semantic rule,
+  persistent Core carrier, selection change, evaluator change, or production
+  resource-limit change.
 
 ## Verification
 
