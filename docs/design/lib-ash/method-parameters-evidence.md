@@ -50,15 +50,16 @@ principal unsigned boundaries are:
 - `72a91e3`, which retains the semantic/specification and
   implementation/Core/resource approval records for that correction; and
 - `689f64a`, which completes the principal checkpoint ledger and records the
-  conditional transition-cleanup boundary.
+  conditional transition-cleanup boundary; and
+- `c98edc2`, which retains the completed re-review, root verification, and
+  documentation-gate evidence before transition cleanup.
 
 The third evidence, migration, lifecycle, and authority review found that the
 checkpoint ledger stopped at the reservation boundary and omitted these later
 commits. The third-review re-review approves the correction after `689f64a`
 resolved that sole Important finding. Fresh root and documentation verification
-now pass. The next boundary is the retained-evidence commit; the approved
-transition cleanup follows it. Commit identities are evidence boundaries, not
-independent language authority.
+pass, and `c98edc2` retains their results before transition cleanup. Commit
+identities are evidence boundaries, not independent language authority.
 
 ## Implemented boundary
 
@@ -446,8 +447,8 @@ strict Clippy with warnings denied, formatting, Markdown lint, and diff hygiene
 also pass. No specification, selection rule, persistent Core carrier,
 evaluator behavior, or production resource limit changes. The correction uses
 its reserved eight units at cumulative use 78/80; two units remain unreserved.
-Checkpoint 7 reviews and complete root verification remain open after this
-implementation handoff.
+The subsequent reviews and complete root verification close this implementation
+handoff without expanding its semantic or resource boundary.
 
 The focused GREEN commands are `cargo test --locked --lib
 core::validate::tests::concrete_source_prerequisites_match_direct_selection_nodes_after_every_rebuild
@@ -510,18 +511,21 @@ passes and all 731 current relative links resolve. Simulated transition cleanup
 checks 82 retained Markdown files and all 696 retained links, with no retained
 link to a removed artifact.
 
-The review approves transition cleanup after this ledger correction,
+The review approves transition cleanup after the ledger correction,
 third-review re-review, full root verification, retained-evidence commit, and
-clean-tree gate. The first three gates and the pre-retention clean-tree check
-are complete. The next boundary is this retained-evidence commit; cleanup
-follows it. The approved cleanup set is
-`docs/proposals/CP-0010-method-local-type-parameters.md`,
-`docs/tasks/TASK-0017-implement-method-local-type-parameters.md`, and
-`docs/plans/2026-08-28-method-local-type-parameters.md`. Cleanup replaces the
-CP-0010 entry in `docs/proposals/README.md` with the no-accepted-change state
-and the TASK-0017 entry in `docs/tasks/README.md` with the no-active-task state,
-then removes any stale current-tree links. This report records that conditional
-approval without taking over task authority.
+clean-tree gate. All five gates are complete. The transition-only proposal,
+task, and execution plan have left the current tree; their index entries now
+record that no accepted proposal awaits implementation and no implementation
+task is active. Git history retains those artifacts and their authority during
+the transition. This report remains informative and does not take over task or
+language authority.
+
+Post-cleanup Markdown lint passes across 82 retained Markdown files, and all
+696 retained relative links resolve. `cargo xtask verify` passes again,
+including all 1,537 tests and documentation generation. Independent lifecycle
+review approves the actual cleanup with no finding: it matches the authorized
+set, changes no semantic authority, leaves no stale link, and does not claim
+integration or full milestone completion.
 
 Cumulative reserved use remains 78/80, with two units unreserved. This retained
 evidence does not claim integration or completion of the full `lib-ash`

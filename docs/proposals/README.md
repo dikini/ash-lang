@@ -22,4 +22,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-- [CP-0010: Method-Local Type Parameters](CP-0010-method-local-type-parameters.md)
+No accepted change proposal is currently awaiting implementation.

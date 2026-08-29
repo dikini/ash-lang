@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0017: Implement Method-Local Type Parameters](TASK-0017-implement-method-local-type-parameters.md)
+No implementation task is currently active.
