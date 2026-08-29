@@ -1257,9 +1257,30 @@ and evaluator semantic or state-machine changes.
   workspace/all-target/all-feature checking, strict Clippy, formatting,
   changed-document Markdown lint, diff hygiene, and clean status. The review
   finds no semantic, Core-representation, or production-limit stop condition.
-- The evidence, migration, lifecycle, and authority review and full root
+- The third evidence, migration, lifecycle, and authority review reports one
+  Important local evidence/lifecycle finding and no Critical or Minor finding.
+  The retained report's principal checkpoint ledger stopped at `685b019` and
+  omitted the later specification, boundary-wording, concrete-source
+  correction, resource, and review commits. The review finds no semantic,
+  Core-representation, production-limit, migration, or stack-lifecycle stop
+  condition.
+- Third-review checks pass both concrete-source prerequisite regressions, all
+  713 library tests, all 62 Core-validation tests, all four method-parameter
+  resource tests, all 61 specification examples, predecessor migration and
+  all twelve excluded higher-rank routes, Markdown lint, every relative link
+  in 85 Markdown files, and the budget and integration audit.
+- After the ledger correction, third-review re-review, full root verification,
+  a retained-evidence commit, and a clean-tree gate, the reviewer approves
+  removing `docs/proposals/CP-0010-method-local-type-parameters.md`,
+  `docs/tasks/TASK-0017-implement-method-local-type-parameters.md`, and
+  `docs/plans/2026-08-28-method-local-type-parameters.md`. The same cleanup
+  replaces the CP-0010 entry in `docs/proposals/README.md` with the
+  no-accepted-change state, replaces the TASK-0017 entry in
+  `docs/tasks/README.md` with the no-active-task state, and removes any stale
+  current-tree links.
+- Third-review re-review, the final retained-evidence boundary, and full root
   closure verification remain pending. Cumulative reserved use remains 78/80,
-  with two units unreserved. This review checkpoint does not close
+  with two units unreserved. This finding correction does not close
   Checkpoint 7.
 
 ## Verification

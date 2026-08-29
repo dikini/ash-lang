@@ -34,14 +34,27 @@ principal unsigned boundaries are:
   migration, runtime trace, carrier inventory, small-stack lifecycle evidence,
   independent reviews, and the 1,531-test product boundary; and
 - `685b019`, which reserves the final specification, evidence, review, and
-  transition-cleanup checkpoint at cumulative use 70/70; and
+  transition-cleanup checkpoint at cumulative use 70/70;
+- `09e9dd8`, which reconciles the normative specification and creates the
+  initial retained method-parameter evidence report;
+- `9304a04`, which corrects the specification boundaries for atomic module
+  publication, inert retained runtime authority, and method-list lexical
+  syntax;
+- `9ade2df`, which corrects the runtime-boundary wording for selected evidence
+  flowing through existing function values and applications;
 - `33ce4b4`, which records ten added authorized units and reserves eight for
   the concrete-source prerequisite correction at cumulative use 78/80, with
-  two units unreserved.
+  two units unreserved;
+- `8930564`, which corrects concrete-source prerequisite provenance and
+  remeasures the directly affected validation resources; and
+- `72a91e3`, which retains the semantic/specification and
+  implementation/Core/resource approval records for that correction.
 
-The final specification and retained-evidence commits are recorded here after
-their independent reviews. Commit identities are evidence boundaries, not
-independent language authority.
+The third evidence, migration, lifecycle, and authority review found that the
+checkpoint ledger stopped at the reservation boundary and omitted these later
+commits. This corrected ledger does not claim the final retention boundary:
+third-review re-review and full root verification remain pending. Commit
+identities are evidence boundaries, not independent language authority.
 
 ## Implemented boundary
 
@@ -462,9 +475,31 @@ checking, strict Clippy, formatting, changed-document Markdown lint, diff
 hygiene, and clean status. The reviewer finds no semantic,
 Core-representation, or production-limit stop condition.
 
-The evidence, migration, lifecycle, and authority review and full root closure
-verification remain pending. Cumulative reserved use remains 78/80, with two
-units unreserved. These two approvals do not close Checkpoint 7.
+The third evidence, migration, lifecycle, and authority review reports one
+Important local evidence/lifecycle finding and no Critical or Minor finding:
+the principal checkpoint ledger omitted the specification, wording,
+correction, resource, and review commits after `685b019`. It finds no semantic,
+Core-representation, production-limit, migration, or stack-lifecycle stop
+condition. Its checks pass both concrete-source prerequisite regressions, 713
+library tests, 62 Core-validation tests, four method-parameter resource tests,
+all 61 specification examples, predecessor migration and all twelve excluded
+higher-rank routes, Markdown lint, every relative link in 85 Markdown files,
+and the budget and integration audit.
+
+The review approves transition cleanup only after this ledger correction,
+third-review re-review, full root verification, a retained-evidence commit,
+and a clean-tree gate. The approved cleanup set is
+`docs/proposals/CP-0010-method-local-type-parameters.md`,
+`docs/tasks/TASK-0017-implement-method-local-type-parameters.md`, and
+`docs/plans/2026-08-28-method-local-type-parameters.md`. Cleanup replaces the
+CP-0010 entry in `docs/proposals/README.md` with the no-accepted-change state
+and the TASK-0017 entry in `docs/tasks/README.md` with the no-active-task state,
+then removes any stale current-tree links. This report records that conditional
+approval without taking over task authority.
+
+Third-review re-review, the final retained-evidence boundary, and full root
+closure verification remain pending. Cumulative reserved use remains 78/80,
+with two units unreserved. These review records do not close Checkpoint 7.
 
 ## Intentional exclusions and remaining pressure
 
