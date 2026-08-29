@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No implementation task is currently active.
+- [TASK-0018: Implement Multi-Parameter Relational Interfaces](TASK-0018-implement-multi-parameter-relational-interfaces.md) — implements accepted [CP-0011](../proposals/CP-0011-multi-parameter-relational-interfaces.md) through the linked task-owned execution plan.

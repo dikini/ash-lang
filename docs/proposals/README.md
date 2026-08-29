@@ -22,4 +22,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-No accepted change proposal is currently awaiting implementation.
+- [CP-0011: Multi-Parameter Relational Interfaces](CP-0011-multi-parameter-relational-interfaces.md) — accepted; implementation is organized by [TASK-0018](../tasks/TASK-0018-implement-multi-parameter-relational-interfaces.md).
