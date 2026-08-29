@@ -309,7 +309,7 @@ const PHASE_DEPENDENT_NO_KIND_INFERENCE: &str = "Every omitted declaration kind 
 const EXPLICIT_KIND_RULE_FRAGMENTS: &[(&str, &str)] = &[
     (
         "spec/lexical-structure.md",
-        "Angle brackets delimit parameter lists on nominal, global, and\nimplementation declarations",
+        "Angle brackets delimit parameter lists on nominal, global, and\nimplementation declarations, method parameter lists",
     ),
     (
         "spec/syntax.md",
@@ -376,7 +376,7 @@ const METHOD_PARAMETER_RULE_FRAGMENTS: &[(&str, &str)] = &[
     ),
     (
         "spec/dynamic-semantics.md",
-        "Method authentication records and method schemes do not reach the evaluator.",
+        "The evaluator does not inspect method authentication records or method schemes.",
     ),
     (
         "spec/README.md",

@@ -1150,6 +1150,19 @@ and evaluator semantic or state-machine changes.
   labeled historical `Current behavior` section. Checkpoint 7 remains open for
   its specification commit, three sequential independent reviews, complete
   verification gate, retained-evidence update, and transition cleanup.
+- The first independent semantic and specification review of `09e9dd8`
+  rejected three local reconciliation defects and found no missing accepted
+  rule. The module judgment froze occurrence evidence for the summary but did
+  not explicitly construct the returned checked module from the same frozen
+  definitions. Dynamic prose incorrectly said retained method arguments and
+  authentication facts did not reach the machine, although the validated
+  program carries inert authority and type-application control carries
+  arguments that the evaluator does not inspect. The lexical angle-bracket
+  inventory also omitted method parameter lists. One documentation correction
+  connects both checked-module and summary publication to the frozen
+  definitions, states the non-inspection and no-runtime-state boundary, and
+  extends the lexical inventory and executable fragment manifest. Semantic
+  re-review remains pending.
 
 ## Verification
 

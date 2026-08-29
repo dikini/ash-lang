@@ -268,7 +268,9 @@ so independent validation can derive and check every generated evidence
 domain, occurrence, forwarding use, and adapter. Their term structure uses only
 ordinary Core type abstractions, function binders, binder occurrences, type
 applications, and term applications. Method authentication facts and schemes
-erase before evaluation.
+may remain as inert validation and transformation authority in the validated
+program; the evaluator does not inspect them. Core type operations erase
+through the existing dynamic rules.
 
 ## Explicit rank-1 operations
 

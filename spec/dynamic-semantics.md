@@ -75,9 +75,13 @@ abstraction and then the implementation method's complete type application.
 the recursive function binder materializes a lexical closure under the existing
 recursive-binding behavior.
 
-Method authentication records and method schemes do not reach the evaluator.
-No interface identity, selection record, implementation authorization route,
-or retained method argument reaches the machine.
+The validated Core program may retain method authentication records and method
+schemes as static authority, and a Core type application carries its retained
+method arguments in control until `E-Type-Application` erases that node.
+The evaluator does not inspect method authentication records or method schemes.
+It does not turn an interface identity, selection record, implementation
+authorization route, method scheme, or method argument into a runtime value,
+environment entry, heap cell, frame, lookup, or transition choice.
 
 For a generic implementation method, lowering uses the recorded head
 substitution to form an ordinary Core type application. When evaluation enters

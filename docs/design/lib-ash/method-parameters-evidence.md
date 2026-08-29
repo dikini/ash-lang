@@ -172,9 +172,11 @@ exactly. Only a generated adapter may use one bounded capture-free, order- and
 kind-preserving alpha-renaming. Monotype equality and unification remain exact.
 
 Identity and literal-folding transformations preserve or rebuild the complete
-relationship, then pass fresh independent validation. Method schemes,
-authentication facts, and type operations erase before observation. No new
-Core node or evaluator state is present.
+relationship, then pass fresh independent validation. Method schemes and
+authentication facts may remain as inert authority in the validated program,
+but the evaluator does not inspect them or derive runtime state from them. Core
+type operations erase through the existing dynamic rules before observation.
+No new Core node or evaluator state is present.
 
 ## Tampering matrix
 
@@ -373,9 +375,15 @@ Checkpoint 7 begins with 57 predecessor executable specification tests. Its
 four documentation REDs prove the missing normative manifest, complete linked
 overview, exact CLI observation, and predecessor-to-explicit migration while
 all product execution succeeds. The reconciled specification passes all 61
-examples. Final semantic/specification, implementation/Core/resource, and
-evidence/migration/lifecycle/authority reviews and the complete final inventory
-are recorded here before transition cleanup.
+examples. Its first semantic/specification review found three local
+reconciliation defects: the formal module result was not connected to frozen
+occurrence definitions, dynamic prose overstated physical erasure instead of
+evaluator non-inspection, and the lexical angle-bracket inventory omitted
+method lists. The correction connects atomic checked-module and summary
+publication, states the inert retained-authority boundary, and updates the
+lexical inventory and executable manifest. Final semantic re-review,
+implementation/Core/resource review, evidence/migration/lifecycle/authority
+review, and the complete inventory are recorded here before transition cleanup.
 
 ## Intentional exclusions and remaining pressure
 

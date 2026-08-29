@@ -1275,8 +1275,9 @@ family module-and-program-typing:
     every inference variable allocated by these premises is in domain(THETA)
     checked_definitions
       = freeze_occurrence_evidence(body-checked definitions, apply(THETA))
-    freeze_public(module, checked_definitions, admitted_impls,
-      staged public name and implementation re-exports, apply(THETA)) = summary
+    freeze_module_and_public(module, checked_definitions, admitted_impls,
+      staged public name and implementation re-exports, apply(THETA))
+      = checked_module, summary
     ===>
     summaries(direct_dependencies) |-module module ⇒ checked_module, summary
 
@@ -1302,9 +1303,11 @@ selection, zonks its interface and method arguments and occurrence type, and
 publishes all fields together. It publishes none if any retained inference
 variable or relationship is invalid.
 
-`freeze_public` atomically derives the body-free checked summary only after the
-complete module succeeds. Public local declarations and implementations retain
-the facts established by their owning judgments. The summary retains public
+`freeze_module_and_public` constructs the returned checked module from
+`checked_definitions` and derives its body-free checked summary in one atomic
+publication after the complete module succeeds. Any failure publishes neither
+result. Public local declarations and implementations retain the facts
+established by their owning judgments. The summary retains public
 kinds and the hidden kind and identity closure required by public schemes,
 constructors, interfaces, ordered method binders and bodies, implementation
 heads, prerequisites, and selected evidence. Publicly selected name and
