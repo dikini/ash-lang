@@ -1044,6 +1044,14 @@ and evaluator semantic or state-machine changes.
   `cf93de7`, `98000f7`, `5c6af3d`, `8eccef4`, and `600ba23`. Its reserved use
   is 14 units, cumulative reserved use is 52/70, 18 units remain unreserved,
   and Checkpoint 6 is not reserved.
+- Checkpoint 6 starts from the clean reviewed boundary `851c26c` and reserves
+  its planned 10 units for the complete linked product, behavior and exclusion
+  evidence, exact diagnostics and migration, and exhaustive carrier, resource,
+  retry, and disposal evidence. Cumulative reserved use is 62/70, eight units
+  remain unreserved for Checkpoint 7, and Checkpoint 7 is not reserved. This
+  reservation does not authorize specification changes, production resource
+  limit changes, new evaluator state or behavior, new Core forms, selection
+  changes, or a new language rule.
 
 ## Verification
 
