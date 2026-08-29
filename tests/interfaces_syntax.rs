@@ -70,6 +70,222 @@ fn first_node_of_kind(
 }
 
 #[test]
+fn projects_relational_interface_parameters_and_total_key() {
+    let text = concat!(
+        "interface Decode<Format, Source, Value> where (Format, Source) -> Value {\n",
+        "decode : (Format, Source) -> Value\n",
+        "}\n",
+        "\n",
+        "impl Decode<Int, Bool, Unit> {\n",
+        "decode pair = ()\n",
+        "}\n",
+    );
+    let source = SourceFile::new("relational-interface.ash", text)
+        .expect("relational interface source should fit");
+    let tree = parse(lex(&source).expect("relational interface source should lex"));
+    assert_complete_balanced_events(&tree);
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+
+    let module = project_module(&source, &tree).expect("relational interface should project");
+    let [interface] = module.interfaces.as_slice() else {
+        panic!("expected one interface declaration");
+    };
+    assert_eq!(
+        interface
+            .parameters
+            .iter()
+            .map(|parameter| (
+                parameter.name.text.as_str(),
+                spanned_text(&source, parameter.span),
+                parameter.kind.as_ref().map(|kind| &kind.kind),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Format", "Format", None),
+            ("Source", "Source", None),
+            ("Value", "Value", None),
+        ]
+    );
+    let determination = interface
+        .determination
+        .as_ref()
+        .expect("the total key should remain explicit");
+    assert_eq!(
+        determination
+            .determinant
+            .parameters
+            .iter()
+            .map(|parameter| parameter.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Format", "Source"]
+    );
+    assert_eq!(
+        determination
+            .dependent
+            .parameters
+            .iter()
+            .map(|parameter| parameter.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Value"]
+    );
+    assert_eq!(
+        spanned_text(&source, determination.determinant.span),
+        "(Format, Source)"
+    );
+    assert_eq!(spanned_text(&source, determination.dependent.span), "Value");
+    assert_eq!(
+        spanned_text(&source, determination.span),
+        "where (Format, Source) -> Value"
+    );
+    assert_eq!(
+        spanned_text(&source, interface.span),
+        text.lines().take(3).collect::<Vec<_>>().join("\n")
+    );
+
+    let [implementation] = module.implementations.as_slice() else {
+        panic!("expected one implementation declaration");
+    };
+    assert!(matches!(
+        &implementation.head.interface,
+        SurfaceReference::Unqualified(name) if name.text == "Decode"
+    ));
+    assert_eq!(
+        implementation
+            .head
+            .arguments
+            .iter()
+            .map(|argument| spanned_text(&source, argument.span))
+            .collect::<Vec<_>>(),
+        ["Int", "Bool", "Unit"]
+    );
+    assert_eq!(
+        spanned_text(&source, implementation.head.span),
+        "Decode<Int, Bool, Unit>"
+    );
+    assert_eq!(
+        spanned_text(&source, implementation.span),
+        text.lines().skip(4).take(3).collect::<Vec<_>>().join("\n")
+    );
+}
+
+#[test]
+fn malformed_relational_interface_headers_recover_to_a_following_declaration() {
+    let cases = [
+        (
+            "empty parameters",
+            "interface Broken<> {\nbad : Unit -> Unit\n}\n",
+            "an identifier",
+            ">",
+            SynchronizationBoundary::TypeParameterListClosing,
+            ">",
+        ),
+        (
+            "trailing parameter comma",
+            "interface Broken<A,> {\nbad : A -> A\n}\n",
+            "an identifier",
+            ">",
+            SynchronizationBoundary::TypeParameterListClosing,
+            ">",
+        ),
+        (
+            "missing parameter closer",
+            "interface Broken<A where A -> A {\nbad : A -> A\n}\n",
+            ">",
+            "where",
+            SynchronizationBoundary::InterfaceBodyOpeningBrace,
+            "{",
+        ),
+        (
+            "missing determinant side",
+            "interface Broken<A, B> where -> B {\nbad : A -> B\n}\n",
+            "an identifier",
+            "->",
+            SynchronizationBoundary::InterfaceBodyOpeningBrace,
+            "{",
+        ),
+        (
+            "empty determinant side",
+            "interface Broken<A, B> where () -> B {\nbad : A -> B\n}\n",
+            "an identifier",
+            ")",
+            SynchronizationBoundary::InterfaceBodyOpeningBrace,
+            "{",
+        ),
+        (
+            "missing determination arrow",
+            "interface Broken<A, B> where A B {\nbad : A -> B\n}\n",
+            "->",
+            "B",
+            SynchronizationBoundary::InterfaceBodyOpeningBrace,
+            "{",
+        ),
+        (
+            "unparenthesized multi-name side",
+            "interface Broken<A, B> where A, B -> B {\nbad : A -> B\n}\n",
+            "->",
+            ",",
+            SynchronizationBoundary::InterfaceBodyOpeningBrace,
+            "{",
+        ),
+        (
+            "repeated determination arrow",
+            "interface Broken<A, B> where A -> B -> A {\nbad : A -> B\n}\n",
+            "{",
+            "->",
+            SynchronizationBoundary::InterfaceBodyOpeningBrace,
+            "{",
+        ),
+    ];
+
+    for (case, malformed, expected, primary, boundary, synchronization) in cases {
+        let text = format!("{malformed}type Following = Following\n");
+        let (source, tree) = parse_tree(&text);
+        let [diagnostic] = tree.parse_diagnostics() else {
+            panic!(
+                "{case} should retain one parser diagnostic: {:?}",
+                tree.parse_diagnostics()
+            );
+        };
+        assert_eq!(diagnostic.reason, ParseReason::ExpectedForm, "{case}");
+        assert_eq!(diagnostic.expected.as_deref(), Some(expected), "{case}");
+        assert_eq!(
+            spanned_text(&source, diagnostic.primary.span()),
+            primary,
+            "{case}"
+        );
+        assert!(
+            matches!(
+                diagnostic.context.as_slice(),
+                [ParseContext::Synchronization { boundary: actual, span }]
+                    if *actual == boundary
+                        && spanned_text(&source, *span) == synchronization
+            ),
+            "{case}: {:?}",
+            diagnostic.context,
+        );
+        let root = tree.root().expect("recovery should retain the module root");
+        assert_eq!(
+            root.children
+                .iter()
+                .filter_map(|child| match child {
+                    ConcreteElement::Node(node) => Some(node.kind),
+                    ConcreteElement::Token(_)
+                    | ConcreteElement::Missing { .. }
+                    | ConcreteElement::Error(_) => None,
+                })
+                .collect::<Vec<_>>(),
+            [NodeKind::InterfaceDeclaration, NodeKind::TypeDeclaration],
+            "{case} must retain the following valid declaration",
+        );
+        assert_projection_refused(&source, &tree);
+    }
+}
+
+#[test]
 fn projects_method_local_type_parameters_and_kinds() {
     let text = concat!(
         "interface Functor<F : Type -> Type> {\n",
@@ -85,11 +301,13 @@ fn projects_method_local_type_parameters_and_kinds() {
         "{:?}",
         tree.parse_diagnostics()
     );
-    let parameter_list = first_node_of_kind(
+    let method_node = first_node_of_kind(
         tree.root().expect("the parser should retain a module root"),
-        NodeKind::TypeParameters,
+        NodeKind::InterfaceMethod,
     )
-    .expect("the method binder list should retain its own concrete node");
+    .expect("the interface should retain its method node");
+    let parameter_list = first_node_of_kind(method_node, NodeKind::TypeParameters)
+        .expect("the method binder list should retain its own concrete node");
     let direct_tokens = parameter_list
         .children
         .iter()
@@ -268,11 +486,14 @@ fn projects_ordered_requirements_on_both_global_presentations() {
             if name.qualifier.text == "Lib" && name.member.text == "Show"
     ));
     assert_eq!(
-        spanned_text(&source, equational.interface.requirements[1].argument.span),
+        spanned_text(
+            &source,
+            equational.interface.requirements[1].arguments[0].span,
+        ),
         "Option<A>"
     );
     assert!(matches!(
-        equational.interface.requirements[1].argument.kind,
+        equational.interface.requirements[1].arguments[0].kind,
         SurfaceTypeKind::Application { .. }
     ));
 
@@ -314,15 +535,15 @@ fn projects_generic_impl_prerequisites_and_flat_method_equations() {
 
     assert!(implementation.public);
     assert!(matches!(
-        &implementation.interface,
+        &implementation.head.interface,
         SurfaceReference::Unqualified(name) if name.text == "Equal"
     ));
     assert_eq!(
-        spanned_text(&source, implementation.argument.span),
+        spanned_text(&source, implementation.head.arguments[0].span),
         "Option<A>"
     );
     assert!(matches!(
-        implementation.argument.kind,
+        implementation.head.arguments[0].kind,
         SurfaceTypeKind::Application { .. }
     ));
     assert_eq!(
@@ -381,7 +602,7 @@ fn projects_a_qualified_impl_head_without_changing_its_identity_route() {
     );
     let module = project_module(&source, &tree).expect("qualified impl should project");
     assert!(matches!(
-        &module.implementations[0].interface,
+        &module.implementations[0].head.interface,
         SurfaceReference::Qualified(name)
             if name.qualifier.text == "Library"
                 && name.member.text == "Equal"
@@ -562,24 +783,16 @@ fn a_lowercase_interface_name_recovers_once_at_its_body() {
 fn malformed_header_delimiters_recover_once_at_the_owning_boundary() {
     let cases = [
         (
-            "extra interface parameter",
-            "interface Equal<A, B> {\nequal : A -> Bool\n}\n",
-            "one interface type parameter",
-            ",",
-            SynchronizationBoundary::TypeParameterSeparator,
-            ",",
-        ),
-        (
             "missing interface parameter",
-            "interface Equal<,> {\nequal : A -> Bool\n}\n",
-            "one interface type parameter",
+            "interface Equal<, A> {\nequal : A -> Bool\n}\n",
+            "an identifier",
             ",",
             SynchronizationBoundary::TypeParameterSeparator,
             ",",
         ),
         (
-            "extra impl argument",
-            "impl Equal<Int, Bool> {\n}\n",
+            "missing impl argument",
+            "impl Equal<, Int> {\n}\n",
             "an interface application",
             ",",
             SynchronizationBoundary::ImplementationBodyOpeningBrace,
@@ -1148,7 +1361,7 @@ fn projects_public_and_private_method_only_interfaces_exactly() {
                     | ConcreteElement::Error(_) => None,
                 })
                 .collect::<Vec<_>>(),
-            vec![NodeKind::TypeParameter, NodeKind::InterfaceMethod]
+            vec![NodeKind::TypeParameters, NodeKind::InterfaceMethod]
         );
     }
     let module = project_module(&source, &tree).expect("interface source should project");
@@ -1158,7 +1371,7 @@ fn projects_public_and_private_method_only_interfaces_exactly() {
 
     assert!(!private.public);
     assert_eq!(private.name.text, "Render");
-    assert_eq!(private.parameter.name.text, "A");
+    assert_eq!(private.parameters[0].name.text, "A");
     assert_eq!(
         spanned_text(&source, private.span),
         text.lines().take(3).collect::<Vec<_>>().join("\n")
@@ -1175,7 +1388,7 @@ fn projects_public_and_private_method_only_interfaces_exactly() {
 
     assert!(public.public);
     assert_eq!(public.name.text, "Equal");
-    assert_eq!(public.parameter.name.text, "A");
+    assert_eq!(public.parameters[0].name.text, "A");
     assert_eq!(
         spanned_text(&source, public.span),
         text.lines().skip(3).take(3).collect::<Vec<_>>().join("\n")

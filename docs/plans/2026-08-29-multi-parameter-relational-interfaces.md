@@ -151,9 +151,22 @@ Record cumulative reserved use as 4/65 and 61 units remaining.
 - Modify: `src/surface.rs`
 - Modify: `src/resolve.rs`
 - Modify: `src/resolved.rs`
+- Modify as compiler-owned unary predecessor migrations: `src/kind.rs`
+- Modify as compiler-owned unary predecessor migrations: `src/elaborate.rs`
+- Modify as compiler-owned unary predecessor migrations: `src/evidence.rs`
+- Modify as compiler-owned unary predecessor migrations: `src/evidence_audit.rs`
+- Modify as compiler-owned unary predecessor migrations: `src/evidence_validation.rs`
+- Modify for resource-fixture alignment: `src/driver.rs`
 - Modify: `tests/interfaces_syntax.rs`
 - Modify: `tests/resolution.rs`
 - Modify: `tests/diagnostics.rs`
+- Modify as compiler-owned unary predecessor migrations: `tests/core_validation.rs`
+- Modify as compiler-owned unary predecessor migrations: `tests/interface_modules.rs`
+- Modify as compiler-owned unary predecessor migrations: `tests/kinds_syntax.rs`
+- Modify as compiler-owned unary predecessor migrations: `tests/spec_examples.rs`
+- Modify for resource-fixture alignment: `tests/interface_resources.rs`
+- Modify for bidirectional type-site inventory: `tests/architecture.rs`
+- Modify for syntax/resource formula alignment: `tests/method_parameter_resources.rs`
 
 ### Step 1: Write and witness multi-parameter syntax RED
 
@@ -240,6 +253,15 @@ formulas, and charge the existing resolved binder/type ledgers before
 allocation or publication. Do not add a parser resource ledger, checked
 multi-parameter semantics, or improvement in this checkpoint.
 
+At each migrated unary checked consumer, authenticate the predecessor shape
+before indexing: exactly one interface parameter, no determination, and exactly
+one application argument. Relational shapes remain available to resolution and
+defer unary kind work, but fail closed before checked publication until
+Checkpoint 3. Independent validators reauthenticate this boundary rather than
+trusting upstream publication. This guard is transitional internal-state
+ownership, not the source `interface.argument-count` or determination admission
+implemented by later checkpoints.
+
 ### Step 5: Verify, review, and commit syntax and resolution
 
 Run:
@@ -248,6 +270,11 @@ Run:
 cargo test --locked --test interfaces_syntax
 cargo test --locked --test resolution
 cargo test --locked --test diagnostics
+cargo test --locked --lib -- evidence
+cargo test --locked --lib -- evidence_validation
+cargo test --locked --test interface_resources
+cargo test --locked --test architecture
+cargo test --locked --test method_parameter_resources
 cargo fmt --check
 cargo check --locked --all-targets
 git diff --check
@@ -256,7 +283,7 @@ git diff --check
 After both reviews and corrections, commit:
 
 ```text
-git add src/parser/grammar.rs src/parser/project.rs src/surface.rs src/resolve.rs src/resolved.rs tests/interfaces_syntax.rs tests/resolution.rs tests/diagnostics.rs
+git add docs/plans/2026-08-29-multi-parameter-relational-interfaces.md docs/tasks/TASK-0018-implement-multi-parameter-relational-interfaces.md src/parser/grammar.rs src/parser/project.rs src/surface.rs src/resolve.rs src/resolved.rs src/kind.rs src/elaborate.rs src/evidence.rs src/evidence_audit.rs src/evidence_validation.rs src/driver.rs tests/interfaces_syntax.rs tests/resolution.rs tests/diagnostics.rs tests/core_validation.rs tests/interface_modules.rs tests/kinds_syntax.rs tests/spec_examples.rs tests/interface_resources.rs tests/architecture.rs tests/method_parameter_resources.rs
 git -c commit.gpgsign=false commit -m "feat: retain relational interface syntax"
 ```
 

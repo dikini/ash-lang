@@ -81,6 +81,21 @@ syntax, packages, runtime interface lookup, and evaluator changes.
   audit (`gpt-5.6-sol`, `xhigh`) supplied the minimum cross-stage cases.
 - Checkpoint 1 is complete at 4/65 reserved units; 61 units remain. No product
   code has changed.
+- Checkpoint 2 retains ordered surface and resolved parameter/application
+  vectors, source determination identities, and iterative failure ownership.
+  Unary checked consumers authenticate their predecessor shape inside charged
+  owning passes and fail closed before checked or evidence publication; no
+  relational checking semantics have entered.
+- Exact resource evidence now covers wide parameter-by-method scopes,
+  `P + 2O` determination work, charged kind membership, late malformed global,
+  implementation, evidence, and linked rows, fallible spelling retention,
+  architecture inventory, retry, and atomic rejection. The full workspace
+  all-target/all-feature suite, 728 library tests, syntax 30/30, resolution
+  56/56, diagnostics 36/36, architecture 23/23, interface resources 5/5,
+  method-parameter resources 4/4, formatting, checking, and strict Clippy pass.
+- Final semantic/authority review (`gpt-5.6-sol`, `xhigh`) and Rust/resource
+  review (`gpt-5.6-sol`, `high`) approve Checkpoint 2 without findings after
+  correction. Cumulative reserved use is 14/65; 51 units remain.
 
 ## Verification
 
@@ -118,4 +133,31 @@ producers, but do not justify implementing their semantics in this task.
 
 ## Deviations
 
-None.
+- In Checkpoint 2, the malformed interface-header and application recovery
+  cases were added after the positive grammar implementation, so they did not
+  independently witness RED. They remain required GREEN regression coverage;
+  the exact positive syntax and resolved-identity tests each witnessed their
+  specified RED before the corresponding behavior.
+- Replacing public scalar resolved carriers required compiler-owned unary
+  predecessor migrations in five source files and four integration-test files
+  omitted from Checkpoint 2's initial file and staging lists. The plan now
+  includes them. They retain explicit one-element behavior behind a fail-closed
+  predecessor-shape boundary and add no checked relational semantics.
+- Honest predecessor-shape accounting made two existing 5,000-interface
+  constraint fixtures exhaust their independent type-work ledger before the
+  constraint result they were intended to witness. The internal
+  constraint-measurement fixture now uses the unbounded type ledgers already
+  named by its messages; the public-path fixtures retain production budgets at
+  width 4,500, which preserves their original constraint inequalities and
+  failure ownership. `src/driver.rs` and `tests/interface_resources.rs` are now
+  explicit Checkpoint 2 resource-fixture migrations.
+- The complete application and interface-parameter carriers changed the
+  repository's bidirectional production type-site inventory. The full
+  all-target suite exposed stale scalar rows and newly derived carrier sites,
+  so `tests/architecture.rs` is now an explicit Checkpoint 2 migration rather
+  than being deferred to the checked-carrier work in Checkpoint 3.
+- The same full suite exposed an obsolete multi-parameter rejection in the
+  already-listed kind-syntax migration and a stale fixed parser-event formula
+  and probe name in `tests/method_parameter_resources.rs`. The rejection row
+  was removed, the fixed carrier cost rose by two events, and the resource test
+  is now an explicit Checkpoint 2 migration; no resource limit changed.

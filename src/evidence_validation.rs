@@ -892,12 +892,13 @@ fn validate_group_consistency<'a>(
             || token.id != source.id
             || fact.id != source.id
             || fact.spelling != source.spelling
+            || !source.has_predecessor_shape()
         {
             return Err(unknown(source.span));
         }
         if !same_binders_charged(
             std::slice::from_ref(&fact.parameter),
-            std::slice::from_ref(&source.parameter),
+            &source.parameters[..1],
             budget,
             source.span,
         )? {
@@ -1193,6 +1194,9 @@ fn requirements_match(
     }
     for (checked, source) in checked.iter().zip(source) {
         charge(budget, 1, span)?;
+        if !source.application.has_predecessor_shape() {
+            return Ok(false);
+        }
         validate_linked_type_with_policy(
             &checked.argument,
             program.registry(),
@@ -1201,15 +1205,20 @@ fn requirements_match(
             checked.span,
         )?;
         if checked.id != source.id
-            || checked.interface != source.interface.id
+            || checked.interface != source.application.interface.id
             || !same_origin_charged(
                 &checked.origin,
-                &Origin::Source(source.span),
+                &Origin::Source(source.application.span),
                 budget,
-                source.span,
+                source.application.span,
             )?
-            || checked.span != source.span
-            || !same_type_charged(&checked.argument, &source.argument.ty, budget, source.span)?
+            || checked.span != source.application.span
+            || !same_type_charged(
+                &checked.argument,
+                &source.application.arguments[0].ty,
+                budget,
+                source.application.span,
+            )?
         {
             return Ok(false);
         }
@@ -1239,12 +1248,13 @@ fn validate_implementation_consistency<'a>(
             .saturating_add(1),
         span,
     )?;
-    if token.source_index != usize::try_from(source.id.declaration()).unwrap_or(usize::MAX)
+    if !source.head.has_predecessor_shape()
+        || token.source_index != usize::try_from(source.id.declaration()).unwrap_or(usize::MAX)
         || token.id != source.id
-        || token.interface != source.interface.id
+        || token.interface != source.head.interface.id
         || body.id() != source.id
         || fact.id != source.id
-        || fact.interface != source.interface.id
+        || fact.interface != source.head.interface.id
     {
         return Err(unknown(span));
     }
@@ -1312,7 +1322,7 @@ fn validate_implementation_consistency<'a>(
             prerequisite.span,
         )?;
     }
-    if !same_type_charged(&fact.argument, &source.argument.ty, budget, span)?
+    if !same_type_charged(&fact.argument, &source.head.arguments[0].ty, budget, span)?
         || !requirements_match(
             &fact.prerequisites,
             &source.prerequisites,
@@ -8437,6 +8447,200 @@ mod tests {
         let (program, _) = linked_higher_kinded_diamond_program();
         validate_interface_evidence(program)
             .expect("the exact public, hidden, opaque, and implementation mirrors must link");
+    }
+
+    #[test]
+    fn rejects_non_predecessor_resolved_source_carriers_without_panicking() {
+        for mutation in [
+            LinkedCarrierMutationForTest::InterfaceSourceParametersEmpty,
+            LinkedCarrierMutationForTest::InterfaceSourceParametersExtra,
+            LinkedCarrierMutationForTest::InterfaceSourceDetermination,
+            LinkedCarrierMutationForTest::ImplementationSourceArgumentsEmpty,
+            LinkedCarrierMutationForTest::ImplementationSourceArgumentsExtra,
+            LinkedCarrierMutationForTest::ImplementationSourceWideLatePrerequisiteArgumentsExtra,
+        ] {
+            let (mut program, base) = linked_higher_kinded_diamond_program();
+            assert!(
+                program.corrupt_linked_carrier_for_test(base, mutation),
+                "the linked fixture should support {mutation:?}",
+            );
+            let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                validate_interface_evidence(program)
+            }));
+            let failure = match observed {
+                Ok(Err(failure)) => failure,
+                Ok(Ok(_)) => panic!("linked validation accepted {mutation:?}"),
+                Err(_) => panic!("linked validation panicked for {mutation:?}"),
+            };
+            assert_eq!(
+                failure.reason(),
+                EvidenceValidationReason::UnknownIdentity,
+                "{mutation:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn wide_mismatched_source_prerequisites_do_not_bypass_the_linked_budget() {
+        let (mut program, base) = linked_higher_kinded_diamond_program();
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect("the canonical linked registry should authenticate");
+        assert!(program.corrupt_linked_carrier_for_test(
+            base,
+            LinkedCarrierMutationForTest::ImplementationSourceWideLatePrerequisiteArgumentsExtra,
+        ));
+        let group = program
+            .groups()
+            .iter()
+            .find(|group| group.module() == base)
+            .expect("the fixture should retain its defining group");
+        let implementation_index = group
+            .implementation_facts()
+            .iter()
+            .position(|fact| {
+                fact.head_parameters
+                    .first()
+                    .is_some_and(|parameter| matches!(parameter.kind, Kind::Arrow(_, _)))
+                    && !fact.prerequisites.is_empty()
+            })
+            .expect("the fixture should retain its prerequisite implementation");
+        let fact = &group.implementation_facts()[implementation_index];
+        let source = group.implementations()[implementation_index].source();
+        assert_eq!(source.prerequisites.len(), 32);
+        assert_eq!(
+            source
+                .prerequisites
+                .last()
+                .unwrap()
+                .application
+                .arguments
+                .len(),
+            2
+        );
+        let initial_fact_work = fact
+            .head_parameters
+            .len()
+            .saturating_add(fact.prerequisites.len())
+            .saturating_add(fact.methods.len())
+            .saturating_add(1);
+        let mut type_work = TypeWorkBudget::default();
+        let mut kind_environments = build_linked_kind_environments(
+            program.registry(),
+            &mut type_work,
+            program.result().span,
+        )
+        .expect("the linked kind environments should fit");
+        let mut exact_initial = InterfaceConstraintBudget::with_limit(initial_fact_work);
+        let failure = validate_implementation_consistency(
+            &program,
+            &registry,
+            &group.implementations()[implementation_index],
+            &group.checked_implementations()[implementation_index],
+            fact,
+            &mut kind_environments,
+            &mut exact_initial,
+            &mut type_work,
+        )
+        .expect_err("source prerequisite width must not be scanned outside the budget");
+
+        assert_eq!(
+            failure.reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        assert_eq!(exact_initial.used(), initial_fact_work);
+    }
+
+    #[test]
+    fn late_relational_source_requirement_has_an_exact_matching_boundary() {
+        const WIDTH: usize = 32;
+        const EXACT_WORK: usize = 6 * WIDTH - 5;
+
+        fn rows(
+            module: ModuleId,
+            span: Span,
+        ) -> (
+            Vec<CheckedRequirement>,
+            Vec<crate::resolved::ResolvedRequirement>,
+        ) {
+            let interface = InterfaceId::new(module, 0);
+            let owner = RequirementOwner::Global(BinderId::resolved(module, 0));
+            let resolved_type = || crate::resolved::ResolvedType {
+                ty: Type::Int,
+                provenance: crate::resolved::ResolvedTypeProvenance::new(
+                    vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
+                    0,
+                ),
+                origin: Origin::Source(span),
+                span,
+            };
+            let mut checked = Vec::new();
+            let mut source = Vec::new();
+            for index in 0..WIDTH {
+                let id = RequirementId::new(
+                    owner,
+                    u32::try_from(index).expect("the fixture width should fit"),
+                );
+                checked.push(CheckedRequirement {
+                    id,
+                    interface,
+                    argument: Type::Int,
+                    origin: Origin::Source(span),
+                    span,
+                });
+                let mut arguments = vec![resolved_type()];
+                if index + 1 == WIDTH {
+                    arguments.push(resolved_type());
+                }
+                source.push(crate::resolved::ResolvedRequirement {
+                    id,
+                    application: crate::resolved::ResolvedInterfaceApplication {
+                        interface: crate::resolved::ResolvedInterfaceOccurrence {
+                            id: interface,
+                            spelling: "Relation".to_owned(),
+                            origin: Origin::Source(span),
+                        },
+                        arguments: arguments.into_boxed_slice(),
+                        span,
+                    },
+                });
+            }
+            (checked, source)
+        }
+
+        let (program, module) = linked_higher_kinded_diamond_program();
+        let span = program.result().span;
+        let (short_checked, short_source) = rows(module, span);
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            requirements_match(
+                &short_checked,
+                &short_source,
+                &[],
+                &program,
+                &mut short,
+                span,
+            )
+            .expect_err("one missing row unit should exhaust linked requirement matching")
+            .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        let (exact_checked, exact_source) = rows(module, span);
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert!(
+            !requirements_match(
+                &exact_checked,
+                &exact_source,
+                &[],
+                &program,
+                &mut exact,
+                span,
+            )
+            .expect("the exact budget should reach the late relational row")
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
     }
 
     #[test]

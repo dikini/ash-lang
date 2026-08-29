@@ -1077,6 +1077,9 @@ pub(crate) enum LinkedCarrierMutationForTest {
     GlobalSourceType,
     InterfaceTokenIdentity,
     InterfaceTokenSourceIndex,
+    InterfaceSourceParametersEmpty,
+    InterfaceSourceParametersExtra,
+    InterfaceSourceDetermination,
     InterfaceSourceParameterIdentity,
     InterfaceSourceParameterSpelling,
     InterfaceSourceMethodIdentity,
@@ -1102,6 +1105,9 @@ pub(crate) enum LinkedCarrierMutationForTest {
     ImplementationTokenInterface,
     ImplementationTokenSourceIndex,
     ImplementationTokenMethod,
+    ImplementationSourceArgumentsEmpty,
+    ImplementationSourceArgumentsExtra,
+    ImplementationSourceWideLatePrerequisiteArgumentsExtra,
     ImplementationPrerequisite,
     ImplementationMethodRequirement,
     ImplementationMethodIdentity,
@@ -1594,6 +1600,9 @@ impl ResolvedModuleProgram {
             }
             LinkedCarrierMutationForTest::InterfaceTokenIdentity
             | LinkedCarrierMutationForTest::InterfaceTokenSourceIndex
+            | LinkedCarrierMutationForTest::InterfaceSourceParametersEmpty
+            | LinkedCarrierMutationForTest::InterfaceSourceParametersExtra
+            | LinkedCarrierMutationForTest::InterfaceSourceDetermination
             | LinkedCarrierMutationForTest::InterfaceSourceParameterIdentity
             | LinkedCarrierMutationForTest::InterfaceSourceParameterSpelling
             | LinkedCarrierMutationForTest::InterfaceSourceMethodIdentity
@@ -1623,19 +1632,69 @@ impl ResolvedModuleProgram {
                         };
                         token.source_index = usize::MAX;
                     }
+                    LinkedCarrierMutationForTest::InterfaceSourceParametersEmpty => {
+                        let Some(interface) = self.groups[group_index].interfaces.first_mut()
+                        else {
+                            return false;
+                        };
+                        discard_resolved_type_variables(std::mem::take(&mut interface.parameters));
+                    }
+                    LinkedCarrierMutationForTest::InterfaceSourceParametersExtra => {
+                        let Some(interface) = self.groups[group_index].interfaces.first_mut()
+                        else {
+                            return false;
+                        };
+                        let Some(parameter) = interface.parameters.first().cloned() else {
+                            return false;
+                        };
+                        let mut parameters = std::mem::take(&mut interface.parameters).into_vec();
+                        parameters.push(parameter);
+                        interface.parameters = parameters.into_boxed_slice();
+                    }
+                    LinkedCarrierMutationForTest::InterfaceSourceDetermination => {
+                        let Some(interface) = self.groups[group_index].interfaces.first_mut()
+                        else {
+                            return false;
+                        };
+                        let Some(parameter) = interface.parameters.first() else {
+                            return false;
+                        };
+                        let occurrence = || ResolvedDeterminationParameter {
+                            id: parameter.id,
+                            spelling: parameter.spelling.clone(),
+                            origin: Origin::Source(interface.span),
+                        };
+                        interface.determination = Some(ResolvedInterfaceDetermination {
+                            determinant: ResolvedDeterminationSide {
+                                parameters: Box::new([occurrence()]),
+                                span: interface.span,
+                            },
+                            dependent: ResolvedDeterminationSide {
+                                parameters: Box::new([occurrence()]),
+                                span: interface.span,
+                            },
+                            span: interface.span,
+                        });
+                    }
                     LinkedCarrierMutationForTest::InterfaceSourceParameterIdentity => {
                         let Some(interface) = self.groups[group_index].interfaces.first_mut()
                         else {
                             return false;
                         };
-                        interface.parameter.id = TypeVariableId::resolved(module, u32::MAX);
+                        let Some(parameter) = interface.parameters.first_mut() else {
+                            return false;
+                        };
+                        parameter.id = TypeVariableId::resolved(module, u32::MAX);
                     }
                     LinkedCarrierMutationForTest::InterfaceSourceParameterSpelling => {
                         let Some(interface) = self.groups[group_index].interfaces.first_mut()
                         else {
                             return false;
                         };
-                        interface.parameter.spelling.push_str("-forged");
+                        let Some(parameter) = interface.parameters.first_mut() else {
+                            return false;
+                        };
+                        parameter.spelling.push_str("-forged");
                     }
                     LinkedCarrierMutationForTest::InterfaceSourceMethodIdentity => {
                         let Some(interface) = self.groups[group_index].interfaces.first_mut()
@@ -1780,6 +1839,9 @@ impl ResolvedModuleProgram {
             | LinkedCarrierMutationForTest::ImplementationTokenInterface
             | LinkedCarrierMutationForTest::ImplementationTokenSourceIndex
             | LinkedCarrierMutationForTest::ImplementationTokenMethod
+            | LinkedCarrierMutationForTest::ImplementationSourceArgumentsEmpty
+            | LinkedCarrierMutationForTest::ImplementationSourceArgumentsExtra
+            | LinkedCarrierMutationForTest::ImplementationSourceWideLatePrerequisiteArgumentsExtra
             | LinkedCarrierMutationForTest::ImplementationPrerequisite
             | LinkedCarrierMutationForTest::ImplementationMethodRequirement
             | LinkedCarrierMutationForTest::ImplementationMethodIdentity
@@ -1880,6 +1942,61 @@ impl ResolvedModuleProgram {
                             return false;
                         };
                         method.method = MethodId::new(method.method.interface(), u32::MAX);
+                    }
+                    LinkedCarrierMutationForTest::ImplementationSourceArgumentsEmpty => {
+                        let Some(source) = self.groups[group_index].implementations
+                            [implementation_index]
+                            .source
+                            .as_mut()
+                        else {
+                            return false;
+                        };
+                        for argument in std::mem::take(&mut source.head.arguments) {
+                            discard_resolved_type(argument);
+                        }
+                    }
+                    LinkedCarrierMutationForTest::ImplementationSourceArgumentsExtra => {
+                        let Some(source) = self.groups[group_index].implementations
+                            [implementation_index]
+                            .source
+                            .as_mut()
+                        else {
+                            return false;
+                        };
+                        let Some(argument) = source.head.arguments.first().cloned() else {
+                            return false;
+                        };
+                        let mut arguments = std::mem::take(&mut source.head.arguments).into_vec();
+                        arguments.push(argument);
+                        source.head.arguments = arguments.into_boxed_slice();
+                    }
+                    LinkedCarrierMutationForTest::ImplementationSourceWideLatePrerequisiteArgumentsExtra => {
+                        const WIDTH: usize = 32;
+                        let Some(source) = self.groups[group_index].implementations
+                            [implementation_index]
+                            .source
+                            .as_mut()
+                        else {
+                            return false;
+                        };
+                        let Some(first) = source.prerequisites.first().cloned() else {
+                            return false;
+                        };
+                        let mut prerequisites = Vec::new();
+                        if prerequisites.try_reserve_exact(WIDTH).is_err() {
+                            return false;
+                        }
+                        prerequisites.resize(WIDTH, first);
+                        let Some(last) = prerequisites.last_mut() else {
+                            return false;
+                        };
+                        let Some(argument) = last.application.arguments.first().cloned() else {
+                            return false;
+                        };
+                        let mut arguments = std::mem::take(&mut last.application.arguments).into_vec();
+                        arguments.push(argument);
+                        last.application.arguments = arguments.into_boxed_slice();
+                        source.prerequisites = prerequisites.into_boxed_slice();
                     }
                     LinkedCarrierMutationForTest::ImplementationPrerequisite => {
                         let Some(prerequisite) = self.groups[group_index].implementation_facts
@@ -2690,7 +2807,7 @@ impl ResolvedModuleProgram {
         }
 
         discard_type_iteratively(std::mem::replace(
-            &mut source_prerequisite.argument.ty,
+            &mut source_prerequisite.application.arguments[0].ty,
             argument.clone(),
         ));
         discard_type_iteratively(std::mem::replace(
@@ -7939,7 +8056,7 @@ impl ExportSummary {
                 .get(admitted.source_index)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             if implementation.id != admitted.id
-                || implementation.interface.id != admitted.interface
+                || implementation.head.interface.id != admitted.interface
                 || checked.id != admitted.id
                 || checked.interface != admitted.interface
                 || checked.methods.len() != admitted.methods.len()
@@ -13238,10 +13355,11 @@ pub(crate) fn clone_resolved_type_variable_with_budget(
     budget: &mut TypeWorkBudget,
 ) -> Result<ResolvedTypeVariable, ()> {
     budget.charge(1)?;
+    let spelling = try_clone_string(&parameter.spelling).map_err(|_| ())?;
     let kind = clone_kind_with_budget(&parameter.kind, budget)?;
     Ok(ResolvedTypeVariable {
         id: parameter.id,
-        spelling: parameter.spelling.clone(),
+        spelling,
         kind,
         origin: parameter.origin.clone(),
     })
@@ -13547,14 +13665,55 @@ pub struct ResolvedInterfaceDeclaration {
     pub public: bool,
     /// Exact declared spelling.
     pub spelling: String,
-    /// The interface's single resolved type parameter.
-    pub parameter: ResolvedTypeVariable,
+    /// The interface's nonempty ordered resolved type parameters.
+    pub parameters: Box<[ResolvedTypeVariable]>,
+    /// The optional resolved source determination edge.
+    pub determination: Option<ResolvedInterfaceDetermination>,
     /// Nonempty methods in semantic declaration order.
     pub methods: Box<[ResolvedInterfaceMethod]>,
     /// Causal declaration provenance.
     pub origin: Origin,
     /// Complete declaration span.
     pub span: Span,
+}
+
+impl ResolvedInterfaceDeclaration {
+    /// Whether this declaration has the unary shape supported by the current
+    /// checked pipeline.
+    pub(crate) fn has_predecessor_shape(&self) -> bool {
+        self.parameters.len() == 1 && self.determination.is_none()
+    }
+}
+
+/// One resolved source determination edge owned by an interface declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedInterfaceDetermination {
+    /// The determinant side before `->`.
+    pub determinant: ResolvedDeterminationSide,
+    /// The dependent side after `->`.
+    pub dependent: ResolvedDeterminationSide,
+    /// The complete `where` determination span.
+    pub span: Span,
+}
+
+/// One nonempty source-ordered resolved determination side.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedDeterminationSide {
+    /// Owning interface-parameter occurrences in written order.
+    pub parameters: Box<[ResolvedDeterminationParameter]>,
+    /// The complete side span, including parentheses when present.
+    pub span: Span,
+}
+
+/// One source name in a resolved interface determination.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedDeterminationParameter {
+    /// Stable owning interface-parameter identity.
+    pub id: TypeVariableId,
+    /// Exact source spelling.
+    pub spelling: String,
+    /// Causal source provenance.
+    pub origin: Origin,
 }
 
 /// One resolved signature-only interface method.
@@ -13587,17 +13746,32 @@ pub struct ResolvedInterfaceOccurrence {
     pub origin: Origin,
 }
 
+/// One complete resolved interface application.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedInterfaceApplication {
+    /// Resolved interface occurrence.
+    pub interface: ResolvedInterfaceOccurrence,
+    /// Nonempty ordered resolved type arguments.
+    pub arguments: Box<[ResolvedType]>,
+    /// Complete interface application span.
+    pub span: Span,
+}
+
+impl ResolvedInterfaceApplication {
+    /// Whether this application has the unary shape supported by the current
+    /// checked pipeline.
+    pub(crate) fn has_predecessor_shape(&self) -> bool {
+        self.arguments.len() == 1
+    }
+}
+
 /// One ordered resolved interface requirement outside the ordinary type algebra.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedRequirement {
     /// Owner-qualified occurrence identity.
     pub id: RequirementId,
-    /// Resolved interface occurrence.
-    pub interface: ResolvedInterfaceOccurrence,
-    /// Resolved single type argument.
-    pub argument: ResolvedType,
-    /// Complete requirement span.
-    pub span: Span,
+    /// Complete resolved interface application.
+    pub application: ResolvedInterfaceApplication,
 }
 
 /// One resolved implementation declaration retained for Task 4 checking.
@@ -13607,10 +13781,8 @@ pub struct ResolvedImplementation {
     pub id: ImplId,
     /// Whether the checked anonymous fact is eligible for publication.
     pub public: bool,
-    /// Implemented interface occurrence.
-    pub interface: ResolvedInterfaceOccurrence,
-    /// Resolved implementation head argument.
-    pub argument: ResolvedType,
+    /// Complete resolved implementation head application.
+    pub head: ResolvedInterfaceApplication,
     /// Rigid parameters discovered from the head in first-occurrence order.
     pub head_parameters: Box<[ResolvedTypeVariable]>,
     /// Candidate variables found only in prerequisites.
@@ -13941,8 +14113,7 @@ pub(crate) fn discard_resolved_definition_iteratively(definition: ResolvedDefini
 }
 
 pub(crate) fn discard_resolved_implementation_iteratively(implementation: ResolvedImplementation) {
-    discard_origin_iteratively(implementation.interface.origin);
-    discard_resolved_type(implementation.argument);
+    discard_resolved_interface_application(implementation.head);
     for parameter in implementation.head_parameters {
         discard_origin_iteratively(parameter.origin);
     }
@@ -13964,7 +14135,17 @@ pub(crate) fn discard_resolved_implementation_iteratively(implementation: Resolv
 }
 
 pub(crate) fn discard_resolved_interface_iteratively(interface: ResolvedInterfaceDeclaration) {
-    discard_origin_iteratively(interface.parameter.origin);
+    for parameter in interface.parameters {
+        discard_origin_iteratively(parameter.origin);
+    }
+    if let Some(determination) = interface.determination {
+        for parameter in determination.determinant.parameters {
+            discard_origin_iteratively(parameter.origin);
+        }
+        for parameter in determination.dependent.parameters {
+            discard_origin_iteratively(parameter.origin);
+        }
+    }
     for method in interface.methods.into_vec() {
         discard_resolved_type(method.annotation);
         for parameter in method.type_parameters.into_vec() {
@@ -13987,8 +14168,14 @@ fn discard_external_interface(interface: ResolvedExternalInterface) {
 }
 
 pub(crate) fn discard_resolved_requirement(requirement: ResolvedRequirement) {
-    discard_origin_iteratively(requirement.interface.origin);
-    discard_resolved_type(requirement.argument);
+    discard_resolved_interface_application(requirement.application);
+}
+
+fn discard_resolved_interface_application(application: ResolvedInterfaceApplication) {
+    discard_origin_iteratively(application.interface.origin);
+    for argument in application.arguments {
+        discard_resolved_type(argument);
+    }
 }
 
 pub(crate) fn discard_resolved_equation_iteratively(equation: ResolvedEquation) {
@@ -15013,12 +15200,14 @@ mod tests {
             id: interface,
             public: true,
             spelling: "Boxed".to_owned(),
-            parameter: ResolvedTypeVariable {
+            parameters: vec![ResolvedTypeVariable {
                 id: interface_parameter,
                 spelling: "I".to_owned(),
                 kind: Kind::Type,
                 origin: Origin::Source(span),
-            },
+            }]
+            .into_boxed_slice(),
+            determination: None,
             methods: Box::new([ResolvedInterfaceMethod {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -15054,7 +15243,7 @@ mod tests {
         let checked = [CheckedInterfaceFact {
             id: interface,
             spelling: "Boxed".to_owned(),
-            parameter: resolved_interface.parameter.clone(),
+            parameter: resolved_interface.parameters[0].clone(),
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -15145,12 +15334,14 @@ mod tests {
             id: interface,
             public: true,
             spelling: "Boxed".to_owned(),
-            parameter: ResolvedTypeVariable {
+            parameters: vec![ResolvedTypeVariable {
                 id: interface_parameter,
                 spelling: "I".to_owned(),
                 kind: Kind::Type,
                 origin: Origin::Source(span),
-            },
+            }]
+            .into_boxed_slice(),
+            determination: None,
             methods: Box::new([ResolvedInterfaceMethod {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -15181,7 +15372,7 @@ mod tests {
         let mut checked = [CheckedInterfaceFact {
             id: interface,
             spelling: "Boxed".to_owned(),
-            parameter: resolved_interface.parameter.clone(),
+            parameter: resolved_interface.parameters[0].clone(),
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -20624,12 +20815,14 @@ mod tests {
             id: interface,
             public: false,
             spelling: "Deep".into(),
-            parameter: ResolvedTypeVariable {
+            parameters: vec![ResolvedTypeVariable {
                 id: TypeVariableId::new(0),
                 spelling: "A".into(),
                 kind: crate::types::Kind::Type,
                 origin: Origin::Source(span),
-            },
+            }]
+            .into_boxed_slice(),
+            determination: None,
             methods: vec![ResolvedInterfaceMethod {
                 id: MethodId::new(interface, 0),
                 spelling: "method".into(),
@@ -20786,18 +20979,22 @@ mod tests {
         let implementation = CheckedImplementationBody::new(ResolvedImplementation {
             id: implementation_id,
             public: false,
-            interface: ResolvedInterfaceOccurrence {
-                id: interface,
-                spelling: "Show".into(),
-                origin: Origin::Source(span),
-            },
-            argument: ResolvedType {
-                ty: Type::Unit,
-                provenance: ResolvedTypeProvenance::new(
-                    vec![ResolvedTypeProvenanceNode::Fact(span)],
-                    0,
-                ),
-                origin: Origin::Source(span),
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "Show".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![ResolvedType {
+                    ty: Type::Unit,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]
+                .into_boxed_slice(),
                 span,
             },
             head_parameters: Box::new([]),
@@ -21050,18 +21247,22 @@ mod tests {
                 let implementation = CheckedImplementationBody::new(ResolvedImplementation {
                     id: implementation_id,
                     public: false,
-                    interface: ResolvedInterfaceOccurrence {
-                        id: InterfaceId::new(module, 0),
-                        spelling: "Deep".into(),
-                        origin: Origin::Source(span),
-                    },
-                    argument: ResolvedType {
-                        ty: Type::Unit,
-                        provenance: ResolvedTypeProvenance::new(
-                            vec![ResolvedTypeProvenanceNode::Fact(span)],
-                            0,
-                        ),
-                        origin: Origin::Source(span),
+                    head: ResolvedInterfaceApplication {
+                        interface: ResolvedInterfaceOccurrence {
+                            id: InterfaceId::new(module, 0),
+                            spelling: "Deep".into(),
+                            origin: Origin::Source(span),
+                        },
+                        arguments: vec![ResolvedType {
+                            ty: Type::Unit,
+                            provenance: ResolvedTypeProvenance::new(
+                                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                0,
+                            ),
+                            origin: Origin::Source(span),
+                            span,
+                        }]
+                        .into_boxed_slice(),
                         span,
                     },
                     head_parameters: Box::new([]),
@@ -21750,18 +21951,22 @@ mod tests {
         let implementation = ResolvedImplementation {
             id: ImplId::new(module, 0),
             public: false,
-            interface: ResolvedInterfaceOccurrence {
-                id: InterfaceId::new(module, 0),
-                spelling: "Local".to_owned(),
-                origin: Origin::Source(span),
-            },
-            argument: ResolvedType {
-                ty: Type::Unit,
-                provenance: ResolvedTypeProvenance::new(
-                    vec![ResolvedTypeProvenanceNode::Fact(span)],
-                    0,
-                ),
-                origin: Origin::Source(span),
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: InterfaceId::new(module, 0),
+                    spelling: "Local".to_owned(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![ResolvedType {
+                    ty: Type::Unit,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]
+                .into_boxed_slice(),
                 span,
             },
             head_parameters: Box::new([]),

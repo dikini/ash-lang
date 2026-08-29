@@ -245,8 +245,8 @@ mod tests {
         resolved::{
             Binder, ResolvedApplicationExpr, ResolvedEquation, ResolvedEquationHead,
             ResolvedEquationalGlobal, ResolvedExternalInterface, ResolvedImplementationMethodGroup,
-            ResolvedInterfaceOccurrence, ResolvedType, ResolvedTypeProvenance,
-            ResolvedTypeProvenanceNode,
+            ResolvedInterfaceApplication, ResolvedInterfaceOccurrence, ResolvedType,
+            ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
         },
         source::{ByteRange, Origin, SourceFile, Span},
         types::Type,
@@ -354,18 +354,22 @@ mod tests {
         ResolvedImplementation {
             id: implementation,
             public: false,
-            interface: ResolvedInterfaceOccurrence {
-                id: interface,
-                spelling: "Show".into(),
-                origin: Origin::Source(span),
-            },
-            argument: ResolvedType {
-                ty: Type::Unit,
-                provenance: ResolvedTypeProvenance::new(
-                    vec![ResolvedTypeProvenanceNode::Fact(span)],
-                    0,
-                ),
-                origin: Origin::Source(span),
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "Show".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![ResolvedType {
+                    ty: Type::Unit,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]
+                .into_boxed_slice(),
                 span,
             },
             head_parameters: Box::new([]),

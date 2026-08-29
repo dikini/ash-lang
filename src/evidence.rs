@@ -928,8 +928,19 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
+        constraint_work
+            .charge(resolved.prerequisites.len().saturating_add(1))
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        if !resolved.head.has_predecessor_shape()
+            || resolved
+                .prerequisites
+                .iter()
+                .any(|requirement| !requirement.application.has_predecessor_shape())
+        {
+            return Err(SelectionFailure::InvalidState);
+        }
         if resolved.id != checked.id
-            || resolved.interface.id != checked.interface
+            || resolved.head.interface.id != checked.interface
             || !resolved.prerequisite_only_parameters.is_empty()
             || checked.methods.len() != resolved.method_groups.len()
         {
@@ -942,12 +953,14 @@ impl EvidenceSelector {
             registry,
             ImplementationCandidateAuthentication {
                 parameter_records: &resolved.head_parameters,
-                interface: resolved.interface.id,
-                argument: &resolved.argument.ty,
-                prerequisites: resolved
-                    .prerequisites
-                    .iter()
-                    .map(|prerequisite| (prerequisite.interface.id, &prerequisite.argument.ty)),
+                interface: resolved.head.interface.id,
+                argument: &resolved.head.arguments[0].ty,
+                prerequisites: resolved.prerequisites.iter().map(|prerequisite| {
+                    (
+                        prerequisite.application.interface.id,
+                        &prerequisite.application.arguments[0].ty,
+                    )
+                }),
                 span: resolved.span,
             },
             constraint_work,
@@ -957,9 +970,7 @@ impl EvidenceSelector {
                 resolved
                     .head_parameters
                     .len()
-                    .saturating_add(resolved.prerequisites.len())
-                    .saturating_add(checked.methods.len().saturating_mul(2))
-                    .saturating_add(1),
+                    .saturating_add(checked.methods.len().saturating_mul(2)),
             )
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         let mut method_spans = Vec::new();
@@ -982,7 +993,7 @@ impl EvidenceSelector {
             method_spans.push(source.span);
         }
         constraint_work
-            .charge_type(&resolved.argument.ty)
+            .charge_type(&resolved.head.arguments[0].ty)
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         let mut prerequisites = Vec::new();
         let mut methods = Vec::new();
@@ -995,18 +1006,21 @@ impl EvidenceSelector {
         let staged_candidate_bucket = self.reserve_implementation_publication(checked.interface)?;
         for prerequisite in &resolved.prerequisites {
             constraint_work
-                .charge_type(&prerequisite.argument.ty)
+                .charge_type(&prerequisite.application.arguments[0].ty)
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
             prerequisites.push(RequirementEntry {
                 id: prerequisite.id,
-                interface: prerequisite.interface.id,
-                argument: clone_type_with_budget(&prerequisite.argument.ty, type_work)
-                    .map_err(|()| SelectionFailure::TypeResource)?,
+                interface: prerequisite.application.interface.id,
+                argument: clone_type_with_budget(
+                    &prerequisite.application.arguments[0].ty,
+                    type_work,
+                )
+                .map_err(|()| SelectionFailure::TypeResource)?,
             });
         }
         methods.extend(checked.methods.iter().map(|method| method.id));
         let argument = IterativeTypeOwner::new(
-            clone_type_with_budget(&resolved.argument.ty, type_work)
+            clone_type_with_budget(&resolved.head.arguments[0].ty, type_work)
                 .map_err(|()| SelectionFailure::TypeResource)?,
         );
         let entry = ImplementationEntry {
@@ -2960,8 +2974,9 @@ mod tests {
             Binder, BinderId, CheckedImplementationFact, CheckedImplementationMethodFact,
             CheckedInterfaceFact, CheckedInterfaceMethodFact, ImplementationAuthorization,
             ImplementationRouteHop, ResolvedImplementation, ResolvedImplementationMethodGroup,
-            ResolvedInterfaceOccurrence, ResolvedNominalType, ResolvedRequirement, ResolvedType,
-            ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
+            ResolvedInterfaceApplication, ResolvedInterfaceOccurrence, ResolvedNominalType,
+            ResolvedRequirement, ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+            ResolvedTypeVariable,
         },
         source::{ByteRange, Origin, SourceFile},
     };
@@ -4413,18 +4428,22 @@ mod tests {
         let resolved = ResolvedImplementation {
             id: implementation,
             public: false,
-            interface: ResolvedInterfaceOccurrence {
-                id: interface,
-                spelling: "I".into(),
-                origin: Origin::Source(span),
-            },
-            argument: ResolvedType {
-                ty: Type::Int,
-                provenance: ResolvedTypeProvenance::new(
-                    vec![ResolvedTypeProvenanceNode::Fact(span)],
-                    0,
-                ),
-                origin: Origin::Source(span),
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "I".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![ResolvedType {
+                    ty: Type::Int,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]
+                .into_boxed_slice(),
                 span,
             },
             head_parameters: Box::new([]),
@@ -4560,6 +4579,197 @@ mod tests {
     }
 
     #[test]
+    fn relational_local_implementation_is_rejected_before_unary_evidence_ingress() {
+        let source = SourceFile::new("relational-evidence-ingress.ash", "impl")
+            .expect("the ingress fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the ingress range is ordered"))
+            .expect("the ingress span should fit");
+        let module = ModuleId::new(54);
+        let interface = InterfaceId::new(module, 0);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let implementation = ImplId::new(module, 0);
+        let mut authority = EvidenceSelector::new();
+        authority.add_interface_raw(interface, interface_parameter, Vec::new());
+        let registry = authority.canonical_registry_for_test();
+        let resolved_type = |ty| ResolvedType {
+            ty,
+            provenance: ResolvedTypeProvenance::new(
+                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                0,
+            ),
+            origin: Origin::Source(span),
+            span,
+        };
+        let resolved = ResolvedImplementation {
+            id: implementation,
+            public: false,
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "Relation".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![resolved_type(Type::Int), resolved_type(Type::Bool)]
+                    .into_boxed_slice(),
+                span,
+            },
+            head_parameters: Box::new([]),
+            prerequisite_only_parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            method_groups: Box::new([]),
+            span,
+        };
+        let checked = CheckedImplementation {
+            source_index: 0,
+            id: implementation,
+            interface,
+            methods: Box::new([]),
+        };
+        let mut short_selector = EvidenceSelector::new();
+        short_selector.add_interface_raw(interface, interface_parameter, Vec::new());
+        assert_eq!(
+            short_selector.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(0),
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert!(short_selector.implementations.is_empty());
+        assert!(short_selector.implementation_indices.is_empty());
+        assert!(short_selector.implementation_candidates.is_empty());
+
+        let mut exact_selector = EvidenceSelector::new();
+        exact_selector.add_interface_raw(interface, interface_parameter, Vec::new());
+        let mut exact = InterfaceConstraintBudget::with_limit(1);
+        assert_eq!(
+            exact_selector.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut exact,
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(SelectionFailure::InvalidState),
+        );
+        assert_eq!(exact.used(), 1);
+        assert!(exact_selector.implementations.is_empty());
+        assert!(exact_selector.implementation_indices.is_empty());
+        assert!(exact_selector.implementation_candidates.is_empty());
+    }
+
+    #[test]
+    fn late_relational_local_prerequisite_has_an_exact_ingress_guard_boundary() {
+        const WIDTH: usize = 32;
+        const EXACT_WORK: usize = WIDTH + 1;
+
+        let source = SourceFile::new("late-relational-evidence-ingress.ash", "impl")
+            .expect("the ingress fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the ingress range is ordered"))
+            .expect("the ingress span should fit");
+        let module = ModuleId::new(55);
+        let interface = InterfaceId::new(module, 0);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let implementation = ImplId::new(module, 0);
+        let mut authority = EvidenceSelector::new();
+        authority.add_interface_raw(interface, interface_parameter, Vec::new());
+        let registry = authority.canonical_registry_for_test();
+        let resolved_type = |ty| ResolvedType {
+            ty,
+            provenance: ResolvedTypeProvenance::new(
+                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                0,
+            ),
+            origin: Origin::Source(span),
+            span,
+        };
+        let prerequisites = (0..WIDTH)
+            .map(|index| ResolvedRequirement {
+                id: RequirementId::new(
+                    RequirementOwner::Impl(implementation),
+                    u32::try_from(index).expect("the fixture width should fit"),
+                ),
+                application: ResolvedInterfaceApplication {
+                    interface: ResolvedInterfaceOccurrence {
+                        id: interface,
+                        spelling: "Relation".into(),
+                        origin: Origin::Source(span),
+                    },
+                    arguments: if index + 1 == WIDTH {
+                        vec![resolved_type(Type::Int), resolved_type(Type::Bool)].into_boxed_slice()
+                    } else {
+                        vec![resolved_type(Type::Int)].into_boxed_slice()
+                    },
+                    span,
+                },
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let resolved = ResolvedImplementation {
+            id: implementation,
+            public: false,
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "Relation".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![resolved_type(Type::Int)].into_boxed_slice(),
+                span,
+            },
+            head_parameters: Box::new([]),
+            prerequisite_only_parameters: Box::new([]),
+            prerequisites,
+            method_groups: Box::new([]),
+            span,
+        };
+        let checked = CheckedImplementation {
+            source_index: 0,
+            id: implementation,
+            interface,
+            methods: Box::new([]),
+        };
+
+        let mut short_selector = EvidenceSelector::new();
+        short_selector.add_interface_raw(interface, interface_parameter, Vec::new());
+        assert_eq!(
+            short_selector.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(EXACT_WORK - 1),
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert!(short_selector.implementations.is_empty());
+        assert!(short_selector.implementation_indices.is_empty());
+        assert!(short_selector.implementation_candidates.is_empty());
+
+        let mut exact_selector = EvidenceSelector::new();
+        exact_selector.add_interface_raw(interface, interface_parameter, Vec::new());
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            exact_selector.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut exact,
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(SelectionFailure::InvalidState),
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert!(exact_selector.implementations.is_empty());
+        assert!(exact_selector.implementation_indices.is_empty());
+        assert!(exact_selector.implementation_candidates.is_empty());
+    }
+
+    #[test]
     fn higher_kinded_implementation_ingress_has_exact_atomic_and_scope_boundaries() {
         // Candidate authentication is:
         //   1 parameter slot + 1 parameter scan + 1 canonical lookup
@@ -4681,23 +4891,29 @@ mod tests {
             |parameters: Vec<ResolvedTypeVariable>, prerequisite_argument| ResolvedImplementation {
                 id: implementation,
                 public: false,
-                interface: ResolvedInterfaceOccurrence {
-                    id: interface,
-                    spelling: "Construct".into(),
-                    origin: Origin::Source(span),
-                },
-                argument: resolved_type(application(function, Type::Int)),
-                head_parameters: parameters.into_boxed_slice(),
-                prerequisite_only_parameters: Box::new([]),
-                prerequisites: vec![ResolvedRequirement {
-                    id: prerequisite,
+                head: ResolvedInterfaceApplication {
                     interface: ResolvedInterfaceOccurrence {
                         id: interface,
                         spelling: "Construct".into(),
                         origin: Origin::Source(span),
                     },
-                    argument: resolved_type(prerequisite_argument),
+                    arguments: vec![resolved_type(application(function, Type::Int))]
+                        .into_boxed_slice(),
                     span,
+                },
+                head_parameters: parameters.into_boxed_slice(),
+                prerequisite_only_parameters: Box::new([]),
+                prerequisites: vec![ResolvedRequirement {
+                    id: prerequisite,
+                    application: ResolvedInterfaceApplication {
+                        interface: ResolvedInterfaceOccurrence {
+                            id: interface,
+                            spelling: "Construct".into(),
+                            origin: Origin::Source(span),
+                        },
+                        arguments: vec![resolved_type(prerequisite_argument)].into_boxed_slice(),
+                        span,
+                    },
                 }]
                 .into_boxed_slice(),
                 method_groups: vec![ResolvedImplementationMethodGroup {

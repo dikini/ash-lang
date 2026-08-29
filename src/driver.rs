@@ -1247,8 +1247,8 @@ mod tests {
             .expect("the wide interface graph should load");
         let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
         let mut checked_by_module: HashMap<ModuleId, usize> = HashMap::new();
-        let mut resolution_type_work = TypeWorkBudget::default();
-        let mut checking_type_work = TypeWorkBudget::default();
+        let mut resolution_type_work = TypeWorkBudget::unbounded();
+        let mut checking_type_work = TypeWorkBudget::unbounded();
         let mut coverage_work = UsefulnessBudget::default();
         let mut measured = InterfaceConstraintBudget::with_limit(usize::MAX);
         let mut phase_boundaries = Vec::new();
@@ -1307,7 +1307,7 @@ mod tests {
             validate_interface_evidence_with_budget(
                 linked,
                 &mut measured,
-                &mut TypeWorkBudget::default(),
+                &mut TypeWorkBudget::unbounded(),
             )
             .expect("the unbounded validation stage should fit"),
         );

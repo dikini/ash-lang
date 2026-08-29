@@ -690,8 +690,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
     };
     assert_eq!(surface_observe.name.text, "Observe");
     assert_surface_type_to_type(
-        &surface_observe
-            .parameter
+        &surface_observe.parameters[0]
             .kind
             .as_ref()
             .expect("Observe should retain its explicit kind")
@@ -755,7 +754,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         panic!("Observe should be the only resolved interface");
     };
     assert_eq!(resolved_observe.spelling, "Observe");
-    assert_type_to_type(&resolved_observe.parameter.kind);
+    assert_type_to_type(&resolved_observe.parameters[0].kind);
     let observe: InterfaceId = resolved_observe.id;
     let [resolved_observe_method] = resolved_observe.methods.as_ref() else {
         panic!("Observe should resolve exactly one method");
@@ -764,7 +763,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
     let [resolved_implementation] = resolved_dependency.implementations() else {
         panic!("the dependency should retain one implementation");
     };
-    assert_eq!(resolved_implementation.interface.id, observe);
+    assert_eq!(resolved_implementation.head.interface.id, observe);
     let implementation: ImplId = resolved_implementation.id;
     let resolved_relay = resolved_dependency
         .definitions()

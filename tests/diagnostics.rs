@@ -1128,6 +1128,50 @@ fn rank_one_resolution_and_kind_diagnostics_retain_exact_type_sites() {
 }
 
 #[test]
+fn relational_interface_resolution_diagnostics_retain_exact_parameter_sites() {
+    let duplicate_text = "interface Bad<A, A> {\nbad : A -> A\n}\n";
+    let PipelineFailure::Resolution(duplicate) =
+        failure("duplicate-interface-parameter.ash", duplicate_text)
+    else {
+        panic!("a duplicate interface parameter should fail during resolution");
+    };
+    assert_eq!(duplicate.reason, ResolveReason::DuplicateTypeParameter);
+    assert_eq!(
+        (
+            duplicate.primary.span().range().start(),
+            duplicate.primary.span().range().end(),
+        ),
+        occurrence_range(duplicate_text, "A", 1),
+    );
+    assert_eq!(duplicate.related.len(), 1);
+    assert_eq!(
+        (
+            duplicate.related[0].span().range().start(),
+            duplicate.related[0].span().range().end(),
+        ),
+        occurrence_range(duplicate_text, "A", 0),
+    );
+
+    let unknown_text = "interface Bad<A, B> where A -> Missing {\nbad : A -> A\n}\n";
+    let PipelineFailure::Resolution(unknown) =
+        failure("unknown-determination-parameter.ash", unknown_text)
+    else {
+        panic!("an unknown determination name should fail during resolution");
+    };
+    assert_eq!(unknown.reason, ResolveReason::UnknownType);
+    assert_eq!(unknown.expected.as_deref(), Some("interface parameter"));
+    assert_eq!(unknown.found.as_deref(), Some("Missing"));
+    assert_eq!(
+        (
+            unknown.primary.span().range().start(),
+            unknown.primary.span().range().end(),
+        ),
+        occurrence_range(unknown_text, "Missing", 0),
+    );
+    assert!(unknown.related.is_empty());
+}
+
+#[test]
 fn method_type_parameter_diagnostics_retain_boundary_and_spans() {
     let duplicate_text = "interface Bad<A> {\nbad<A> : A -> A\n}\n";
     let PipelineFailure::Resolution(duplicate) =

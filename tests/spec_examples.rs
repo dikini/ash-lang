@@ -908,8 +908,8 @@ fn resolution_binder_policies_are_executable_and_ordered() {
     };
     assert_eq!(
         (
-            interface.parameter.spelling.as_str(),
-            &interface.parameter.kind
+            interface.parameters[0].spelling.as_str(),
+            &interface.parameters[0].kind
         ),
         ("Value", &Kind::Type),
     );

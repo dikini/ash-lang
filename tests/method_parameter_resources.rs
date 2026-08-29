@@ -199,7 +199,7 @@ fn adapter_heavy_source(width: usize, reject_last: bool) -> String {
 
 #[test]
 fn syntax_method_binders_have_an_exact_additive_token_and_event_formula() {
-    const FIXED_INTERFACE_AND_METHOD_WORK: usize = 66;
+    const FIXED_INTERFACE_AND_METHOD_WORK: usize = 68;
     const WORK_PER_METHOD_PARAMETER: usize = 14;
 
     for parameter_count in [1, 2, 3, 512] {
@@ -217,7 +217,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "resolution binder validation",
             RESOLVE_SOURCE,
             "fn method_parameter_validation_is_exact_atomic_and_retryable()",
-            "const COMPLETE_WORK: usize = 2 + OWNER_AND_BINDERS + 6 + 2 * 2;",
+            "const COMPLETE_WORK: usize = 2 + OWNER_AND_BINDER_SET_VISITS + 6 + 2 * 2;",
         ),
         (
             "imported method-binder Kind authentication",

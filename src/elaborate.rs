@@ -2208,7 +2208,8 @@ impl Elaborator {
             .implementations()
             .get(checked.source_index)
             .ok_or_else(invalid_state)?;
-        if implementation.id != checked.id || implementation.interface.id != checked.interface {
+        if implementation.id != checked.id || implementation.head.interface.id != checked.interface
+        {
             return Err(invalid_state());
         }
         let interface = checked_interface(
@@ -2229,7 +2230,7 @@ impl Elaborator {
         replacements
             .try_insert_unique(
                 interface.parameter(),
-                self.clone_type(&implementation.argument.ty)?,
+                self.clone_type(&implementation.head.arguments[0].ty)?,
             )
             .map_err(|()| invalid_state())?;
 
@@ -2387,13 +2388,13 @@ impl Elaborator {
         let prerequisites =
             self.clone_implementation_requirements(&implementation.prerequisites)?;
         self.constraint_work
-            .charge_type(&implementation.argument.ty)
+            .charge_type(&implementation.head.arguments[0].ty)
             .map_err(|()| constraint_resource())?;
         Ok(CheckedImplementationFact {
             id: implementation.id,
-            interface: implementation.interface.id,
+            interface: implementation.head.interface.id,
             head_parameters: head_parameters.into_boxed_slice(),
-            argument: self.clone_type(&implementation.argument.ty)?,
+            argument: self.clone_type(&implementation.head.arguments[0].ty)?,
             prerequisites,
             methods: method_facts.into_boxed_slice(),
             origin: Origin::Source(implementation.span),
@@ -2463,14 +2464,14 @@ impl Elaborator {
             .map_err(|_| constraint_resource())?;
         for requirement in requirements {
             self.constraint_work
-                .charge_type(&requirement.argument.ty)
+                .charge_type(&requirement.application.arguments[0].ty)
                 .map_err(|()| constraint_resource())?;
             checked.push(CheckedRequirement {
                 id: requirement.id,
-                interface: requirement.interface.id,
-                argument: self.clone_type(&requirement.argument.ty)?,
-                origin: Origin::Source(requirement.span),
-                span: requirement.span,
+                interface: requirement.application.interface.id,
+                argument: self.clone_type(&requirement.application.arguments[0].ty)?,
+                origin: Origin::Source(requirement.application.span),
+                span: requirement.application.span,
             });
         }
         Ok(checked.into_boxed_slice())
@@ -2516,10 +2517,10 @@ impl Elaborator {
             for requirement in requirements {
                 checked_requirements.push(CheckedRequirement {
                     id: requirement.id,
-                    interface: requirement.interface.id,
-                    argument: self.clone_type(&requirement.argument.ty)?,
-                    origin: Origin::Source(requirement.span),
-                    span: requirement.span,
+                    interface: requirement.application.interface.id,
+                    argument: self.clone_type(&requirement.application.arguments[0].ty)?,
+                    origin: Origin::Source(requirement.application.span),
+                    span: requirement.application.span,
                 });
             }
             let body = match &definition.kind {
@@ -5408,8 +5409,11 @@ impl Elaborator {
                     && checked.scheme.requirements.iter().zip(requirements).all(
                         |(checked, resolved)| {
                             checked.id == resolved.id
-                                && checked.interface == resolved.interface.id
-                                && same_type(&checked.argument, &resolved.argument.ty)
+                                && checked.interface == resolved.application.interface.id
+                                && same_type(
+                                    &checked.argument,
+                                    &resolved.application.arguments[0].ty,
+                                )
                         },
                     );
                 if checked.spelling != name.spelling
@@ -8125,12 +8129,15 @@ fn check_interface_declarations(
         .map_err(|_| constraint_resource())?;
     for (source_index, interface) in module.interfaces().iter().enumerate() {
         budget.charge(1).map_err(|()| constraint_resource())?;
+        if !interface.has_predecessor_shape() {
+            return Err(invalid_state());
+        }
         for method in &interface.methods {
             budget
                 .charge(method.type_parameters.len().saturating_add(1))
                 .map_err(|()| constraint_resource())?;
             let parameter_occurs =
-                type_contains_variable(&method.annotation.ty, interface.parameter.id, budget)
+                type_contains_variable(&method.annotation.ty, interface.parameters[0].id, budget)
                     .map_err(|()| constraint_resource())?;
             if (!method.has_explicit_type_parameters && !method.type_parameters.is_empty())
                 || !parameter_occurs
@@ -8143,7 +8150,7 @@ fn check_interface_declarations(
                     ),
                 );
                 diagnostic.related.push(SourceLabel::new(
-                    interface.parameter.origin.primary_span(),
+                    interface.parameters[0].origin.primary_span(),
                     "the interface parameter is declared here",
                 ));
                 return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -8194,6 +8201,12 @@ fn check_global_requirements(
         budget
             .charge(value_type_count)
             .map_err(|()| constraint_resource())?;
+        for requirement in requirements.iter() {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            if !requirement.application.has_predecessor_shape() {
+                return Err(invalid_state());
+            }
+        }
         let mut value_types = Vec::new();
         value_types
             .try_reserve(value_type_count)
@@ -8220,7 +8233,7 @@ fn check_global_requirements(
                 let private = checked_interface(
                     module,
                     checked_interfaces,
-                    requirement.interface.id,
+                    requirement.application.interface.id,
                     budget,
                 )?
                 .filter(|interface| !interface.is_public());
@@ -8228,7 +8241,7 @@ fn check_global_requirements(
                     let mut diagnostic = Diagnostic::new(
                         InterfaceReason::ConstraintPrivateInterface,
                         SourceLabel::new(
-                            requirement.span,
+                            requirement.application.span,
                             "a public global cannot expose this private interface",
                         ),
                     );
@@ -8241,14 +8254,13 @@ fn check_global_requirements(
             }
         }
         for (index, requirement) in requirements.iter().enumerate() {
-            budget.charge(1).map_err(|()| constraint_resource())?;
             let mut duplicate = None;
             for first in &requirements[..index] {
                 budget.charge(1).map_err(|()| constraint_resource())?;
-                if first.interface.id == requirement.interface.id
+                if first.application.interface.id == requirement.application.interface.id
                     && same_type_with_constraint_budget(
-                        &first.argument.ty,
-                        &requirement.argument.ty,
+                        &first.application.arguments[0].ty,
+                        &requirement.application.arguments[0].ty,
                         budget,
                     )
                     .map_err(|()| constraint_resource())?
@@ -8260,10 +8272,13 @@ fn check_global_requirements(
             if let Some(first) = duplicate {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::DuplicateRequirement,
-                    SourceLabel::new(requirement.span, "this requirement is already declared"),
+                    SourceLabel::new(
+                        requirement.application.span,
+                        "this requirement is already declared",
+                    ),
                 );
                 diagnostic.related.push(SourceLabel::new(
-                    first.span,
+                    first.application.span,
                     "the first identical requirement is here",
                 ));
                 return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -8271,14 +8286,17 @@ fn check_global_requirements(
         }
         for requirement in requirements.iter() {
             budget.charge(1).map_err(|()| constraint_resource())?;
-            if let Some(variable) =
-                first_variable_absent_from_types(&requirement.argument.ty, &value_types, budget)
-                    .map_err(|()| constraint_resource())?
+            if let Some(variable) = first_variable_absent_from_types(
+                &requirement.application.arguments[0].ty,
+                &value_types,
+                budget,
+            )
+            .map_err(|()| constraint_resource())?
             {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::UndeterminedParameter,
                     SourceLabel::new(
-                        requirement.span,
+                        requirement.application.span,
                         "this requirement parameter is not determined by the value type",
                     ),
                 );
@@ -8343,14 +8361,14 @@ impl<'a> ImplementationHeadRef<'a> {
     const fn interface(self) -> crate::interface::InterfaceId {
         match self {
             Self::Imported(implementation) => implementation.fact.interface,
-            Self::Local(implementation) => implementation.interface.id,
+            Self::Local(implementation) => implementation.head.interface.id,
         }
     }
 
     const fn argument(self) -> &'a Type {
         match self {
             Self::Imported(implementation) => &implementation.fact.argument,
-            Self::Local(implementation) => &implementation.argument.ty,
+            Self::Local(implementation) => &implementation.head.arguments[0].ty,
         }
     }
 
@@ -8367,14 +8385,14 @@ impl<'a> ImplementationHeadRef<'a> {
                 Some(hop) => hop.import_span,
                 None => implementation.fact.span,
             },
-            Self::Local(implementation) => implementation.argument.span,
+            Self::Local(implementation) => implementation.head.arguments[0].span,
         }
     }
 
     const fn definition_span(self) -> Span {
         match self {
             Self::Imported(implementation) => implementation.fact.span,
-            Self::Local(implementation) => implementation.argument.span,
+            Self::Local(implementation) => implementation.head.arguments[0].span,
         }
     }
 
@@ -8558,12 +8576,20 @@ fn check_implementation_header(
                 .saturating_add(1),
         )
         .map_err(|()| constraint_resource())?;
+    if !implementation.head.has_predecessor_shape()
+        || implementation
+            .prerequisites
+            .iter()
+            .any(|requirement| !requirement.application.has_predecessor_shape())
+    {
+        return Err(invalid_state());
+    }
     budget
-        .charge_type(&implementation.argument.ty)
+        .charge_type(&implementation.head.arguments[0].ty)
         .map_err(|()| constraint_resource())?;
     for prerequisite in &implementation.prerequisites {
         budget
-            .charge_type(&prerequisite.argument.ty)
+            .charge_type(&prerequisite.application.arguments[0].ty)
             .map_err(|()| constraint_resource())?;
     }
 
@@ -8571,14 +8597,14 @@ fn check_implementation_header(
         if let Some(interface) = checked_interface(
             module,
             checked_interfaces,
-            implementation.interface.id,
+            implementation.head.interface.id,
             budget,
         )? && !interface.is_public()
         {
             let mut diagnostic = Diagnostic::new(
                 InterfaceReason::ImplPrivateInterface,
                 SourceLabel::new(
-                    implementation.interface.origin.primary_span(),
+                    implementation.head.interface.origin.primary_span(),
                     "a public implementation cannot expose this private interface",
                 ),
             );
@@ -8592,14 +8618,14 @@ fn check_implementation_header(
             if let Some(interface) = checked_interface(
                 module,
                 checked_interfaces,
-                prerequisite.interface.id,
+                prerequisite.application.interface.id,
                 budget,
             )? && !interface.is_public()
             {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::ImplPrivateInterface,
                     SourceLabel::new(
-                        prerequisite.span,
+                        prerequisite.application.span,
                         "a public implementation cannot expose this private prerequisite",
                     ),
                 );
@@ -8612,16 +8638,16 @@ fn check_implementation_header(
         }
     }
 
-    if matches!(implementation.argument.ty, Type::Variable(_)) {
+    if matches!(implementation.head.arguments[0].ty, Type::Variable(_)) {
         let mut diagnostic = Diagnostic::new(
             InterfaceReason::ImplVariableHead,
             SourceLabel::new(
-                implementation.argument.span,
+                implementation.head.arguments[0].span,
                 "an implementation head cannot be a bare type variable",
             ),
         );
         diagnostic.related.push(SourceLabel::new(
-            implementation.interface.origin.primary_span(),
+            implementation.head.interface.origin.primary_span(),
             "this is the implemented interface",
         ));
         return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -8636,14 +8662,14 @@ fn check_implementation_header(
             ),
         );
         diagnostic.related.push(SourceLabel::new(
-            implementation.argument.span,
+            implementation.head.arguments[0].span,
             "the implementation head determines every prerequisite variable",
         ));
         return Err(TypeError::Interface(Box::new(diagnostic)));
     }
 
-    let local_interface_owner = implementation.interface.id.module() == module.module();
-    let local_nominal_owner = match implementation.argument.ty.outer_nominal() {
+    let local_interface_owner = implementation.head.interface.id.module() == module.module();
+    let local_nominal_owner = match implementation.head.arguments[0].ty.outer_nominal() {
         Some(id) => id.module() == module.module(),
         None => false,
     };
@@ -8651,12 +8677,12 @@ fn check_implementation_header(
         let mut diagnostic = Diagnostic::new(
             InterfaceReason::ImplOrphan,
             SourceLabel::new(
-                implementation.argument.span,
+                implementation.head.arguments[0].span,
                 "this module owns neither the interface nor the outer nominal type",
             ),
         );
         diagnostic.related.push(SourceLabel::new(
-            implementation.interface.origin.primary_span(),
+            implementation.head.interface.origin.primary_span(),
             "the foreign interface is selected here",
         ));
         return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -8664,8 +8690,8 @@ fn check_implementation_header(
 
     for prerequisite in &implementation.prerequisites {
         if !implementation_prerequisite_terminates(
-            &prerequisite.argument.ty,
-            &implementation.argument.ty,
+            &prerequisite.application.arguments[0].ty,
+            &implementation.head.arguments[0].ty,
             budget,
         )
         .map_err(|()| constraint_resource())?
@@ -8673,12 +8699,12 @@ fn check_implementation_header(
             let mut diagnostic = Diagnostic::new(
                 InterfaceReason::ImplPrerequisiteNotDecreasing,
                 SourceLabel::new(
-                    prerequisite.span,
+                    prerequisite.application.span,
                     "this generic prerequisite does not strictly decrease",
                 ),
             );
             diagnostic.related.push(SourceLabel::new(
-                implementation.argument.span,
+                implementation.head.arguments[0].span,
                 "the prerequisite must be a strict subterm of this head",
             ));
             return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -8697,7 +8723,7 @@ fn check_implementation_membership(
     let interface = checked_interface(
         module,
         checked_interfaces,
-        implementation.interface.id,
+        implementation.head.interface.id,
         budget,
     )?
     .ok_or_else(invalid_state)?;
@@ -8782,7 +8808,7 @@ fn check_implementation_membership(
     Ok(CheckedImplementation {
         source_index,
         id: implementation.id,
-        interface: implementation.interface.id,
+        interface: implementation.head.interface.id,
         methods: methods.into_boxed_slice(),
     })
 }
@@ -8810,7 +8836,7 @@ impl<'a> CheckedInterfaceRef<'a> {
 
     const fn parameter(self) -> TypeVariableId {
         match self {
-            Self::Local(interface) => interface.parameter.id,
+            Self::Local(interface) => interface.parameters[0].id,
             Self::Imported(interface) => interface.parameter.id,
         }
     }
@@ -9388,8 +9414,11 @@ fn checked_interface_facts(
         facts.push(CheckedInterfaceFact {
             id: interface.id,
             spelling: interface.spelling.clone(),
-            parameter: clone_resolved_type_variable_with_budget(&interface.parameter, type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            parameter: clone_resolved_type_variable_with_budget(
+                &interface.parameters[0],
+                type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
             methods: methods.into_boxed_slice(),
             origin: interface.origin.clone(),
             span: interface.span,
@@ -12822,6 +12851,133 @@ mod tests {
     }
 
     #[test]
+    fn relational_interface_shape_has_an_exact_declaration_guard_boundary() {
+        const EXACT_WORK: usize = 1 + 1;
+        let declarations =
+            "interface Relational<First, Second> {\nrelational : First -> First\n}\n";
+
+        let short_module = resolved_module_fixture(
+            "short-relational-interface-guard.ash",
+            declarations,
+            "Unit",
+            "()",
+        );
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_interface_declarations(&short_module, &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+
+        let exact_module = resolved_module_fixture(
+            "exact-relational-interface-guard.ash",
+            declarations,
+            "Unit",
+            "()",
+        );
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            check_interface_declarations(&exact_module, &mut exact),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn late_relational_global_requirement_has_an_exact_guard_boundary() {
+        const WIDTH: usize = 32;
+        const EXACT_WORK: usize = 1 + 1 + WIDTH;
+
+        fn fixture(display_path: &str) -> ResolvedModule {
+            let mut declarations = String::new();
+            let mut requirements = Vec::new();
+            for index in 0..WIDTH {
+                declarations.push_str(&format!(
+                    "interface Guard{index}<Value> {{\nguard{index} : Value -> Value\n}}\n"
+                ));
+                if index + 1 == WIDTH {
+                    requirements.push(format!("Guard{index}<Int, Bool>"));
+                } else {
+                    requirements.push(format!("Guard{index}<Int>"));
+                }
+            }
+            declarations.push_str(&format!(
+                "value : Unit -> Unit where {}\nvalue () = ()\n",
+                requirements.join(", ")
+            ));
+            resolved_module_fixture(display_path, &declarations, "Unit", "()")
+        }
+
+        let short_module = fixture("short-late-global-requirement-guard.ash");
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_global_requirements(&short_module, &[], &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+
+        let exact_module = fixture("exact-late-global-requirement-guard.ash");
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            check_global_requirements(&exact_module, &[], &mut exact),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn late_relational_implementation_prerequisite_has_an_exact_header_guard_boundary() {
+        const WIDTH: usize = 32;
+        const EXACT_WORK: usize = WIDTH + 1;
+
+        fn fixture(display_path: &str) -> ResolvedModule {
+            let mut declarations =
+                String::from("interface Head<Value> {\nhead : Value -> Value\n}\n");
+            let mut prerequisites = Vec::new();
+            for index in 0..WIDTH {
+                declarations.push_str(&format!(
+                    "interface Guard{index}<Value> {{\nguard{index} : Value -> Value\n}}\n"
+                ));
+                if index + 1 == WIDTH {
+                    prerequisites.push(format!("Guard{index}<Int, Bool>"));
+                } else {
+                    prerequisites.push(format!("Guard{index}<Int>"));
+                }
+            }
+            declarations.push_str(&format!(
+                "impl Head<Int> where {} {{\nhead value = value\n}}\n",
+                prerequisites.join(", ")
+            ));
+            resolved_module_fixture(display_path, &declarations, "Unit", "()")
+        }
+
+        let short_module = fixture("short-late-implementation-guard.ash");
+        let [short_implementation] = short_module.implementations() else {
+            panic!("the fixture should retain one implementation");
+        };
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_implementation_header(&short_module, &[], short_implementation, &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+
+        let exact_module = fixture("exact-late-implementation-guard.ash");
+        let [exact_implementation] = exact_module.implementations() else {
+            panic!("the fixture should retain one implementation");
+        };
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            check_implementation_header(&exact_module, &[], exact_implementation, &mut exact),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
     fn link_retains_public_authorization_tables_at_an_exact_limit() {
         const WIDTH: usize = 8;
 
@@ -12955,12 +13111,14 @@ mod tests {
                         id: interface_id,
                         public: false,
                         spelling: "Deep".to_owned(),
-                        parameter: ResolvedTypeVariable {
+                        parameters: vec![ResolvedTypeVariable {
                             id: parameter_id,
                             spelling: "A".to_owned(),
                             kind: crate::types::Kind::Type,
                             origin: Origin::Source(span),
-                        },
+                        }]
+                        .into_boxed_slice(),
+                        determination: None,
                         methods: vec![ResolvedInterfaceMethod {
                             id: MethodId::new(interface_id, 0),
                             spelling: "deep".to_owned(),

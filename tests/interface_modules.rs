@@ -247,7 +247,7 @@ fn qualified_public_interface_and_method_keep_their_defining_identities() {
         panic!("same should retain the qualified method occurrence");
     };
 
-    assert_eq!(requirement.interface.id, interface.id);
+    assert_eq!(requirement.application.interface.id, interface.id);
     assert_eq!(
         requirement.id.owner(),
         RequirementOwner::Global(same.interface.name.id)

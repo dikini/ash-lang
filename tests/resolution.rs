@@ -4,15 +4,15 @@ use std::{
 };
 
 use ash::{
-    elaborate::check_module,
+    elaborate::{ElaborationFailure, TypeError, check_module},
     interface::RequirementOwner,
     module::{ModuleRoots, load_module_graph},
     parser::STRUCTURAL_DEPTH_LIMIT,
     resolve::{ResolveReason, resolve_module},
     resolved::{
-        Binder, BinderId, ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExprKind,
-        ResolvedLocalDeclaration, ResolvedModule, ResolvedPattern, ResolvedPatternKind,
-        ResolvedTermName,
+        Binder, BinderId, ResolvedBinding, ResolvedBlock, ResolvedDeclarationIndex,
+        ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule,
+        ResolvedPattern, ResolvedPatternKind, ResolvedTermName,
     },
     types::{Kind, Type},
 };
@@ -79,7 +79,7 @@ fn resolves_local_interface_and_method_identities() {
     assert_eq!(interface.id.module(), program.module());
     assert_eq!(interface.id.declaration(), 0);
     assert_eq!(interface.spelling, "Equal");
-    assert_eq!(interface.parameter.spelling, "A");
+    assert_eq!(interface.parameters[0].spelling, "A");
     let [method] = interface.methods.as_ref() else {
         panic!("expected one resolved interface method");
     };
@@ -103,8 +103,8 @@ fn resolves_local_interface_and_method_identities() {
         RequirementOwner::Global(same.interface.name.id)
     );
     assert_eq!(requirement.id.declaration(), 0);
-    assert_eq!(requirement.interface.id, interface.id);
-    assert_eq!(requirement.argument.ty, Type::Int);
+    assert_eq!(requirement.application.interface.id, interface.id);
+    assert_eq!(requirement.application.arguments[0].ty, Type::Int);
 
     let ResolvedExprKind::Apply(application) = &same.equations[0].body.kind else {
         panic!("expected a method application");
@@ -155,7 +155,10 @@ fn retains_method_local_type_candidates_for_interface_checking() {
         panic!("expected the method's resolved function type");
     };
     assert_eq!(domain.as_ref(), &Type::Variable(candidate.id));
-    assert_eq!(codomain.as_ref(), &Type::Variable(interface.parameter.id));
+    assert_eq!(
+        codomain.as_ref(),
+        &Type::Variable(interface.parameters[0].id)
+    );
 }
 
 #[test]
@@ -200,13 +203,13 @@ fn method_type_binders_are_complete_ordered_and_declaration_ordered() {
     let ResolvedDefinitionKind::Equational(later) = &program.definitions()[0].kind else {
         panic!("expected the equational global");
     };
-    assert_eq!(functor.parameter.id.local(), 0);
+    assert_eq!(functor.parameters[0].id.local(), 0);
     assert_eq!(method.type_parameters[0].id.local(), 1);
     assert_eq!(method.type_parameters[1].id.local(), 2);
     assert_eq!(method.type_parameters[2].id.local(), 3);
     assert_eq!(nominal[0].id.local(), 4);
     assert_eq!(nominal[1].id.local(), 5);
-    assert_eq!(identity.parameter.id.local(), 6);
+    assert_eq!(identity.parameters[0].id.local(), 6);
     assert_eq!(identity.methods[0].type_parameters[0].id.local(), 7);
     assert!(identity.methods[0].has_explicit_type_parameters);
     assert!(!identity.methods[1].has_explicit_type_parameters);
@@ -309,8 +312,14 @@ fn resolves_duplicate_requirements_as_distinct_ordered_occurrences() {
     let [first, duplicate, requirement_only] = same.interface.requirements.as_ref() else {
         panic!("expected three ordered resolved requirements");
     };
-    assert_eq!(first.interface.id, duplicate.interface.id);
-    assert_eq!(first.argument.ty, duplicate.argument.ty);
+    assert_eq!(
+        first.application.interface.id,
+        duplicate.application.interface.id
+    );
+    assert_eq!(
+        first.application.arguments[0].ty,
+        duplicate.application.arguments[0].ty
+    );
     assert_ne!(first.id, duplicate.id);
     assert_eq!(first.id.declaration(), 0);
     assert_eq!(duplicate.id.declaration(), 1);
@@ -320,7 +329,7 @@ fn resolves_duplicate_requirements_as_distinct_ordered_occurrences() {
         RequirementOwner::Global(same.interface.name.id)
     );
     assert!(matches!(
-        requirement_only.argument.ty,
+        requirement_only.application.arguments[0].ty,
         Type::Variable(id) if id == same.interface.type_parameters[1].id
     ));
 }
@@ -420,21 +429,21 @@ fn resolves_impl_prerequisites_and_method_occurrences_to_method_ids() {
     };
 
     assert!(matches!(
-        implementation.argument.ty,
+        implementation.head.arguments[0].ty,
         Type::Variable(id) if id == head_parameter.id
     ));
     assert_eq!(first.id.owner(), RequirementOwner::Impl(implementation.id));
     assert_eq!(first.id.declaration(), 0);
     assert_eq!(second.id.owner(), RequirementOwner::Impl(implementation.id));
     assert_eq!(second.id.declaration(), 1);
-    assert_eq!(first.interface.id, interface.id);
-    assert_eq!(second.interface.id, interface.id);
+    assert_eq!(first.application.interface.id, interface.id);
+    assert_eq!(second.application.interface.id, interface.id);
     assert!(matches!(
-        first.argument.ty,
+        first.application.arguments[0].ty,
         Type::Variable(id) if id == head_parameter.id
     ));
     assert!(matches!(
-        second.argument.ty,
+        second.application.arguments[0].ty,
         Type::Variable(id) if id == prerequisite_only_parameter.id
     ));
 
@@ -836,7 +845,7 @@ fn declaration_binder_defaults_and_legacy_order_are_fixed_at_type() {
     let [interface] = program.interfaces() else {
         panic!("expected one interface");
     };
-    assert_eq!(interface.parameter.kind, Kind::Type);
+    assert_eq!(interface.parameters[0].kind, Kind::Type);
 
     let ResolvedDefinitionKind::Equational(legacy) = &program.definitions()[0].kind else {
         panic!("expected the legacy equational global");
@@ -884,11 +893,230 @@ fn declaration_type_binder_identities_follow_source_order_across_interface_and_n
         panic!("expected the equational global");
     };
 
-    assert_eq!(interface.parameter.id.local(), 0);
+    assert_eq!(interface.parameters[0].id.local(), 0);
     assert_eq!(method_parameter.id.local(), 1);
     assert_eq!(nominal[0].id.local(), 2);
     assert_eq!(nominal[1].id.local(), 3);
     assert_eq!(identity.interface.type_parameters[0].id.local(), 4);
+}
+
+#[test]
+fn relational_interface_binders_and_applications_preserve_source_order() {
+    let program = resolve_valid(concat!(
+        "type Carrier<Element> = Carrier(Element)\n\n",
+        "interface Decode<Format, Source : Type -> Type, Value> where (Format, Source) -> Value {\n",
+        "decode<Method> : Method -> Format\n",
+        "}\n\n",
+        "impl<Head> Decode<Head, Carrier, Unit> {\n",
+        "decode value = value\n",
+        "}\n\n",
+        "consume<Global> : Global -> Unit where Decode<Global, Carrier, Unit>\n",
+        "consume value = ()\n",
+    ));
+
+    assert_eq!(
+        program.declaration_order(),
+        [
+            ResolvedDeclarationIndex::Type(0),
+            ResolvedDeclarationIndex::Interface(0),
+            ResolvedDeclarationIndex::Implementation(0),
+            ResolvedDeclarationIndex::Global(0),
+        ]
+    );
+
+    let nominal = program
+        .registry()
+        .nominal_parameters(program.registry().nominals()[0].id)
+        .expect("the nominal should retain its parameter");
+    let [interface] = program.interfaces() else {
+        panic!("expected one relational interface");
+    };
+    let [format, source, value] = interface.parameters.as_ref() else {
+        panic!("expected three ordered interface parameters");
+    };
+    let [method_parameter] = interface.methods[0].type_parameters.as_ref() else {
+        panic!("expected one method-local parameter");
+    };
+    let [implementation] = program.implementations() else {
+        panic!("expected one implementation");
+    };
+    let [head_parameter] = implementation.head_parameters.as_ref() else {
+        panic!("expected one implementation head parameter");
+    };
+    let ResolvedDefinitionKind::Equational(consume) = &program.definitions()[0].kind else {
+        panic!("expected the constrained global");
+    };
+    let [global_parameter] = consume.interface.type_parameters.as_ref() else {
+        panic!("expected one global parameter");
+    };
+
+    assert_eq!(nominal[0].id.local(), 0);
+    assert_eq!(format.id.local(), 1);
+    assert_eq!(source.id.local(), 2);
+    assert_eq!(value.id.local(), 3);
+    assert_eq!(method_parameter.id.local(), 4);
+    assert_eq!(head_parameter.id.local(), 5);
+    assert_eq!(global_parameter.id.local(), 6);
+    assert_eq!(nominal[0].kind, Kind::Type);
+    assert_eq!(format.kind, Kind::Type);
+    assert_eq!(
+        source.kind,
+        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
+    );
+    assert_eq!(value.kind, Kind::Type);
+    assert_eq!(method_parameter.kind, Kind::Type);
+    assert_eq!(head_parameter.kind, Kind::Type);
+    assert_eq!(global_parameter.kind, Kind::Type);
+
+    let determination = interface
+        .determination
+        .as_ref()
+        .expect("the total determination should be resolved");
+    assert_eq!(
+        determination
+            .determinant
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), parameter.id))
+            .collect::<Vec<_>>(),
+        [("Format", format.id), ("Source", source.id)]
+    );
+    assert_eq!(
+        determination
+            .dependent
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), parameter.id))
+            .collect::<Vec<_>>(),
+        [("Value", value.id)]
+    );
+
+    let carrier = program.registry().nominals()[0].id;
+    assert_eq!(implementation.head.interface.id, interface.id);
+    assert_eq!(
+        implementation
+            .head
+            .arguments
+            .iter()
+            .map(|argument| &argument.ty)
+            .collect::<Vec<_>>(),
+        [
+            &Type::Variable(head_parameter.id),
+            &Type::Nominal(carrier),
+            &Type::Unit,
+        ]
+    );
+    let [requirement] = consume.interface.requirements.as_ref() else {
+        panic!("expected one global requirement");
+    };
+    assert_eq!(requirement.application.interface.id, interface.id);
+    assert_eq!(
+        requirement
+            .application
+            .arguments
+            .iter()
+            .map(|argument| &argument.ty)
+            .collect::<Vec<_>>(),
+        [
+            &Type::Variable(global_parameter.id),
+            &Type::Nominal(carrier),
+            &Type::Unit,
+        ]
+    );
+}
+
+#[test]
+fn resolved_determination_preserves_raw_occurrence_order_for_later_admission() {
+    let program = resolve_valid(concat!(
+        "interface Relation<A, B, C> where (C, A, A) -> C {\n",
+        "relate : A -> A\n",
+        "}\n",
+    ));
+    let [interface] = program.interfaces() else {
+        panic!("expected one relational interface");
+    };
+    let determination = interface
+        .determination
+        .as_ref()
+        .expect("the raw determination should be retained");
+
+    assert_eq!(
+        determination
+            .determinant
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), parameter.id))
+            .collect::<Vec<_>>(),
+        [
+            ("C", interface.parameters[2].id),
+            ("A", interface.parameters[0].id),
+            ("A", interface.parameters[0].id),
+        ]
+    );
+    assert_eq!(
+        determination
+            .dependent
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), parameter.id))
+            .collect::<Vec<_>>(),
+        [("C", interface.parameters[2].id)]
+    );
+}
+
+#[test]
+fn relational_interfaces_bypass_unary_kind_work_without_hiding_later_errors() {
+    for text in [
+        concat!(
+            "type Carrier<A> = Carrier(A)\n\n",
+            "interface Deferred<F : Type -> Type, Ignored> {\n",
+            "deferred : F -> Unit\n",
+            "}\n\n",
+            "bad : Carrier -> Unit\n",
+            "bad value = ()\n",
+        ),
+        concat!(
+            "type Carrier<A> = Carrier(A)\n\n",
+            "interface Deferred<F : Type -> Type> where F -> F {\n",
+            "deferred : F -> Unit\n",
+            "}\n\n",
+            "bad : Carrier -> Unit\n",
+            "bad value = ()\n",
+        ),
+    ] {
+        let error = with_loaded(text, |loaded| {
+            resolve_module(loaded, &[]).expect_err("the later ordinary declaration is ill-kinded")
+        });
+        let ash::resolve::ResolveModuleError::Kind(ash::kind::KindFailure::Source(error)) = error
+        else {
+            panic!("the independent ordinary declaration should retain its source kind error");
+        };
+        let later = text.find("bad : Carrier").expect("the later header exists") + 6;
+        assert_eq!(error.primary.span().range().start(), later as u32, "{text}");
+        assert_eq!(
+            error.primary.span().range().end(),
+            later as u32 + 7,
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn relational_applications_fail_closed_before_unary_checked_publication() {
+    let resolved = resolve_valid(concat!(
+        "interface Marker<A, B> {\n",
+        "marker : A -> Bool\n",
+        "}\n\n",
+        "impl Marker<Int, Bool> {\n",
+        "marker value = true\n",
+        "}\n\n",
+        "main : Unit -> Bool where Marker<Int, Bool>\n",
+        "main () = marker 1\n",
+    ));
+
+    let error = check_module(resolved)
+        .expect_err("a relational application must not enter unary checked publication");
+    assert_eq!(error, TypeError::Internal(ElaborationFailure::InvalidState));
 }
 
 #[test]
@@ -913,7 +1141,7 @@ fn declaration_type_binder_identities_follow_source_order_across_impl_and_global
         panic!("expected the later equational global");
     };
 
-    assert_eq!(interface.parameter.id.local(), 0);
+    assert_eq!(interface.parameters[0].id.local(), 0);
     assert_eq!(head_parameter.id.local(), 1);
     assert_eq!(prerequisite_parameter.id.local(), 2);
     assert_eq!(later.interface.type_parameters[0].id.local(), 3);
@@ -972,7 +1200,10 @@ fn omitted_kinds_and_implicit_lists_preserve_exact_type_kinds_and_order() {
         panic!("expected one interface");
     };
     assert_eq!(
-        (&*interface.parameter.spelling, &interface.parameter.kind),
+        (
+            &*interface.parameters[0].spelling,
+            &interface.parameters[0].kind
+        ),
         ("Subject", &Kind::Type)
     );
 
@@ -1068,7 +1299,7 @@ fn non_type_explicit_kinds_are_retained_on_every_declaration_binder_owner() {
     };
     assert_eq!(nominal_parameter.kind, expected);
 
-    assert_eq!(program.interfaces()[0].parameter.kind, expected);
+    assert_eq!(program.interfaces()[0].parameters[0].kind, expected);
 
     let ResolvedDefinitionKind::Equational(global) = &program.definitions()[0].kind else {
         panic!("expected the kinded global");

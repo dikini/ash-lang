@@ -25,22 +25,24 @@ use crate::{
         ImportedNominalMergeFailure, ImportedTypeAccess, ResolvedApplicationExpr,
         ResolvedBinaryExpr, ResolvedBinding, ResolvedBlock, ResolvedBuildFailure,
         ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
-        ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationalGlobal,
-        ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
-        ResolvedFunctionExpr, ResolvedImplementation, ResolvedImplementationMethodGroup,
-        ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
-        ResolvedInterfaceDeclaration, ResolvedInterfaceMethod, ResolvedInterfaceOccurrence,
-        ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr, ResolvedModule,
-        ResolvedModuleParts, ResolvedNominalType, ResolvedOccurrence, ResolvedPattern,
-        ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry,
-        ResolvedRequirement, ResolvedTermName, ResolvedType, ResolvedTypeProvenance,
-        ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern,
-        ValidatedImportedNominalMerge, WithheldExport, WithheldExportKind, WithheldNamespace,
-        clone_resolved_type_variable_with_budget, clone_resolved_type_variables_with_budget,
-        discard_resolved_definition_iteratively, discard_resolved_equation_iteratively,
-        discard_resolved_expression_iteratively, discard_resolved_implementation_iteratively,
-        discard_resolved_interface_iteratively, discard_resolved_local_declaration_iteratively,
-        discard_resolved_pattern_iteratively, discard_resolved_requirement,
+        ResolvedDefinitionKind, ResolvedDeterminationParameter, ResolvedDeterminationSide,
+        ResolvedEquation, ResolvedEquationalGlobal, ResolvedExportCandidate, ResolvedExpr,
+        ResolvedExprKind, ResolvedExternalInterface, ResolvedFunctionExpr, ResolvedImplementation,
+        ResolvedImplementationMethodGroup, ResolvedInlineOperationalGlobal,
+        ResolvedInlineOperationalHeader, ResolvedInterfaceApplication,
+        ResolvedInterfaceDeclaration, ResolvedInterfaceDetermination, ResolvedInterfaceMethod,
+        ResolvedInterfaceOccurrence, ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr,
+        ResolvedModule, ResolvedModuleParts, ResolvedNominalType, ResolvedOccurrence,
+        ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRecursiveMember,
+        ResolvedRegistry, ResolvedRequirement, ResolvedTermName, ResolvedType,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
+        ResolvedTypedPattern, ValidatedImportedNominalMerge, WithheldExport, WithheldExportKind,
+        WithheldNamespace, clone_resolved_type_variable_with_budget,
+        clone_resolved_type_variables_with_budget, discard_resolved_definition_iteratively,
+        discard_resolved_equation_iteratively, discard_resolved_expression_iteratively,
+        discard_resolved_implementation_iteratively, discard_resolved_interface_iteratively,
+        discard_resolved_local_declaration_iteratively, discard_resolved_pattern_iteratively,
+        discard_resolved_requirement,
         same_checked_implementation_fact_observing_nominals_with_budget,
         same_checked_interface_fact_observing_nominals_with_budget,
         same_imported_constructor_fact_observing_nominals_with_budget,
@@ -51,11 +53,11 @@ use crate::{
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDeclarationIndex, SurfaceDefinition,
         SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceImplementation,
-        SurfaceImportItem, SurfaceImportSelection, SurfaceInterfaceDeclaration, SurfaceKind,
-        SurfaceKindKind, SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfacePattern,
-        SurfacePatternKind, SurfaceRecursiveGroup, SurfaceReference, SurfaceRequirement,
-        SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter,
-        SurfaceTypeVisibility,
+        SurfaceImportItem, SurfaceImportSelection, SurfaceInterfaceApplication,
+        SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination, SurfaceKind, SurfaceKindKind,
+        SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfacePattern, SurfacePatternKind,
+        SurfaceRecursiveGroup, SurfaceReference, SurfaceRequirement, SurfaceType,
+        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter, SurfaceTypeVisibility,
     },
     types::{
         ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
@@ -334,6 +336,22 @@ impl Drop for ResolvedTypeOccurrenceBuffer {
     fn drop(&mut self) {
         for resolved in self.0.drain(..) {
             resolved.discard_iteratively();
+        }
+    }
+}
+
+struct ResolvedDeterminationParameterBuffer(Vec<ResolvedDeterminationParameter>);
+
+impl ResolvedDeterminationParameterBuffer {
+    fn into_boxed_slice(mut self) -> Box<[ResolvedDeterminationParameter]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for ResolvedDeterminationParameterBuffer {
+    fn drop(&mut self) {
+        for parameter in self.0.drain(..) {
+            discard_origin_iteratively(parameter.origin);
         }
     }
 }
@@ -1294,7 +1312,7 @@ struct InterfaceDeclarationIdentity {
 }
 
 struct PendingInterfaceTypeParameters {
-    parameter: ResolvedTypeVariable,
+    parameters: Vec<ResolvedTypeVariable>,
     methods: Vec<Vec<ResolvedTypeVariable>>,
 }
 
@@ -1671,10 +1689,38 @@ impl Resolver {
         &mut self,
         declaration: &SurfaceInterfaceDeclaration,
     ) -> Result<PendingInterfaceTypeParameters, ResolveError> {
-        let parameter = self.allocate_type_variable(
-            &declaration.parameter.name,
-            declaration.parameter.kind.as_ref(),
+        if declaration.parameters.is_empty() {
+            return Err(error(
+                ResolveReason::InternalState,
+                declaration.span,
+                "the projected interface parameter vector is empty",
+            ));
+        }
+        validate_interface_type_parameters(
+            &declaration.parameters,
+            declaration.span,
+            &mut self.type_work,
         )?;
+        let mut parameters = Vec::new();
+        parameters
+            .try_reserve_exact(declaration.parameters.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    declaration.span,
+                    "interface type-parameter storage could not be reserved",
+                )
+            })?;
+        for parameter in &declaration.parameters {
+            parameters.push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
+        }
+        let first_parameter = declaration.parameters.first().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                declaration.span,
+                "the projected interface parameter vector is empty",
+            )
+        })?;
         let mut methods = Vec::new();
         methods
             .try_reserve_exact(declaration.methods.len())
@@ -1688,10 +1734,31 @@ impl Resolver {
         for method in &declaration.methods {
             let explicit = method.type_parameters.as_deref();
             let mut names = Vec::new();
-            let mut seen = HashSet::from([declaration.parameter.name.text.as_str()]);
+            let mut seen = HashSet::new();
+            self.type_work
+                .charge(declaration.parameters.len())
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        method.span,
+                        "method free-name owner installation exceeded its type-work budget",
+                    )
+                })?;
+            seen.try_reserve(declaration.parameters.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        first_parameter.name.span,
+                        "method free-name storage could not reserve interface parameters",
+                    )
+                })?;
+            for parameter in &declaration.parameters {
+                seen.insert(parameter.name.text.as_str());
+            }
             let declared = validate_method_type_parameters(
-                &declaration.parameter,
+                &declaration.parameters,
                 explicit,
+                declaration.span,
                 &mut self.type_work,
             )?;
             collect_free_type_names(
@@ -1706,7 +1773,10 @@ impl Resolver {
             let type_parameters = self.allocate_declaration_type_parameters(explicit, &names)?;
             methods.push(type_parameters);
         }
-        Ok(PendingInterfaceTypeParameters { parameter, methods })
+        Ok(PendingInterfaceTypeParameters {
+            parameters,
+            methods,
+        })
     }
 
     fn resolve_interface_declarations(
@@ -1740,11 +1810,24 @@ impl Resolver {
                     "the resolver retained mismatched interface method preparation records",
                 ));
             }
-            retained_type_variables.push(self.clone_type_variable_for_retention(
-                &pending.parameter,
-                declaration.parameter.name.span,
-                "interface parameter retention exceeded its type-work budget",
-            )?);
+            retained_type_variables
+                .try_reserve(pending.parameters.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "interface parameter registry storage could not be reserved",
+                    )
+                })?;
+            for (parameter, source_parameter) in
+                pending.parameters.iter().zip(declaration.parameters.iter())
+            {
+                retained_type_variables.push(self.clone_type_variable_for_retention(
+                    parameter,
+                    source_parameter.name.span,
+                    "interface parameter retention exceeded its type-work budget",
+                )?);
+            }
             let mut methods =
                 ResolvedInterfaceMethodBuffer(Vec::with_capacity(declaration.methods.len()));
             for ((method, method_id), type_parameters) in declaration
@@ -1753,6 +1836,15 @@ impl Resolver {
                 .zip(identity.methods)
                 .zip(pending.methods)
             {
+                retained_type_variables
+                    .try_reserve(type_parameters.len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            method.span,
+                            "interface method parameter registry storage could not be reserved",
+                        )
+                    })?;
                 for type_parameter in &type_parameters {
                     retained_type_variables.push(self.clone_type_variable_for_retention(
                         type_parameter,
@@ -1760,15 +1852,54 @@ impl Resolver {
                         "interface method parameter retention exceeded its type-work budget",
                     )?);
                 }
-                self.type_scopes.push(
-                    std::iter::once((pending.parameter.spelling.clone(), pending.parameter.id))
-                        .chain(
-                            type_parameters
-                                .iter()
-                                .map(|parameter| (parameter.spelling.clone(), parameter.id)),
+                let scope_width = pending
+                    .parameters
+                    .len()
+                    .checked_add(type_parameters.len())
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            method.span,
+                            "interface method type scope size is not representable",
                         )
-                        .collect(),
-                );
+                    })?;
+                self.type_work.charge(scope_width).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        method.span,
+                        "interface method type-scope retention exceeded its type-work budget",
+                    )
+                })?;
+                let mut scope = HashMap::new();
+                scope.try_reserve(scope_width).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        method.span,
+                        "interface method type-scope storage could not be reserved",
+                    )
+                })?;
+                for parameter in pending.parameters.iter().chain(&type_parameters) {
+                    let spelling = try_clone_resolution_string(
+                        &parameter.spelling,
+                        method.span,
+                        "interface method type-scope spelling could not be retained",
+                    )?;
+                    if scope.insert(spelling, parameter.id).is_some() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            method.span,
+                            "an interface method type scope repeats a prepared binder",
+                        ));
+                    }
+                }
+                self.type_scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        method.span,
+                        "interface method type-scope stack could not be reserved",
+                    )
+                })?;
+                self.type_scopes.push(scope);
                 let annotation = self.resolve_type(&method.annotation);
                 let _ = self.type_scopes.pop();
                 methods.0.push(ResolvedInterfaceMethod {
@@ -1781,11 +1912,19 @@ impl Resolver {
                     span: method.span,
                 });
             }
+            let determination = declaration
+                .determination
+                .as_ref()
+                .map(|determination| {
+                    self.resolve_interface_determination(determination, &pending.parameters)
+                })
+                .transpose()?;
             resolved.0.push(ResolvedInterfaceDeclaration {
                 id: identity.id,
                 public: declaration.public,
                 spelling: declaration.name.text.clone(),
-                parameter: pending.parameter,
+                parameters: pending.parameters.into_boxed_slice(),
+                determination,
                 methods: methods.into_vec().into_boxed_slice(),
                 origin: Origin::Source(declaration.span),
                 span: declaration.span,
@@ -1812,15 +1951,24 @@ impl Resolver {
             validate_explicit_type_parameters(implementation.type_parameters.as_deref())?;
         let mut seen = HashSet::new();
         let mut head_names = Vec::new();
-        collect_free_type_names(
-            &implementation.argument,
-            &self.type_names,
-            &self.interface_names,
-            &declared,
-            &mut seen,
-            &mut head_names,
-            &mut self.type_work,
-        )?;
+        if implementation.head.arguments.is_empty() {
+            return Err(error(
+                ResolveReason::InternalState,
+                implementation.head.span,
+                "the projected implementation head argument vector is empty",
+            ));
+        }
+        for head_argument in &implementation.head.arguments {
+            collect_free_type_names(
+                head_argument,
+                &self.type_names,
+                &self.interface_names,
+                &declared,
+                &mut seen,
+                &mut head_names,
+                &mut self.type_work,
+            )?;
+        }
         let head_parameters = self.allocate_declaration_type_parameters(
             implementation.type_parameters.as_deref(),
             &head_names,
@@ -1828,15 +1976,17 @@ impl Resolver {
 
         let mut prerequisite_only_names = Vec::new();
         for prerequisite in &implementation.prerequisites {
-            collect_free_type_names(
-                &prerequisite.argument,
-                &self.type_names,
-                &self.interface_names,
-                &declared,
-                &mut seen,
-                &mut prerequisite_only_names,
-                &mut self.type_work,
-            )?;
+            for argument in &prerequisite.arguments {
+                collect_free_type_names(
+                    argument,
+                    &self.type_names,
+                    &self.interface_names,
+                    &declared,
+                    &mut seen,
+                    &mut prerequisite_only_names,
+                    &mut self.type_work,
+                )?;
+            }
         }
         let prerequisite_only_parameters = prerequisite_only_names
             .into_iter()
@@ -4256,17 +4406,130 @@ impl Resolver {
                     "the declaration contains too many interface requirements",
                 )
             })?;
-            let interface = self.interface_reference(&requirement.interface)?;
-            let argument =
-                ResolvedTypeOccurrenceOwner::new(self.resolve_type(&requirement.argument)?);
+            let application = self.resolve_interface_application(requirement)?;
             resolved.0.push(ResolvedRequirement {
                 id: RequirementId::new(owner, index),
-                interface,
-                argument: argument.into_inner(),
-                span: requirement.span,
+                application,
             });
         }
         Ok(resolved.into_boxed_slice())
+    }
+
+    fn resolve_interface_application(
+        &mut self,
+        application: &SurfaceInterfaceApplication,
+    ) -> Result<ResolvedInterfaceApplication, ResolveError> {
+        let interface = self.interface_reference(&application.interface)?;
+        if application.arguments.is_empty() {
+            return Err(error(
+                ResolveReason::InternalState,
+                application.span,
+                "the projected interface argument vector is empty",
+            ));
+        }
+        let mut arguments = ResolvedTypeOccurrenceBuffer(Vec::new());
+        arguments
+            .0
+            .try_reserve_exact(application.arguments.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    application.span,
+                    "interface argument storage could not be reserved",
+                )
+            })?;
+        for argument in &application.arguments {
+            arguments.0.push(self.resolve_type(argument)?);
+        }
+        Ok(ResolvedInterfaceApplication {
+            interface,
+            arguments: arguments.into_vec().into_boxed_slice(),
+            span: application.span,
+        })
+    }
+
+    fn resolve_interface_determination(
+        &mut self,
+        determination: &SurfaceInterfaceDetermination,
+        parameters: &[ResolvedTypeVariable],
+    ) -> Result<ResolvedInterfaceDetermination, ResolveError> {
+        self.type_work.charge(parameters.len()).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                determination.span,
+                "interface determination parameter indexing exceeded its type-work budget",
+            )
+        })?;
+
+        let mut identities = HashMap::new();
+        identities.try_reserve(parameters.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                determination.span,
+                "interface determination identity storage could not be reserved",
+            )
+        })?;
+        for parameter in parameters {
+            identities.insert(parameter.spelling.as_str(), parameter.id);
+        }
+
+        let mut resolve_side = |side: &crate::surface::SurfaceDeterminationSide| {
+            let mut resolved = ResolvedDeterminationParameterBuffer(Vec::new());
+            resolved
+                .0
+                .try_reserve_exact(side.parameters.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        side.span,
+                        "interface determination side storage could not be reserved",
+                    )
+                })?;
+            for name in &side.parameters {
+                self.type_work.charge(1).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        name.span,
+                        "interface determination lookup exceeded its type-work budget",
+                    )
+                })?;
+                let id = identities
+                    .get(name.text.as_str())
+                    .copied()
+                    .ok_or_else(|| unknown_determination_parameter_error(name))?;
+                self.type_work.charge(1).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        name.span,
+                        "interface determination occurrence retention exceeded its type-work budget",
+                    )
+                })?;
+                resolved.0.push(ResolvedDeterminationParameter {
+                    id,
+                    spelling: try_clone_resolution_string(
+                        &name.text,
+                        name.span,
+                        "interface determination spelling could not be retained",
+                    )?,
+                    origin: Origin::Source(name.span),
+                });
+            }
+            Ok::<_, ResolveError>(resolved)
+        };
+
+        let determinant = resolve_side(&determination.determinant)?;
+        let dependent = resolve_side(&determination.dependent)?;
+        Ok(ResolvedInterfaceDetermination {
+            determinant: ResolvedDeterminationSide {
+                parameters: determinant.into_boxed_slice(),
+                span: determination.determinant.span,
+            },
+            dependent: ResolvedDeterminationSide {
+                parameters: dependent.into_boxed_slice(),
+                span: determination.dependent.span,
+            },
+            span: determination.span,
+        })
     }
 
     fn constructor_reference(
@@ -4933,9 +5196,7 @@ impl Resolver {
             );
 
             let result = (|| -> Result<ResolvedImplementation, ResolveError> {
-                let interface = self.interface_reference(&implementation.interface)?;
-                let argument =
-                    ResolvedTypeOccurrenceOwner::new(self.resolve_type(&implementation.argument)?);
+                let head = self.resolve_interface_application(&implementation.head)?;
                 let prerequisites = ResolvedRequirementBuffer(
                     self.resolve_requirements(
                         RequirementOwner::Impl(pending.id),
@@ -5036,8 +5297,7 @@ impl Resolver {
                 Ok(ResolvedImplementation {
                     id: pending.id,
                     public: implementation.public,
-                    interface,
-                    argument: argument.into_inner(),
+                    head,
                     head_parameters: pending.head_parameters.into_boxed_slice(),
                     prerequisite_only_parameters: pending
                         .prerequisite_only_parameters
@@ -5740,6 +6000,11 @@ impl Resolver {
                 "type-parameter record retention exceeded its type-work budget",
             )
         })?;
+        let spelling = try_clone_resolution_string(
+            &name.text,
+            name.span,
+            "type-parameter spelling storage could not be reserved",
+        )?;
         let id = TypeVariableId::resolved(self.module, self.next_type_variable);
         self.next_type_variable = self.next_type_variable.checked_add(1).ok_or_else(|| {
             error(
@@ -5750,7 +6015,7 @@ impl Resolver {
         })?;
         Ok(ResolvedTypeVariable {
             id,
-            spelling: name.text.clone(),
+            spelling,
             kind,
             origin: Origin::Source(name.span),
         })
@@ -5817,15 +6082,17 @@ impl Resolver {
                     &mut self.type_work,
                 )?;
                 for requirement in &equational.interface.requirements {
-                    collect_free_type_names(
-                        &requirement.argument,
-                        &self.type_names,
-                        &self.interface_names,
-                        &declared,
-                        &mut seen,
-                        &mut names,
-                        &mut self.type_work,
-                    )?;
+                    for argument in &requirement.arguments {
+                        collect_free_type_names(
+                            argument,
+                            &self.type_names,
+                            &self.interface_names,
+                            &declared,
+                            &mut seen,
+                            &mut names,
+                            &mut self.type_work,
+                        )?;
+                    }
                 }
             }
             SurfaceDefinitionKind::InlineOperational(operational) => {
@@ -5850,15 +6117,17 @@ impl Resolver {
                     &mut self.type_work,
                 )?;
                 for requirement in &operational.header.requirements {
-                    collect_free_type_names(
-                        &requirement.argument,
-                        &self.type_names,
-                        &self.interface_names,
-                        &declared,
-                        &mut seen,
-                        &mut names,
-                        &mut self.type_work,
-                    )?;
+                    for argument in &requirement.arguments {
+                        collect_free_type_names(
+                            argument,
+                            &self.type_names,
+                            &self.interface_names,
+                            &declared,
+                            &mut seen,
+                            &mut names,
+                            &mut self.type_work,
+                        )?;
+                    }
                 }
             }
         }
@@ -6697,6 +6966,19 @@ fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> Resolve
     diagnostic.into()
 }
 
+fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
+    let mut diagnostic = Diagnostic::new(
+        ResolveReason::UnknownType,
+        SourceLabel::new(
+            name.span,
+            "this name is not a parameter of the owning interface",
+        ),
+    );
+    diagnostic.expected = Some("interface parameter".to_owned());
+    diagnostic.found = Some(name.text.clone());
+    diagnostic.into()
+}
+
 fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
     let mut diagnostic = Diagnostic::new(
         ResolveReason::InterfaceKind,
@@ -6715,6 +6997,58 @@ fn type_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
     diagnostic.expected = Some("type".to_owned());
     diagnostic.found = Some(spelling.to_owned());
     diagnostic.into()
+}
+
+fn try_clone_resolution_string(
+    value: &str,
+    span: crate::source::Span,
+    message: &'static str,
+) -> Result<String, ResolveError> {
+    let mut retained = String::new();
+    retained
+        .try_reserve_exact(value.len())
+        .map_err(|_| error(ResolveReason::TypeResourceExhausted, span, message))?;
+    retained.push_str(value);
+    Ok(retained)
+}
+
+fn validate_interface_type_parameters(
+    parameters: &[SurfaceTypeParameter],
+    owner_span: crate::source::Span,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ResolveError> {
+    budget.charge(parameters.len()).map_err(|()| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            owner_span,
+            "interface type-parameter validation exceeded its type-work budget",
+        )
+    })?;
+    let mut first = HashMap::new();
+    first.try_reserve(parameters.len()).map_err(|_| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            owner_span,
+            "interface type-parameter validation could not reserve duplicate storage",
+        )
+    })?;
+    for parameter in parameters {
+        if let Some(first_span) = first.insert(parameter.name.text.as_str(), parameter.name.span) {
+            let mut diagnostic = Diagnostic::new(
+                ResolveReason::DuplicateTypeParameter,
+                SourceLabel::new(
+                    parameter.name.span,
+                    "this type parameter is already declared",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                first_span,
+                "the first type parameter is here",
+            ));
+            return Err(diagnostic.into());
+        }
+    }
+    Ok(())
 }
 
 fn validate_explicit_type_parameters(
@@ -6746,54 +7080,73 @@ fn validate_explicit_type_parameters(
 }
 
 fn validate_method_type_parameters<'a>(
-    owner: &'a SurfaceTypeParameter,
+    owners: &'a [SurfaceTypeParameter],
     parameters: Option<&'a [SurfaceTypeParameter]>,
+    owner_span: crate::source::Span,
     budget: &mut TypeWorkBudget,
 ) -> Result<HashSet<&'a str>, ResolveError> {
     let Some(parameters) = parameters else {
-        let mut declared = HashSet::new();
-        declared.try_reserve(1).map_err(|_| {
+        budget.charge(owners.len()).map_err(|()| {
             error(
                 ResolveReason::TypeResourceExhausted,
-                owner.name.span,
+                owner_span,
+                "method type-parameter owner validation exceeded its type-work budget",
+            )
+        })?;
+        let mut declared = HashSet::new();
+        declared.try_reserve(owners.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                owner_span,
                 "method type-parameter validation could not reserve owner storage",
             )
         })?;
-        declared.insert(owner.name.text.as_str());
+        for owner in owners {
+            declared.insert(owner.name.text.as_str());
+        }
         return Ok(declared);
     };
-    let validation_work = parameters.len().checked_add(1).ok_or_else(|| {
+    let entry_count = parameters.len().checked_add(owners.len()).ok_or_else(|| {
         error(
             ResolveReason::TypeResourceExhausted,
-            owner.name.span,
+            owner_span,
+            "method type-parameter validation size is not representable",
+        )
+    })?;
+    let validation_work = entry_count.checked_mul(2).ok_or_else(|| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            owner_span,
             "method type-parameter validation size is not representable",
         )
     })?;
     budget.charge(validation_work).map_err(|()| {
         error(
             ResolveReason::TypeResourceExhausted,
-            owner.name.span,
+            owner_span,
             "method type-parameter validation exceeded its type-work budget",
         )
     })?;
     let mut declared = HashSet::new();
-    declared.try_reserve(validation_work).map_err(|_| {
+    declared.try_reserve(entry_count).map_err(|_| {
         error(
             ResolveReason::TypeResourceExhausted,
-            owner.name.span,
+            owner_span,
             "method type-parameter validation could not reserve declaration storage",
         )
     })?;
     let mut first = HashMap::new();
-    first.try_reserve(validation_work).map_err(|_| {
+    first.try_reserve(entry_count).map_err(|_| {
         error(
             ResolveReason::TypeResourceExhausted,
-            owner.name.span,
+            owner_span,
             "method type-parameter validation could not reserve duplicate storage",
         )
     })?;
-    declared.insert(owner.name.text.as_str());
-    first.insert(owner.name.text.as_str(), owner.name.span);
+    for owner in owners {
+        declared.insert(owner.name.text.as_str());
+        first.insert(owner.name.text.as_str(), owner.name.span);
+    }
     for parameter in parameters {
         if let Some(first_span) = first.insert(parameter.name.text.as_str(), parameter.name.span) {
             let mut diagnostic = Diagnostic::new(
@@ -9654,12 +10007,13 @@ mod tests {
 
     #[test]
     fn method_parameter_validation_is_exact_atomic_and_retryable() {
-        // A present method list validates one interface owner plus each of P
-        // written binders before free-name discovery or binder publication.
-        const OWNER_AND_BINDERS: usize = 3;
+        // Interface duplicate validation and the method free-name set each
+        // visit owner A once. Method duplicate validation visits the declared
+        // and first-occurrence sets for A, B, and C.
+        const OWNER_AND_BINDER_SET_VISITS: usize = 1 + 1 + 2 * 3;
         // Interface A costs two units, the method type has six surface nodes,
         // and omitted-kind B and C cost two units each.
-        const COMPLETE_WORK: usize = 2 + OWNER_AND_BINDERS + 6 + 2 * 2;
+        const COMPLETE_WORK: usize = 2 + OWNER_AND_BINDER_SET_VISITS + 6 + 2 * 2;
         let surface = declaration_fixture(
             "method-parameter-validation-budget.ash",
             "interface Fixture<A> {\nmethod<B, C> : (A, B, C) -> A\n}\n",
@@ -9697,14 +10051,14 @@ mod tests {
         for (source, validation_work, spelling, primary_occurrence, related_occurrence) in [
             (
                 "interface Duplicate<A> {\nmethod<A> : A -> A\n}\n",
-                2,
+                4,
                 "A",
                 1,
                 0,
             ),
             (
                 "interface Duplicate<A> {\nmethod<B, B> : (A, B) -> B\n}\n",
-                3,
+                6,
                 "B",
                 1,
                 0,
@@ -9712,7 +10066,10 @@ mod tests {
         ] {
             let surface = declaration_fixture("duplicate-method-parameter.ash", source);
             let declaration = &surface.interfaces[0];
-            let exact_work = 2 + validation_work;
+            // Interface validation and allocation cost three units; method
+            // free-name owner installation costs one more before the atomic
+            // two-set duplicate-validation charge.
+            let exact_work = 4 + validation_work;
 
             let mut short = Resolver::with_type_work(
                 ModuleId::new(0),
@@ -9725,12 +10082,12 @@ mod tests {
             assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
             assert_eq!(
                 short.type_work.used(),
-                2,
+                4,
                 "the all-at-once validation charge must not partially publish",
             );
             short
                 .type_work
-                .charge(exact_work - 3)
+                .charge(exact_work - 5)
                 .expect("the rejected validation charge must leave its capacity reusable");
             assert_eq!(short.type_work.used(), exact_work - 1);
             assert_eq!(short.next_type_variable, 1);
@@ -9763,6 +10120,221 @@ mod tests {
                 expected_related + 1
             );
         }
+    }
+
+    #[test]
+    fn wide_interface_parameter_and_method_scope_work_is_exact_atomic_and_retryable() {
+        const PARAMETER_COUNT: usize = 32;
+        const METHOD_COUNT: usize = 32;
+        // Preparation visits each interface binder once for duplicate
+        // validation and retains its Type Kind plus binder record. Every
+        // method then installs the P owners in both free-name sets and visits
+        // the three nodes of `P0 -> P0`:
+        //   3P + M(2P + 3).
+        const PREPARATION_WORK: usize =
+            3 * PARAMETER_COUNT + METHOD_COUNT * (2 * PARAMETER_COUNT + 3);
+        // Resolution clones every canonical interface binder, then each
+        // method retains one P-wide scope map and resolves the same three
+        // annotation nodes:
+        //   2P + M(P + 3).
+        const RESOLUTION_WORK: usize = 2 * PARAMETER_COUNT + METHOD_COUNT * (PARAMETER_COUNT + 3);
+        const EXACT_WORK: usize = PREPARATION_WORK + RESOLUTION_WORK;
+
+        let parameter_names = (0..PARAMETER_COUNT)
+            .map(|index| format!("P{index}"))
+            .collect::<Vec<_>>();
+        let mut text = format!("interface Wide<{}> {{\n", parameter_names.join(", "));
+        for index in 0..METHOD_COUNT {
+            text.push_str(&format!("method{index} : P0 -> P0\n"));
+        }
+        text.push_str("}\n");
+        let surface = declaration_fixture("wide-interface-scope-budget.ash", &text);
+
+        let mut one_short =
+            Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK - 1));
+        let identities = one_short
+            .install_interface_identities(&surface.interfaces)
+            .expect("the wide interface identities should fit");
+        let pending = one_short
+            .prepare_interface_type_parameters(&surface.interfaces[0])
+            .expect("the one-short boundary should reach resolved scope retention");
+        let failure = one_short
+            .resolve_interface_declarations(
+                &surface.interfaces,
+                identities,
+                vec![pending],
+                surface.span,
+            )
+            .expect_err("one missing scope or annotation visit must reject atomically");
+        assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(one_short.type_work.used(), EXACT_WORK - 1);
+        assert!(one_short.type_scopes.is_empty());
+        assert_eq!(one_short.next_type_variable as usize, PARAMETER_COUNT);
+
+        let mut exact =
+            Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK));
+        let identities = exact
+            .install_interface_identities(&surface.interfaces)
+            .expect("the retry identities should fit");
+        let pending = exact
+            .prepare_interface_type_parameters(&surface.interfaces[0])
+            .expect("the retry preparation formula should fit exactly");
+        let (interfaces, retained) = exact
+            .resolve_interface_declarations(
+                &surface.interfaces,
+                identities,
+                vec![pending],
+                surface.span,
+            )
+            .expect("the exact wide interface formula should resolve");
+        assert_eq!(exact.type_work.used(), EXACT_WORK);
+        assert!(exact.type_scopes.is_empty());
+        assert_eq!(interfaces[0].parameters.len(), PARAMETER_COUNT);
+        assert_eq!(interfaces[0].methods.len(), METHOD_COUNT);
+        assert_eq!(retained.len(), PARAMETER_COUNT);
+    }
+
+    #[test]
+    fn interface_parameter_duplicate_validation_is_exact_and_atomic() {
+        const DUPLICATE_VISITS: usize = 3;
+        let surface = declaration_fixture(
+            "interface-duplicate-budget.ash",
+            "interface Duplicate<A, B, B> {\nmethod : A -> A\n}\n",
+        );
+        let declaration = &surface.interfaces[0];
+
+        let mut one_short = Resolver::with_type_work(
+            ModuleId::new(0),
+            TypeWorkBudget::with_limit(DUPLICATE_VISITS - 1),
+        );
+        let failure = match one_short.prepare_interface_type_parameters(declaration) {
+            Err(failure) => failure,
+            Ok(_) => panic!("one-short duplicate validation must fail before binder allocation"),
+        };
+        assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(one_short.type_work.used(), 0);
+        assert_eq!(one_short.next_type_variable, 0);
+
+        let mut exact = Resolver::with_type_work(
+            ModuleId::new(0),
+            TypeWorkBudget::with_limit(DUPLICATE_VISITS),
+        );
+        let failure = match exact.prepare_interface_type_parameters(declaration) {
+            Err(failure) => failure,
+            Ok(_) => panic!("the exact validation budget must reach the duplicate binder"),
+        };
+        assert_eq!(failure.reason, ResolveReason::DuplicateTypeParameter);
+        assert_eq!(exact.type_work.used(), DUPLICATE_VISITS);
+        assert_eq!(exact.next_type_variable, 0);
+        assert_eq!(failure.related.len(), 1);
+    }
+
+    #[test]
+    fn interface_determination_resolution_is_exact_atomic_and_retryable() {
+        const PARAMETER_COUNT: usize = 16;
+        const OCCURRENCE_COUNT: usize = PARAMETER_COUNT * 2;
+        // One map insertion per binder, then one lookup and one retained
+        // record per written determination occurrence.
+        const EXACT_WORK: usize = PARAMETER_COUNT + 2 * OCCURRENCE_COUNT;
+
+        let parameter_names = (0..PARAMETER_COUNT)
+            .map(|index| format!("P{index}"))
+            .collect::<Vec<_>>();
+        let reverse_names = parameter_names.iter().rev().cloned().collect::<Vec<_>>();
+        let text = format!(
+            "interface Relation<{}> where ({}) -> ({}) {{\nrelate : P0 -> P0\n}}\n",
+            parameter_names.join(", "),
+            parameter_names.join(", "),
+            reverse_names.join(", "),
+        );
+        let surface = declaration_fixture("determination-budget.ash", &text);
+        let declaration = &surface.interfaces[0];
+        let determination = declaration
+            .determination
+            .as_ref()
+            .expect("the fixture has one determination");
+        let parameters = declaration
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| ResolvedTypeVariable {
+                id: TypeVariableId::resolved(ModuleId::new(0), index as u32),
+                spelling: parameter.name.text.clone(),
+                kind: Kind::Type,
+                origin: Origin::Source(parameter.name.span),
+            })
+            .collect::<Vec<_>>();
+
+        let mut one_short =
+            Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK - 1));
+        let failure = one_short
+            .resolve_interface_determination(determination, &parameters)
+            .expect_err("one missing retained occurrence must reject the determination");
+        assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(one_short.type_work.used(), EXACT_WORK - 1);
+
+        let mut exact =
+            Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK));
+        let resolved = exact
+            .resolve_interface_determination(determination, &parameters)
+            .expect("a fresh exact retry should retain every occurrence");
+        assert_eq!(exact.type_work.used(), EXACT_WORK);
+        assert_eq!(resolved.determinant.parameters.len(), PARAMETER_COUNT);
+        assert_eq!(resolved.dependent.parameters.len(), PARAMETER_COUNT);
+        assert_eq!(resolved.determinant.parameters[0].spelling, "P0");
+        assert_eq!(resolved.dependent.parameters[0].spelling, "P15");
+    }
+
+    #[test]
+    fn late_unknown_determination_name_has_an_exact_retryable_boundary() {
+        // Four map insertions, three successful lookup/retention pairs, then
+        // the late unknown lookup itself.
+        const EXACT_UNKNOWN_WORK: usize = 4 + 2 * 3 + 1;
+        let text = concat!(
+            "interface Relation<A, B, C, D> where (A, B) -> (C, Missing) {\n",
+            "relate : A -> A\n",
+            "}\n",
+        );
+        let surface = declaration_fixture("late-unknown-determination-budget.ash", text);
+        let declaration = &surface.interfaces[0];
+        let determination = declaration
+            .determination
+            .as_ref()
+            .expect("the fixture has one determination");
+        let parameters = declaration
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| ResolvedTypeVariable {
+                id: TypeVariableId::resolved(ModuleId::new(0), index as u32),
+                spelling: parameter.name.text.clone(),
+                kind: Kind::Type,
+                origin: Origin::Source(parameter.name.span),
+            })
+            .collect::<Vec<_>>();
+
+        let mut one_short = Resolver::with_type_work(
+            ModuleId::new(0),
+            TypeWorkBudget::with_limit(EXACT_UNKNOWN_WORK - 1),
+        );
+        let failure = one_short
+            .resolve_interface_determination(determination, &parameters)
+            .expect_err("one missing lookup visit must stop before the late unknown name");
+        assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(one_short.type_work.used(), EXACT_UNKNOWN_WORK - 1);
+
+        let mut exact = Resolver::with_type_work(
+            ModuleId::new(0),
+            TypeWorkBudget::with_limit(EXACT_UNKNOWN_WORK),
+        );
+        let failure = exact
+            .resolve_interface_determination(determination, &parameters)
+            .expect_err("a fresh exact retry must reach the causal unknown spelling");
+        assert_eq!(failure.reason, ResolveReason::UnknownType);
+        assert_eq!(exact.type_work.used(), EXACT_UNKNOWN_WORK);
+        let missing = text.find("Missing").expect("the unknown spelling exists") as u32;
+        assert_eq!(failure.primary.span().range().start(), missing);
+        assert_eq!(failure.primary.span().range().end(), missing + 7);
     }
 
     #[test]
@@ -10286,7 +10858,7 @@ mod tests {
                 else {
                     panic!("the requirement fixture should remain equational")
                 };
-                definition.interface.requirements[0].argument = deep_declaration_type(span);
+                definition.interface.requirements[0].arguments[0] = deep_declaration_type(span);
                 definition.interface.requirements[1].interface = declaration_name("Missing", span);
                 let error = expected_declaration_error(
                     declaration_resolver(&requirements).resolve_declarations(&requirements),

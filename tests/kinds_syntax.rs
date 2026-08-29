@@ -121,14 +121,13 @@ type Type = Type\n";
     let [interface] = module.interfaces.as_slice() else {
         panic!("expected one interface");
     };
-    assert_eq!(interface.parameter.name.text, "F");
+    assert_eq!(interface.parameters[0].name.text, "F");
     assert_eq!(
-        spanned_text(&source, interface.parameter.span),
+        spanned_text(&source, interface.parameters[0].span),
         "F : Type -> Type"
     );
     assert_type_to_type(
-        interface
-            .parameter
+        interface.parameters[0]
             .kind
             .as_ref()
             .expect("the interface parameter should retain its kind"),
@@ -291,16 +290,6 @@ fn malformed_kind_and_binder_headers_recover_without_projection() {
             1,
             SynchronizationBoundary::TypeParameterListClosing,
             ">",
-        ),
-        (
-            "two interface parameters",
-            "interface Bad<F, A> {\nmethod : F\n}\ntype Next = Next\n",
-            ParseReason::ExpectedForm,
-            Some(ExpectedForm::InterfaceParameter),
-            ",",
-            1,
-            SynchronizationBoundary::TypeParameterSeparator,
-            ",",
         ),
     ];
 
@@ -1065,7 +1054,7 @@ read (Box(item)) = 0\n\
     let module = project_module(&source, &tree).expect("legacy headers should still project");
 
     assert_eq!(module.type_declarations[0].parameters[0].kind, None);
-    assert_eq!(module.interfaces[0].parameter.kind, None);
+    assert_eq!(module.interfaces[0].parameters[0].kind, None);
     let SurfaceDefinitionKind::Equational(equational) = &module.definitions[0].kind else {
         panic!("expected an equational global");
     };
