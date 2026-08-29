@@ -2046,6 +2046,46 @@ impl<'program, 'source> Validator<'program, 'source> {
             }
             let expected_prerequisite_nodes = prerequisites.len();
             self.charge_type_work(expected_prerequisite_nodes)?;
+            self.charge_type_work(source.prerequisites.len())?;
+            let mut retained_prerequisites = source.prerequisites.iter();
+            for expected_selection_node in prerequisites {
+                match occurrence
+                    .selection
+                    .node(*expected_selection_node)
+                    .ok_or_else(|| {
+                        ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+                    })? {
+                    EvidenceNode::Abstract { methods, .. } => {
+                        self.charge_type_work(methods.len())?;
+                        for expected_method in methods {
+                            let Some(retained) = retained_prerequisites.next() else {
+                                return Ok(false);
+                            };
+                            if retained.selection_node != *expected_selection_node
+                                || retained.method != *expected_method
+                            {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                    EvidenceNode::Implementation { methods, .. } => {
+                        self.charge_type_work(methods.len())?;
+                        for expected_method in methods {
+                            let Some(retained) = retained_prerequisites.next() else {
+                                return Ok(false);
+                            };
+                            if retained.selection_node != *expected_selection_node
+                                || retained.method != expected_method.method()
+                            {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                }
+            }
+            if retained_prerequisites.next().is_some() {
+                return Ok(false);
+            }
             let mut current = actual_node;
             for prerequisite in source.prerequisites.iter().rev() {
                 self.charge_type_work(1)?;
@@ -5597,6 +5637,227 @@ mod tests {
         )
     }
 
+    fn concrete_source_with_same_typed_sibling_prerequisites_fixture() -> LinkedCoreValidationFixture
+    {
+        LinkedCoreValidationFixture::compile(
+            "pub seed : Unit -> Unit\nseed value = value\n",
+            concat!(
+                "type Wrap<A> = Wrap(A)\n\n",
+                "interface Leaf<I> {\nfirst : I -> I\nsecond : I -> I\n}\n\n",
+                "interface Base<I> {\nbase : I -> I\n}\n\n",
+                "interface Convert<I> {\nconvert<X> : (I, X) -> I\n}\n\n",
+                "impl<A> Base<Wrap<A>> where Leaf<A>, Leaf<A> {\n",
+                "base (Wrap(value)) = Wrap(first(value))\n",
+                "}\n\n",
+                "impl<A> Convert<Wrap<Wrap<A>>> where Base<Wrap<A>> {\n",
+                "convert (Wrap(value), ignored) = Wrap(base(value))\n",
+                "}\n\n",
+                "probe<A> : Wrap<Wrap<A>> -> Wrap<Wrap<A>> where Leaf<A>\n",
+                "probe value = convert((value, true))\n\n",
+                "impl Leaf<Int> {\n",
+                "first value = value\n",
+                "second value = value\n",
+                "}\n\n",
+                "main : Unit -> Wrap<Wrap<Int>>\n",
+                "main () = probe(Wrap(Wrap(42)))\n",
+            ),
+            &[],
+        )
+    }
+
+    fn substitute_concrete_source_direct_selection_node(program: &mut UnvalidatedProgram) {
+        let (source_selection_node, implementation, first_node, sibling_node) = program
+            .method_evidence
+            .concrete_sources()
+            .iter()
+            .find_map(|source| {
+                let occurrence = program.method_evidence.occurrence(source.occurrence)?;
+                let EvidenceNode::Implementation { prerequisites, .. } =
+                    occurrence.selection.node(source.selection_node)?
+                else {
+                    return None;
+                };
+                let [first_node, sibling_node] = prerequisites else {
+                    return None;
+                };
+                let EvidenceNode::Abstract {
+                    methods: first_methods,
+                    ..
+                } = occurrence.selection.node(*first_node)?
+                else {
+                    return None;
+                };
+                let EvidenceNode::Abstract {
+                    methods: sibling_methods,
+                    ..
+                } = occurrence.selection.node(*sibling_node)?
+                else {
+                    return None;
+                };
+                (*first_node != *sibling_node && first_methods == sibling_methods).then_some((
+                    source.selection_node,
+                    source.implementation,
+                    *first_node,
+                    *sibling_node,
+                ))
+            })
+            .expect("the fixture has distinct same-typed direct prerequisite nodes");
+        let concrete_sources = Arc::get_mut(&mut program.method_evidence)
+            .expect("the rebuilt program uniquely owns its catalog")
+            .concrete_sources_mut_for_core_test();
+        let source = concrete_sources
+            .iter_mut()
+            .find(|source| {
+                source.selection_node == source_selection_node
+                    && source.implementation == implementation
+            })
+            .expect("the concrete source row remains retained");
+        let retained = source
+            .prerequisites
+            .iter_mut()
+            .find(|prerequisite| prerequisite.selection_node == first_node)
+            .expect("the concrete source retains the first direct prerequisite");
+        retained.selection_node = sibling_node;
+    }
+
+    #[test]
+    fn concrete_source_prerequisites_match_direct_selection_nodes_after_every_rebuild() {
+        for rebuild in 0..3 {
+            let fixture = concrete_source_with_same_typed_sibling_prerequisites_fixture();
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                mut program,
+                module_sources,
+                globals: _,
+            } = fixture;
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            if rebuild != 0 {
+                let validated = validate_modules(program, &sources, &module_sources)
+                    .expect("the original direct prerequisite nodes validate");
+                program = if rebuild == 1 {
+                    identity_traversal(&validated).expect("identity rebuild")
+                } else {
+                    fold_literal_primitives(&validated).expect("literal-fold rebuild")
+                };
+                drop(validated);
+            }
+            substitute_concrete_source_direct_selection_node(&mut program);
+            assert!(
+                validate_modules(program, &sources, &module_sources).is_err(),
+                "same-typed sibling-node substitution must reject after rebuild {rebuild}",
+            );
+            drop(directory);
+        }
+    }
+
+    fn swap_concrete_source_prerequisite_method_order(program: &mut UnvalidatedProgram) {
+        let (selection_node, implementation) = program
+            .method_evidence
+            .concrete_sources()
+            .iter()
+            .find_map(|source| {
+                let [first, second] = source.prerequisites.as_ref() else {
+                    return None;
+                };
+                (first.selection_node == second.selection_node && first.method != second.method)
+                    .then_some((source.selection_node, source.implementation))
+            })
+            .expect("the fixture has one concrete source with two ordered Leaf methods");
+        let source_node = program
+            .method_evidence_anchors
+            .iter()
+            .find_map(|anchor| match anchor.role {
+                MethodEvidenceAnchorRole::AdapterEdge {
+                    producer_node,
+                    producer_selection_node,
+                    producer:
+                        MethodEvidenceProducer::Adapter {
+                            implementation: actual,
+                        },
+                    ..
+                } if producer_selection_node == selection_node && actual == implementation => {
+                    Some(producer_node)
+                }
+                _ => None,
+            })
+            .expect("the concrete source has one retained adapter-edge use");
+        let source_index = source_node
+            .index()
+            .expect("the source node belongs to the fixture");
+        let PureExprKind::Computation(PureComputation::Apply(outer)) =
+            program.nodes[source_index].kind
+        else {
+            panic!("the concrete source applies its second Leaf method")
+        };
+        let inner_node = outer.function();
+        let inner_index = inner_node
+            .index()
+            .expect("the inner source node belongs to the fixture");
+        let PureExprKind::Computation(PureComputation::Apply(inner)) =
+            program.nodes[inner_index].kind
+        else {
+            panic!("the concrete source applies its first Leaf method")
+        };
+        program.nodes[inner_index].kind = PureExprKind::Computation(PureComputation::Apply(
+            ApplicationNode::new(inner.function(), outer.argument()),
+        ));
+        program.nodes[source_index].kind = PureExprKind::Computation(PureComputation::Apply(
+            ApplicationNode::new(inner_node, inner.argument()),
+        ));
+        Arc::get_mut(&mut program.method_evidence)
+            .expect("the rebuilt program uniquely owns its catalog")
+            .concrete_sources_mut_for_core_test()
+            .iter_mut()
+            .find(|source| {
+                source.selection_node == selection_node
+                    && source.implementation == implementation
+                    && source.prerequisites.len() == 2
+            })
+            .expect("the concrete source row remains retained")
+            .prerequisites
+            .swap(0, 1);
+    }
+
+    #[test]
+    fn concrete_source_prerequisites_match_selected_method_order_after_every_rebuild() {
+        for rebuild in 0..3 {
+            let fixture = concrete_source_with_wide_abstract_prerequisite_fixture();
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                mut program,
+                module_sources,
+                globals: _,
+            } = fixture;
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            if rebuild != 0 {
+                let validated = validate_modules(program, &sources, &module_sources)
+                    .expect("the original prerequisite sequence validates");
+                program = if rebuild == 1 {
+                    identity_traversal(&validated).expect("identity rebuild")
+                } else {
+                    fold_literal_primitives(&validated).expect("literal-fold rebuild")
+                };
+                drop(validated);
+            }
+            swap_concrete_source_prerequisite_method_order(&mut program);
+            assert!(
+                validate_modules(program, &sources, &module_sources).is_err(),
+                "coordinated Leaf method-order tampering must reject after rebuild {rebuild}",
+            );
+            drop(directory);
+        }
+    }
+
     fn replace_concrete_monomorphic_adapter_edge_source_with_global(
         program: &mut UnvalidatedProgram,
     ) {
@@ -5799,11 +6060,16 @@ mod tests {
         // The owner, occurrence, carrier, source-chain, and checked-Type
         // relations consume 1,084 units for this fixed graph. The concrete
         // source has Q=2 retained prerequisite method rows, each of which
-        // independently reads the W=2 abstract method list before membership:
-        // 1,084 + Q*W = 1,088.
+        // independently reads the W=2 abstract method list before membership.
+        // Exact sequence comparison also visits R=2 retained rows and the W=2
+        // methods of D=1 direct selected prerequisite:
+        // 1,084 + Q*W + R + D*W = 1,092.
         const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_084;
         const PREREQUISITE_METHOD_LIST_WORK: usize = 2 * 2;
-        const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK + PREREQUISITE_METHOD_LIST_WORK;
+        const EXACT_PREREQUISITE_SEQUENCE_WORK: usize = 2 + 2;
+        const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK
+            + PREREQUISITE_METHOD_LIST_WORK
+            + EXACT_PREREQUISITE_SEQUENCE_WORK;
         assert_eq!(measured.type_work.get(), EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)

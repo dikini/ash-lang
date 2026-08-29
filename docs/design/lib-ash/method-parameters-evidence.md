@@ -34,7 +34,10 @@ principal unsigned boundaries are:
   migration, runtime trace, carrier inventory, small-stack lifecycle evidence,
   independent reviews, and the 1,531-test product boundary; and
 - `685b019`, which reserves the final specification, evidence, review, and
-  transition-cleanup checkpoint at cumulative use 70/70.
+  transition-cleanup checkpoint at cumulative use 70/70; and
+- `33ce4b4`, which records ten added authorized units and reserves eight for
+  the concrete-source prerequisite correction at cumulative use 78/80, with
+  two units unreserved.
 
 The final specification and retained-evidence commits are recorded here after
 their independent reviews. Commit identities are evidence boundaries, not
@@ -171,6 +174,14 @@ adapter, and consumes every fact exactly once. Canonical method binders compare
 exactly. Only a generated adapter may use one bounded capture-free, order- and
 kind-preserving alpha-renaming. Monotype equality and unification remain exact.
 
+For a retained concrete implementation source, validation also compares its
+prerequisite rows lockstep with the selected implementation node's direct
+prerequisites, flattened in prerequisite declaration order and then each
+child's interface-method order. Both the selection node and `MethodId` must
+match, and both sequences must end together. Existing per-row producer,
+binder, Core application-chain, and recursive-source checks then validate the
+matched rows.
+
 Identity and literal-folding transformations preserve or rebuild the complete
 relationship, then pass fresh independent validation. Method schemes and
 authentication facts may remain as inert authority in the validated program,
@@ -188,7 +199,7 @@ The retained private mutation suites reject each relationship independently:
 | summaries and import admission | missing, extra, duplicated, reordered, wrong-kind, wrong-owner, wrong-origin, or wrong-spelling body-free binders; forged annotation spans; a nested scheme in an ordinary global, constructor, implementation head, prerequisite, or source method body |
 | linked occurrences and implementations | mismatched interface or method arguments, wrong checked occurrence type, wrong `MethodId` or `ImplMethodId`, wrong selection, wrong head substitution, reordered head and method binders, wrong prerequisite producer or order, and unavailable or forged route provenance |
 | Core authentication | missing, duplicate, unconsumed, wrong-owner, wrong-position, wrong-order, wrong-kind, wrong-method, forged, or shared facts; nested schemes in ordinary value positions |
-| adapters and transforms | capture, escape, shadowing, partial or reordered type application, wrong implementation binder, wrong head or method arguments, wrong prerequisites, mismatched scheme, malformed transformed relation, or renamed canonical method facts |
+| adapters and transforms | capture, escape, shadowing, partial or reordered type application, wrong implementation binder, wrong head or method arguments, wrong prerequisites including a reachable sibling-node substitution or same-node method-order swap, mismatched scheme, malformed transformed relation, or renamed canonical method facts |
 
 Positive evidence accepts one complete capture-free generated adapter-binder
 renaming. Original, identity-transformed, and literal-folded product programs
@@ -305,7 +316,7 @@ boundaries are:
 | Core Builder constructor | `2E`, hence `4` for `E = 2` |
 | one-anchor authentication and finish | `14` |
 | concrete monomorphic validator | `633` |
-| concrete source with two abstract-prerequisite methods | `1,088` |
+| concrete source with two abstract-prerequisite methods | `1,092` |
 | monomorphic adapter-edge validator | `746` |
 | independent polymorphic validator | `2,339` |
 | checked lowering worklist | `10` |
@@ -317,6 +328,14 @@ exact retries where the owner supports retry. Catalog formulas separately
 charge selected method width, domains, adapters, producer lookups,
 prerequisites, and checked traversal capacity. A generic implementation probe
 also proves that a discarded six-unit head-scope buffer is not charged.
+
+The wide concrete-source boundary is exactly
+`1,084 + Q*W + R + D*W = 1,084 + 2*2 + 2 + 1*2 = 1,092`. The final two terms
+charge one visit to each of the `R = 2` retained rows and one visit to each of
+the `W = 2` methods under the `D = 1` direct selected prerequisite. The
+zero-prerequisite 633-unit validator, 2,339-unit independent polymorphic
+validator, and 686-unit identity and literal-fold transform boundaries do not
+change.
 
 Deep accepted and rejected method types at depth 96 and wide accepted and
 rejected methods at width 128 traverse the public pipeline and dispose on a
@@ -385,6 +404,42 @@ publication, states the inert retained-authority boundary, and updates the
 lexical inventory and executable manifest. Final semantic re-review,
 implementation/Core/resource review, evidence/migration/lifecycle/authority
 review, and the complete inventory are recorded here before transition cleanup.
+
+A later corrective review found one independent-Core implementation defect.
+The concrete-source catalog already retained prerequisite selection nodes and
+methods in the exact order fixed by linked selection, but validation checked
+only reachable-node membership for each copied row. Before production changed,
+the focused wide-`Leaf` RED coordinated the catalog rows and same-typed Core
+applications. The exact command, under its temporary first test name, was
+`cargo test --locked --lib
+core::validate::tests::concrete_source_prerequisite_method_order_is_authenticated_after_every_rebuild
+-- --exact --nocapture`; it failed at rebuild zero because validation admitted
+the mutation, with zero passed, one failed, and 711 filtered tests.
+
+The correction adds an allocation-free lockstep comparison against the direct
+selected prerequisite and method sequence. The retained method-order test and
+a distinct same-typed sibling-selection-node test reject in original,
+identity-rebuilt, and literal-folded Core. Removing only the selection-node
+comparison makes the sibling test fail at rebuild zero, proving that the test
+does not rely on the method comparison. Fresh corrective verification passes
+713 library tests, 62 Core-validation tests, 23 architecture tests, four
+method-parameter resource tests, and the focused 633, 1,092, 2,339, and 686
+one-short and fresh-retry probes. Workspace/all-target/all-feature checking,
+strict Clippy with warnings denied, formatting, Markdown lint, and diff hygiene
+also pass. No specification, selection rule, persistent Core carrier,
+evaluator behavior, or production resource limit changes. The correction uses
+its reserved eight units at cumulative use 78/80; two units remain unreserved.
+Checkpoint 7 reviews and complete root verification remain open after this
+implementation handoff.
+
+The focused GREEN commands are `cargo test --locked --lib
+core::validate::tests::concrete_source_prerequisites_match_direct_selection_nodes_after_every_rebuild
+-- --exact --nocapture` and `cargo test --locked --lib
+core::validate::tests::concrete_source_prerequisites_match_selected_method_order_after_every_rebuild
+-- --exact --nocapture`. The 713/62/23/4 counts come from `cargo test --locked
+--lib`, `cargo test --locked --test core_validation`, `cargo test --locked
+--test architecture`, and `cargo test --locked --test
+method_parameter_resources` respectively.
 
 ## Intentional exclusions and remaining pressure
 

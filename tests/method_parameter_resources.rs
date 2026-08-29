@@ -409,7 +409,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "wide-prerequisite Core validation",
             CORE_VALIDATE_SOURCE,
             "fn concrete_source_with_wide_abstract_prerequisite_has_an_exact_retry_boundary()",
-            "const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK + PREREQUISITE_METHOD_LIST_WORK;",
+            "const EXACT_PREREQUISITE_SEQUENCE_WORK: usize = 2 + 2;",
         ),
         (
             "monomorphic adapter producer validation",
@@ -492,7 +492,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
     assert_eq!(85 + 2 * 2, 89);
     assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5, 141);
     assert_eq!(584 + 1 + 1 + 1 + 1 + 45, 633);
-    assert_eq!(1_084 + 2 * 2, 1_088);
+    assert_eq!(1_084 + 2 * 2 + 2 + 2, 1_092);
     assert_eq!(646 + (49 + 5 + 1) + 45, 746);
     assert_eq!(2_197 + 22 + 28 + 92, 2_339);
     assert_eq!(673 + 4 + 4 + 1 + 4, 686);

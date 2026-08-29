@@ -360,6 +360,12 @@ impl MethodEvidenceCatalog {
         &mut self.occurrences
     }
 
+    pub(super) fn concrete_sources_mut_for_core_test(
+        &mut self,
+    ) -> &mut [MethodEvidenceConcreteSource] {
+        &mut self.concrete_sources
+    }
+
     pub(crate) fn corrupt_for_core_test(
         &mut self,
         mutation: MethodEvidenceCatalogMutationForTest,

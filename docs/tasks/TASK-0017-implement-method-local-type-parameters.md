@@ -1181,6 +1181,62 @@ and evaluator semantic or state-machine changes.
   unreserved. The checkpoint does not authorize a new semantic rule,
   persistent Core carrier, selection change, evaluator change, or production
   resource-limit change.
+- Corrective review found that `MethodEvidenceConcreteSource.prerequisites`
+  retained the selected implementation node's flattened direct prerequisites,
+  but independent Core validation did not compare the two sequences. It
+  instead accepted each retained row when its copied selection node was
+  reachable and contained the copied method. A coordinated catalog and Core
+  `Apply` mutation could therefore swap the wide `Leaf` methods while
+  preserving all existing per-row checks. Existing specification and CP-0010
+  already require declaration order followed by interface-method order, so
+  this is an implementation defect rather than a missing semantic rule.
+- The method-order RED ran before production validation changed. The exact
+  command, under the test's temporary first name, was `cargo test --locked
+  --lib core::validate::tests::concrete_source_prerequisite_method_order_is_authenticated_after_every_rebuild
+  -- --exact --nocapture`. It exited 101 because validation admitted the
+  original-Core mutation: `coordinated Leaf method-order tampering must reject
+  after rebuild 0`; zero tests passed, one failed, and 711 were filtered out.
+  The retained test is named
+  `concrete_source_prerequisites_match_selected_method_order_after_every_rebuild`.
+- The correction compares retained prerequisite rows lockstep with the exact
+  flattening of the selected implementation node's direct prerequisite nodes:
+  prerequisite declaration order, then each selected child's method order.
+  It compares both `EvidenceNodeId` and `MethodId` and requires exact
+  exhaustion. The comparison is iterative, allocation-free, fallible through
+  the existing validation ledger, and precedes the unchanged producer,
+  binder, Core `Apply`-chain, and recursive concrete-source checks.
+- A second private mutation fixture retains two distinct direct selection
+  nodes for identical `Leaf<A>` prerequisites. Substituting one concrete-source
+  row with its same-typed reachable sibling now rejects in original,
+  identity-rebuilt, and literal-folded Core. Temporarily removing only the
+  selection-node comparison made
+  `concrete_source_prerequisites_match_direct_selection_nodes_after_every_rebuild`
+  fail at rebuild zero; restoring it passes all three forms. The method-order
+  mutation likewise rejects in all three forms.
+- Exact resource remeasurement keeps the zero-prerequisite concrete validator
+  at 633 units, independent polymorphic validation at 2,339, and both Core
+  transforms at 686. The wide direct-prerequisite validator moves from 1,088
+  to 1,092: its existing `1,084 + Q*W` work is joined by `R + D*W = 2 + 1*2`
+  exact-sequence visits. All four probes retain one-short rejection and fresh
+  exact retries, and the source-derived resource manifest passes. No
+  production resource limit changes.
+- Focused corrective verification passes both three-form mutation tests, the
+  633, 1,092, 2,339, and 686 exact probes, all 713 library tests, all 62
+  Core-validation integration tests, all 23 architecture tests, and all four
+  method-parameter resource tests. Workspace/all-target/all-feature checking,
+  strict Clippy with warnings denied, formatting, Markdown lint, and diff
+  hygiene pass. The correction remains within its reserved eight units:
+  cumulative reserved use is 78/80, and two units remain unreserved.
+  Checkpoint 7 closure reviews and final root verification remain outside this
+  corrective handoff.
+- The focused GREEN commands are `cargo test --locked --lib
+  core::validate::tests::concrete_source_prerequisites_match_direct_selection_nodes_after_every_rebuild
+  -- --exact --nocapture` and `cargo test --locked --lib
+  core::validate::tests::concrete_source_prerequisites_match_selected_method_order_after_every_rebuild
+  -- --exact --nocapture`. The counted suite commands are `cargo test --locked
+  --lib`, `cargo test --locked --test core_validation`, `cargo test --locked
+  --test architecture`, and `cargo test --locked --test
+  method_parameter_resources`.
 
 ## Verification
 
