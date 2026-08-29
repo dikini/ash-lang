@@ -1118,6 +1118,15 @@ and evaluator semantic or state-machine changes.
   unchanged. Checkpoint 6 is complete in `dab6e93`; its reserved use is ten
   units, cumulative reserved use is 62/70, eight units remain unreserved, and
   Checkpoint 7 is not reserved.
+- Checkpoint 7 starts from the clean reviewed boundary `a6174ec` and reserves
+  the final planned eight units for executable specification REDs, normative
+  reconciliation from retained implementation truth, the retained evidence
+  report, three sequential independent reviews, the complete verification
+  gate, and transition-artifact closure. Cumulative reserved use is 70/70 and
+  no units remain unreserved. This reservation does not authorize replanning,
+  a new language rule, a production resource-limit change, evaluator behavior,
+  a new Core form, selection expansion, higher-rank expansion, or work outside
+  the accepted CP-0010 transition.
 
 ## Verification
 
