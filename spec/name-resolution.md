@@ -139,6 +139,10 @@ from its ordered parameter records before the dependency facts enter local
 resolution. Resolution preserves those identities and kinds. Qualification,
 targeted renaming, opacity, re-export, and another path through a dependency
 diamond cannot recompute a kind or replace a defining record with a local one.
+For each public method scheme, admission also authenticates the complete
+method-parameter set, written order, method owner, kinds, body scope, identity,
+and provenance. A dependent checks from that body-free fact without importing
+the interface or implementation body.
 
 A public constrained global, public implementation, or re-exported fact may
 refer to declarations defined by an earlier module. The summary retains the
@@ -262,6 +266,13 @@ Nominal parameters use their written set and order and may be phantom. An
 interface has exactly one written parameter. A kind annotation fixes that
 binder's kind; an omitted annotation fixes it at `Type`.
 
+For an interface declaration, binder encounter order starts with the interface
+parameter, then visits methods in declaration order and each method's explicit
+parameters in written order. The interface parameter and one method's local
+parameters scope over that method signature only. An implementation equation
+does not inherit the method-parameter spellings from the interface it
+implements.
+
 An explicit global parameter list is an ordered bijection with the free type
 variables of the global's value type and requirements. The written order is
 the outer scheme order and scopes over the complete header, patterns, and body.
@@ -273,22 +284,28 @@ that is unlisted and occurs only in a prerequisite remains
 `impl.prerequisite-variable`. Listing such a variable does not add it to the
 head's free-variable set and instead makes that explicit binder unused.
 
-A duplicate explicit binder is `resolve.duplicate-type-parameter`; a listed
-binder absent from the global's value type and requirements or from the
-implementation head is `resolve.unused-type-parameter`; and an unlisted free
-header name under an explicit list is `resolve.unknown-type`. An interface
-method has no local parameter list, so a free variable other than its interface
-parameter remains `interface.method-parameter`. The global determination rule
-still rejects a variable that occurs only in a requirement.
+An absent method parameter list binds no method-local parameter.
+A present method parameter list is an ordered bijection with the method type's free variables other than the interface parameter. Its binders must be distinct
+from that parameter and one another, every listed binder must occur in the
+method type, and written order becomes method-scheme order.
+
+A duplicate explicit binder, including a method binder that repeats the
+interface parameter, is `resolve.duplicate-type-parameter`; a listed binder
+absent from the global's value type and requirements, the implementation head,
+or its method type is `resolve.unused-type-parameter`; and an unlisted free
+header or method name under an explicit list is `resolve.unknown-type`. With an
+absent method list, another free type variable remains
+`interface.method-parameter`. The global determination rule still rejects a
+variable that occurs only in a requirement.
 
 When a global omits its parameter list, first occurrences in its value type
 come first, followed by first occurrences found only in its requirements. When
 an implementation omits its list, first occurrences in its head argument
-become its parameters. Every omitted declaration kind annotation, and every
-binder introduced by an omitted global or implementation binder list, is fixed
-to `Type`. Ash does not infer a kind for those binders. This is the current
-phase-dependent language constraint, not a commitment against a later bounded
-declaration-local inference rule.
+become its parameters. A method list is never implicit. Every omitted
+declaration kind annotation, and every binder introduced by an omitted global
+or implementation binder list, is fixed to `Type`. Ash does not infer a kind
+for those binders. This is the current phase-dependent language constraint, not
+a commitment against a later bounded declaration-local inference rule.
 
 The executable test `resolution_binder_policies_are_executable_and_ordered`
 checks written order, first-occurrence order, omitted kinds, phantom nominal
@@ -370,8 +387,9 @@ defining module. Individual constructors cannot have separate visibility.
 
 An `interface` declaration without `pub` is private. Its interface spelling and
 method spellings remain local to the defining module. `pub interface` exports
-the interface identity, parameter, ordered methods, checked method signatures,
-and their spellings as one declaration unit. A method cannot have visibility
+the interface identity, parameter, ordered methods, ordered method-parameter
+records, checked method signatures, and their spellings as one declaration
+unit. A method cannot have visibility
 separate from its interface. Public implementation facts are anonymous: `impl`
 keeps the fact local, while `pub impl` places the checked fact in its module's
 public implementation closure without creating an exported source name. A

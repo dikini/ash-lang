@@ -58,17 +58,26 @@ family type-erasure-steps:
 
 The unchanged heap and environment make erasure observable only as progress in
 the machine. No source program can inspect a type parameter or type argument.
+Method-local type arguments erase through `E-Type-Application`.
 
 ## Generated interface evidence
 
 Linking preserves each checked interface selection. Linked interface-evidence
 validation authenticates it, and Core synthesis lowers it before evaluation.
-An abstract evidence method becomes an ordinary function parameter. A concrete
-evidence method becomes a binder occurrence for the implementation method in
-its defining module's recursive group. Looking up that recursive function
-binder materializes a lexical closure under the existing recursive-binding
-behavior. No interface identity, selection record, or implementation
-authorization route reaches the machine.
+An abstract evidence method becomes an ordinary function parameter. A
+polymorphic occurrence type-applies that parameter to its retained method-local
+arguments; entering the Core application uses `E-Type-Application`. A
+monomorphic concrete evidence method becomes a binder occurrence for the
+implementation method in its defining module's recursive group. A polymorphic
+concrete or exact-current method first enters its generated adapter type
+abstraction and then the implementation method's complete type application.
+`E-Type-Abstraction` and `E-Type-Application` erase both operations. Looking up
+the recursive function binder materializes a lexical closure under the existing
+recursive-binding behavior.
+
+Method authentication records and method schemes do not reach the evaluator.
+No interface identity, selection record, implementation authorization route,
+or retained method argument reaches the machine.
 
 For a generic implementation method, lowering uses the recorded head
 substitution to form an ordinary Core type application. When evaluation enters
@@ -85,10 +94,12 @@ function lookup and closure materialization.
 
 There is no runtime interface value, dictionary, interface or implementation
 registry, implementation lookup, interface dispatch, registration step, or
-interface-specific failure mode. Evidence construction uses only type erasure,
-recursive binding, ordinary binder lookup and closure materialization, and the
-strict application transitions below. It adds no Core node and requires no new
-evaluation rule.
+interface-specific failure mode. Polymorphic method evidence adds no evaluator
+value, environment-entry class, frame kind, lookup class, transition class,
+failure reason, or runtime interface state. Evidence construction uses only
+type erasure, recursive binding, ordinary binder lookup and closure
+materialization, and the strict application transitions below. It adds no Core
+node and requires no new evaluation rule.
 
 The executable test
 `generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace`

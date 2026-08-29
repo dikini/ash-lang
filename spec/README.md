@@ -31,12 +31,15 @@ name without constructors, and a `pub type` exports its name and complete
 constructor family.
 
 An interface declares one type parameter and an ordered set of method
-signatures. Every method type has `Function` as its top-level constructor. Its
-methods are constrained terms. An implementation supplies the complete method
-set for one interface argument but introduces no source name. Private
-implementations remain available only in their defining module; `pub impl`
-publishes a body-free fact that dependents or later facades may select
-explicitly.
+signatures. A method may bind an explicit ordered list of fixed-kinded local
+parameters, and every method value type has `Function` as its top-level
+constructor. Each occurrence instantiates the interface and method parameters,
+while only the interface argument creates an evidence obligation. Its methods
+are constrained terms. An implementation supplies the complete method set for
+one interface argument but introduces no source name. Private implementations
+remain available only in their defining module; `pub impl` publishes a body-
+free fact that dependents or later facades may select explicitly. Body-free
+summaries preserve canonical method schemes and their defining identities.
 
 Ash's monomorphic kind language contains `Type` and right-associative function
 kinds such as `Type -> Type`. Declaration parameters may state their kinds.
@@ -54,8 +57,18 @@ evaluates `main ()`.
 Imports, exports, aliases, and opacity are static access rules and do not remain
 as runtime operations. Interface identities, implementation identities, and
 their checking registries also erase. Selected evidence lowers to ordinary
-functions and applications; evaluation has no runtime module object,
-implementation registry, or interface lookup.
+functions, applications, and erased type operations; evaluation has no runtime
+module object, implementation registry, or interface lookup.
+
+Ordinary source value positions remain rank-1.
+No source annotation denotes a nested scheme. Source code cannot write
+`forall` or expression type arguments; give a parameter, result, tuple field,
+or constructor field a polymorphic annotation; store or return an
+uninstantiated method scheme; pass one to an ordinary parameter; add implicit
+method binders or method requirements; or use polymorphic recursion.
+Core admits a nested scheme only where authenticated compiler-generated method
+evidence requires it. Every other term slot and every runtime value remains
+monomorphic.
 
 Within a module, Ash provides global and explicit local recursion, rank-1
 polymorphism, nominal data, structural tuples, constructor values, typed
@@ -202,6 +215,65 @@ implementation defined in `equality.ash`. The interface, implementation,
 method, and binder identities remain those of the defining module. Aliases and
 authorization routes do not become runtime values; the selected method
 evidence runs as ordinary function application.
+
+### Polymorphic method evidence
+
+One constrained global may use the same method scheme at unrelated
+instantiations. This `api.ash` module exports a higher-kinded interface whose
+method binds two local type parameters, then uses it once from `Int` to `Bool`
+and once from `Bool` to `Int`:
+
+```ash
+pub interface Functor<F : Type -> Type> {
+map<A, B> : (A -> B, F<A>) -> F<B>
+}
+
+to_bool : Int -> Bool
+to_bool value = value == 42
+
+to_int : Bool -> Int
+to_int true = 42
+to_int false = 0
+
+pub map_pair<F : Type -> Type> : (F<Int>, F<Bool>) -> (F<Bool>, F<Int>) where Functor<F>
+map_pair (numbers, flags) = (map((to_bool, numbers)), map((to_int, flags)))
+```
+
+The sibling `carrier.ash` module reuses the defining method identity and
+publishes a generic implementation for `Box`:
+
+```ash
+pub import api (Functor, map)
+
+pub type Box<A> = Box(A)
+
+pub impl Functor<Box> {
+map (function, Box(value)) = Box(function(value))
+}
+```
+
+The `entry.ash` module imports the constrained global and explicitly selects
+the implementation:
+
+```ash
+import api (map_pair)
+import carrier (Box, impl Functor)
+
+main : Unit -> (Box<Bool>, Box<Int>)
+main () = map_pair((Box(42), Box(true)))
+```
+
+The program observes:
+
+```text
+(Box(true), Box(42)) : (Box<Bool>, Box<Int>)
+```
+
+The method scheme is authenticated across both body-free summaries. Concrete
+evidence uses one generated adapter over the implementation method; its type
+operations erase through the existing evaluator rules. The source filename
+retained by the test corpus is `interface.ash`, but the executable tree stages
+that content as `api.ash` because `interface` is reserved in a module path.
 
 ### Opaque types and smart constructors
 

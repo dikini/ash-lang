@@ -17,8 +17,9 @@ unification.
 The typing environment `GAMMA` maps resolved `BinderId` identities to rank-1
 constrained schemes. Interface methods do not have binder identities. The
 immutable method registry `MU` instead maps each resolved `MethodId` to its
-owning `InterfaceId`, interface parameter, declared method type, declaration
-order, and provenance. A constrained scheme has three fields:
+owning `InterfaceId`, interface parameter, ordered method-local parameters,
+declared method value type, declaration order, and provenance. A constrained
+scheme has three fields:
 
 ```text
 ConstrainedScheme =
@@ -33,6 +34,17 @@ fresh inference variable of the same fixed kind, instantiates the value type,
 and creates one evidence obligation for each requirement in source order. A
 scheme with no requirements has the ordinary `forall parameters. type`
 behavior. Rigid variables from annotations never unify with a different type.
+
+One registry method has a distinct method scheme under its owning interface
+parameter:
+
+```text
+MethodScheme = forall method_parameters. method_value_type
+```
+
+The interface parameter remains free relative to this scheme and is owned by
+the enclosing interface. A method scheme never enters `GAMMA`, and no source
+occurrence can name it without instantiating every method parameter.
 
 The judgment `GAMMA |- expression ⇒ type` synthesizes a type, while
 `GAMMA |- expression ⇐ type` checks an expression against an expected type.
@@ -139,7 +151,9 @@ A scheme is distinct from a monotype and has no ordinary kind. It has the form
 `forall (A_1 : kind_1) ... (A_n : kind_n). body`, with distinct binders and a
 body accepted by `K-Value-Type` under the extended `DELTA`. A scheme cannot
 occur as a type-application argument, tuple element, term-function domain or
-codomain, term-binder type, or any other monotype.
+codomain, term-binder type, or any other source monotype. A method scheme
+remains separate in `MU`; the elaboration specification defines its sole
+authenticated compiler-generated Core evidence position.
 
 Every omitted declaration kind annotation, and every binder introduced by an omitted global or implementation binder list, is fixed to `Type`. Ash does not infer a kind for those binders. This is the current phase-dependent language constraint, not a commitment against a later bounded declaration-local inference rule.
 
@@ -550,11 +564,13 @@ than a fresh instantiation. A recursive call that would require a distinct
 instantiation is rejected with `type.polymorphic-recursion`. Local recursive
 annotations introduce no type parameters and remain monomorphic.
 
-There are no nested schemes or polymorphic function domains. Generalization
-occurs only at global signatures and eligible local function bindings. An
-eligible local may generalize inference variables of any fixed monomorphic
-kind, but the variables remain outer scheme binders and the scheme body must
-have kind `Type`. Source expressions cannot provide explicit type arguments.
+There are no source-denotable nested schemes or polymorphic function domains.
+Generalization occurs only at global signatures and eligible local function
+bindings. An eligible local may generalize inference variables of any fixed
+monomorphic kind, but the variables remain outer scheme binders and the scheme
+body must have kind `Type`. Source expressions cannot provide explicit type
+arguments. Method schemes remain registry facts that each occurrence
+instantiates; they do not make a polymorphic value available to source typing.
 
 The executable test `static_semantics_rank_one_polymorphism_is_executable`
 checks parameterized data, one implicitly quantified global, and one eligible
@@ -666,10 +682,13 @@ main () = true + 1
 ## Interfaces and constrained schemes
 
 An interface has one fixed-kinded parameter and a nonempty ordered method list.
-An omitted parameter annotation means `Type`. Every method type has kind
-`Type`, contains that parameter, has `Function` as its outermost constructor,
-and has no other free type variable. Interface declaration order fixes the
-order of the method positions used by checked evidence.
+An omitted parameter annotation means `Type`. Each method may have an explicit
+ordered list of fixed-kinded local parameters; an omitted method-parameter kind
+means `Type`. Its value type has kind `Type`, contains the interface parameter,
+contains exactly its listed local parameters as its other free variables, and
+has `Function` as its outermost constructor. Interface declaration order fixes
+the order of the method positions used by checked evidence, and written method-
+parameter order fixes each method scheme's binder order.
 
 The following judgments check an interface method and then the complete
 interface. `free_type_variables` compares resolved binder identities, not
@@ -680,12 +699,16 @@ arrow. Resolution has already established method-name freshness.
 ```sequent
 family interface-well-formedness:
   WF-Interface-Method :=
-    DELTA = {parameter -> parameter_kind}
-    DELTA; empty_OMEGA; XI |- method_type => Type
-    free_type_variables(method_type) = {parameter}
-    method_type = domain -> codomain
+    method_parameters = ordered declared parameters of method
+    DELTA = {parameter -> parameter_kind} union kinds(method_parameters)
+    DELTA; empty_OMEGA; XI |- method_value_type => Type
+    free_type_variables(method_value_type)
+      = {parameter} union set(method_parameters)
+    parameter occurs in method_value_type
+    method_value_type = domain -> codomain
     ===>
-    interface<parameter : parameter_kind> |-method method_name : method_type ok
+    interface<parameter : parameter_kind>
+      |-method method_name<method_parameters> : method_value_type ok
 
   WF-Interface :=
     IOTA(interface) = (parameter, parameter_kind)
@@ -705,19 +728,33 @@ the complete interface and its method registry enter later checking after all
 of the declaration's methods are accepted.
 
 After interface admission, a method occurrence consults `MU` by `MethodId`
-rather than `GAMMA` by `BinderId`. The registry fact determines the method's
-one-requirement constrained scheme. Instantiation records that requirement on
-the occurrence for later selection.
+rather than `GAMMA` by `BinderId`. It freshens the interface parameter followed
+by every method parameter at the same fixed kinds and substitutes all those
+arguments into the value type. Only the interface argument creates an evidence
+obligation. The exact `MethodId`, ordered method arguments, checked occurrence
+type, and selection remain private pending state until whole-module inference
+closure.
 
 ```sequent
 T-Method-Occurrence :=
-  MU(method_id) = interface_id, parameter, method_type
-  scheme = ConstrainedScheme([parameter], [interface_id<parameter>], method_type)
-  instantiate(scheme) = type, [obligation]
-  record_pending(occurrence(method_id), [obligation])
+  MU(method_id)
+    = interface_id, interface_parameter, method_parameters, method_value_type
+  freshen(interface_parameter) = interface_argument
+  method_scheme = MethodScheme(method_parameters, method_value_type)
+  instantiate(method_scheme) = instantiated_method_type, method_arguments
+  type = substitute(interface_parameter, interface_argument, instantiated_method_type)
+  obligation = interface_id<interface_argument>
+  record_pending(occurrence(method_id), method_arguments, type, [obligation])
   ===>
   GAMMA; MU |- method_id ⇒ type
 ```
+
+Evidence selection sees only `obligation`. It does not inspect, choose, infer,
+or refine `method_arguments`. An unresolved interface argument is
+`constraint.ambiguous` when the owning evidence scope closes. An otherwise
+unresolved method argument remains subject to `type.ambiguous` at whole-module
+inference closure. No method-determination, improvement, kind-inference, or
+higher-order matching rule follows from method instantiation.
 
 A global signature carries an ordered requirement list after its complete
 value type. When the declaration has an explicit binder list, that list must be
@@ -764,10 +801,13 @@ requirements produce the same constrained scheme. The checked scheme retains
 the ordered `(TypeVariableId, Kind)` records rather than a second authoritative
 kind representation.
 
-A method type that omits the interface parameter or introduces another free
-type variable is `interface.method-parameter`. This check precedes the outer
-decomposition. If it succeeds but the method type's outermost constructor is
-not `Function`, the failure is `interface.method-not-function`. Duplicate
+A method with an absent parameter list and another free variable, or a method
+that omits the interface parameter, is `interface.method-parameter`. The
+absent-list check precedes any deferred invalid application-kind failure.
+Present-list kind failures belong to kind checking. After kind checking
+succeeds, the interface-parameter check precedes outer decomposition; a method
+whose outermost constructor is not `Function` is
+`interface.method-not-function`. Duplicate
 identity-equal global requirements are `constraint.duplicate-requirement`,
 requirement-only parameters are `constraint.undetermined-parameter`, and a
 public signature that exposes a private interface is
@@ -829,9 +869,11 @@ An implementation supplies every interface method exactly once and supplies no
 other method. Contiguous equations with one method spelling form one method
 definition. Method groups may appear in any order, but each definition checks
 against its interface method type after substituting the head argument for the
-interface parameter. The implementation head parameters stay rigid. All
-ordinary globals and implementation methods in one module share one
-simultaneous recursive scope.
+interface parameter and retaining the method parameters. The implementation
+head and method parameters stay rigid as two ordered, distinguishable
+sequences. Source equations do not inherit or bind the interface method's
+parameter spellings. All ordinary globals and implementation methods in one
+module share one simultaneous recursive scope.
 
 Substitution acts on occurrences inside the method domain and codomain without
 changing the outer `Function` constructor. The resulting `expected` type is
@@ -842,11 +884,11 @@ Each prerequisite contributes its interface's method positions in prerequisite
 and interface declaration order.
 
 ```text
-forall head_parameters.
+forall implementation_head_parameters method_parameters.
     evidence(prerequisite_1) ->
     ... ->
     evidence(prerequisite_n) ->
-    substituted_method_type
+    substituted_method_value_type
 ```
 
 The membership judgment compares resolved method identities before any
@@ -867,12 +909,14 @@ family implementation-method-checking:
     |-impl-membership interface<head_argument> { body } ok
 
   T-Implementation-Method :=
-    method : method_type in declared_methods(interface)
-    expected = substitute(interface_parameter, head_argument, method_type)
+    method<method_parameters> : method_value_type in declared_methods(interface)
+    expected = substitute(interface_parameter, head_argument, method_value_type)
     head_parameters = ordered rigid parameters of head_argument
     current = the exact current implementation header and identity
     abstracts = ordered abstract evidence for current.prerequisites
+    head_parameters followed by method_parameters is the checked scheme order
     head_parameters are rigid while checking the method
+    method_parameters are rigid while checking the method
     GAMMA; abstracts; current; effective
       |-equations grouped_methods(body, method) ⇐ expected, obligations
     close_and_select(abstracts, current, effective, empty_active, obligations)
@@ -885,11 +929,15 @@ family implementation-method-checking:
 The abstract evidence in `T-Implementation-Method` has one requirement identity
 per declared prerequisite in order. Substitution preserves kinds, so replacing
 the interface parameter with the already checked head argument leaves the
-method type at kind `Type`. Exact current-implementation selection may use only
-the same rigid head and that abstract prerequisite evidence. Closing the method
-fills every occurrence-owned evidence field before the checked method can enter
-the module result. The `selections` output denotes those structural field
-contents, not a detached selection vector.
+method value type at kind `Type`. Exact current-implementation selection may
+use only the same rigid head and that abstract prerequisite evidence. A direct
+recursive occurrence of this implementation method reuses its rigid method
+arguments; a different instantiation is `type.polymorphic-recursion`. Other
+method occurrences instantiate their declared schemes normally. Closing the
+method fixes each selection but leaves its occurrence private until module
+inference closure freezes the zonked interface and method arguments. The
+`selections` output denotes those pending structural fields, not a detached
+selection vector.
 
 A public implementation that exposes a private implemented or prerequisite
 interface is `impl.private-interface`. A bare variable head is
@@ -1052,13 +1100,20 @@ EvidenceSelection =
 ```
 
 Every resolved method or constrained-global occurrence owns one structural
-evidence field. A method field has one position for its interface requirement;
-a constrained-global field follows the global signature's requirement order.
-Typing fills the field exactly once at the first closure that owns the
-occurrence. An eligible unannotated anonymous-function initializer closes
-before `generalize_local`; every other local occurrence closes with its
-enclosing global or implementation method. The filled field remains on the
-checked definition returned by `T-Module`. Static checking neither joins a
+evidence field. A method field has one position for its interface requirement
+and retains the exact `MethodId`, zonked interface argument, ordered zonked
+method arguments, checked occurrence type, and selection. A constrained-global
+field follows the global signature's requirement order. The first closure that
+owns an occurrence fixes its selection. An eligible unannotated anonymous-
+function initializer closes before `generalize_local`; every other local
+occurrence closes with its enclosing global or implementation method.
+
+Selection may finish before the complete module substitution is closed. The
+field therefore remains private pending state until whole-module inference
+closure zonks every retained argument. Publication preflights and freezes all
+occurrence fields atomically; an unsolved argument or any earlier failure
+publishes neither a checked module nor a summary. The frozen field remains on
+the checked definition returned by `T-Module`. Static checking neither joins a
 detached selection list by source span nor repeats implementation selection.
 
 The executable test
@@ -1102,11 +1157,12 @@ Imported schemes come from immutable summaries of direct dependencies.
 
 For these rules, `close_and_select` traverses the named obligation sequence in
 source order with the supplied abstract, current, effective, and active
-contexts. It fills each occurrence's evidence field and returns the ordered
-selections retained by the checked definition. A global's abstract context is
-its declared requirements, its current-implementation context is absent, and
-its initial active-goal set is empty. The `selections` output denotes the filled
-structural fields in that definition, not a separate side collection.
+contexts. It fixes each pending occurrence selection and returns the ordered
+pending fields retained by the body-checked definition. A global's abstract
+context is its declared requirements, its current-implementation context is
+absent, and its initial active-goal set is empty. The `selections` output does
+not denote a separate side collection; `T-Module` owns its later atomic
+publication after inference closure.
 
 ```sequent
 family global-typing:
@@ -1217,7 +1273,9 @@ family module-and-program-typing:
     for each ordinary global or implementation method in deterministic source and method order,
       GAMMA_D, GAMMA_G, GAMMA_M |-body definition ok
     every inference variable allocated by these premises is in domain(THETA)
-    freeze_public(module, checked definitions, admitted_impls,
+    checked_definitions
+      = freeze_occurrence_evidence(body-checked definitions, apply(THETA))
+    freeze_public(module, checked_definitions, admitted_impls,
       staged public name and implementation re-exports, apply(THETA)) = summary
     ===>
     summaries(direct_dependencies) |-module module ⇒ checked_module, summary
@@ -1239,14 +1297,18 @@ before checking any body, which creates one simultaneous recursive scope for
 those definitions. Its inference premise closes inference over the complete
 module, including types inferred only inside discarded expressions. All
 retained schemes contain ordered `(TypeVariableId, Kind)` binders and a zonked
-kind-`Type` body.
+kind-`Type` body. `freeze_occurrence_evidence` preflights every staged
+selection, zonks its interface and method arguments and occurrence type, and
+publishes all fields together. It publishes none if any retained inference
+variable or relationship is invalid.
 
 `freeze_public` atomically derives the body-free checked summary only after the
 complete module succeeds. Public local declarations and implementations retain
 the facts established by their owning judgments. The summary retains public
 kinds and the hidden kind and identity closure required by public schemes,
-constructors, interfaces, implementation heads, prerequisites, and selected
-evidence. Publicly selected name and implementation re-exports preserve the
+constructors, interfaces, ordered method binders and bodies, implementation
+heads, prerequisites, and selected evidence. Publicly selected name and
+implementation re-exports preserve the
 checked facts and defining identities from their dependency summary while
 adding the current public spelling or authorization hop. Any import admission,
 kind, header, overlap, membership, body, inference-closure, or selection failure
@@ -1320,8 +1382,9 @@ summary admission through effective-environment construction, header and body
 checking, evidence selection, linking, and linked evidence validation. The
 static stages charge proportional work before retaining or visiting interface
 and implementation facts, selector expansions, effective and public routes,
-summary closure, overlap pairs, obligations, candidates, substitutions,
-prerequisite edges, active goals, and evidence nodes.
+summary closure, occurrence evidence, overlap pairs, obligations, candidates,
+substitutions, prerequisite edges, active goals, routes, and linked
+authentication facts.
 [Elaboration](elaboration.md#module-linking-and-entry-generation) defines the
 link-retention and full-route-validation charges. Exhaustion at any stage is
 `internal.resource.constraint-work`; validation has no separate resource
@@ -1334,6 +1397,10 @@ Kind traversal, cloning, equality, hashing, rendering, substitution,
 unification, matching, summary admission, validation, and disposal use
 iteration or explicit bounded work stacks. Resolved kind checking,
 elaboration, and retained kind cloning charge their owning type-work ledger.
+Method binder records, schemes, instantiation arguments, substitutions,
+adapters, and Core types also charge their owning type-work ledger; binder-list
+syntax charges the syntax budget. Core construction and independent Core
+validation retain separate cumulative ledgers.
 Interface, implementation, evidence, and linked-authentication traversal or
 comparison charge the graph-wide constraint budget; retaining a structural
 type, substitution, kind, or binder-kind record additionally charges the
@@ -1347,10 +1414,11 @@ These ledgers are bounded compiler-resource policy. They do not add runtime kind
 values or evaluator work, and this specification transition does not change
 evaluation behavior or make a resource ceiling part of Ash value semantics.
 
-Ash has no kind polymorphism, higher-rank types, explicit source term type
-application, type lambdas, higher-order unification, broad application-shaped
-local generalization, subtyping, implicit conversions, explicit structural
-recursive-type operators, or polymorphic recursion. Interfaces add no
+Ash has no kind polymorphism, general higher-rank source values, explicit
+source term type application, type lambdas, higher-order unification, broad
+application-shaped local generalization, subtyping, implicit conversions,
+explicit structural recursive-type operators, or polymorphic recursion.
+Unauthenticated nested Core schemes remain invalid. Interfaces add no
 associated types, specialization, priority, default or negative
 implementations, inferred global requirements, first-class dictionaries,
 runtime implementation lookup, or interface-specific Core mechanism. Nominal

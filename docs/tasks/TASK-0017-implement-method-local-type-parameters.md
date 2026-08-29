@@ -1127,6 +1127,29 @@ and evaluator semantic or state-machine changes.
   a new language rule, a production resource-limit change, evaluator behavior,
   a new Core form, selection expansion, higher-rank expansion, or work outside
   the accepted CP-0010 transition.
+- Checkpoint 7's executable documentation RED contains 61 tests. All 57
+  predecessor examples pass, while exactly four documentation expectations
+  fail: the normative method-parameter manifest, the complete linked
+  specification overview, the exact CLI example, and the predecessor-to-
+  explicit migration. Both new product executions and the migration behavior
+  already succeed, so the RED exposes only the deliberately unreconciled
+  documentation boundary.
+- Normative reconciliation updates method grammar and scope, canonical binder
+  authority, method schemes and occurrence instantiation, post-inference atomic
+  publication, rigid implementation checking, authenticated nested evidence
+  domains and adapters, independent Core validation, and runtime erasure. The
+  overview and tool guide retain the same three-module product and exact
+  `(Box(true), Box(42)) : (Box<Bool>, Box<Int>)` observation. DN-0025, the
+  design index, and trajectory now identify three completed bounded `lib-ash`
+  increments without closing the complete milestone. The informative method-
+  parameter evidence report retains checkpoints, authentication, tampering,
+  resources, lifecycle, migration, reviews, verification, and exclusions.
+- The reconciled executable specification passes all 61 tests. Markdown lint,
+  all relative-link targets in 85 Markdown files, and diff hygiene pass. Manual
+  current-versus-proposed review finds predecessor wording only in CP-0010's
+  labeled historical `Current behavior` section. Checkpoint 7 remains open for
+  its specification commit, three sequential independent reviews, complete
+  verification gate, retained-evidence update, and transition cleanup.
 
 ## Verification
 

@@ -55,7 +55,7 @@ interface_declaration ::=
   interface_method { line_end interface_method } [ line_end ]
   "}" ;
 interface_parameter ::= "<" type_parameter ">" ;
-interface_method ::= identifier ":" type ;
+interface_method ::= identifier [ type_parameters ] ":" type ;
 
 implementation_declaration ::=
   [ "pub" ] "impl" [ type_parameters ]
@@ -203,13 +203,20 @@ writes `pub` once before its global signature, not on its equation heads. An
 inline operational global writes `pub` before `fn`.
 
 An interface declaration has exactly one parameter and a nonempty body of
-method signatures. A method has no visibility modifier, type-parameter list,
-requirement, or body. An implementation has no source name. Its body contains
-only equations; an equation has no separate visibility modifier, signature, or
-requirement. Implementation equations use the same pattern and expression
+method signatures. A method may place one `type_parameters` list between its
+name and colon. It has no visibility modifier, requirement, or body. An
+implementation has no source name. Its body contains only equations; an
+equation has no separate visibility modifier, signature, type-parameter list,
+or requirement. Implementation equations use the same pattern and expression
 grammar as equational-global clauses, and the body may be empty. The grammar
 provides no associated declaration, default method, named implementation, or
 runtime dictionary form.
+
+A present method `type_parameters` list is nonempty by the existing production
+and uses the same optionally kinded `type_parameter` entries as other
+declarations. An absent list is syntactically distinct. Missing separators,
+kinds, or the closing angle bracket are syntax failures; recovery does not
+publish a partial method binder list.
 
 Every declaration-level type binder uses `type_parameter`. Its optional kind
 annotation contains `Type`, a function kind, or a parenthesized kind. The

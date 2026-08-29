@@ -34,8 +34,11 @@ below.
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
 checking, but it solves and removes every inference variable before constructing
-the final Core program. Only resolved monotypes and outer rank-1 schemes cross
-the Core boundary.
+the final Core program. Ordinary source positions cross the Core boundary as
+resolved monotypes or outer rank-1 schemes. A validated generated method-
+evidence domain may additionally carry its nested method scheme together with
+the minimal immutable authentication facts required by independent Core
+validation. Those facts are compiler authority, not source types.
 
 An ordinary local binding becomes a nonrecursive Core binding around the
 remainder of its block. Its initializer remains outside its new binder's
@@ -89,15 +92,17 @@ or synthesize a facade definition.
 
 Every resolved method or constrained-global occurrence has an occurrence-local
 structural evidence field. Resolution creates each slot empty. Checking
-atomically fills each slot with the zonked checked obligation argument and the
-selected evidence at the owning obligation-closure boundary defined by the
+fixes each selection at the owning obligation-closure boundary defined by the
 [static semantics](static-semantics.md#constraint-satisfaction-and-checked-evidence).
-A method occurrence retains one selection for its interface requirement. A
-constrained-global occurrence retains one selection for each requirement in
-the global signature's order. The checked definition owns those selections
-through module checking and linking. Core synthesis consumes the slots on those
-exact occurrences; it neither joins evidence by source location nor performs
-implementation selection again.
+The field remains private pending state until whole-module inference closure
+atomically freezes its zonked checked obligation argument, ordered method-local
+arguments, checked occurrence type, and selected evidence. A method occurrence
+retains one selection for its interface requirement. A constrained-global
+occurrence retains one selection for each requirement in the global signature's
+order. The checked definition owns those selections through module checking
+and linking. Core synthesis consumes the slots on those exact occurrences; it
+neither joins evidence by source location nor performs implementation selection
+again.
 
 Before Core synthesis, linked interface-evidence validation receives the
 checked definition groups, their combined registries, effective implementation
@@ -127,12 +132,17 @@ The complete validation authenticates:
   and prerequisite termination;
 - complete method slots in interface declaration order, including slots with
   equal Core types;
+- each method's exact ordered binder identities, owner, kinds, body scope,
+  spelling, identity, and provenance;
 - abstract requirement ownership, declaration order, lexical scope, and
   provenance;
 - checked global and implementation-method schemes, their ordered kinded
-  binders, selected method types, and binder mappings;
-- equality between every checker-retained occurrence argument and its selected
-  evidence goal; and
+  head-versus-method binder partitions, selected method types, and binder
+  mappings;
+- equality between every checker-retained occurrence interface argument and
+  its selected evidence goal, plus every ordered method argument, checked
+  occurrence type, `MethodId`, selected `ImplMethodId`, and adapter relation;
+  and
 - source and module provenance, complete linked definitions, and the absence of
   unresolved inference variables.
 
@@ -143,6 +153,11 @@ budget charges linked public-entry retention and every route hop, then continues
 through inventory and occurrence validation. Exhaustion remains
 `internal.resource.constraint-work`. Core construction begins only after the
 complete judgment succeeds.
+
+Successful linked validation produces the only capability that authorizes
+polymorphic Core evidence. A copied scheme, node annotation, or unchecked Core
+shape cannot establish that authority, and Core synthesis never reselects an
+implementation.
 
 Each nonempty module definition group becomes one ordinary Core recursive
 binding. Groups appear in dependency order: a dependency's group surrounds the
@@ -172,14 +187,31 @@ forall parameters.
     source value type
 ```
 
-Each `type(s_j)` is the corresponding declared method type after substituting
-its requirement argument for the interface parameter. Substitution preserves
-the declared method type's top-level `Function` constructor, so each evidence
-slot remains a function and uses the existing ordinary function Core form. The
-initializer contains one outer type abstraction when `parameters` is nonempty,
-then one ordinary unary function binder for every flattened evidence method,
-then the source function. An unconstrained global retains its existing Core
-shape.
+Authenticated nested schemes are valid only in generated method-evidence
+domains. If `s_j` has method parameters, its `type(s_j)` is the corresponding
+declared method scheme after substituting the requirement argument for the
+interface parameter:
+
+```text
+forall method_parameters. substituted_method_value_type
+```
+
+A monomorphic method keeps its substituted ordinary function type. Thus a
+constrained definition with a polymorphic method evidence position has this
+shape:
+
+```text
+forall definition_parameters.
+    (forall method_parameters. substituted_method_value_type) ->
+    ... ->
+    source_value_type
+```
+
+Core admits a nested scheme only in an authenticated compiler-generated method-evidence position. Substitution preserves the method value type's
+top-level `Function` constructor. The initializer contains one outer type
+abstraction when definition parameters are nonempty, then one ordinary unary
+function binder for every flattened evidence method, then the source function.
+An unconstrained global retains its existing Core shape.
 
 A constrained-global occurrence starts from its ordinary Core binder. Core
 type application, when needed, precedes the ordered evidence applications.
@@ -189,33 +221,54 @@ same order: type application precedes prerequisite-evidence applications, and
 all of them precede the method's source argument.
 
 An abstract selection lowers each selected method to the evidence binder keyed
-by its requirement and method identities. A concrete selection maps every
-ordered `ImplMethodId` through the defining module's checked
-`ImplMethodId`-to-`BinderId` mapping. A generic implementation method is first
-type-applied with its recorded head substitution. Its prerequisite selections
-then lower recursively, in prerequisite and method order, and become ordinary
-term arguments. Exact current-implementation evidence uses the same lowering;
-its prerequisite selections refer to the implementation method's abstract
-evidence binders rather than triggering another selection.
+by its requirement and method identities. At a polymorphic method occurrence,
+Core type application supplies the retained ordered method arguments before
+source term arguments apply. An authenticated evidence variable may remain
+uninstantiated only when it is forwarded to the exact matching generated
+evidence domain of another constrained definition.
+
+A concrete selection maps every ordered `ImplMethodId` through the defining
+module's checked `ImplMethodId`-to-`BinderId` mapping. A monomorphic method uses
+the existing binder occurrence and applications. A polymorphic concrete or
+exact-current method instead uses one generated adapter:
+
+```text
+type-abstract method_parameters.
+    type-apply implementation_method
+      <implementation_head_arguments, method_parameters>
+      prerequisite_evidence...
+```
+
+Head arguments precede method arguments. Prerequisite evidence follows
+prerequisite and interface-method declaration order. The adapter exposes
+exactly the selected method scheme; it neither copies nor specializes the
+implementation body and performs no selection. Repeated selections of the same
+implementation at different evidence nodes or substitutions retain distinct
+authenticated adapters. Exact current evidence uses the same lowering, but its
+prerequisite selections refer to the implementation method's abstract evidence
+binders rather than triggering another selection.
 
 Direct and facade selections therefore lower through the same original method
 binder. A facade authorization contributes no Core binder or forwarding call.
 
 Each implementation-method binder has the Core scheme obtained from its rigid
-head parameters, flattened prerequisite methods, and substituted source method
-type. Its initializer therefore uses an outer type abstraction when generic,
-then ordinary evidence functions, then the source method function. Every such
-binder joins the defining module's existing recursive group alongside ordinary
-globals. Global-to-method, method-to-global, direct method recursion, and mutual
-method recursion consequently use the existing recursive binding rather than a
-cross-module group.
+head parameters followed by its rigid method parameters, flattened prerequisite
+methods, and substituted source method value type. Its initializer therefore
+uses one ordered type abstraction when generic, then ordinary evidence
+functions, then the source method function. Every such binder joins the
+defining module's existing recursive group alongside ordinary globals.
+Global-to-method, method-to-global, direct method recursion, and mutual method
+recursion consequently use the existing recursive binding rather than a cross-
+module group.
 
-After linked interface-evidence validation, interface, implementation, method,
-implementation-method, requirement, and authorization-route metadata erase.
-Their authenticated relationships have become ordinary Core type abstractions,
-function binders, binder occurrences, type applications, and term
-applications. Stable Core binder, nominal, constructor, type-parameter, source,
-and origin identities remain for ordinary Core validation.
+After linked interface-evidence validation, source-only interface,
+implementation, requirement, and authorization-route carriers can erase.
+Minimal immutable method-evidence authentication facts survive Core synthesis
+so independent validation can derive and check every generated evidence
+domain, occurrence, forwarding use, and adapter. Their term structure uses only
+ordinary Core type abstractions, function binders, binder occurrences, type
+applications, and term applications. Method authentication facts and schemes
+erase before evaluation.
 
 ## Explicit rank-1 operations
 
@@ -254,6 +307,13 @@ identity throughout that scope is equivalent Core. The original generated
 identity, binder span, and allocation ordinal are not external authority for
 later validation.
 
+Canonical resolved method binders remain exact through checking, summaries,
+imports, and linked authentication. Only a locally generated adapter may use a
+bounded, capture-free, order- and kind-preserving alpha-renaming when compared
+with its authenticated canonical method scheme. This comparison does not make
+ordinary monotype equality, unification, or canonical method facts alpha-
+equivalent.
+
 The executable test
 `elaboration_distinguishes_structural_application_from_simultaneous_instantiation`
 checks both operations in one program:
@@ -275,10 +335,12 @@ the occurrence in `main`, one Core type application simultaneously instantiates
 `F` with the bare `Option` constructor and `A` with `Int`, producing
 `Option<Int> -> Option<Int>`.
 
-Core transformations preserve type abstractions, type applications, binder
-kinds, ordered identities and arguments, structural types, and origins. The
-dynamic semantics erase the operations. They produce no runtime kind or type
-value and change neither evaluation order nor heap contents.
+Core transformations preserve or rebuild type abstractions, type applications,
+binder kinds, ordered identities and arguments, structural types, origins, and
+every method-evidence authentication relationship. The transformed program
+passes fresh independent validation before use. The dynamic semantics erase
+the type operations. They produce no runtime kind or type value and change
+neither evaluation order nor heap contents.
 
 ## Function presentations
 
@@ -376,14 +438,15 @@ group; it cannot silently treat the members as sequential bindings.
 ## Validation boundary
 
 Every semantic binder, pattern, and expression carries its type and causal
-source origin. After linked interface-evidence validation and erasure, the
-existing Core validator receives the produced program, its combined immutable
-nominal, constructor, and canonical type-binder facts, the admitted source set,
-and each module's source identity. It independently synthesizes monotype kinds,
-checks outer schemes, and checks registry closure and identities, module and
-source provenance, binder scope, node and branch types, constructor ownership
-and payloads, pattern bindings, coverage, recursive groups, type-variable
-scope, type-operation substitution, origins, child handles, and reachability.
+source origin. After linked interface-evidence validation, the existing Core
+validator receives the produced program, its combined immutable nominal,
+constructor, canonical type-binder, and method-evidence authentication facts,
+the admitted source set, and each module's source identity. It independently
+synthesizes monotype kinds, checks schemes, and checks registry closure and
+identities, module and source provenance, binder scope, node and branch types,
+constructor ownership and payloads, pattern bindings, coverage, recursive
+groups, type-variable scope, type-operation substitution, origins, child
+handles, and reachability.
 
 For every resolved global with a nonempty outer binder list, validation
 requires its `TypeAbstraction` to be the immediate initializer of exactly one
@@ -399,6 +462,23 @@ agreement with the matching outer scheme, fixed kinds, uniqueness, and lexical
 scope without capture, shadowing, or escape, while accepting a coherent
 capture-free alpha-renaming. It does not authenticate the elaborator's original
 generated identity, binder span, or allocation ordinal.
+
+For every polymorphic method-evidence position, validation derives the expected
+scheme from canonical method-binder records and the authenticated interface
+argument. It checks the exact constrained-definition owner, requirement and
+method position, occurrence `MethodId` and arguments, adapter
+`ImplMethodId`, head-before-method type arguments, prerequisite producers, and
+exclusive incoming uses.
+Independent Core validation consumes every method-evidence authentication fact exactly once.
+
+A nested scheme is valid only at its authenticated generated evidence domain,
+an occurrence type application of the matching evidence binder, exact
+forwarding to that domain, or the matching generated adapter. It remains
+invalid in ordinary parameters or results, globals, local bindings, patterns,
+tuples, constructors, structural type applications, storage, and returns. A
+missing, duplicate, unconsumed, wrong-owner, wrong-position, wrong-order,
+wrong-kind, wrong-method, capture-producing, or mismatched authentication
+relation fails Core validation before evaluation.
 
 Validation distinguishes unary structural monotype applications from Core
 type applications. A Core type application supplies one argument per quantified

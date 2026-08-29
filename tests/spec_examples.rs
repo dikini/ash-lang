@@ -188,6 +188,32 @@ const LINKED_HIGHER_KINDED_ENTRY_MODULE: &str =
     include_str!("fixtures/explicit-kinds/linked-product/entry.ash");
 const LINKED_HIGHER_KINDED_DEPENDENCY_MODULE: &str =
     include_str!("fixtures/explicit-kinds/linked-product/dependency.ash");
+const METHOD_PARAMETER_INTERFACE_MODULE: &str =
+    include_str!("fixtures/method-parameters/linked-product/interface.ash");
+const METHOD_PARAMETER_IMPLEMENTATION_MODULE: &str =
+    include_str!("fixtures/method-parameters/linked-product/implementation.ash");
+const METHOD_PARAMETER_ENTRY_MODULE: &str =
+    include_str!("fixtures/method-parameters/linked-product/entry.ash");
+const METHOD_PARAMETER_MIGRATION_REJECTED_MODULE: &str = concat!(
+    "interface Project<I> {\n",
+    "project : (I, A) -> A\n",
+    "}\n\n",
+    "impl Project<Int> {\n",
+    "project (owner, value) = value\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = project((0, 42))\n",
+);
+const METHOD_PARAMETER_MIGRATION_ACCEPTED_MODULE: &str = concat!(
+    "interface Project<I> {\n",
+    "project<A> : (I, A) -> A\n",
+    "}\n\n",
+    "impl Project<Int> {\n",
+    "project (owner, value) = value\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = project((0, 42))\n",
+);
 const BINDER_POLICY_MODULE: &str = concat!(
     "type Phantom<Unused, A> = Phantom(A)\n",
     "type Pair<Left, Right> = Pair(Left, Right)\n\n",
@@ -309,6 +335,53 @@ const EXPLICIT_KIND_RULE_FRAGMENTS: &[(&str, &str)] = &[
     ("spec/static-semantics.md", "K-Function :="),
     ("spec/static-semantics.md", "K-Value-Type :="),
     ("spec/static-semantics.md", "K-Interface-Argument :="),
+];
+
+const METHOD_PARAMETER_RULE_FRAGMENTS: &[(&str, &str)] = &[
+    (
+        "spec/syntax.md",
+        "interface_method ::= identifier [ type_parameters ] \":\" type ;",
+    ),
+    (
+        "spec/name-resolution.md",
+        "An absent method parameter list binds no method-local parameter.",
+    ),
+    (
+        "spec/name-resolution.md",
+        "A present method parameter list is an ordered bijection with the method type's free variables other than the interface parameter.",
+    ),
+    (
+        "spec/static-semantics.md",
+        "MethodScheme = forall method_parameters. method_value_type",
+    ),
+    (
+        "spec/static-semantics.md",
+        "instantiate(method_scheme) = instantiated_method_type, method_arguments",
+    ),
+    (
+        "spec/static-semantics.md",
+        "method_parameters are rigid while checking the method",
+    ),
+    (
+        "spec/elaboration.md",
+        "forall definition_parameters.\n    (forall method_parameters. substituted_method_value_type) ->",
+    ),
+    (
+        "spec/elaboration.md",
+        "Core admits a nested scheme only in an authenticated compiler-generated method-evidence position.",
+    ),
+    (
+        "spec/elaboration.md",
+        "Independent Core validation consumes every method-evidence authentication fact exactly once.",
+    ),
+    (
+        "spec/dynamic-semantics.md",
+        "Method authentication records and method schemes do not reach the evaluator.",
+    ),
+    (
+        "spec/README.md",
+        "Ordinary source value positions remain rank-1.",
+    ),
 ];
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -720,6 +793,27 @@ fn overview_linked_higher_kinded_example_is_executable() {
     assert_eq!(observation.type_display(), "Int");
     assert_documented("spec/README.md", LINKED_HIGHER_KINDED_ENTRY_MODULE);
     assert_documented("spec/README.md", LINKED_HIGHER_KINDED_DEPENDENCY_MODULE);
+}
+
+#[test]
+fn overview_linked_polymorphic_method_evidence_is_executable() {
+    let observation = assert_module_tree(
+        METHOD_PARAMETER_ENTRY_MODULE,
+        &[
+            ("app/api.ash", METHOD_PARAMETER_INTERFACE_MODULE),
+            ("app/carrier.ash", METHOD_PARAMETER_IMPLEMENTATION_MODULE),
+        ],
+        ModuleRoots::empty(),
+    );
+    assert_eq!(observation.value_display(), "(Box(true), Box(42))");
+    assert_eq!(observation.type_display(), "(Box<Bool>, Box<Int>)");
+    for source in [
+        METHOD_PARAMETER_INTERFACE_MODULE,
+        METHOD_PARAMETER_IMPLEMENTATION_MODULE,
+        METHOD_PARAMETER_ENTRY_MODULE,
+    ] {
+        assert_documented("spec/README.md", source);
+    }
 }
 
 #[test]
@@ -1502,6 +1596,60 @@ fn tool_higher_kinded_example_has_exact_cli_observation() {
 }
 
 #[test]
+fn tool_method_parameter_example_has_exact_cli_observation() {
+    let tree = TempDirectory::create();
+    tree.write("app/api.ash", METHOD_PARAMETER_INTERFACE_MODULE);
+    tree.write("app/carrier.ash", METHOD_PARAMETER_IMPLEMENTATION_MODULE);
+    tree.write("app/entry.ash", METHOD_PARAMETER_ENTRY_MODULE);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .current_dir(&tree.0)
+        .arg("app/entry.ash")
+        .output()
+        .expect("the documented method-parameter executable should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.stdout,
+        b"(Box(true), Box(42)) : (Box<Bool>, Box<Int>)\n"
+    );
+    assert!(output.stderr.is_empty());
+    for source in [
+        METHOD_PARAMETER_INTERFACE_MODULE,
+        METHOD_PARAMETER_IMPLEMENTATION_MODULE,
+        METHOD_PARAMETER_ENTRY_MODULE,
+    ] {
+        assert_documented("docs/tools/ash.md", source);
+    }
+}
+
+#[test]
+fn tool_method_parameter_migration_is_executable_and_documented() {
+    let failure = run(
+        "method-parameter-migration-rejected.ash",
+        METHOD_PARAMETER_MIGRATION_REJECTED_MODULE,
+    )
+    .expect_err("an absent list should keep the predecessor rejection");
+    let PipelineFailure::Typing(TypeError::Interface(diagnostic)) = failure else {
+        panic!("the absent-list migration example should fail at interface checking")
+    };
+    assert_eq!(diagnostic.reason, InterfaceReason::MethodParameter);
+
+    assert_observation(
+        "method-parameter-migration-accepted.ash",
+        METHOD_PARAMETER_MIGRATION_ACCEPTED_MODULE,
+        "42",
+        "Int",
+    );
+    for source in [
+        METHOD_PARAMETER_MIGRATION_REJECTED_MODULE,
+        METHOD_PARAMETER_MIGRATION_ACCEPTED_MODULE,
+    ] {
+        assert_documented("docs/tools/ash.md", source);
+    }
+}
+
+#[test]
 fn tool_source_rejection_uses_status_one_and_stderr() {
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
         .arg(Path::new(
@@ -1538,6 +1686,13 @@ fn normative_document_manifest_is_complete() {
 #[test]
 fn explicit_kind_normative_rule_manifest_is_complete() {
     for &(path, fragment) in EXPLICIT_KIND_RULE_FRAGMENTS {
+        assert_normative_fragment(path, fragment);
+    }
+}
+
+#[test]
+fn method_parameter_normative_rule_manifest_is_complete() {
+    for &(path, fragment) in METHOD_PARAMETER_RULE_FRAGMENTS {
         assert_normative_fragment(path, fragment);
     }
 }

@@ -196,6 +196,107 @@ Kinds, scheme instantiation, and selected interface evidence erase before
 evaluation. They add no CLI configuration, runtime lookup, value, or output
 field.
 
+### Method-local type parameters
+
+An interface method may declare one complete ordered type-parameter list after
+its name. The parameters scope only over that method signature. An omitted kind
+is `Type`; the executable does not infer method-binder kinds or missing method
+binders.
+
+This `api.ash` module exports a higher-kinded method scheme and a constrained
+global that uses it at two unrelated instantiations:
+
+```ash
+pub interface Functor<F : Type -> Type> {
+map<A, B> : (A -> B, F<A>) -> F<B>
+}
+
+to_bool : Int -> Bool
+to_bool value = value == 42
+
+to_int : Bool -> Int
+to_int true = 42
+to_int false = 0
+
+pub map_pair<F : Type -> Type> : (F<Int>, F<Bool>) -> (F<Bool>, F<Int>) where Functor<F>
+map_pair (numbers, flags) = (map((to_bool, numbers)), map((to_int, flags)))
+```
+
+Its sibling `carrier.ash` exports a generic implementation:
+
+```ash
+pub import api (Functor, map)
+
+pub type Box<A> = Box(A)
+
+pub impl Functor<Box> {
+map (function, Box(value)) = Box(function(value))
+}
+```
+
+The `entry.ash` module imports the constrained global and explicitly selects
+that implementation:
+
+```ash
+import api (map_pair)
+import carrier (Box, impl Functor)
+
+main : Unit -> (Box<Bool>, Box<Int>)
+main () = map_pair((Box(42), Box(true)))
+```
+
+From the directory containing those files, run:
+
+```text
+ash entry.ash
+```
+
+The exact output is:
+
+```text
+(Box(true), Box(42)) : (Box<Bool>, Box<Int>)
+```
+
+Method parameters add no command-line option, runtime configuration, registry,
+dispatch, or output field. Their schemes and authentication records are
+compiler facts; generated type operations erase through the existing evaluator
+rules.
+
+An absent method parameter list keeps the predecessor meaning: it binds no
+method-local parameter. This complete module is rejected with
+`interface.method-parameter`:
+
+```ash
+interface Project<I> {
+project : (I, A) -> A
+}
+
+impl Project<Int> {
+project (owner, value) = value
+}
+
+main : Unit -> Int
+main () = project((0, 42))
+```
+
+Adding the complete explicit list migrates the declaration:
+
+```ash
+interface Project<I> {
+project<A> : (I, A) -> A
+}
+
+impl Project<Int> {
+project (owner, value) = value
+}
+
+main : Unit -> Int
+main () = project((0, 42))
+```
+
+The migrated module prints `42 : Int`. The executable has no compatibility
+mode and introduces no implicit method binder.
+
 Interfaces, implementations, and global requirements do not add invocation
 options or runtime configuration. The compiler selects method evidence during
 checking, validates it before Core construction, and lowers it to ordinary Core
