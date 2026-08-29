@@ -74,6 +74,16 @@ fn public_interfaces(width: usize) -> String {
     source
 }
 
+fn public_polymorphic_interfaces(width: usize) -> String {
+    let mut source = String::new();
+    for index in 0..width {
+        source.push_str(&format!(
+            "pub interface Marker{index}<A> {{\nmark{index}<T> : (A, T) -> A\n}}\n\n"
+        ));
+    }
+    source
+}
+
 fn public_interface_implementations(width: usize) -> String {
     let mut source = String::new();
     for index in 0..width {
@@ -182,6 +192,53 @@ fn one_constraint_budget_persists_from_dependency_admission_through_validation()
         validation.reason(),
         EvidenceValidationReason::ConstraintResourceExhausted,
     );
+}
+
+#[test]
+fn polymorphic_summary_resource_rejection_is_repeatable_and_a_fresh_run_recovers() {
+    const ACCEPTED_WIDTH: usize = 1_024;
+    const REJECTED_WIDTH: usize = 5_000;
+    let entry = concat!(
+        "import dependency as Dependency\n",
+        "main : Unit -> Int\n",
+        "main () = 42\n",
+    );
+    let accepted = ResourceFixture::create(entry);
+    accepted.write(
+        "dependency.ash",
+        &public_polymorphic_interfaces(ACCEPTED_WIDTH),
+    );
+    let rejected = ResourceFixture::create(entry);
+    rejected.write(
+        "dependency.ash",
+        &public_polymorphic_interfaces(REJECTED_WIDTH),
+    );
+
+    let observation = accepted
+        .run()
+        .expect("the admitted polymorphic summaries should fit the unchanged public budgets");
+    assert_eq!(observation.value_display(), "42");
+    drop(observation);
+
+    for attempt in 0..2 {
+        let failure = rejected
+            .run()
+            .expect_err("the rejected polymorphic summaries should exceed the public budget");
+        assert_eq!(
+            failure.reason_code(),
+            "internal.resource.constraint-work",
+            "fresh rejected attempt {attempt} should reach the same owning budget",
+        );
+        let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Internal(_))) = &failure
+        else {
+            panic!("polymorphic summary ingress should exhaust during typing: {failure:?}");
+        };
+    }
+
+    let observation = accepted
+        .run()
+        .expect("a fresh public run should recover after independent resource failures");
+    assert_eq!(observation.value_display(), "42");
 }
 
 #[test]

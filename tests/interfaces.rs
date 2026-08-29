@@ -1,11 +1,16 @@
 use std::{
+    collections::HashSet,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use ash::{
-    core::{PureComputation, PureExprKind, PureValue, ValidatedProgram, validate_modules},
+    core::{
+        PureComputation, PureExprKind, PureValue, ValidatedProgram,
+        transform::{fold_literal_primitives, identity_traversal},
+        validate_modules,
+    },
     driver::{RunConfiguration, run_path},
     elaborate::{Elaborator, TypeError, check_module, link_modules},
     eval::{TraceEvent, evaluate},
@@ -17,6 +22,7 @@ use ash::{
         CheckedDefinition, CheckedModule, ResolvedExpr, ResolvedExprKind, ResolvedLocalDeclaration,
         ResolvedTermName,
     },
+    source::Origin,
     types::{Kind, Type},
 };
 
@@ -49,6 +55,27 @@ impl Drop for InterfaceFixture {
             let _ = fs::remove_dir_all(directory);
         }
     }
+}
+
+fn linked_method_product_fixture() -> InterfaceFixture {
+    let fixture_directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/method-parameters/linked-product");
+    let interface = fs::read_to_string(fixture_directory.join("interface.ash"))
+        .expect("the retained interface fixture should be readable");
+    let implementation = fs::read_to_string(fixture_directory.join("implementation.ash"))
+        .expect("the retained implementation fixture should be readable");
+    let entry = fs::read_to_string(fixture_directory.join("entry.ash"))
+        .expect("the retained entry fixture should be readable");
+    let fixture = InterfaceFixture::create(&entry);
+    let staged_directory = fixture
+        .0
+        .parent()
+        .expect("the staged linked product should have a parent directory");
+    fs::write(staged_directory.join("api.ash"), interface)
+        .expect("the reserved interface fixture should stage under a valid module identifier");
+    fs::write(staged_directory.join("carrier.ash"), implementation)
+        .expect("the implementation fixture should stage under its imported module identity");
+    fixture
 }
 
 fn check_error(text: &str) -> TypeError {
@@ -146,6 +173,23 @@ fn validated_interface_core(text: &str) -> ValidatedProgram {
         .collect::<Vec<_>>();
     validate_modules(unchecked, &sources, &module_sources)
         .expect("the interface Core should independently validate")
+}
+
+fn reachable_core_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
+    let mut visited = HashSet::new();
+    let mut pending = vec![program.root()];
+    let mut nodes = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let node = program
+            .node(id)
+            .expect("every reachable Core node should belong to the program");
+        pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+        nodes.push(id);
+    }
+    nodes
 }
 
 fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&EvidenceSlot> {
@@ -324,6 +368,326 @@ fn polymorphic_method_occurrence_instantiates_all_binders_once() {
     assert!(second.selection().is_some());
     assert_eq!(first.method_arguments(), &[Type::Int, Type::Bool]);
     assert_eq!(second.method_arguments(), &[Type::Bool, Type::Int]);
+}
+
+#[test]
+fn linked_polymorphic_method_evidence_evaluates() {
+    // `interface` is a reserved Ash token, so the plan-mandated `interface.ash`
+    // source is staged as `api.ash`; the graph still checks the three retained
+    // fixture sources as distinct modules.
+    let fixture = linked_method_product_fixture();
+    let entry = fixture.0.clone();
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("the linked polymorphic method product should load");
+    let interface_module = graph
+        .modules()
+        .iter()
+        .find(|module| module.canonical_path().file_name() == Some("api.ash".as_ref()))
+        .expect("the separately checked interface module should load")
+        .id();
+    let implementation_module = graph
+        .modules()
+        .iter()
+        .find(|module| module.canonical_path().file_name() == Some("carrier.ash".as_ref()))
+        .expect("the separately checked implementation module should load")
+        .id();
+    let checked = checked_graph(&graph);
+    let checked_interface = checked
+        .iter()
+        .find(|module| module.module() == interface_module)
+        .expect("the interface module should check independently");
+    let [functor] = checked_interface.interface_facts() else {
+        panic!("the product should retain exactly one higher-kinded interface");
+    };
+    assert_eq!(
+        functor.parameter.kind,
+        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+    );
+    let [map_method] = functor.methods.as_ref() else {
+        panic!("Functor should retain exactly map");
+    };
+    assert_eq!(map_method.type_parameters().len(), 2);
+    let map_pair = checked_interface
+        .definitions()
+        .iter()
+        .find(|definition| match definition.kind() {
+            ash::resolved::ResolvedDefinitionKind::Equational(global) => {
+                global.interface.name.spelling == "map_pair"
+            }
+            ash::resolved::ResolvedDefinitionKind::InlineOperational(_) => false,
+        })
+        .expect("the constrained consumer should check separately from its implementation");
+    let occurrences = method_occurrences(map_pair, map_method.id);
+    assert_eq!(occurrences.len(), 2);
+    assert!(
+        occurrences
+            .iter()
+            .any(|slot| slot.method_arguments() == [Type::Int, Type::Bool]),
+    );
+    assert!(
+        occurrences
+            .iter()
+            .any(|slot| slot.method_arguments() == [Type::Bool, Type::Int]),
+    );
+
+    let checked_implementation = checked
+        .iter()
+        .find(|module| module.module() == implementation_module)
+        .expect("the concrete implementation module should check independently");
+    let [implementation] = checked_implementation.implementation_facts() else {
+        panic!("the carrier module should retain one concrete implementation");
+    };
+    let [implementation_method] = implementation.methods.as_ref() else {
+        panic!("the concrete implementation should retain map");
+    };
+    assert_eq!(implementation_method.scheme.type_parameters.len(), 2);
+    let implementation_method_binder = implementation_method.binder;
+    let interface_source = graph
+        .module(interface_module)
+        .expect("the interface module should remain in the graph")
+        .source()
+        .id();
+    let implementation_source = graph
+        .module(implementation_module)
+        .expect("the implementation module should remain in the graph")
+        .source()
+        .id();
+    let Origin::Related { primary, related } = &implementation_method.origin else {
+        panic!("the separately checked implementation method should retain exact provenance");
+    };
+    let primary = primary.primary_span();
+    assert_eq!(
+        (
+            primary.source(),
+            primary.range().start(),
+            primary.range().end()
+        ),
+        (implementation_source, 81, 130),
+    );
+    assert_eq!(
+        related
+            .iter()
+            .map(|span| (span.source(), span.range().start(), span.range().end()))
+            .collect::<Vec<_>>(),
+        [
+            (implementation_source, 57, 132),
+            (implementation_source, 81, 130),
+            (interface_source, 42, 76),
+            (interface_source, 54, 76),
+            (implementation_source, 110, 130),
+        ],
+        "the checked carrier should keep the full cross-module method and annotation provenance before Core erasure",
+    );
+
+    let linked = link_modules(checked, graph.entry()).expect("the product should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("the product's polymorphic method evidence should authenticate");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the product Core namespace should fit");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("the authenticated polymorphic evidence should lower");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the linked product Core should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let original = validate_modules(unchecked, &sources, &module_sources)
+        .expect("the linked product Core should independently validate");
+
+    let reachable = reachable_core_nodes(&original);
+    let recursive_initializers = reachable
+        .iter()
+        .filter_map(|id| {
+            let node = original.node(*id)?;
+            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+            else {
+                return None;
+            };
+            Some(
+                group
+                    .members()
+                    .iter()
+                    .map(|member| member.initializer())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect::<HashSet<_>>();
+    let adapters = reachable
+        .iter()
+        .copied()
+        .filter(|id| {
+            !recursive_initializers.contains(id)
+                && matches!(
+                    original.node(*id).map(|node| &node.kind),
+                    Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        abstraction
+                    ))) if abstraction.parameters().len() == 2
+                )
+        })
+        .collect::<Vec<_>>();
+    let [adapter] = adapters.as_slice() else {
+        panic!("one concrete selection should lower through one generated map adapter");
+    };
+    let PureExprKind::Computation(PureComputation::TypeAbstraction(adapter_abstraction)) =
+        &original
+            .node(*adapter)
+            .expect("the generated adapter should exist")
+            .kind
+    else {
+        unreachable!("the selected adapter is a type abstraction");
+    };
+    let [(adapter_a, Kind::Type), (adapter_b, Kind::Type)] = adapter_abstraction.parameters()
+    else {
+        panic!("the generated adapter should preserve both map parameter kinds and order");
+    };
+    let adapter_type_application = adapter_abstraction.body();
+    let PureExprKind::Computation(PureComputation::TypeApplication(adapter_application)) =
+        &original
+            .node(adapter_type_application)
+            .expect("the adapter implementation application should exist")
+            .kind
+    else {
+        panic!("the generated adapter should type-apply the concrete implementation method");
+    };
+    assert_eq!(
+        adapter_application.arguments(),
+        &[Type::Variable(*adapter_a), Type::Variable(*adapter_b),],
+    );
+    let implementation_variable = adapter_application.function();
+    let PureExprKind::Variable(variable) = &original
+        .node(implementation_variable)
+        .expect("the adapter implementation variable should exist")
+        .kind
+    else {
+        panic!("the adapter should retain the one implementation-method body");
+    };
+    assert_eq!(variable.binder(), implementation_method_binder);
+
+    let evidence_binders = reachable
+        .iter()
+        .filter_map(|id| {
+            let node = original.node(*id)?;
+            let PureExprKind::Value(PureValue::Function(function)) = &node.kind else {
+                return None;
+            };
+            matches!(function.parameter().ty(), Type::Forall(parameters, _) if parameters.len() == 2)
+                .then_some(function.parameter().id())
+        })
+        .collect::<Vec<_>>();
+    let [evidence_binder] = evidence_binders.as_slice() else {
+        panic!("map_pair should expose one polymorphic evidence domain");
+    };
+    let mut int_to_bool = None;
+    let mut bool_to_int = None;
+    for type_application in reachable.iter().copied() {
+        let Some(node) = original.node(type_application) else {
+            continue;
+        };
+        let PureExprKind::Computation(PureComputation::TypeApplication(application)) = &node.kind
+        else {
+            continue;
+        };
+        let Some(function) = original.node(application.function()) else {
+            continue;
+        };
+        let PureExprKind::Variable(variable) = &function.kind else {
+            continue;
+        };
+        if variable.binder() != *evidence_binder {
+            continue;
+        }
+        let source_application = reachable
+            .iter()
+            .copied()
+            .find(|candidate| {
+                matches!(
+                    original.node(*candidate).map(|node| &node.kind),
+                    Some(PureExprKind::Computation(PureComputation::Apply(application)))
+                        if application.function() == type_application
+                )
+            })
+            .expect("each instantiated method should receive its source argument strictly");
+        let retained = (source_application, type_application, application.function());
+        match application.arguments() {
+            [Type::Int, Type::Bool] => int_to_bool = Some(retained),
+            [Type::Bool, Type::Int] => bool_to_int = Some(retained),
+            arguments => panic!("unexpected map instantiation {arguments:?}"),
+        }
+    }
+    let int_to_bool = int_to_bool.expect("map_pair should instantiate map at Int and Bool");
+    let bool_to_int = bool_to_int.expect("map_pair should instantiate map at Bool and Int");
+
+    let evaluation = evaluate(&original).expect("the linked product should erase and evaluate");
+    assert_eq!(evaluation.value.to_string(), "(Box(true), Box(42))");
+    let entered = evaluation
+        .trace
+        .iter()
+        .map(|event| match event {
+            TraceEvent::Enter(id) => *id,
+        })
+        .collect::<Vec<_>>();
+    let evidence_nodes = [
+        *adapter,
+        adapter_type_application,
+        implementation_variable,
+        int_to_bool.0,
+        int_to_bool.1,
+        int_to_bool.2,
+        bool_to_int.0,
+        bool_to_int.1,
+        bool_to_int.2,
+    ];
+    let erased_evidence_trace = entered
+        .into_iter()
+        .filter(|node| evidence_nodes.contains(node))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        erased_evidence_trace, evidence_nodes,
+        "polymorphic evidence should enter only adapter erasure, implementation lookup, and each strict abstract application in source order",
+    );
+
+    for transformed in [
+        identity_traversal(&original).expect("identity traversal should preserve method evidence"),
+        fold_literal_primitives(&original)
+            .expect("literal folding should preserve method evidence"),
+    ] {
+        let transformed = validate_modules(transformed, &sources, &module_sources)
+            .expect("each transformed product should pass fresh independent validation");
+        let transformed_evaluation =
+            evaluate(&transformed).expect("each freshly validated product should evaluate");
+        assert_eq!(
+            transformed_evaluation.value.to_string(),
+            evaluation.value.to_string()
+        );
+        assert!(ash::types::same_type(
+            &transformed
+                .node(transformed.root())
+                .expect("the transformed root should exist")
+                .ty,
+            &original
+                .node(original.root())
+                .expect("the original root should exist")
+                .ty,
+        ));
+    }
+
+    let observation = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the linked polymorphic method product should complete the library pipeline");
+    assert_eq!(observation.value_display(), "(Box(true), Box(42))");
+    assert_eq!(observation.type_display(), "(Box<Bool>, Box<Int>)");
 }
 
 #[test]

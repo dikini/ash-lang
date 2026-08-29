@@ -9,6 +9,7 @@ mod support;
 use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
     elaborate::{TypeError, TypeReason, check_module},
+    interface::InterfaceReason,
     kind::{KindExpectation, KindFailure, KindReason},
     lexer::lex,
     module::{LoadGraphError, LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
@@ -1223,6 +1224,254 @@ fn method_type_parameter_diagnostics_retain_boundary_and_spans() {
             absent.primary.span().range().end(),
         ),
         occurrence_range(absent_text, "bad : G<Int> -> A", 0),
+    );
+    assert_eq!(
+        absent.primary.message(),
+        "this method signature must use its interface parameter and only declared type parameters"
+    );
+    assert_eq!(absent.related.len(), 1);
+    assert_eq!(
+        (
+            absent.related[0].span().range().start(),
+            absent.related[0].span().range().end(),
+        ),
+        occurrence_range(absent_text, "A", 0),
+    );
+    assert_eq!(
+        absent.related[0].message(),
+        "the interface parameter is declared here"
+    );
+
+    let shape_text = "interface Bad<A> {\nbad<B> : B\n}\n";
+    let PipelineFailure::Typing(TypeError::Interface(shape)) =
+        failure("method-parameter-before-shape.ash", shape_text)
+    else {
+        panic!("method parameter checking should precede the outer function-shape rule");
+    };
+    assert_eq!(shape.reason, InterfaceReason::MethodParameter);
+    assert_eq!(
+        (
+            shape.primary.span().range().start(),
+            shape.primary.span().range().end(),
+        ),
+        occurrence_range(shape_text, "bad<B> : B", 0),
+    );
+}
+
+#[test]
+fn method_parameter_higher_rank_exclusions_have_direct_source_diagnostics() {
+    struct SyntaxCase {
+        route: &'static str,
+        source: &'static str,
+        primary: &'static str,
+        primary_occurrence: usize,
+        expected: &'static str,
+        found: &'static str,
+    }
+
+    let syntax_cases = [
+        SyntaxCase {
+            route: "source forall",
+            source: "main : forall A. A -> A\nmain value = value\n",
+            primary: "forall",
+            primary_occurrence: 0,
+            expected: "a type",
+            found: "identifier",
+        },
+        SyntaxCase {
+            route: "expression type application",
+            source: concat!(
+                "identity<A> : A -> A\n",
+                "identity value = value\n\n",
+                "main : Unit -> Int\n",
+                "main () = identity<Int> 42\n",
+            ),
+            primary: "<",
+            primary_occurrence: 1,
+            expected: "a logical line end",
+            found: "<",
+        },
+        SyntaxCase {
+            route: "polymorphic parameter annotation",
+            source: "fn consume(value : forall A. A -> A) -> Int {\n0\n}\n",
+            primary: "forall",
+            primary_occurrence: 0,
+            expected: "a type",
+            found: "identifier",
+        },
+        SyntaxCase {
+            route: "polymorphic result annotation",
+            source: "fn produce(value : Unit) -> forall A. A -> A {\nfn(item) {\nitem\n}\n}\n",
+            primary: "forall",
+            primary_occurrence: 0,
+            expected: "a type",
+            found: "identifier",
+        },
+        SyntaxCase {
+            route: "polymorphic tuple field",
+            source: "bad : (Int, forall A. A -> A) -> Int\nbad pair = 0\n",
+            primary: "forall",
+            primary_occurrence: 0,
+            expected: "a type",
+            found: "identifier",
+        },
+        SyntaxCase {
+            route: "polymorphic constructor field",
+            source: "type Box = Box(forall A. A -> A)\n",
+            primary: "forall",
+            primary_occurrence: 0,
+            expected: "a type",
+            found: "identifier",
+        },
+        SyntaxCase {
+            route: "method scheme return",
+            source: concat!(
+                "interface Project<I> {\nproject<A> : I -> (I, A)\n}\n\n",
+                "fn return_project(value : Int) -> forall A. Int -> (Int, A) ",
+                "where Project<Int> {\nproject\n}\n",
+            ),
+            primary: "forall",
+            primary_occurrence: 0,
+            expected: "a type",
+            found: "identifier",
+        },
+        SyntaxCase {
+            route: "method requirement",
+            source: concat!(
+                "interface Project<I> {\n",
+                "project<A> : I -> (I, A) where Project<A>\n",
+                "}\n",
+            ),
+            primary: "where",
+            primary_occurrence: 0,
+            expected: "a logical line end",
+            found: "where",
+        },
+    ];
+
+    for case in syntax_cases {
+        let PipelineFailure::Syntax(syntax) = failure("higher-rank-exclusion.ash", case.source)
+        else {
+            panic!("{} should remain unavailable in source syntax", case.route);
+        };
+        assert!(syntax.lexical.is_empty(), "route: {}", case.route);
+        let diagnostic = syntax
+            .parser
+            .first()
+            .unwrap_or_else(|| panic!("{} should retain a parser diagnostic", case.route));
+        assert_eq!(
+            diagnostic.reason,
+            ParseReason::ExpectedForm,
+            "route: {}",
+            case.route
+        );
+        assert_eq!(
+            (
+                diagnostic.primary.span().range().start(),
+                diagnostic.primary.span().range().end(),
+            ),
+            occurrence_range(case.source, case.primary, case.primary_occurrence),
+            "primary span: {}",
+            case.route,
+        );
+        assert_eq!(
+            diagnostic.primary.message(),
+            "required syntax is missing",
+            "primary label: {}",
+            case.route,
+        );
+        assert_eq!(
+            diagnostic.expected.as_deref(),
+            Some(case.expected),
+            "route: {}",
+            case.route
+        );
+        assert_eq!(
+            diagnostic.found.as_deref(),
+            Some(case.found),
+            "route: {}",
+            case.route
+        );
+    }
+
+    let storage_text = concat!(
+        "interface Project<I> {\nproject<A> : I -> (I, A)\n}\n\n",
+        "store : Int -> Unit where Project<Int>\n",
+        "store value = {\nlet stored = project\n()\n}\n",
+    );
+    let PipelineFailure::Typing(TypeError::Interface(storage)) =
+        failure("method-scheme-storage.ash", storage_text)
+    else {
+        panic!("an uninstantiated stored method should keep its ambiguous interface obligation");
+    };
+    assert_eq!(storage.reason, InterfaceReason::Ambiguous);
+
+    let passing_text = concat!(
+        "interface Project<I> {\nproject<A> : I -> (I, A)\n}\n\n",
+        "fn consume<A>(poly : Int -> (Int, A)) -> Unit {\n()\n}\n",
+        "pass : Int -> Unit where Project<Int>\n",
+        "pass value = consume(project)\n",
+    );
+    let PipelineFailure::Typing(TypeError::Source(passing)) =
+        failure("method-scheme-passing.ash", passing_text)
+    else {
+        panic!("passing a method to an ordinary parameter should instantiate a monotype");
+    };
+    assert_eq!(passing.reason, TypeReason::AmbiguousType);
+
+    let implicit_text = "interface Project<I> {\nproject : I -> (I, A)\n}\n";
+    let PipelineFailure::Typing(TypeError::Interface(implicit)) =
+        failure("implicit-method-binder.ash", implicit_text)
+    else {
+        panic!("an implicit method binder should fail at interface checking");
+    };
+    assert_eq!(implicit.reason, InterfaceReason::MethodParameter);
+    assert_eq!(
+        (
+            implicit.primary.span().range().start(),
+            implicit.primary.span().range().end(),
+        ),
+        occurrence_range(implicit_text, "project : I -> (I, A)", 0),
+    );
+    assert_eq!(
+        implicit.primary.message(),
+        "this method signature must use its interface parameter and only declared type parameters"
+    );
+    assert_eq!(implicit.related.len(), 1);
+    assert_eq!(
+        (
+            implicit.related[0].span().range().start(),
+            implicit.related[0].span().range().end(),
+        ),
+        occurrence_range(implicit_text, "I", 0),
+    );
+    assert_eq!(
+        implicit.related[0].message(),
+        "the interface parameter is declared here"
+    );
+
+    let recursive_text = concat!(
+        "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n\n",
+        "impl Repeat<Int> {\n",
+        "repeat (owner, value) = repeat((owner, (value, value)))\n",
+        "}\n",
+    );
+    let PipelineFailure::Typing(TypeError::Source(recursive)) =
+        failure("polymorphic-recursive-method.ash", recursive_text)
+    else {
+        panic!("a polymorphic recursive method self-use should fail during typing");
+    };
+    assert_eq!(recursive.reason, TypeReason::PolymorphicRecursion);
+    assert_eq!(recursive.expected.as_deref(), Some("A"));
+    assert_eq!(recursive.found.as_deref(), Some("(A, A)"));
+    assert_eq!(
+        recursive.primary.message(),
+        "this recursive call requires a different type instantiation"
+    );
+    assert!(
+        recursive.related.iter().any(|label| {
+            label.message() == "this recursive function is checked monomorphically"
+        })
     );
 }
 

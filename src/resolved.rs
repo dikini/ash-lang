@@ -3712,6 +3712,8 @@ pub struct CheckedInterfaceMethodFact {
     pub(crate) value_type: Type,
     /// Causal method provenance.
     pub origin: Origin,
+    /// Defining source annotation subspan.
+    annotation_span: Span,
     /// Complete method-signature span.
     pub span: Span,
 }
@@ -3743,6 +3745,7 @@ impl CheckedInterfaceMethodFact {
         type_parameters: Box<[ResolvedTypeVariable]>,
         value_type: Type,
         origin: Origin,
+        annotation_span: Span,
         span: Span,
     ) -> Self {
         let method_binder_authority = if type_parameters.is_empty() {
@@ -3757,6 +3760,7 @@ impl CheckedInterfaceMethodFact {
             method_binder_authority,
             value_type,
             origin,
+            annotation_span,
             span,
         }
     }
@@ -3782,6 +3786,7 @@ impl CheckedInterfaceMethodFact {
             method_binder_authority,
             value_type: value_type.into_inner(),
             origin: source.origin.clone(),
+            annotation_span: source.annotation.span,
             span: source.span,
         })
     }
@@ -3807,6 +3812,7 @@ impl CheckedInterfaceMethodFact {
             method_binder_authority,
             value_type: value_type.into_inner(),
             origin: source.origin.clone(),
+            annotation_span: source.annotation_span,
             span: source.span,
         })
     }
@@ -3830,6 +3836,12 @@ impl CheckedInterfaceMethodFact {
     #[must_use]
     pub const fn value_type(&self) -> &Type {
         &self.value_type
+    }
+
+    /// Returns the defining source annotation subspan.
+    #[must_use]
+    pub(crate) const fn annotation_span(&self) -> Span {
+        self.annotation_span
     }
 }
 
@@ -3996,6 +4008,7 @@ fn clone_checked_interface_fact(
             if source_method.id != method.id
                 || source_method.spelling != method.spelling
                 || source_method.span != method.span
+                || source_method.annotation.span != method.annotation_span
                 || !same_origin_after_base_charge(
                     &source_method.origin,
                     &method.origin,
@@ -6160,6 +6173,7 @@ fn same_checked_interface_fact_with_optional_nominal_observer(
         if left.id != right.id
             || left.spelling != right.spelling
             || left.span != right.span
+            || left.annotation_span != right.annotation_span
             || !same_summary_resolved_type_variables_with_constraint_budget(
                 left.type_parameters(),
                 right.type_parameters(),
@@ -14611,6 +14625,7 @@ mod tests {
                         Box::new(Type::Variable(parameter)),
                     ),
                     origin: Origin::Source(span),
+                    annotation_span: span,
                     span,
                 }]),
                 origin: Origin::Source(span),
@@ -14863,6 +14878,7 @@ mod tests {
                 ])),
                 value_type: method_type,
                 origin: Origin::Source(method_span),
+                annotation_span: method_span,
                 span: method_span,
             }]),
             origin: Origin::Source(interface_span),
@@ -15059,6 +15075,7 @@ mod tests {
                     Box::new(Type::Variable(interface_parameter)),
                 ),
                 origin: Origin::Source(span),
+                annotation_span: span,
                 span,
             }]),
             origin: Origin::Source(span),
@@ -15114,7 +15131,7 @@ mod tests {
     }
 
     #[test]
-    fn freeze_rejects_coherently_forged_monomorphic_method_type_and_origin_before_publication() {
+    fn freeze_rejects_forged_monomorphic_method_source_mirror_before_publication() {
         let source = SourceFile::new("monomorphic-method-forgery.ash", "interface Boxed<I>")
             .expect("the monomorphic-forgery source should fit");
         let span = source
@@ -15175,6 +15192,7 @@ mod tests {
                     Box::new(Type::Unit),
                 ),
                 origin: forged_origin(),
+                annotation_span: span,
                 span,
             }]),
             origin: Origin::Source(span),
@@ -15238,6 +15256,11 @@ mod tests {
             Box::new(Type::Variable(interface_parameter)),
         );
         checked[0].methods[0].origin = forged_origin();
+        assert_rejected(&checked);
+        checked[0].methods[0].origin = Origin::Source(span);
+        checked[0].methods[0].annotation_span = source
+            .span(ByteRange::new(0, 1).expect("the forged annotation range should be ordered"))
+            .expect("the forged annotation span should fit");
         assert_rejected(&checked);
     }
 
@@ -15347,6 +15370,7 @@ mod tests {
                     }])),
                     value_type: Type::Unit,
                     origin: Origin::Source(span),
+                    annotation_span: span,
                     span,
                 });
             })
@@ -16125,6 +16149,7 @@ mod tests {
                             Box::new(Type::Variable(parameter.id)),
                         ),
                         origin: Origin::Source(span),
+                        annotation_span: span,
                         span,
                     }]
                     .into_boxed_slice(),
@@ -17753,6 +17778,7 @@ mod tests {
                 method_binder_authority: None,
                 value_type: value_type(),
                 origin: Origin::Source(span),
+                annotation_span: span,
                 span,
             }]),
             origin: Origin::Source(span),
@@ -18198,6 +18224,7 @@ mod tests {
                         method_binder_authority: None,
                         value_type: public_value_type(),
                         origin: Origin::Source(span),
+                        annotation_span: span,
                         span,
                     }]),
                     origin: Origin::Source(span),
@@ -18461,6 +18488,7 @@ mod tests {
                                 Box::new(Type::Variable(parameter)),
                             ),
                             origin: Origin::Source(span),
+                            annotation_span: span,
                             span,
                         });
                     }
@@ -22153,6 +22181,7 @@ mod tests {
                     method_binder_authority: None,
                     value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
                     origin: Origin::Source(interface_span),
+                    annotation_span: interface_span,
                     span: interface_span,
                 }]
                 .into_boxed_slice(),

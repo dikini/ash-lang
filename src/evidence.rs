@@ -3533,6 +3533,7 @@ mod tests {
                     ),
                     Origin::Source(fact.span),
                     fact.span,
+                    fact.span,
                 ),
             ]);
             let registry = registry_for_interface_fact(&fact);
@@ -3627,6 +3628,7 @@ mod tests {
                         Box::new(Type::Tuple(values)),
                     ),
                     Origin::Source(fact.span),
+                    fact.span,
                     fact.span,
                 ),
             ]);
@@ -4344,6 +4346,7 @@ mod tests {
                     Box::new([]),
                     Type::Unit,
                     Origin::Source(fact.span),
+                    fact.span,
                     fact.span,
                 )
             })

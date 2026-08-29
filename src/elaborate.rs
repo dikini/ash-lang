@@ -4954,7 +4954,7 @@ impl Elaborator {
                 let binder = self.builder.resolved_binder(
                     method.binder,
                     binder_ty,
-                    method.origin.clone(),
+                    implementation_method_core_origin(method),
                 )?;
                 let source_ty = IterativeTypeOwner::new(
                     clone_type_with_budget(&lowered.scheme.value_type, &mut self.type_work)
@@ -5100,7 +5100,8 @@ impl Elaborator {
                 core_type_replacements.push((*source, *core));
             }
         }
-        let evidence = self.enter_lowered_implementation_evidence_scope(fact.id, &fact.origin)?;
+        let core_origin = implementation_method_core_origin(fact);
+        let evidence = self.enter_lowered_implementation_evidence_scope(fact.id, &core_origin)?;
         let source_ty = self
             .evidence_lowering
             .as_ref()
@@ -5120,7 +5121,7 @@ impl Elaborator {
             },
             &mut prepared.context,
             source.span,
-            &fact.origin,
+            &core_origin,
         );
         let mut function = TypedNodeOwner::new(match body_result {
             Ok(function) => function,
@@ -5133,7 +5134,7 @@ impl Elaborator {
         function = TypedNodeOwner::new(self.wrap_lowered_evidence_scope(
             function.into_inner(),
             evidence,
-            &fact.origin,
+            &core_origin,
         )?);
         if !core_type_replacements.is_empty() {
             let inference_solutions = &self.inference_solutions;
@@ -5236,7 +5237,7 @@ impl Elaborator {
                 parameters,
                 function.node,
                 core_scheme,
-                fact.origin.clone(),
+                core_origin,
             )?;
             if self
                 .builder
@@ -8873,7 +8874,7 @@ impl<'a> CheckedInterfaceMethodRef<'a> {
     const fn annotation_span(self) -> Span {
         match self {
             Self::Local(method) => method.annotation.span,
-            Self::Imported(method) => method.span,
+            Self::Imported(method) => method.annotation_span(),
         }
     }
 
@@ -11266,6 +11267,12 @@ fn implementation_method_origin(
         .chain(first.map(|equation| equation.body.span))
         .collect(),
     }
+}
+
+fn implementation_method_core_origin(method: &CheckedImplementationMethodFact) -> Origin {
+    // Linked evidence has already authenticated the complete cross-module
+    // relation. Core retains only the implementation-local primary cause.
+    Origin::Source(method.origin.primary_span())
 }
 
 fn operational_origin(

@@ -21,7 +21,7 @@ use ash::{
     },
     integer::Integer,
     resolved::BinderId,
-    source::{ByteRange, Origin, SourceFile},
+    source::{ByteRange, Origin, SourceFile, Span},
     types::{Kind, Type},
 };
 
@@ -1738,6 +1738,602 @@ const EVALUATOR_SOURCES: &[(&str, &str)] = &[
     ("src/eval/mod.rs", include_str!("../src/eval/mod.rs")),
     ("src/eval/value.rs", include_str!("../src/eval/value.rs")),
 ];
+
+const SURFACE_SOURCE: &str = include_str!("../src/surface.rs");
+const RESOLVED_SOURCE: &str = include_str!("../src/resolved.rs");
+const INTERFACE_SOURCE: &str = include_str!("../src/interface.rs");
+const EVIDENCE_SOURCE: &str = include_str!("../src/evidence.rs");
+const EVIDENCE_VALIDATION_SOURCE: &str = include_str!("../src/evidence_validation.rs");
+const ELABORATE_SOURCE: &str = include_str!("../src/elaborate.rs");
+const CORE_DIALECT_SOURCE: &str = include_str!("../src/core/dialect.rs");
+const CORE_TRANSFORM_SOURCE: &str = include_str!("../src/core/transform.rs");
+
+#[derive(Clone, Copy)]
+struct MethodParameterCarrier {
+    key: &'static str,
+    path: &'static str,
+    source: &'static str,
+    marker: &'static str,
+}
+
+macro_rules! method_parameter_carrier {
+    ($key:literal, $path:literal, $source:ident, $marker:literal) => {
+        MethodParameterCarrier {
+            key: $key,
+            path: $path,
+            source: $source,
+            marker: $marker,
+        }
+    };
+}
+
+const METHOD_PARAMETER_CARRIERS: &[MethodParameterCarrier] = &[
+    method_parameter_carrier!(
+        "syntax.cst_method_parameter_list",
+        "src/parser/grammar.rs",
+        PARSER_GRAMMAR,
+        "TypeParameterOwnerBoundary::InterfaceMethod"
+    ),
+    method_parameter_carrier!(
+        "syntax.projected_method_parameter_list",
+        "src/parser/project.rs",
+        PARSER_PROJECTION,
+        "type_parameters: project_optional_type_parameters"
+    ),
+    method_parameter_carrier!(
+        "syntax.surface_method_parameter_list",
+        "src/surface.rs",
+        SURFACE_SOURCE,
+        "pub type_parameters: Option<Vec<SurfaceTypeParameter>>"
+    ),
+    method_parameter_carrier!(
+        "binder.resolved_method_parameters",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "pub type_parameters: Box<[ResolvedTypeVariable]>"
+    ),
+    method_parameter_carrier!(
+        "binder.resolved_explicit_list_bit",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "pub has_explicit_type_parameters: bool"
+    ),
+    method_parameter_carrier!(
+        "binder.checked_method_parameters",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "pub(crate) type_parameters: Box<[ResolvedTypeVariable]>"
+    ),
+    method_parameter_carrier!(
+        "binder.private_method_authority",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "method_binder_authority: Option<Box<[ResolvedTypeVariable]>>"
+    ),
+    method_parameter_carrier!(
+        "scheme.checked_method_value_type",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "pub(crate) value_type: Type"
+    ),
+    method_parameter_carrier!(
+        "scheme.checked_method_annotation_span",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "annotation_span: Span"
+    ),
+    method_parameter_carrier!(
+        "scheme.implementation_method_scheme",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "pub scheme: ConstrainedScheme"
+    ),
+    method_parameter_carrier!(
+        "scheme.implementation_head_boundary",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "pub(crate) head_type_parameter_count: usize"
+    ),
+    method_parameter_carrier!(
+        "summary.imported_authority_method_index",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "authority_method_indices: Box<[usize]>"
+    ),
+    method_parameter_carrier!(
+        "occurrence.selector_method_scheme",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "struct MethodEntry"
+    ),
+    method_parameter_carrier!(
+        "occurrence.obligation_metadata_arguments",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "pub(crate) struct MethodObligationMetadata"
+    ),
+    method_parameter_carrier!(
+        "occurrence.pending_arguments",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "struct PendingObligation"
+    ),
+    method_parameter_carrier!(
+        "occurrence.rigid_arguments",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "pub(crate) struct MethodRigidityCondition"
+    ),
+    method_parameter_carrier!(
+        "occurrence.rigidity_diagnostic_site",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "pub(crate) struct MethodRigiditySite"
+    ),
+    method_parameter_carrier!(
+        "occurrence.rigidity_match_rank",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "enum MethodRigidityMatchRank"
+    ),
+    method_parameter_carrier!(
+        "occurrence.rigidity_target",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "pub(crate) struct MethodRigidityTarget"
+    ),
+    method_parameter_carrier!(
+        "occurrence.selected_rigidity",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "struct SelectedMethodRigidity"
+    ),
+    method_parameter_carrier!(
+        "occurrence.borrowed_rigidity_check",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "pub(crate) struct MethodRigidityCheck"
+    ),
+    method_parameter_carrier!(
+        "occurrence.selected_arguments",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "struct SelectedOccurrence"
+    ),
+    method_parameter_carrier!(
+        "occurrence.atomic_publication",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "pub(crate) struct PendingEvidencePublication"
+    ),
+    method_parameter_carrier!(
+        "occurrence.borrowed_selection_method",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "pub(crate) struct SelectionMethod"
+    ),
+    method_parameter_carrier!(
+        "occurrence.filled_slot_arguments",
+        "src/interface.rs",
+        INTERFACE_SOURCE,
+        "struct FilledEvidenceSlot"
+    ),
+    method_parameter_carrier!(
+        "occurrence.current_implementation_method_arguments",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct CurrentImplementationMethod"
+    ),
+    method_parameter_carrier!(
+        "linked.authenticated_program_catalog",
+        "src/evidence_validation.rs",
+        EVIDENCE_VALIDATION_SOURCE,
+        "method_evidence: Arc<MethodEvidenceCatalog>"
+    ),
+    method_parameter_carrier!(
+        "linked.authentication_capability",
+        "src/evidence_validation.rs",
+        EVIDENCE_VALIDATION_SOURCE,
+        "struct MethodEvidenceAuthentication"
+    ),
+    method_parameter_carrier!(
+        "linked.catalog_carrier",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceCatalog"
+    ),
+    method_parameter_carrier!(
+        "linked.catalog_methods",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "methods: Vec<MethodEvidenceMethod>"
+    ),
+    method_parameter_carrier!(
+        "linked.catalog_implementation_owners",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "implementation_owners: Vec<MethodEvidenceImplementationOwner>"
+    ),
+    method_parameter_carrier!(
+        "linked.catalog_domains",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "domains: Vec<MethodEvidenceDomain>"
+    ),
+    method_parameter_carrier!(
+        "linked.catalog_occurrences",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "occurrences: Vec<MethodEvidenceOccurrence>"
+    ),
+    method_parameter_carrier!(
+        "linked.catalog_adapters",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "adapters: Vec<MethodEvidenceAdapter>"
+    ),
+    method_parameter_carrier!(
+        "linked.catalog_concrete_sources",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "concrete_sources: Vec<MethodEvidenceConcreteSource>"
+    ),
+    method_parameter_carrier!(
+        "linked.catalog_expectations",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "expectations: Vec<MethodEvidenceExpectation>"
+    ),
+    method_parameter_carrier!(
+        "linked.method_parameters_and_value_type",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceMethod"
+    ),
+    method_parameter_carrier!(
+        "linked.implementation_owner_parameters",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceImplementationOwner"
+    ),
+    method_parameter_carrier!(
+        "linked.domain_relation",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceDomain"
+    ),
+    method_parameter_carrier!(
+        "linked.owner_identity",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) enum MethodEvidenceOwner"
+    ),
+    method_parameter_carrier!(
+        "linked.expected_role",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) enum MethodEvidenceExpectedRole"
+    ),
+    method_parameter_carrier!(
+        "linked.expectation_relation",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceExpectation"
+    ),
+    method_parameter_carrier!(
+        "linked.occurrence_arguments",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceOccurrence"
+    ),
+    method_parameter_carrier!(
+        "adapter.generated_adapter_parameters",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceAdapter"
+    ),
+    method_parameter_carrier!(
+        "adapter.prerequisite_method_parameters",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceAdapterEdge"
+    ),
+    method_parameter_carrier!(
+        "adapter.concrete_source_arguments",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceConcreteSource"
+    ),
+    method_parameter_carrier!(
+        "adapter.concrete_prerequisite_relation",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceConcretePrerequisite"
+    ),
+    method_parameter_carrier!(
+        "adapter.expected_producer_relation",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) enum MethodEvidenceExpectedProducer"
+    ),
+    method_parameter_carrier!(
+        "adapter.producer_identity",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) enum MethodEvidenceProducer"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.lowered_interface_scheme",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct LoweredInterfaceMethod"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.lowered_implementation_scheme",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct LoweredImplementationMethod"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.lowered_evidence_adapter",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct LoweredEvidenceMethod"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.active_evidence_binder",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct ActiveEvidenceBinder"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.polymorphic_evidence_producer",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "enum PolymorphicEvidenceProducer"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.scoped_evidence_binder",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct ScopedEvidenceBinder"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.evidence_lowering_maps",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct EvidenceLowering"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.evidence_specification_buffer",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct EvidenceSpecificationBuffer"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.evidence_specification_sequence",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct EvidenceSpecificationSequence"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.anchor_role",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) enum MethodEvidenceAnchorRole"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.anchor",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceAnchor"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.unvalidated_catalog_and_anchors",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub struct UnvalidatedProgram"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.validated_catalog_and_anchors",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub struct PureProgram"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.validated_capability",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub struct ValidatedProgram(Arc<PureProgram>)"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.builder_catalog_anchors_and_consumption",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "consumed_method_evidence: Vec<bool>"
+    ),
+    method_parameter_carrier!(
+        "transformation.shared_catalog",
+        "src/core/transform.rs",
+        CORE_TRANSFORM_SOURCE,
+        "Arc::clone(program.method_evidence())"
+    ),
+    method_parameter_carrier!(
+        "transformation.remapped_anchors",
+        "src/core/transform.rs",
+        CORE_TRANSFORM_SOURCE,
+        "program.method_evidence_anchors()"
+    ),
+    method_parameter_carrier!(
+        "teardown.checked_method",
+        "src/resolved.rs",
+        RESOLVED_SOURCE,
+        "impl Drop for CheckedInterfaceMethodFact"
+    ),
+    method_parameter_carrier!(
+        "teardown.pending_occurrence",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "impl Drop for PendingObligation"
+    ),
+    method_parameter_carrier!(
+        "teardown.selected_occurrence",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "impl Drop for SelectedOccurrence"
+    ),
+    method_parameter_carrier!(
+        "teardown.published_occurrence",
+        "src/interface.rs",
+        INTERFACE_SOURCE,
+        "impl Drop for FilledEvidenceSlot"
+    ),
+    method_parameter_carrier!(
+        "teardown.linked_occurrence",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "impl Drop for MethodEvidenceOccurrence"
+    ),
+    method_parameter_carrier!(
+        "teardown.adapter",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "impl Drop for MethodEvidenceAdapter"
+    ),
+    method_parameter_carrier!(
+        "teardown.unvalidated_core",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "impl Drop for UnvalidatedProgram"
+    ),
+    method_parameter_carrier!(
+        "teardown.validated_core",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "impl Drop for PureProgram"
+    ),
+];
+
+#[test]
+fn method_parameter_carrier_inventory_is_stage_complete_and_source_attached() {
+    let required_stages = BTreeSet::from([
+        "syntax",
+        "binder",
+        "scheme",
+        "occurrence",
+        "summary",
+        "linked",
+        "adapter",
+        "core_authentication",
+        "transformation",
+        "teardown",
+    ]);
+    let mut actual_stages = BTreeSet::new();
+    let mut keys = BTreeSet::new();
+
+    for carrier in METHOD_PARAMETER_CARRIERS {
+        assert!(
+            keys.insert(carrier.key),
+            "duplicate carrier key: {}",
+            carrier.key
+        );
+        actual_stages.insert(
+            carrier
+                .key
+                .split_once('.')
+                .expect("carrier keys must name their stage")
+                .0,
+        );
+        assert!(
+            carrier.source.contains(carrier.marker),
+            "{} is detached from {} marker {:?}",
+            carrier.key,
+            carrier.path,
+            carrier.marker,
+        );
+    }
+
+    assert_eq!(actual_stages, required_stages);
+    assert!(
+        !std::mem::needs_drop::<Span>(),
+        "the imported annotation Span is a zero-allocation, zero-traversal copy carrier",
+    );
+}
+
+fn declared_carrier_names(source: &str, include: impl Fn(&str) -> bool) -> BTreeSet<String> {
+    production_rust_code_tokens(source)
+        .windows(2)
+        .filter(|window| matches!(window[0], "struct" | "enum") && include(window[1]))
+        .map(|window| window[1].to_owned())
+        .collect()
+}
+
+fn manifested_declared_carrier_names(
+    path: &str,
+    include: impl Fn(&str) -> bool,
+) -> BTreeSet<String> {
+    METHOD_PARAMETER_CARRIERS
+        .iter()
+        .filter(|carrier| carrier.path == path)
+        .flat_map(|carrier| rust_code_tokens(carrier.marker))
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|window| matches!(window[0], "struct" | "enum") && include(window[1]))
+        .map(|window| window[1].to_owned())
+        .collect()
+}
+
+#[test]
+fn method_evidence_and_scope_carriers_are_bidirectionally_manifested() {
+    let occurrence_declared = declared_carrier_names(EVIDENCE_SOURCE, |name| {
+        name.starts_with("Method")
+            || name.starts_with("SelectedMethod")
+            || matches!(
+                name,
+                "PendingObligation"
+                    | "SelectedOccurrence"
+                    | "PendingEvidencePublication"
+                    | "SelectionMethod"
+            )
+    });
+    let occurrence_manifested = manifested_declared_carrier_names("src/evidence.rs", |name| {
+        name.starts_with("Method")
+            || name.starts_with("SelectedMethod")
+            || matches!(
+                name,
+                "PendingObligation"
+                    | "SelectedOccurrence"
+                    | "PendingEvidencePublication"
+                    | "SelectionMethod"
+            )
+    });
+    assert_eq!(occurrence_manifested, occurrence_declared);
+
+    let authentication_declared = declared_carrier_names(EVIDENCE_VALIDATION_SOURCE, |name| {
+        name == "MethodEvidenceAuthentication"
+    });
+    let authentication_manifested =
+        manifested_declared_carrier_names("src/evidence_validation.rs", |name| {
+            name == "MethodEvidenceAuthentication"
+        });
+    assert_eq!(authentication_manifested, authentication_declared);
+
+    let core_declared = declared_carrier_names(CORE_DIALECT_SOURCE, |name| {
+        name.starts_with("MethodEvidence") && !name.ends_with("ForTest")
+    });
+    let core_manifested = manifested_declared_carrier_names("src/core/dialect.rs", |name| {
+        name.starts_with("MethodEvidence") && !name.ends_with("ForTest")
+    });
+    assert_eq!(core_manifested, core_declared);
+
+    let scope_declared = declared_carrier_names(ELABORATE_SOURCE, |name| {
+        name.contains("Evidence") || name == "PolymorphicEvidenceProducer"
+    });
+    let scope_manifested = manifested_declared_carrier_names("src/elaborate.rs", |name| {
+        name.contains("Evidence") || name == "PolymorphicEvidenceProducer"
+    });
+    assert_eq!(scope_manifested, scope_declared);
+}
 
 #[test]
 fn canonical_type_carrier_inventory_has_a_source_closed_fixed_point() {

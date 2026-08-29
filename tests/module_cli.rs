@@ -8,7 +8,7 @@ use std::{
 
 use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
-    elaborate::TypeError,
+    elaborate::{TypeError, TypeReason},
     interface::InterfaceReason,
     kind::{KindFailure, KindReason},
     module::ModuleRoots,
@@ -409,6 +409,154 @@ fn cli_renders_the_structured_interface_diagnostic_without_reclassifying_it() {
     assert_eq!(
         canonicalize_source_ids(&actual),
         canonicalize_source_ids(&expected)
+    );
+}
+
+#[test]
+fn linked_polymorphic_method_product_has_exact_library_and_cli_observations() {
+    let tree = TempTree::create();
+    let fixture_directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/method-parameters/linked-product");
+    let interface = fs::read_to_string(fixture_directory.join("interface.ash"))
+        .expect("the retained interface fixture should be readable");
+    let implementation = fs::read_to_string(fixture_directory.join("implementation.ash"))
+        .expect("the retained implementation fixture should be readable");
+    let entry_source = fs::read_to_string(fixture_directory.join("entry.ash"))
+        .expect("the retained entry fixture should be readable");
+    // `interface` is reserved in Ash, so the retained plan-mandated filename
+    // stages under the parser-valid module identity imported by `entry.ash`.
+    tree.write("api.ash", &interface);
+    tree.write("carrier.ash", &implementation);
+    let entry = tree.write("entry.ash", &entry_source);
+    let observation = run_path(RunConfiguration {
+        entry: entry.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the linked polymorphic method product should evaluate through the library");
+    assert_eq!(observation.value_display(), "(Box(true), Box(42))");
+    assert_eq!(observation.type_display(), "(Box<Bool>, Box<Int>)");
+
+    let output = ash([entry.into_os_string()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.stdout,
+        b"(Box(true), Box(42)) : (Box<Bool>, Box<Int>)\n"
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn method_parameter_cli_diagnostics_preserve_library_structure_exactly() {
+    let absent_text = concat!(
+        "interface Project<I> {\n",
+        "project : G<Int> -> I\n",
+        "}\n\n",
+        "main : Unit -> Unit\n",
+        "main () = ()\n",
+    );
+    let absent_tree = TempTree::create();
+    let absent_entry = absent_tree.write("entry.ash", absent_text);
+    let absent_failure = run_path(RunConfiguration {
+        entry: absent_entry.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("an absent method binder list should retain predecessor rejection");
+    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(absent))) =
+        &absent_failure
+    else {
+        panic!("the absent-list failure should remain an interface diagnostic");
+    };
+    assert_eq!(absent.reason, InterfaceReason::MethodParameter);
+    assert_eq!(
+        (
+            absent.primary.span().range().start(),
+            absent.primary.span().range().end(),
+        ),
+        occurrence_range(absent_text, "project : G<Int> -> I"),
+    );
+    assert_eq!(
+        absent.primary.message(),
+        "this method signature must use its interface parameter and only declared type parameters"
+    );
+    assert_eq!(absent.related.len(), 1);
+    assert_eq!(
+        (
+            absent.related[0].span().range().start(),
+            absent.related[0].span().range().end(),
+        ),
+        occurrence_range(absent_text, "I"),
+    );
+    assert_eq!(
+        absent.related[0].message(),
+        "the interface parameter is declared here"
+    );
+    let absent_expected = format!("{}\n", absent.render_plain());
+    let absent_output = ash([absent_entry.into_os_string()]);
+    assert_eq!(absent_output.status.code(), Some(1));
+    assert!(absent_output.stdout.is_empty());
+    assert_eq!(
+        canonicalize_source_ids(
+            &String::from_utf8(absent_output.stderr)
+                .expect("the absent-list diagnostic should be UTF-8")
+        ),
+        canonicalize_source_ids(&absent_expected),
+    );
+
+    let recursive_text = concat!(
+        "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n\n",
+        "impl Repeat<Int> {\n",
+        "repeat (owner, value) = repeat((owner, (value, value)))\n",
+        "}\n",
+    );
+    let recursive_tree = TempTree::create();
+    let recursive_entry = recursive_tree.write("entry.ash", recursive_text);
+    let recursive_failure = run_path(RunConfiguration {
+        entry: recursive_entry.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("a method-local recursive self-use must remain monomorphic");
+    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Source(recursive))) =
+        &recursive_failure
+    else {
+        panic!("method-local polymorphic recursion should retain a source diagnostic");
+    };
+    assert_eq!(recursive.reason, TypeReason::PolymorphicRecursion);
+    assert_eq!(recursive.expected.as_deref(), Some("A"));
+    assert_eq!(recursive.found.as_deref(), Some("(A, A)"));
+    let application = "((owner, (value, value)))";
+    let application_start = recursive_text
+        .rfind(application)
+        .expect("the recursive application should remain source-authored");
+    assert_eq!(
+        (
+            recursive.primary.span().range().start(),
+            recursive.primary.span().range().end(),
+        ),
+        (
+            u32::try_from(application_start).expect("the application start should fit"),
+            u32::try_from(application_start + application.len())
+                .expect("the application end should fit"),
+        ),
+    );
+    assert_eq!(
+        recursive.primary.message(),
+        "this recursive call requires a different type instantiation"
+    );
+    assert!(
+        recursive.related.iter().any(|label| {
+            label.message() == "this recursive function is checked monomorphically"
+        })
+    );
+    let recursive_expected = format!("{}\n", recursive.render_plain());
+    let recursive_output = ash([recursive_entry.into_os_string()]);
+    assert_eq!(recursive_output.status.code(), Some(1));
+    assert!(recursive_output.stdout.is_empty());
+    assert_eq!(
+        canonicalize_source_ids(
+            &String::from_utf8(recursive_output.stderr)
+                .expect("the recursive method diagnostic should be UTF-8")
+        ),
+        canonicalize_source_ids(&recursive_expected),
     );
 }
 

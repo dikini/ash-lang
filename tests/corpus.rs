@@ -451,6 +451,159 @@ fn explicit_kind_migration_matrix_records_every_predecessor_assertion_shift() {
     }
 }
 
+#[test]
+fn method_parameter_migration_and_exclusion_corpus_is_complete() {
+    struct ExclusionCase {
+        route: &'static str,
+        source: &'static str,
+        reason: &'static str,
+    }
+
+    let exclusions = [
+        ExclusionCase {
+            route: "source-forall",
+            source: "main : forall A. A -> A\nmain value = value\n",
+            reason: "parse.expected-form",
+        },
+        ExclusionCase {
+            route: "expression-type-application",
+            source: concat!(
+                "identity<A> : A -> A\n",
+                "identity value = value\n\n",
+                "main : Unit -> Int\n",
+                "main () = identity<Int> 42\n",
+            ),
+            reason: "parse.expected-form",
+        },
+        ExclusionCase {
+            route: "polymorphic-parameter-annotation",
+            source: "fn consume(value : forall A. A -> A) -> Int {\n0\n}\n",
+            reason: "parse.expected-form",
+        },
+        ExclusionCase {
+            route: "polymorphic-result-annotation",
+            source: "fn produce(value : Unit) -> forall A. A -> A {\nfn(item) { item }\n}\n",
+            reason: "parse.expected-form",
+        },
+        ExclusionCase {
+            route: "polymorphic-tuple-field",
+            source: "bad : (Int, forall A. A -> A) -> Int\nbad pair = 0\n",
+            reason: "parse.expected-form",
+        },
+        ExclusionCase {
+            route: "polymorphic-constructor-field",
+            source: "type Box = Box(forall A. A -> A)\n",
+            reason: "parse.expected-form",
+        },
+        ExclusionCase {
+            route: "method-scheme-storage",
+            source: concat!(
+                "interface Project<I> {\nproject<A> : I -> (I, A)\n}\n\n",
+                "store : Int -> Unit where Project<Int>\n",
+                "store value = {\nlet stored = project\n()\n}\n",
+            ),
+            reason: "constraint.ambiguous",
+        },
+        ExclusionCase {
+            route: "method-scheme-return",
+            source: concat!(
+                "interface Project<I> {\nproject<A> : I -> (I, A)\n}\n\n",
+                "fn return_project(value : Int) -> forall A. Int -> (Int, A) ",
+                "where Project<Int> {\nproject\n}\n",
+            ),
+            reason: "parse.expected-form",
+        },
+        ExclusionCase {
+            route: "method-scheme-ordinary-parameter",
+            source: concat!(
+                "interface Project<I> {\nproject<A> : I -> (I, A)\n}\n\n",
+                "fn consume<A>(poly : Int -> (Int, A)) -> Unit {\n()\n}\n",
+                "pass : Int -> Unit where Project<Int>\n",
+                "pass value = consume(project)\n",
+            ),
+            reason: "type.ambiguous",
+        },
+        ExclusionCase {
+            route: "implicit-method-binder",
+            source: "interface Project<I> {\nproject : I -> (I, A)\n}\n",
+            reason: "interface.method-parameter",
+        },
+        ExclusionCase {
+            route: "method-requirement",
+            source: concat!(
+                "interface Project<I> {\n",
+                "project<A> : I -> (I, A) where Project<A>\n",
+                "}\n",
+            ),
+            reason: "parse.expected-form",
+        },
+        ExclusionCase {
+            route: "polymorphic-recursive-method-self-use",
+            source: concat!(
+                "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\n\n",
+                "impl Repeat<Int> {\n",
+                "repeat (owner, value) = repeat((owner, (value, value)))\n",
+                "}\n",
+            ),
+            reason: "type.polymorphic-recursion",
+        },
+    ];
+    assert_eq!(exclusions.len(), 12);
+    for case in exclusions {
+        let source = TempSource::write(case.source);
+        let failure = match run(source.0.clone()) {
+            Ok(_) => panic!("{} unexpectedly reached evaluation", case.route),
+            Err(failure) => failure,
+        };
+        assert_eq!(failure.reason_code(), case.reason, "{}", case.route);
+
+        let output = ash(&source.0);
+        assert_eq!(output.status.code(), Some(1), "{}: {output:?}", case.route);
+        assert!(output.stdout.is_empty(), "{}: {output:?}", case.route);
+        assert!(
+            output
+                .stderr
+                .starts_with(format!("{}\n", case.reason).as_bytes()),
+            "{}: {output:?}",
+            case.route,
+        );
+    }
+
+    let predecessor = TempSource::write(concat!(
+        "interface Project<I> {\nproject : (I, A) -> A\n}\n\n",
+        "impl Project<Int> {\nproject (owner, value) = value\n}\n\n",
+        "main : Unit -> Int\nmain () = project((0, 42))\n",
+    ));
+    let predecessor_failure =
+        run(predecessor.0.clone()).expect_err("the absent-list predecessor must stay rejected");
+    assert_eq!(
+        predecessor_failure.reason_code(),
+        "interface.method-parameter"
+    );
+    let predecessor_cli = ash(&predecessor.0);
+    assert_eq!(predecessor_cli.status.code(), Some(1));
+    assert!(predecessor_cli.stdout.is_empty());
+    assert!(
+        predecessor_cli
+            .stderr
+            .starts_with(b"interface.method-parameter\n")
+    );
+
+    let explicit = TempSource::write(concat!(
+        "interface Project<I> {\nproject<A> : (I, A) -> A\n}\n\n",
+        "impl Project<Int> {\nproject (owner, value) = value\n}\n\n",
+        "main : Unit -> Int\nmain () = project((0, 42))\n",
+    ));
+    let observation = run(explicit.0.clone())
+        .expect("adding the complete explicit method list should make the program valid");
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+    let explicit_cli = ash(&explicit.0);
+    assert_eq!(explicit_cli.status.code(), Some(0));
+    assert_eq!(explicit_cli.stdout, b"42 : Int\n");
+    assert!(explicit_cli.stderr.is_empty());
+}
+
 fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
     match (case.stage, case.reason, failure) {
         (

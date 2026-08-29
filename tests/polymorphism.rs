@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
@@ -14,7 +15,7 @@ use ash::{
     },
     driver::PipelineFailure,
     elaborate::{Elaborator, check_module, link_modules},
-    eval::{TraceEvent, evaluate},
+    eval::{RuntimeFailure, TraceEvent, Value, evaluate},
     evidence_validation::validate_interface_evidence,
     module::{ModuleId, ModuleRoots, load_module_graph},
     resolve::resolve_module,
@@ -78,6 +79,107 @@ fn elaborated(text: &str) -> (ValidatedProgram, SourceFile, ModuleId) {
         .expect("Core should validate");
     let _ = fs::remove_dir_all(directory);
     (validated, source, module)
+}
+
+fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str {
+    let TraceEvent::Enter(id) = event;
+    match &program
+        .node(*id)
+        .expect("an entered Core node should exist")
+        .kind
+    {
+        PureExprKind::Value(ash::core::PureValue::Integer(_)) => "integer",
+        PureExprKind::Value(ash::core::PureValue::Boolean(_)) => "boolean",
+        PureExprKind::Value(ash::core::PureValue::Unit(_)) => "unit",
+        PureExprKind::Value(ash::core::PureValue::Function(_)) => "function",
+        PureExprKind::Value(ash::core::PureValue::Constructor(_)) => "constructor",
+        PureExprKind::Variable(_) => "variable-lookup",
+        PureExprKind::Computation(PureComputation::Bind(_)) => "bind",
+        PureExprKind::Computation(PureComputation::RecursiveBind(_)) => "recursive-bind",
+        PureExprKind::Computation(PureComputation::Apply(_)) => "apply",
+        PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
+        PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
+        PureExprKind::Computation(PureComputation::Match(_)) => "match",
+        PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
+            "type-abstraction-erasure"
+        }
+        PureExprKind::Computation(PureComputation::TypeApplication(_)) => {
+            "type-application-erasure"
+        }
+    }
+}
+
+fn runtime_value_class(value: &Value) -> &'static str {
+    match value {
+        Value::Integer(_) => "integer",
+        Value::Boolean(_) => "boolean",
+        Value::Unit => "unit",
+        Value::Function(_) => "function",
+        Value::ConstructorFunction(_) => "constructor-function",
+        Value::Location(_) => "location",
+        Value::Data(_) => "data",
+    }
+}
+
+const fn runtime_failure_class(failure: RuntimeFailure) -> &'static str {
+    match failure {
+        RuntimeFailure::MissingNode => "runtime.missing-node",
+        RuntimeFailure::UnexpectedPrimitiveValue => "runtime.unexpected-primitive-value",
+        RuntimeFailure::UnexpectedFunctionValue => "runtime.unexpected-function-value",
+        RuntimeFailure::MissingBinding => "runtime.missing-binding",
+        RuntimeFailure::UnexpectedRecursiveBinding => "runtime.unexpected-recursive-binding",
+        RuntimeFailure::EnvironmentCapacity => "runtime.environment-capacity",
+        RuntimeFailure::InvalidControlState => "runtime.invalid-control-state",
+        RuntimeFailure::HeapCapacity => "runtime.heap-capacity",
+        RuntimeFailure::InvalidLocation => "runtime.invalid-location",
+        RuntimeFailure::UninitializedLocation => "runtime.uninitialized-location",
+        RuntimeFailure::AliasLoop => "runtime.alias-loop",
+        RuntimeFailure::ImpossibleMatch => "runtime.impossible-match",
+    }
+}
+
+fn assert_type_operations_enter_only_their_retained_child(
+    program: &ValidatedProgram,
+    trace: &[TraceEvent],
+) {
+    for pair in trace.windows(2) {
+        let [TraceEvent::Enter(current), TraceEvent::Enter(next)] = pair else {
+            unreachable!("the evaluator trace has one public event form")
+        };
+        let expected = match &program
+            .node(*current)
+            .expect("an entered type operation should exist")
+            .kind
+        {
+            PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+                Some(operation.body())
+            }
+            PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                Some(operation.function())
+            }
+            _ => None,
+        };
+        if let Some(expected) = expected {
+            assert_eq!(*next, expected);
+        }
+    }
+}
+
+fn reachable_core_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
+    let mut visited = HashSet::new();
+    let mut pending = vec![program.root()];
+    let mut nodes = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let node = program
+            .node(id)
+            .expect("every reachable Core node should belong to the program");
+        pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+        nodes.push(id);
+    }
+    nodes
 }
 
 #[test]
@@ -229,61 +331,6 @@ fn higher_kinded_instantiation_preserves_fixed_kinds() {
 
 #[test]
 fn higher_kinded_type_operations_add_only_existing_erasure_entries() {
-    fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str {
-        let TraceEvent::Enter(id) = event;
-        match &program
-            .node(*id)
-            .expect("an entered Core node should exist")
-            .kind
-        {
-            PureExprKind::Value(ash::core::PureValue::Integer(_)) => "integer",
-            PureExprKind::Value(ash::core::PureValue::Boolean(_)) => "boolean",
-            PureExprKind::Value(ash::core::PureValue::Unit(_)) => "unit",
-            PureExprKind::Value(ash::core::PureValue::Function(_)) => "function",
-            PureExprKind::Value(ash::core::PureValue::Constructor(_)) => "constructor",
-            PureExprKind::Variable(_) => "variable-lookup",
-            PureExprKind::Computation(PureComputation::Bind(_)) => "bind",
-            PureExprKind::Computation(PureComputation::RecursiveBind(_)) => "recursive-bind",
-            PureExprKind::Computation(PureComputation::Apply(_)) => "apply",
-            PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
-            PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
-            PureExprKind::Computation(PureComputation::Match(_)) => "match",
-            PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
-                "type-abstraction-erasure"
-            }
-            PureExprKind::Computation(PureComputation::TypeApplication(_)) => {
-                "type-application-erasure"
-            }
-        }
-    }
-
-    fn assert_type_operations_enter_only_their_retained_child(
-        program: &ValidatedProgram,
-        trace: &[TraceEvent],
-    ) {
-        for pair in trace.windows(2) {
-            let [TraceEvent::Enter(current), TraceEvent::Enter(next)] = pair else {
-                unreachable!("the evaluator trace has one public event form")
-            };
-            let expected = match &program
-                .node(*current)
-                .expect("an entered type operation should exist")
-                .kind
-            {
-                PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
-                    Some(operation.body())
-                }
-                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
-                    Some(operation.function())
-                }
-                _ => None,
-            };
-            if let Some(expected) = expected {
-                assert_eq!(*next, expected);
-            }
-        }
-    }
-
     fn core_abstraction_count(program: &ValidatedProgram) -> usize {
         let mut visited = std::collections::HashSet::new();
         let mut work = vec![program.root()];
@@ -395,6 +442,222 @@ fn higher_kinded_type_operations_add_only_existing_erasure_entries() {
             .filter(|class| **class == "type-application-erasure")
             .count()
             + 1,
+    );
+}
+
+#[test]
+fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
+    let source = concat!(
+        "interface Functor<F : Type -> Type> {\n",
+        "map<A, B> : (A -> B, F<A>) -> F<B>\n",
+        "}\n\n",
+        "type Box<A> = Box(A)\n\n",
+        "impl Functor<Box> {\n",
+        "map (function, Box(value)) = Box(function(value))\n",
+        "}\n\n",
+        "to_bool : Int -> Bool\n",
+        "to_bool value = value == 42\n\n",
+        "to_int : Bool -> Int\n",
+        "to_int true = 42\n",
+        "to_int false = 0\n\n",
+        "map_pair<F : Type -> Type> : (F<Int>, F<Bool>) -> (F<Bool>, F<Int>) where Functor<F>\n",
+        "map_pair (numbers, flags) = (map((to_bool, numbers)), map((to_int, flags)))\n\n",
+        "main : Unit -> (Box<Bool>, Box<Int>)\n",
+        "main () = map_pair((Box(42), Box(true)))\n",
+    );
+    let (program, _, _) = elaborated(source);
+    let reachable = reachable_core_nodes(&program);
+    let recursive_initializers = reachable
+        .iter()
+        .filter_map(|id| {
+            let node = program.node(*id)?;
+            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+            else {
+                return None;
+            };
+            Some(
+                group
+                    .members()
+                    .iter()
+                    .map(|member| member.initializer())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect::<HashSet<_>>();
+    let adapters = reachable
+        .iter()
+        .copied()
+        .filter(|id| {
+            !recursive_initializers.contains(id)
+                && matches!(
+                    program.node(*id).map(|node| &node.kind),
+                    Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        abstraction
+                    ))) if abstraction.parameters().len() == 2
+                )
+        })
+        .collect::<Vec<_>>();
+    let [adapter] = adapters.as_slice() else {
+        panic!("one selected concrete method should produce one erased adapter");
+    };
+    let PureExprKind::Computation(PureComputation::TypeAbstraction(adapter_abstraction)) = &program
+        .node(*adapter)
+        .expect("the adapter should remain reachable")
+        .kind
+    else {
+        unreachable!("the selected adapter is a type abstraction");
+    };
+    let adapter_type_application = adapter_abstraction.body();
+    let PureExprKind::Computation(PureComputation::TypeApplication(adapter_application)) = &program
+        .node(adapter_type_application)
+        .expect("the adapter implementation application should remain reachable")
+        .kind
+    else {
+        panic!("the adapter should erase through an existing type application");
+    };
+    let implementation_variable = adapter_application.function();
+    assert!(matches!(
+        program.node(implementation_variable).map(|node| &node.kind),
+        Some(PureExprKind::Variable(_))
+    ));
+
+    let evidence_binders = reachable
+        .iter()
+        .filter_map(|id| {
+            let node = program.node(*id)?;
+            let PureExprKind::Value(ash::core::PureValue::Function(function)) = &node.kind else {
+                return None;
+            };
+            matches!(function.parameter().ty(), ash::types::Type::Forall(parameters, _) if parameters.len() == 2)
+                .then_some(function.parameter().id())
+        })
+        .collect::<Vec<_>>();
+    let [evidence_binder] = evidence_binders.as_slice() else {
+        panic!("the constrained global should own one ordinary polymorphic evidence binder");
+    };
+    let mut instantiations = Vec::new();
+    for type_application in reachable.iter().copied() {
+        let Some(node) = program.node(type_application) else {
+            continue;
+        };
+        let PureExprKind::Computation(PureComputation::TypeApplication(application)) = &node.kind
+        else {
+            continue;
+        };
+        let Some(function) = program.node(application.function()) else {
+            continue;
+        };
+        let PureExprKind::Variable(variable) = &function.kind else {
+            continue;
+        };
+        if variable.binder() != *evidence_binder {
+            continue;
+        }
+        let strict_application = reachable
+            .iter()
+            .copied()
+            .find(|candidate| {
+                matches!(
+                    program.node(*candidate).map(|node| &node.kind),
+                    Some(PureExprKind::Computation(PureComputation::Apply(application)))
+                        if application.function() == type_application
+                )
+            })
+            .expect("each method instantiation should flow through ordinary strict application");
+        instantiations.push((
+            application.arguments().to_vec(),
+            strict_application,
+            type_application,
+            application.function(),
+        ));
+    }
+    instantiations.sort_by_key(|(arguments, _, _, _)| {
+        usize::from(arguments.as_slice() == [ash::types::Type::Bool, ash::types::Type::Int])
+    });
+    let [int_to_bool, bool_to_int] = instantiations.as_slice() else {
+        panic!("the method evidence binder should be instantiated exactly twice");
+    };
+    assert_eq!(
+        int_to_bool.0,
+        [ash::types::Type::Int, ash::types::Type::Bool]
+    );
+    assert_eq!(
+        bool_to_int.0,
+        [ash::types::Type::Bool, ash::types::Type::Int]
+    );
+
+    let evaluation = evaluate(&program).expect("polymorphic method evidence should erase");
+    assert_eq!(evaluation.value.to_string(), "(Box(true), Box(42))");
+    assert_eq!(runtime_value_class(&evaluation.value), "data");
+    assert_eq!(
+        evaluation.max_frame_depth, 3,
+        "method evidence should require no evaluator frame beyond existing strict applications",
+    );
+    assert_type_operations_enter_only_their_retained_child(&program, &evaluation.trace);
+    let evidence_nodes = [
+        *adapter,
+        adapter_type_application,
+        implementation_variable,
+        int_to_bool.1,
+        int_to_bool.2,
+        int_to_bool.3,
+        bool_to_int.1,
+        bool_to_int.2,
+        bool_to_int.3,
+    ];
+    let entered_evidence = evaluation
+        .trace
+        .iter()
+        .filter(|event| {
+            let TraceEvent::Enter(node) = event;
+            evidence_nodes.contains(node)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entered_evidence.len(), evidence_nodes.len());
+    assert_eq!(
+        entered_evidence
+            .iter()
+            .map(|event| runtime_class(&program, event))
+            .collect::<Vec<_>>(),
+        [
+            "type-abstraction-erasure",
+            "type-application-erasure",
+            "variable-lookup",
+            "apply",
+            "type-application-erasure",
+            "variable-lookup",
+            "apply",
+            "type-application-erasure",
+            "variable-lookup",
+        ],
+        "the evidence trace should contain only existing erasure, lookup, and strict-application transitions",
+    );
+
+    let classes = evaluation
+        .trace
+        .iter()
+        .map(|event| runtime_class(&program, event))
+        .collect::<Vec<_>>();
+    assert!(classes.contains(&"recursive-bind"));
+    let failures = [
+        RuntimeFailure::MissingNode,
+        RuntimeFailure::UnexpectedPrimitiveValue,
+        RuntimeFailure::UnexpectedFunctionValue,
+        RuntimeFailure::MissingBinding,
+        RuntimeFailure::UnexpectedRecursiveBinding,
+        RuntimeFailure::EnvironmentCapacity,
+        RuntimeFailure::InvalidControlState,
+        RuntimeFailure::HeapCapacity,
+        RuntimeFailure::InvalidLocation,
+        RuntimeFailure::UninitializedLocation,
+        RuntimeFailure::AliasLoop,
+        RuntimeFailure::ImpossibleMatch,
+    ];
+    assert!(
+        failures
+            .iter()
+            .all(|failure| runtime_failure_class(*failure) == failure.reason_code())
     );
 }
 
