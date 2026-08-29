@@ -1269,8 +1269,26 @@ and evaluator semantic or state-machine changes.
   resource tests, all 61 specification examples, predecessor migration and
   all twelve excluded higher-rank routes, Markdown lint, every relative link
   in 85 Markdown files, and the budget and integration audit.
+- The third lifecycle re-review approves the corrected ledger at `689f64a`
+  with no remaining finding. The commit resolves the first review's sole
+  Important finding. The re-review finds no semantic, Core-representation,
+  production-limit, migration, or stack-lifecycle stop condition.
+- Fresh root `cargo fmt --all -- --check`, `cargo check --locked --workspace
+  --all-targets --all-features`, and `cargo clippy --locked --workspace
+  --all-targets --all-features -- -D warnings` commands exit zero. `cargo test
+  --locked --workspace --all-targets --all-features` exits zero with an exact
+  inventory of 1,537 tests, and `cargo xtask verify` exits zero including its
+  documentation checks. `git diff --check` passes and the reviewed tree is
+  clean.
+- The independent documentation gate at `689f64a` checks 85 Markdown files:
+  lint passes and all 731 current relative links resolve. Simulated cleanup
+  checks 82 retained Markdown files and all 696 retained links, with no
+  retained link to a removed artifact.
+- `git diff --exit-code 9ade2df..HEAD -- src/eval spec` is empty. No evaluator
+  or normative specification file changes after the accepted specification
+  boundary.
 - After the ledger correction, third-review re-review, full root verification,
-  a retained-evidence commit, and a clean-tree gate, the reviewer approves
+  retained-evidence commit, and clean-tree gate, the reviewer approves
   removing `docs/proposals/CP-0010-method-local-type-parameters.md`,
   `docs/tasks/TASK-0017-implement-method-local-type-parameters.md`, and
   `docs/plans/2026-08-28-method-local-type-parameters.md`. The same cleanup
@@ -1278,10 +1296,11 @@ and evaluator semantic or state-machine changes.
   no-accepted-change state, replaces the TASK-0017 entry in
   `docs/tasks/README.md` with the no-active-task state, and removes any stale
   current-tree links.
-- Third-review re-review, the final retained-evidence boundary, and full root
-  closure verification remain pending. Cumulative reserved use remains 78/80,
-  with two units unreserved. This finding correction does not close
-  Checkpoint 7.
+- The ledger correction, re-review, full root verification, and pre-retention
+  clean-tree gate are complete. The next boundary is this retained-evidence
+  commit; approved cleanup follows it. Cumulative reserved use remains 78/80,
+  with two units unreserved. This evidence does not claim integration or
+  completion of the full `lib-ash` milestone.
 
 ## Verification
 

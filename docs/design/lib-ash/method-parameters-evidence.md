@@ -48,13 +48,17 @@ principal unsigned boundaries are:
 - `8930564`, which corrects concrete-source prerequisite provenance and
   remeasures the directly affected validation resources; and
 - `72a91e3`, which retains the semantic/specification and
-  implementation/Core/resource approval records for that correction.
+  implementation/Core/resource approval records for that correction; and
+- `689f64a`, which completes the principal checkpoint ledger and records the
+  conditional transition-cleanup boundary.
 
 The third evidence, migration, lifecycle, and authority review found that the
 checkpoint ledger stopped at the reservation boundary and omitted these later
-commits. This corrected ledger does not claim the final retention boundary:
-third-review re-review and full root verification remain pending. Commit
-identities are evidence boundaries, not independent language authority.
+commits. The third-review re-review approves the correction after `689f64a`
+resolved that sole Important finding. Fresh root and documentation verification
+now pass. The next boundary is the retained-evidence commit; the approved
+transition cleanup follows it. Commit identities are evidence boundaries, not
+independent language authority.
 
 ## Implemented boundary
 
@@ -486,9 +490,31 @@ all 61 specification examples, predecessor migration and all twelve excluded
 higher-rank routes, Markdown lint, every relative link in 85 Markdown files,
 and the budget and integration audit.
 
-The review approves transition cleanup only after this ledger correction,
-third-review re-review, full root verification, a retained-evidence commit,
-and a clean-tree gate. The approved cleanup set is
+The third lifecycle re-review approves the corrected ledger at `689f64a` with
+no remaining finding. The sole Important finding from the first review is
+resolved; the re-review finds no semantic, Core-representation,
+production-limit, migration, or stack-lifecycle stop condition.
+
+Fresh root verification passes `cargo fmt --all -- --check`, `cargo check
+--locked --workspace --all-targets --all-features`, and `cargo clippy --locked
+--workspace --all-targets --all-features -- -D warnings`, each with exit status
+zero. `cargo test --locked --workspace --all-targets --all-features` passes all
+1,537 listed tests with exit status zero. `cargo xtask verify` also exits zero,
+including its documentation checks. `git diff --check` passes, the reviewed
+tree is clean, and `git diff --exit-code 9ade2df..HEAD -- src/eval spec` is
+empty. The increment therefore changes neither the evaluator nor the normative
+specification after the accepted specification boundary.
+
+An independent documentation gate at `689f64a` checks 85 Markdown files: lint
+passes and all 731 current relative links resolve. Simulated transition cleanup
+checks 82 retained Markdown files and all 696 retained links, with no retained
+link to a removed artifact.
+
+The review approves transition cleanup after this ledger correction,
+third-review re-review, full root verification, retained-evidence commit, and
+clean-tree gate. The first three gates and the pre-retention clean-tree check
+are complete. The next boundary is this retained-evidence commit; cleanup
+follows it. The approved cleanup set is
 `docs/proposals/CP-0010-method-local-type-parameters.md`,
 `docs/tasks/TASK-0017-implement-method-local-type-parameters.md`, and
 `docs/plans/2026-08-28-method-local-type-parameters.md`. Cleanup replaces the
@@ -497,9 +523,9 @@ and the TASK-0017 entry in `docs/tasks/README.md` with the no-active-task state,
 then removes any stale current-tree links. This report records that conditional
 approval without taking over task authority.
 
-Third-review re-review, the final retained-evidence boundary, and full root
-closure verification remain pending. Cumulative reserved use remains 78/80,
-with two units unreserved. These review records do not close Checkpoint 7.
+Cumulative reserved use remains 78/80, with two units unreserved. This retained
+evidence does not claim integration or completion of the full `lib-ash`
+milestone.
 
 ## Intentional exclusions and remaining pressure
 
