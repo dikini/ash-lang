@@ -2134,13 +2134,13 @@ fn build_core_method_evidence_catalog(
                     continue;
                 }
                 let mut parameters = Vec::new();
+                type_work
+                    .charge(method.authoritative_type_parameters().len())
+                    .map_err(|()| type_resource(method.span))?;
                 parameters
                     .try_reserve(method.authoritative_type_parameters().len())
                     .map_err(|_| type_resource(method.span))?;
                 for parameter in method.authoritative_type_parameters() {
-                    type_work
-                        .charge(1)
-                        .map_err(|()| type_resource(method.span))?;
                     parameters.push((
                         parameter.id,
                         clone_kind_with_budget(&parameter.kind, type_work)
@@ -2237,13 +2237,13 @@ fn build_core_method_evidence_catalog(
                     continue;
                 }
                 let mut source_parameters = Vec::new();
+                type_work
+                    .charge(method.scheme.type_parameters.len())
+                    .map_err(|()| type_resource(method.span))?;
                 source_parameters
                     .try_reserve_exact(method.scheme.type_parameters.len())
                     .map_err(|_| type_resource(method.span))?;
                 for (parameter, kind) in &method.scheme.type_parameters {
-                    type_work
-                        .charge(1)
-                        .map_err(|()| type_resource(method.span))?;
                     source_parameters.push((
                         *parameter,
                         clone_kind_with_budget(kind, type_work)
@@ -2369,6 +2369,73 @@ fn build_core_method_evidence_catalog(
     ))
 }
 
+fn checked_implementation_method_count(
+    program: &ResolvedModuleProgram,
+    constraint_work: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<usize, EvidenceValidationFailure> {
+    charge(constraint_work, program.groups().len(), span)?;
+    let implementation_count = program
+        .groups()
+        .iter()
+        .map(|group| group.implementation_facts().len())
+        .try_fold(0usize, usize::checked_add)
+        .ok_or_else(|| resource(span))?;
+    charge(constraint_work, implementation_count, span)?;
+    program
+        .groups()
+        .iter()
+        .flat_map(ResolvedModuleGroup::implementation_facts)
+        .map(|implementation| implementation.methods.len())
+        .try_fold(0usize, usize::checked_add)
+        .ok_or_else(|| resource(span))
+}
+
+fn checked_global_scheme_count(
+    program: &ResolvedModuleProgram,
+    constraint_work: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<usize, EvidenceValidationFailure> {
+    charge(constraint_work, program.groups().len(), span)?;
+    program
+        .groups()
+        .iter()
+        .map(|group| group.schemes().len())
+        .try_fold(0usize, usize::checked_add)
+        .ok_or_else(|| resource(span))
+}
+
+fn checked_interface_count(
+    program: &ResolvedModuleProgram,
+    constraint_work: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<usize, EvidenceValidationFailure> {
+    charge(constraint_work, program.groups().len(), span)?;
+    program
+        .groups()
+        .iter()
+        .map(|group| group.interface_facts().len())
+        .try_fold(0usize, usize::checked_add)
+        .ok_or_else(|| resource(span))
+}
+
+fn checked_interface_method_search_width(
+    program: &ResolvedModuleProgram,
+    constraint_work: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<usize, EvidenceValidationFailure> {
+    let interface_count = checked_interface_count(program, constraint_work, span)?;
+    charge(constraint_work, interface_count, span)?;
+    program
+        .groups()
+        .iter()
+        .flat_map(ResolvedModuleGroup::interface_facts)
+        .try_fold(interface_count, |count, interface| {
+            count.checked_add(interface.methods.len())
+        })
+        .ok_or_else(|| resource(span))
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "concrete adapter sources are derived from linked selection and checked method facts"
@@ -2384,6 +2451,7 @@ fn build_method_evidence_concrete_sources(
     span: Span,
 ) -> Result<Vec<crate::core::dialect::MethodEvidenceConcreteSource>, EvidenceValidationFailure> {
     let mut pending = Vec::new();
+    charge(constraint_work, expectations.len(), span)?;
     let edge_count = expectations
         .iter()
         .filter(|expectation| {
@@ -2395,8 +2463,7 @@ fn build_method_evidence_concrete_sources(
         .count();
     let root_pass_work = expectations
         .len()
-        .checked_mul(2)
-        .and_then(|work| work.checked_add(edge_count))
+        .checked_add(edge_count)
         .ok_or_else(|| resource(span))?;
     charge(constraint_work, root_pass_work, span)?;
     pending
@@ -2473,13 +2540,7 @@ fn build_method_evidence_concrete_sources(
         {
             return Err(invalid_root(span));
         }
-        let method_count = program
-            .groups()
-            .iter()
-            .flat_map(ResolvedModuleGroup::implementation_facts)
-            .map(|implementation| implementation.methods.len())
-            .try_fold(0usize, usize::checked_add)
-            .ok_or_else(|| resource(span))?;
+        let method_count = checked_implementation_method_count(program, constraint_work, span)?;
         charge(constraint_work, method_count, span)?;
         let checked = program
             .groups()
@@ -2704,12 +2765,8 @@ fn build_method_evidence_expectations(
                 if !methods.iter().any(|method| method.id == selected.method()) {
                     continue;
                 }
-                let producer_count = program
-                    .groups()
-                    .iter()
-                    .flat_map(ResolvedModuleGroup::implementation_facts)
-                    .flat_map(|implementation| implementation.methods.iter())
-                    .count();
+                let producer_count =
+                    checked_implementation_method_count(program, constraint_work, span)?;
                 charge(constraint_work, producer_count, span)?;
                 let producer = program
                     .groups()
@@ -2897,12 +2954,8 @@ fn build_method_evidence_expectations(
                         .checked_method
                         .is_none_or(|requested| requested == selected.method())
             }) {
-                let producer_count = program
-                    .groups()
-                    .iter()
-                    .flat_map(ResolvedModuleGroup::implementation_facts)
-                    .flat_map(|implementation| implementation.methods.iter())
-                    .count();
+                let producer_count =
+                    checked_implementation_method_count(program, constraint_work, span)?;
                 charge(constraint_work, producer_count, span)?;
                 let producer = program
                     .groups()
@@ -3020,16 +3073,11 @@ fn build_method_evidence_expectations(
                             charge(constraint_work, retained_edge_work, span)?;
                             adapter_edges.try_reserve(1).map_err(|_| resource(span))?;
                             let ordinal = adapter_edges.len();
-                            let interface_search_work = program
-                                .groups()
-                                .iter()
-                                .flat_map(ResolvedModuleGroup::interface_facts)
-                                .try_fold(0usize, |count, interface| {
-                                    count.checked_add(1).and_then(|count| {
-                                        count.checked_add(interface.methods.len())
-                                    })
-                                })
-                                .ok_or_else(|| resource(span))?;
+                            let interface_search_work = checked_interface_method_search_width(
+                                program,
+                                constraint_work,
+                                span,
+                            )?;
                             charge(constraint_work, interface_search_work, span)?;
                             let interface = program
                                 .groups()
@@ -3043,11 +3091,13 @@ fn build_method_evidence_expectations(
                                 .find(|candidate| candidate.id == method)
                                 .ok_or_else(|| invalid_root(span))?;
                             let mut method_parameters = Vec::new();
+                            type_work
+                                .charge(canonical.authoritative_type_parameters().len())
+                                .map_err(|()| type_resource(span))?;
                             method_parameters
                                 .try_reserve_exact(canonical.authoritative_type_parameters().len())
                                 .map_err(|_| type_resource(span))?;
                             for parameter in canonical.authoritative_type_parameters() {
-                                type_work.charge(1).map_err(|()| type_resource(span))?;
                                 method_parameters.push((
                                     parameter.id,
                                     clone_kind_with_budget(&parameter.kind, type_work)
@@ -3207,19 +3257,13 @@ fn method_evidence_scope_position(
 ) -> Result<usize, EvidenceValidationFailure> {
     let owner = occurrence.scope.ok_or_else(|| invalid_root(span))?;
     let candidate_count = match owner {
-        MethodEvidenceOwner::Global(_) => program
-            .groups()
-            .iter()
-            .map(|group| group.schemes().len())
-            .try_fold(0usize, usize::checked_add),
-        MethodEvidenceOwner::Implementation(_) => program
-            .groups()
-            .iter()
-            .flat_map(ResolvedModuleGroup::implementation_facts)
-            .map(|implementation| implementation.methods.len())
-            .try_fold(0usize, usize::checked_add),
-    }
-    .ok_or_else(|| resource(span))?;
+        MethodEvidenceOwner::Global(_) => {
+            checked_global_scheme_count(program, constraint_work, span)?
+        }
+        MethodEvidenceOwner::Implementation(_) => {
+            checked_implementation_method_count(program, constraint_work, span)?
+        }
+    };
     charge(constraint_work, candidate_count, span)?;
     let scheme = match owner {
         MethodEvidenceOwner::Global(binder) => program
@@ -3244,16 +3288,17 @@ fn method_evidence_scope_position(
         .get(..=requirement_position)
         .ok_or_else(|| invalid_root(span))?;
     charge(constraint_work, requirements.len(), span)?;
-    let interface_count = program
-        .groups()
-        .iter()
-        .map(|group| group.interface_facts().len())
-        .try_fold(0usize, usize::checked_add)
-        .ok_or_else(|| resource(span))?;
+    let interface_count = checked_interface_count(program, constraint_work, span)?;
     let interface_search_work = interface_count
         .checked_mul(requirements.len())
         .ok_or_else(|| resource(span))?;
-    charge(constraint_work, interface_search_work, span)?;
+    charge(
+        constraint_work,
+        interface_count
+            .checked_add(interface_search_work)
+            .ok_or_else(|| resource(span))?,
+        span,
+    )?;
     let mut position = 0usize;
     for (index, checked) in requirements.iter().enumerate() {
         if usize::try_from(checked.id.declaration()).ok() != Some(index) {
@@ -3433,19 +3478,16 @@ fn collect_method_evidence_expression_occurrences(
         match &expression.kind {
             ResolvedExprKind::Occurrence(occurrence) => match occurrence.term {
                 ResolvedTermName::Global(binder) => {
-                    let scheme_count = program
-                        .groups()
-                        .iter()
-                        .map(|group| group.schemes().len())
-                        .try_fold(0usize, usize::checked_add)
-                        .ok_or_else(|| resource(expression.span))?;
-                    charge(constraint_work, scheme_count, expression.span)?;
-                    let scheme = program
-                        .groups()
-                        .iter()
-                        .flat_map(ResolvedModuleGroup::schemes)
-                        .find(|checked| checked.binder == binder)
-                        .map(|checked| &checked.scheme);
+                    let mut scheme = None;
+                    'groups: for group in program.groups() {
+                        for checked in group.schemes() {
+                            charge(constraint_work, 1, expression.span)?;
+                            if checked.binder == binder {
+                                scheme = Some(&checked.scheme);
+                                break 'groups;
+                            }
+                        }
+                    }
                     let Some(scheme) = scheme else {
                         if occurrence.evidence.is_empty() {
                             continue;
@@ -3639,13 +3681,8 @@ fn push_method_evidence_occurrence(
     let scope_binder = match scope {
         Some(MethodEvidenceOwner::Global(binder)) => Some(binder),
         Some(MethodEvidenceOwner::Implementation(implementation)) => {
-            let candidate_count = program
-                .groups()
-                .iter()
-                .flat_map(ResolvedModuleGroup::implementation_facts)
-                .map(|implementation| implementation.methods.len())
-                .try_fold(0usize, usize::checked_add)
-                .ok_or_else(|| resource(span))?;
+            let candidate_count =
+                checked_implementation_method_count(program, constraint_work, span)?;
             charge(constraint_work, candidate_count, span)?;
             Some(
                 program
@@ -6727,9 +6764,13 @@ mod tests {
         // occurrence-owner binders and A=1 adapter selection identity in both
         // the adapter row and its expectation lookup key. The bounded concrete
         // source pass counts and then reads E=4 expectations, reserves G=1
-        // edge-root slot, and classifies M=1 selected source method:
-        // 87 + C + 2A + 2E + G + M = 101.
-        assert_eq!(constraint_work, 101);
+        // edge-root slot, and classifies M=1 selected source method. The
+        // selected implementation lookup has J=1 candidate and therefore
+        // charges one search slot. Its checked width derivations first admit
+        // B=3 implementation/interface header reads, before traversing
+        // those rows:
+        // 87 + C + 2A + 2E + G + M + J + B = 105.
+        assert_eq!(constraint_work, 105);
         assert_eq!(type_work, 74);
         drop(catalog);
 
@@ -6780,12 +6821,15 @@ mod tests {
         )
         .expect("the concrete source catalog should build");
         assert_eq!(catalog.concrete_sources().len(), 1);
-        // The fixed linked adapter pipeline costs 106 constraint units. The
+        // The fixed linked adapter pipeline costs 121 constraint units after
+        // separately charging every count/search pass over checked methods,
+        // interface methods, owner candidates, and requirement interfaces,
+        // including checked outer row reads before deriving widths. The
         // source pass adds 2E=8 expectation passes, G=1 root capacity, C=1
         // occurrence lookup, J=2 checked-method reads, M=1 selected-method
         // membership, P=1 polymorphic-method classification, and five retained
         // scalar identities. This ground source has H=0 cloned head Types.
-        const CONSTRAINT_WORK: usize = 106 + 8 + 1 + 1 + 2 + 1 + 1 + 5;
+        const CONSTRAINT_WORK: usize = 121 + 8 + 1 + 1 + 2 + 1 + 1 + 5;
         const TYPE_WORK: usize = 36;
         assert_eq!(measured_constraint.used(), CONSTRAINT_WORK);
         assert_eq!(measured_type.used(), TYPE_WORK);

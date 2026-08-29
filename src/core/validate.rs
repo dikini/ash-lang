@@ -961,6 +961,7 @@ impl<'program, 'source> Validator<'program, 'source> {
 
     fn type_contains_forall_charged(&self, root: &Type) -> Result<bool, ValidationError> {
         let mut pending = Vec::new();
+        self.charge_type_work(1)?;
         pending
             .try_reserve(1)
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
@@ -970,6 +971,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             match ty {
                 Type::Forall(_, _) => return Ok(true),
                 Type::Application(function, argument) | Type::Function(function, argument) => {
+                    self.charge_type_work(2)?;
                     pending
                         .try_reserve(2)
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
@@ -977,6 +979,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     pending.push(function);
                 }
                 Type::Tuple(elements) => {
+                    self.charge_type_work(elements.len())?;
                     pending
                         .try_reserve(elements.len())
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
@@ -1734,6 +1737,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         needle: crate::types::TypeVariableId,
     ) -> Result<bool, ValidationError> {
         let mut pending = Vec::new();
+        self.charge_type_work(1)?;
         pending
             .try_reserve(1)
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
@@ -1743,6 +1747,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             match ty {
                 Type::Variable(variable) if *variable == needle => return Ok(true),
                 Type::Application(function, argument) | Type::Function(function, argument) => {
+                    self.charge_type_work(2)?;
                     pending
                         .try_reserve(2)
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
@@ -1750,12 +1755,14 @@ impl<'program, 'source> Validator<'program, 'source> {
                     pending.push(function);
                 }
                 Type::Tuple(elements) => {
+                    self.charge_type_work(elements.len())?;
                     pending
                         .try_reserve(elements.len())
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
                     pending.extend(elements);
                 }
                 Type::Forall(_, body) => {
+                    self.charge_type_work(1)?;
                     pending
                         .try_reserve(1)
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
@@ -2057,7 +2064,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                     EvidenceNode::Abstract {
                         requirement,
                         methods,
-                    } if methods.contains(&prerequisite.method) => {
+                    } => {
+                        self.charge_type_work(methods.len())?;
+                        if !methods.contains(&prerequisite.method) {
+                            return Ok(false);
+                        }
                         let Some(position) = prerequisite.scope_position else {
                             return Ok(false);
                         };
@@ -2118,7 +2129,6 @@ impl<'program, 'source> Validator<'program, 'source> {
                             pending.push((child, argument));
                         }
                     }
-                    EvidenceNode::Abstract { .. } => return Ok(false),
                 }
                 current = application.function();
             }
@@ -5560,6 +5570,33 @@ mod tests {
         )
     }
 
+    fn concrete_source_with_wide_abstract_prerequisite_fixture() -> LinkedCoreValidationFixture {
+        LinkedCoreValidationFixture::compile(
+            "pub seed : Unit -> Unit\nseed value = value\n",
+            concat!(
+                "type Wrap<A> = Wrap(A)\n\n",
+                "interface Leaf<I> {\nfirst : I -> I\nsecond : I -> I\n}\n\n",
+                "interface Base<I> {\nbase : I -> I\n}\n\n",
+                "interface Convert<I> {\nconvert<X> : (I, X) -> I\n}\n\n",
+                "impl<A> Base<Wrap<A>> where Leaf<A> {\n",
+                "base (Wrap(value)) = Wrap(first(value))\n",
+                "}\n\n",
+                "impl<A> Convert<Wrap<Wrap<A>>> where Base<Wrap<A>> {\n",
+                "convert (Wrap(value), ignored) = Wrap(base(value))\n",
+                "}\n\n",
+                "probe<A> : Wrap<Wrap<A>> -> Wrap<Wrap<A>> where Leaf<A>\n",
+                "probe value = convert((value, true))\n\n",
+                "impl Leaf<Int> {\n",
+                "first value = value\n",
+                "second value = value\n",
+                "}\n\n",
+                "main : Unit -> Wrap<Wrap<Int>>\n",
+                "main () = probe(Wrap(Wrap(42)))\n",
+            ),
+            &[],
+        )
+    }
+
     fn replace_concrete_monomorphic_adapter_edge_source_with_global(
         program: &mut UnvalidatedProgram,
     ) {
@@ -5705,8 +5742,10 @@ mod tests {
             .expect("the concrete source topology validates");
         // The fixed authority graph costs 584 units. Its one concrete source
         // adds S=1 catalog lookup, one fallible pending slot, and M=1 exact
-        // selected-method membership cell.
-        const EXACT_WORK: usize = 584 + 1 + 1 + 1 + 1;
+        // selected-method membership cell. The checked type walkers reserve
+        // 45 root/child stack slots separately from their existing visits.
+        const CHECKED_STACK_CAPACITY_WORK: usize = 45;
+        const EXACT_WORK: usize = 584 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(measured.type_work.get(), EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -5732,6 +5771,64 @@ mod tests {
                 .expect("a fresh exact concrete-source pass retries");
             assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
         }
+    }
+
+    #[test]
+    fn concrete_source_with_wide_abstract_prerequisite_has_an_exact_retry_boundary() {
+        let fixture = concrete_source_with_wide_abstract_prerequisite_fixture();
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let source = fixture
+            .program
+            .method_evidence
+            .concrete_sources()
+            .iter()
+            .find(|source| !source.prerequisites.is_empty())
+            .expect("the concrete source retains its abstract prerequisite chain");
+        assert_eq!(source.prerequisites.len(), 2);
+
+        let measured = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the widened abstract-prerequisite fixture is canonical");
+        measured
+            .validate_method_evidence_authority()
+            .expect("the widened concrete source topology validates");
+        // The owner, occurrence, carrier, source-chain, and checked-Type
+        // relations consume 1,084 units for this fixed graph. The concrete
+        // source has Q=2 retained prerequisite method rows, each of which
+        // independently reads the W=2 abstract method list before membership:
+        // 1,084 + Q*W = 1,088.
+        const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_084;
+        const PREREQUISITE_METHOD_LIST_WORK: usize = 2 * 2;
+        const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK + PREREQUISITE_METHOD_LIST_WORK;
+        assert_eq!(measured.type_work.get(), EXACT_WORK);
+
+        let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("the one-short widened source fixture is canonical");
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+            .expect("the one-short widened-source prefix fits");
+        assert_eq!(
+            short
+                .validate_method_evidence_authority()
+                .expect_err("one missing abstract method-list capacity unit rejects")
+                .reason(),
+            ValidationReason::Resource,
+        );
+        for _ in 0..2 {
+            let exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the exact widened source fixture is canonical");
+            exact
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                .expect("the exact widened-source prefix fits");
+            exact
+                .validate_method_evidence_authority()
+                .expect("a fresh exact widened-source pass retries");
+        }
+        drop(fixture);
     }
 
     fn replace_monomorphic_adapter_edge_with_same_typed_wrong_producer(
@@ -5895,8 +5992,11 @@ mod tests {
         // The fixed authenticated graph costs 646 units. The exact abstract
         // producer adds one owner-envelope pass: N=49 nodes, R=5 recursive
         // members, p=0 preceding evidence functions, and one selected binder.
+        // Its checked type walks independently reserve 45 root/child stack
+        // slots in addition to their existing visits.
         const EXACT_SOURCE_ENVELOPE_WORK: usize = 49 + 5 + 1;
-        const EXACT_WORK: usize = 646 + EXACT_SOURCE_ENVELOPE_WORK;
+        const CHECKED_STACK_CAPACITY_WORK: usize = 45;
+        const EXACT_WORK: usize = 646 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -5949,7 +6049,11 @@ mod tests {
         // detailed-edge 4Q, and prerequisite-sequence Q.
         const PRECHARGED_CARRIER_ROWS: usize = 22;
         const EXACT_IDENTITY_WORK: usize = 28;
-        const EXACT_WORK: usize = 2_197 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK;
+        // Full and early-exit checked type walks reserve 92 exact root/child
+        // stack slots independently from their already charged node visits.
+        const CHECKED_STACK_CAPACITY_WORK: usize = 92;
+        const EXACT_WORK: usize =
+            2_197 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)

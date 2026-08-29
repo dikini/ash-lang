@@ -944,6 +944,45 @@ and evaluator semantic or state-machine changes.
   The evaluator tree remains byte-identical to `5ce71d1`; no specification file
   or production resource-limit assignment changed. CP5 remains open for
   semantic re-review and final root verification.
+- Quality and resource review of `5c6af3d` found four remaining accounting
+  defects. The focused constructor RED,
+  `method_evidence_builder_constructor_precharges_both_exact_carriers`,
+  measured two units for `E = 2` expectations where the consumed bitmap and
+  anchor carrier require four. The correction stages both exact-capacity
+  buffers after a checked `2E` charge and publishes them atomically. Catalog,
+  lowering, and validator parameter carriers now charge before reserve;
+  checked type walkers separately charge every root and child stack slot.
+  Catalog expectation, implementation-method, interface-method, owner, and
+  scheme searches either precharge each count and search pass or fuse them
+  into charge-before-compare traversal. The fused global-scheme lookup
+  preserves the unchanged wide-interface default-budget boundary. Concrete
+  source validation additionally charges the complete abstract prerequisite
+  method list before membership.
+- Exact CP5 accounting after the review is four units for the isolated `E = 2`
+  Builder constructor, while the distinct one-anchor authentication and finish
+  boundary remains 14. General catalog construction is 105 constraint and 74
+  type units; the concrete-source fixture is 140 constraint and 36 type units.
+  The zero-prerequisite concrete validator moves from 588 to 633 units after
+  45 checked stack-capacity slots, and the polymorphic validator moves from
+  2,247 to 2,339 after 92 such slots. A reachable concrete source with two
+  retained methods from one abstract prerequisite is exactly 1,088 units; its
+  explicit authorization term is `Q * W = 2 * 2`. The isolated lowering
+  worklist is ten units for five visits plus five capacities. The concrete
+  one-edge identity and literal-fold transforms move from 682 to 686 units
+  because their `E = 4` catalog now charges both constructor carriers. Every
+  boundary rejects one-short work and succeeds on two fresh exact retries.
+  No production resource limit changed.
+- Post-review verification passes 710 library tests, all 62 Core-validation
+  integration tests, all 21 architecture tests, and the complete 1,517-test
+  quiet locked workspace/all-target/all-feature matrix. Formatting, locked
+  workspace/all-target/all-feature checking, strict Clippy with warnings
+  denied, `cargo xtask verify` including rustdoc, Markdown lint, relative-link
+  verification, and diff hygiene pass. The evaluator tree remains
+  byte-identical to `5ce71d1`; no specification file or production
+  resource-limit assignment changed. The CP5 reservation remains 14 units,
+  cumulative reserved use remains 52/70, 18 units remain unreserved, and
+  Checkpoint 6 is not reserved. CP5 remains open for review and final root
+  verification.
 
 ## Verification
 

@@ -1661,21 +1661,26 @@ impl Elaborator {
         for group in program.groups() {
             for interface in group.interface_facts() {
                 let mut methods = Vec::new();
+                self.type_work
+                    .charge(interface.methods.len())
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 methods
                     .try_reserve(interface.methods.len())
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 for method in &interface.methods {
                     methods.push(method.id);
                     let mut type_parameters = Vec::new();
+                    self.type_work
+                        .charge(method.authoritative_type_parameters().len())
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
                     type_parameters
                         .try_reserve(method.authoritative_type_parameters().len())
                         .map_err(|_| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?;
                     for parameter in method.authoritative_type_parameters() {
-                        self.type_work.charge(1).map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
                         type_parameters.push((
                             parameter.id,
                             clone_kind_with_budget(&parameter.kind, &mut self.type_work).map_err(
@@ -3945,6 +3950,9 @@ impl Elaborator {
         variables: &HashSet<TypeVariableId>,
     ) -> Result<bool, TypeError> {
         let mut pending = Vec::new();
+        self.type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         pending
             .try_reserve(1)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -3956,6 +3964,9 @@ impl Elaborator {
             match ty {
                 Type::Variable(variable) if variables.contains(variable) => return Ok(true),
                 Type::Application(function, argument) | Type::Function(function, argument) => {
+                    self.type_work.charge(2).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
                     pending.try_reserve(2).map_err(|_| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
@@ -3963,12 +3974,18 @@ impl Elaborator {
                     pending.push(function);
                 }
                 Type::Tuple(elements) => {
+                    self.type_work.charge(elements.len()).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
                     pending.try_reserve(elements.len()).map_err(|_| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
                     pending.extend(elements);
                 }
                 Type::Forall(_, body) => {
+                    self.type_work.charge(1).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
                     pending.try_reserve(1).map_err(|_| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
@@ -12159,6 +12176,37 @@ mod tests {
                 enter_with_limit(EXACT_WORK).expect("a fresh exact scope stage should fit"),
                 EXACT_WORK,
             );
+        }
+    }
+
+    #[test]
+    fn checked_type_worklist_capacity_has_an_exact_boundary_and_fresh_retry() {
+        // Five visited cells and five independently admitted root/child stack
+        // slots: Function(Int, Tuple(Bool, Unit)).
+        const EXACT_WORK: usize = 5 + 5;
+
+        fn contains_with_limit(limit: usize) -> Result<(bool, usize), TypeError> {
+            let resolved = resolved_module_fixture("checked-type-stack.ash", "", "Unit", "()");
+            let mut elaborator = Elaborator::for_module(&resolved)
+                .expect("the checked-stack fixture namespace should fit");
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let ty = Type::Function(
+                Box::new(Type::Int),
+                Box::new(Type::Tuple(vec![Type::Bool, Type::Unit].into_boxed_slice())),
+            );
+            let variables = HashSet::from([TypeVariableId::new(91)]);
+            let contains = elaborator.type_contains_any_variable(&ty, &variables)?;
+            Ok((contains, elaborator.type_work.used()))
+        }
+
+        assert!(matches!(
+            contains_with_limit(EXACT_WORK - 1),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+        ));
+        for _ in 0..2 {
+            assert_eq!(contains_with_limit(EXACT_WORK), Ok((false, EXACT_WORK)));
         }
     }
 

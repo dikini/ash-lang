@@ -1503,24 +1503,35 @@ impl CoreBuilder {
         method_evidence: Arc<MethodEvidenceCatalog>,
     ) -> Result<Self, BuildError> {
         let mut builder = Self::with_registry(registry);
-        builder.method_evidence = method_evidence;
-        let expectation_count = builder.method_evidence.expectations().len();
-        builder
-            .type_work
-            .charge(expectation_count)
-            .map_err(|()| BuildError::TypeWorkExceeded)?;
-        builder
-            .consumed_method_evidence
-            .try_reserve_exact(expectation_count)
-            .map_err(|_| BuildError::TypeWorkExceeded)?;
-        builder
-            .consumed_method_evidence
-            .resize(expectation_count, false);
-        builder
-            .method_evidence_anchors
-            .try_reserve_exact(expectation_count)
-            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        builder.install_linked_catalog(method_evidence)?;
         Ok(builder)
+    }
+
+    fn install_linked_catalog(
+        &mut self,
+        method_evidence: Arc<MethodEvidenceCatalog>,
+    ) -> Result<(), BuildError> {
+        let expectation_count = method_evidence.expectations().len();
+        self.type_work
+            .charge(
+                expectation_count
+                    .checked_mul(2)
+                    .ok_or(BuildError::TypeWorkExceeded)?,
+            )
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let mut consumed_method_evidence = Vec::new();
+        consumed_method_evidence
+            .try_reserve_exact(expectation_count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        consumed_method_evidence.resize(expectation_count, false);
+        let mut method_evidence_anchors = Vec::new();
+        method_evidence_anchors
+            .try_reserve_exact(expectation_count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.method_evidence = method_evidence;
+        self.consumed_method_evidence = consumed_method_evidence;
+        self.method_evidence_anchors = method_evidence_anchors;
+        Ok(())
     }
 
     pub(crate) fn requires_method_evidence_implementation_owner(
@@ -3339,6 +3350,56 @@ mod tests {
             exact
                 .finish(exact_node)
                 .expect("a fresh exact stage should retry and publish");
+        }
+    }
+
+    #[test]
+    fn method_evidence_builder_constructor_precharges_both_exact_carriers() {
+        let interface = InterfaceId::new(ModuleId::new(0), 0);
+        let method = MethodId::new(interface, 0);
+        let catalog = Arc::new(MethodEvidenceCatalog::new(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![
+                MethodEvidenceExpectation {
+                    occurrence: None,
+                    method,
+                    role: MethodEvidenceExpectedRole::Instantiation { producer: 0 },
+                },
+                MethodEvidenceExpectation {
+                    occurrence: None,
+                    method,
+                    role: MethodEvidenceExpectedRole::Instantiation { producer: 0 },
+                },
+            ],
+        ));
+        const EXPECTATIONS: usize = 2;
+        const EXACT_WORK: usize = 2 * EXPECTATIONS;
+
+        let mut short = CoreBuilder::with_registry(Arc::new(ResolvedRegistry::default()));
+        short.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            short
+                .install_linked_catalog(Arc::clone(&catalog))
+                .expect_err("one missing carrier-capacity unit rejects construction"),
+            BuildError::TypeWorkExceeded,
+        );
+        assert!(short.consumed_method_evidence.is_empty());
+        assert!(short.method_evidence_anchors.is_empty());
+
+        for _ in 0..2 {
+            let mut builder = CoreBuilder::with_registry(Arc::new(ResolvedRegistry::default()));
+            builder.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+            builder
+                .install_linked_catalog(Arc::clone(&catalog))
+                .expect("a fresh exact constructor stage retries");
+            assert_eq!(builder.type_work.used(), EXACT_WORK);
+            assert_eq!(builder.consumed_method_evidence.capacity(), EXPECTATIONS);
+            assert_eq!(builder.method_evidence_anchors.capacity(), EXPECTATIONS);
         }
     }
 

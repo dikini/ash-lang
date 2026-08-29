@@ -875,8 +875,12 @@ mod tests {
         const CORE_WORK: usize = 673 + CONCRETE_SOURCE_LOOKUP_WORK;
         const ANCHOR_REPLAY_WORK: usize = 4;
         const PRODUCER_REMAP_WORK: usize = 1;
-        const IDENTITY_WORK: usize = CORE_WORK + ANCHOR_REPLAY_WORK + PRODUCER_REMAP_WORK;
-        const FOLD_WORK: usize = CORE_WORK + ANCHOR_REPLAY_WORK + PRODUCER_REMAP_WORK;
+        // Constructor admission reserves both the E=4 consumed bitmap and
+        // the E=4 anchor carrier, adding the second E term to prior totals.
+        const CONSTRUCTOR_SECOND_CARRIER_WORK: usize = 4;
+        const IDENTITY_WORK: usize =
+            CORE_WORK + ANCHOR_REPLAY_WORK + PRODUCER_REMAP_WORK + CONSTRUCTOR_SECOND_CARRIER_WORK;
+        const FOLD_WORK: usize = IDENTITY_WORK;
         let fixture = linked_method_transform_fixture();
         assert_eq!(
             fixture.program.method_evidence_anchors().len(),
