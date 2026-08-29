@@ -1011,6 +1011,39 @@ and evaluator semantic or state-machine changes.
   cumulative reserved use remains 52/70, 18 units remain unreserved, and
   Checkpoint 6 is not reserved. CP5 remains open for review and final root
   verification.
+- Independent semantic re-review approves the complete CP5 meaning with no
+  findings. It confirms exact selection-node identity for repeated adapters,
+  owner-envelope derivation for abstract monomorphic sources, and independent
+  reconstruction of concrete monomorphic sources from linked selection and
+  checked implementation facts. Builder consumption, transform remapping, and
+  fresh validation preserve those relations. The later corrections change
+  only resource charging, traversal shape, exact probes, and task evidence;
+  they add no Core form, evaluator behavior, selection rule, language rule, or
+  specification change.
+- Independent quality and resource re-review approves `600ba23` with no
+  findings. It verifies that both root producer callers precharge checked
+  `D + A + W`, prerequisite rows are charged before child inspection, and
+  derived method-edge capacity is charged before reserve. The 89/32,
+  107/74, and 141/36 catalog boundaries and the approved Builder 4/14,
+  validator 633/1,088/2,339, transform 686, and elaborator 10 boundaries pass
+  exact, one-short, and two-fresh-retry evidence. Lifecycle, iterative
+  teardown, `Arc` identity and `Weak` release, architecture carriers,
+  evaluator isolation, checked arithmetic, and unchanged production limits
+  also pass. Checkpoint 6 retains only its planned product-level exhaustive
+  coverage.
+- Fresh root verification at `600ba23` passes the four corrected exact
+  resource probes, eight method-evidence unit tests, all 711 library tests,
+  all 62 Core-validation tests, all 33 interface tests, all 40 polymorphism
+  tests, and all 21 architecture tests. The locked
+  workspace/all-target/all-feature run and its exact test listing pass all
+  1,518 tests. Formatting, locked workspace/all-target/all-feature checking,
+  strict Clippy with warnings denied, `cargo xtask verify` including rustdoc,
+  Markdown lint, relative-link and authority review, cumulative diff hygiene,
+  evaluator and specification byte identity against `5ce71d1`, exact-head
+  inspection, and clean-worktree status pass. Checkpoint 5 is complete in
+  `cf93de7`, `98000f7`, `5c6af3d`, `8eccef4`, and `600ba23`. Its reserved use
+  is 14 units, cumulative reserved use is 52/70, 18 units remain unreserved,
+  and Checkpoint 6 is not reserved.
 
 ## Verification
 
