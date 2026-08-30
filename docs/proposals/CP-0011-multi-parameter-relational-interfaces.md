@@ -4,9 +4,10 @@
 - Status: accepted
 - Related: [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), [AD-0008: Explicit Evaluator Machine](../decisions/AD-0008-explicit-evaluator-machine.md), [AD-0009: Ordered Resolved-Global Binder Authority](../decisions/AD-0009-ordered-resolved-global-binder-authority.md), and [TASK-0018: Implement Multi-Parameter Relational Interfaces](../tasks/TASK-0018-implement-multi-parameter-relational-interfaces.md)
 
-> This proposal is not current Ash.
+> This proposal records the accepted transition. It is not current language
+> authority; the specification defines current Ash.
 
-## Current behavior
+## Predecessor behavior
 
 An interface declares exactly one fixed-kinded type parameter. Every method
 value type must contain that parameter, and one method occurrence creates one
@@ -26,7 +27,7 @@ A global requirement may use only type variables that occur in the global
 value type. Interfaces have no relational determination, associated outputs,
 projection types, defaults, specialization, or runtime dictionaries.
 
-## Proposed behavior
+## Accepted behavior
 
 ### Parameters and applications
 
@@ -144,18 +145,21 @@ guesses a key, uses a dependent argument to infer a key, inspects
 prerequisites, constructs evidence, or records a selection.
 
 After improvement, existing evidence selection starts only when the complete
-application is zonked and inference-free. A determined obligation must also
-have belonged to the pre-pass inference-free-key snapshot. An obligation
-outside that snapshot is `constraint.ambiguous` for this closure even if
+application is zonked and inference-free. A pending determined occurrence root
+must also have belonged to the pre-pass inference-free-key snapshot. A pending
+root outside that snapshot is `constraint.ambiguous` for this closure even if
 another obligation later makes its key and complete application inference-free;
 it cannot bypass mandatory key consistency by entering full selection. An
-eligible obligation matches the full application and retains the existing
-abstract, exact-current, and concrete priority. An unresolved key is
+eligible root matches the full application and retains the existing abstract,
+exact-current, and concrete priority. An unresolved key is
 `constraint.ambiguous`. If a known key has no improvement source and the
 complete goal remains unresolved, the occurrence is also
 `constraint.ambiguous`; `constraint.unsatisfied` remains owned by full-goal
-selection. No-edge obligations retain their predecessor full-application
-selection rule and do not participate in the determination snapshot.
+selection. Prerequisites created recursively by concrete selection have complete
+applications after substitution. They use ordinary full-application selection
+and active-cycle detection without snapshot membership. No-edge occurrence
+roots retain their predecessor full-application selection rule and do not
+participate in the determination snapshot.
 
 Improvement is one isolated pass because the key determines the entire
 complement. Before that pass mutates inference state, the checker snapshots
@@ -370,13 +374,24 @@ a production resource limit.
 
 ## Resulting specification truth
 
-After the complete product branch is integrated into `main`, current Ash has
+At the retained product checkpoint, current Ash has
 multi-parameter method-only interfaces and an optional single total forward
 determination edge. Complete ordered interface applications cross checking,
 summaries, evidence, linking, and Core authentication. Improvement fills only
 the dependent complement from an inference-free key and never chooses evidence
 or reverses the relation. Evidence still lowers to ordinary functions and
 erased type operations, and evaluation remains free of interface state.
+
+The implementation checkpoints `ade65e6`, `aeb7b82`, `f9868ba`, `5b6acd2`,
+and `e660c17` retain the accepted syntax, complete carriers, total-key rules,
+improvement, linked product, authentication, resource, and review evidence. The
+Checkpoint 7 working tree reconciles the normative specification and creates
+the durable
+[relational-interface evidence report](../design/lib-ash/relational-interfaces-evidence.md).
+No semantic contradiction was found. CP-0011 remains present and accepted
+during retained-checkpoint review. After that checkpoint is committed and
+approved, a separate cleanup records the final result before removing this
+proposal, TASK-0018, their plan, and their active index entries.
 
 ## Interactions
 

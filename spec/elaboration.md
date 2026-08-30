@@ -28,8 +28,9 @@ identities that later stages require.
 Interface and implementation declarations likewise produce no Core declaration
 node. The interface-specific identities and registries established during
 resolution and checking remain linked metadata until linked interface-evidence
-validation authenticates them. They erase during Core synthesis as described
-below.
+validation authenticates their ordered parameter records, optional determinant
+positions, and complete applications. Determination metadata erases during Core
+synthesis as described below.
 
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
@@ -95,7 +96,7 @@ structural evidence field. Resolution creates each slot empty. Checking
 fixes each selection at the owning obligation-closure boundary defined by the
 [static semantics](static-semantics.md#constraint-satisfaction-and-checked-evidence).
 The field remains private pending state until whole-module inference closure
-atomically freezes its zonked checked obligation argument, ordered method-local
+atomically freezes its zonked complete obligation application, ordered method-local
 arguments, checked occurrence type, and selected evidence. A method occurrence
 retains one selection for its interface requirement. A constrained-global
 occurrence retains one selection for each requirement in the global signature's
@@ -125,11 +126,13 @@ The complete validation authenticates:
 
 - interface, method, implementation, nominal, requirement,
   implementation-method, and binder identities;
+- every interface's ordered parameter identities, kinds, origins, and optional
+  determinant positions;
 - every local implementation inventory, public authorization table, and
   selected implementation's availability in the occurrence module's effective
   environment through its complete local, import, or re-export route;
-- implementation-head matching, recorded substitutions, prerequisite trees,
-  and prerequisite termination;
+- complete implementation-head matching, recorded substitutions, prerequisite
+  trees, and full-application prerequisite termination;
 - complete method slots in interface declaration order, including slots with
   equal Core types;
 - each method's exact ordered binder identities, owner, kinds, body scope,
@@ -139,8 +142,8 @@ The complete validation authenticates:
 - checked global and implementation-method schemes, their ordered kinded
   head-versus-method binder partitions, selected method types, and binder
   mappings;
-- equality between every checker-retained occurrence interface argument and
-  its selected evidence goal, plus every ordered method argument, checked
+- equality between every checker-retained complete occurrence interface
+  application and its selected evidence goal, plus every ordered method argument, checked
   occurrence type, `MethodId`, selected `ImplMethodId`, and adapter relation;
   and
 - source and module provenance, complete linked definitions, and the absence of
@@ -189,8 +192,8 @@ forall parameters.
 
 Authenticated nested schemes are valid only in generated method-evidence
 domains. If `s_j` has method parameters, its `type(s_j)` is the corresponding
-declared method scheme after substituting the requirement argument for the
-interface parameter:
+declared method scheme after substituting the requirement's complete argument
+vector for the interface parameter vector:
 
 ```text
 forall method_parameters. substituted_method_value_type
@@ -212,6 +215,11 @@ top-level `Function` constructor. The initializer contains one outer type
 abstraction when definition parameters are nonempty, then one ordinary unary
 function binder for every flattened evidence method, then the source function.
 An unconstrained global retains its existing Core shape.
+
+Interface substitution is simultaneous and follows declaration order. It
+substitutes the complete interface vector before method-local type arguments
+or evidence applications are introduced. This order is structural
+authentication authority even when two positions contain equal types.
 
 A constrained-global occurrence starts from its ordinary Core binder. Core
 type application, when needed, precedes the ordered evidence applications.
@@ -262,7 +270,8 @@ recursion consequently use the existing recursive binding rather than a cross-
 module group.
 
 After linked interface-evidence validation, source-only interface,
-implementation, requirement, and authorization-route carriers can erase.
+implementation, requirement, determination, and authorization-route carriers
+can erase.
 Minimal immutable method-evidence authentication facts survive Core synthesis
 so independent validation can derive and check every generated evidence
 domain, occurrence, forwarding use, and adapter. Their term structure uses only
@@ -271,6 +280,10 @@ applications, and term applications. Method authentication facts and schemes
 may remain as inert validation and transformation authority in the validated
 program; the evaluator does not inspect them. Core type operations erase
 through the existing dynamic rules.
+Determination adds no Core node, type binder, evidence method, evaluator value,
+or interface-specific operation. Complete substituted types and the existing
+method-evidence relationships are sufficient after the determinant-position
+metadata erases.
 
 ## Explicit rank-1 operations
 
@@ -466,8 +479,8 @@ capture-free alpha-renaming. It does not authenticate the elaborator's original
 generated identity, binder span, or allocation ordinal.
 
 For every polymorphic method-evidence position, validation derives the expected
-scheme from canonical method-binder records and the authenticated interface
-argument. It checks the exact constrained-definition owner, requirement and
+scheme from canonical method-binder records and the authenticated complete
+interface application. It checks the exact constrained-definition owner, requirement and
 method position, occurrence `MethodId` and arguments, adapter
 `ImplMethodId`, head-before-method type arguments, prerequisite producers, and
 exclusive incoming uses.

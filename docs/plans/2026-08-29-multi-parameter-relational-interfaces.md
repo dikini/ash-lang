@@ -818,13 +818,15 @@ have inference-free keys. Process only that set once in source order.
 Improvement is mandatory when a source exists, even when ordinary checking
 already fixed every dependent, and it unifies the complete dependent tuple
 atomically. An output filled by one obligation cannot unlock another obligation
-in the same pass. Reject every determined obligation outside the snapshot as
-`constraint.ambiguous` for this closure even if later zonking makes its key and
-complete application inference-free. For snapshot members, retain the existing
-close path: zonk the full application, reject any remaining inference variable
-as `constraint.ambiguous`, and perform full-goal evidence selection. No-edge
-obligations retain their predecessor close path. Do not add an edge worklist,
-repeated saturation, or cross-obligation closure.
+in the same pass. Reject every pending determined occurrence root outside the
+snapshot as `constraint.ambiguous` for this closure even if later zonking makes
+its key and complete application inference-free. For snapshot members, retain
+the existing close path: zonk the full application, reject any remaining
+inference variable as `constraint.ambiguous`, and perform full-goal evidence
+selection. Recursively instantiated prerequisite goals are already complete and
+use ordinary full-application selection and active-cycle detection without
+snapshot membership. No-edge roots retain their predecessor close path. Do not
+add an edge worklist, repeated saturation, or cross-obligation closure.
 
 ### Step 3: Prove ambiguity, agreement, and non-reversal
 
@@ -1079,7 +1081,7 @@ specification and closure.
   full gate exposed the avoidable interface index, and re-review approves every
   correction without remaining findings. Focused gates pass 801 library tests,
   architecture 28/28, Core validation 64/64, interface modules 24/24, evidence
-  56/56, interface matching 46/46, method-parameter resources 4/4, formatting,
+  57/57, interface matching 46/46, method-parameter resources 4/4, formatting,
   all-target checking, strict Clippy, and diff hygiene.
 
 Cumulative reserved use is 58/65; 7 units remain. Neither TASK-0018 nor lib-ash
@@ -1188,3 +1190,41 @@ remove the worktree. Report the verified branch and commits to the user and
 request integration direction.
 
 Record final reserved use as 65/65.
+
+### Checkpoint 7 retained-working result
+
+- The checkpoint starts from clean product commit `e660c17`. Semantic
+  reconciliation found no contradiction with accepted CP-0011, so the
+  specification was updated without reopening design or changing production
+  semantics.
+- The normative chapters now describe complete vectors, one total edge,
+  determinant method occurrence, requirements, implementation admission and
+  coherence, prerequisite-pair precedence, fixed-snapshot improvement,
+  full-application selection, summary authentication, simultaneous lowering,
+  runtime erasure, causal failure order, and exact resource ownership.
+- The durable relational-interface report records commits `ade65e6` through
+  `e660c17`, the linked product and tampering matrices, hidden and opaque
+  identities, transforms, diagnostics, migration, reviews, exclusions, and the
+  final current formulas. In particular, the retained leaf-application formula
+  is `7P+5/2P`, the graph is 6,516 exact and 6,515 one-short, snapshots are
+  `17/6` and `3W+14/6`, and the final wide relation is
+  `327655 < 327680 < 567320`.
+- Executable specification tests retain the dependent-absent relational example
+  and exact normative fragments. The corpus retains the linked fixture,
+  ordinary no-edge omission, invalid partition, and explicit unary no-edge
+  predecessor guards.
+- DN-0025 and the trajectory define the revised relational-only `lib-ash`
+  product goal and defer associated syntax, general graphs, defaults, effects,
+  proofs, and existentials. Complete application carriers preserve future
+  existential equality pressure without adding existential semantics.
+- Root `README.md` remains unchanged because its method-only-interface summary
+  is still exact. Cumulative reserved use is 65/65.
+- This is the update-before-removal boundary. CP-0011, TASK-0018, this plan, and
+  their index entries remain present and TASK-0018 remains active through final
+  review and verification. A later separate cleanup commit records the
+  approved result before removing them. No integration, push, tag, branch
+  deletion, or worktree removal occurs here.
+- Focused specification and corpus suites pass 64/64 and 11/11. The final
+  authored tree passes `cargo xtask verify`, Markdown lint, and diff hygiene.
+  Controller review corrections are applied; independent final review remains
+  before the retained checkpoint commit and later cleanup commit.

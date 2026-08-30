@@ -604,6 +604,61 @@ fn method_parameter_migration_and_exclusion_corpus_is_complete() {
     assert!(explicit_cli.stderr.is_empty());
 }
 
+#[test]
+fn relational_interface_corpus_preserves_the_new_and_predecessor_boundaries() {
+    let observation = run("tests/fixtures/relational-interfaces/linked-composite/entry.ash")
+        .expect("the retained linked relational program should remain executable");
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+
+    let dependent_absent = TempSource::write(concat!(
+        "interface Measure<Key, Result> where Key -> Result {\n",
+        "measure : Key -> Int\n",
+        "}\n\n",
+        "impl Measure<Bool, Unit> {\n",
+        "measure value = 42\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = measure(true)\n",
+    ));
+    let observation = run(dependent_absent.0.clone())
+        .expect("a determined parameter may be absent from the method value type");
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+
+    let ordinary_omission = TempSource::write(concat!(
+        "interface Pairwise<Left, Right> {\n",
+        "pairwise : Left -> Int\n",
+        "}\n",
+    ));
+    let failure = run(ordinary_omission.0.clone())
+        .expect_err("without a determination edge every interface parameter must occur");
+    assert_eq!(failure.reason_code(), "interface.method-parameter");
+
+    let invalid_partition = TempSource::write(concat!(
+        "interface Invalid<Left, Right> where Left -> Left {\n",
+        "invalid : Left -> Int\n",
+        "}\n",
+    ));
+    let failure = run(invalid_partition.0.clone())
+        .expect_err("a determination edge must partition the interface parameters");
+    assert_eq!(failure.reason_code(), "interface.determination-parameter");
+
+    for path in [
+        "tests/fixtures/explicit-kinds/linked-product/dependency.ash",
+        "tests/fixtures/method-parameters/linked-product/interface.ash",
+    ] {
+        let source = fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("missing predecessor fixture {path}: {error}"));
+        let interface_header = source
+            .lines()
+            .find(|line| line.contains("interface "))
+            .unwrap_or_else(|| panic!("missing predecessor interface in {path}"));
+        assert_eq!(interface_header.matches(',').count(), 0, "{path}");
+        assert!(!interface_header.contains(" where "), "{path}");
+    }
+}
+
 fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
     match (case.stage, case.reason, failure) {
         (

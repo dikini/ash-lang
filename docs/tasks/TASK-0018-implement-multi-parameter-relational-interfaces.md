@@ -260,12 +260,41 @@ syntax, packages, runtime interface lookup, and evaluator changes.
   gap, missing exact elaboration probe, and an unbound prevalidated-goal API.
   The full gate then exposed the avoidable interface index. All corrections pass
   re-review without remaining findings. Focused verification passes 801 library
-  tests, evidence 56/56, interface matching 46/46, architecture 28/28, Core
+  tests, evidence 57/57, interface matching 46/46, architecture 28/28, Core
   validation 64/64, interface modules 24/24, and method-parameter resources
   4/4, plus formatting, all-target checking, strict Clippy, and diff hygiene.
   Cumulative reserved use is 58/65; 7 units remain for normative reconciliation
   and lifecycle closure. The specification remains unchanged until Checkpoint 7,
   so neither lib-ash nor TASK-0018 is complete.
+- Checkpoint 7 starts from the clean retained product commit `e660c17`.
+  Reconciliation found no contradiction between CP-0011 and the implemented
+  evidence. The current working checkpoint updates every affected normative
+  specification chapter, adds executable relational and unary-predecessor
+  guards, creates the durable
+  [relational-interface evidence report](../design/lib-ash/relational-interfaces-evidence.md),
+  and revises DN-0025 and the trajectory to the relational-only revised
+  `lib-ash` boundary. Root `README.md` requires no edit because its
+  method-only-interface summary remains accurate.
+- The retained evidence records the final current formulas, including
+  `7P+5/2P`, 6,516 exact and 6,515 one-short graph work, `17/6` and
+  `3W+14/6` snapshots, and
+  `327655 < 327680 < 567320`. The earlier `577100` figure remains historical
+  Checkpoint 4 evidence and is superseded by the final Checkpoint 6 validation
+  measurement.
+- Cumulative reserved use is 65/65. TASK-0018 remains active during independent
+  Checkpoint 7 review and verification. This retained checkpoint does not
+  remove transition artifacts or index entries. After its commit and approval,
+  a separate cleanup must update these records first, then remove CP-0011,
+  TASK-0018, the execution plan, and their active index entries. Integration,
+  push, tagging, branch deletion, and worktree removal remain unauthorized.
+- Checkpoint 7 focused specification and corpus tests pass 64/64 and 11/11.
+  The final authored tree passes `cargo xtask verify`, including formatting,
+  metadata, build, strict Clippy, 801 library tests, every integration suite,
+  the xtask self-test, doctests, and Rustdoc. Markdown lint and diff hygiene
+  also pass. Controller review corrections align dependent-only requirement
+  wording, prerequisite conflict ownership, inert complete-application Core
+  authority, DN-0025 simplification, and cleanup authorization with the
+  accepted boundary. Independent final review remains the next lifecycle gate.
 
 ## Verification
 

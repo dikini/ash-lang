@@ -131,6 +131,22 @@ const GENERIC_PREREQUISITE_EVIDENCE_MODULE: &str = concat!(
     "main : Unit -> Bool\n",
     "main () = equal(Some(1), Some(1))\n",
 );
+const DETERMINED_GENERIC_PREREQUISITE_MODULE: &str = concat!(
+    "type Option<A> =\n",
+    "    None\n",
+    "    | Some(A)\n\n",
+    "interface Measure<Key, Result> where Key -> Result {\n",
+    "    measure : Key -> Int\n",
+    "}\n\n",
+    "impl Measure<Int, Int> {\n",
+    "    measure value = value\n",
+    "}\n\n",
+    "impl<A> Measure<Option<A>, Option<A>> where Measure<A, A> {\n",
+    "    measure value = 42\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = measure(Some(1))\n",
+);
 const INTERFACE_HIDDEN_ENTRY_MODULE: &str = concat!(
     "import carrier as Carrier\n",
     "import carrier (impl Transform)\n\n",
@@ -213,6 +229,16 @@ const METHOD_PARAMETER_MIGRATION_ACCEPTED_MODULE: &str = concat!(
     "}\n\n",
     "main : Unit -> Int\n",
     "main () = project((0, 42))\n",
+);
+const RELATIONAL_INTERFACE_MODULE: &str = concat!(
+    "interface Measure<Key, Result> where Key -> Result {\n",
+    "    measure : Key -> Int\n",
+    "}\n\n",
+    "impl Measure<Bool, Unit> {\n",
+    "    measure value = 42\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = measure(true)\n",
 );
 const BINDER_POLICY_MODULE: &str = concat!(
     "type Phantom<Unused, A> = Phantom(A)\n",
@@ -318,7 +344,7 @@ const EXPLICIT_KIND_RULE_FRAGMENTS: &[(&str, &str)] = &[
     ("spec/syntax.md", "kind ::= kind_atom [ \"->\" kind ] ;"),
     (
         "spec/syntax.md",
-        "interface_parameter ::= \"<\" type_parameter \">\" ;",
+        "interface_parameters ::= \"<\" type_parameter { \",\" type_parameter } \">\" ;",
     ),
     (
         "spec/syntax.md",
@@ -348,7 +374,7 @@ const METHOD_PARAMETER_RULE_FRAGMENTS: &[(&str, &str)] = &[
     ),
     (
         "spec/name-resolution.md",
-        "A present method parameter list is an ordered bijection with the method type's free variables other than the interface parameter.",
+        "A present method parameter list is an ordered bijection with the method type's\nfree variables other than the interface parameters.",
     ),
     (
         "spec/static-semantics.md",
@@ -356,7 +382,7 @@ const METHOD_PARAMETER_RULE_FRAGMENTS: &[(&str, &str)] = &[
     ),
     (
         "spec/static-semantics.md",
-        "instantiate(method_scheme) = instantiated_method_type, method_arguments",
+        "freshen(method_parameters) = method_arguments",
     ),
     (
         "spec/static-semantics.md",
@@ -381,6 +407,49 @@ const METHOD_PARAMETER_RULE_FRAGMENTS: &[(&str, &str)] = &[
     (
         "spec/README.md",
         "Ordinary source value positions remain rank-1.",
+    ),
+];
+
+const RELATIONAL_INTERFACE_RULE_FRAGMENTS: &[(&str, &str)] = &[
+    (
+        "spec/lexical-structure.md",
+        "Angle brackets delimit nonempty\nordered parameter and argument lists on interfaces",
+    ),
+    (
+        "spec/syntax.md",
+        "interface_determination ::=\n  \"where\" determination_side \"->\" determination_side ;",
+    ),
+    (
+        "spec/name-resolution.md",
+        "The\noptional determination edge resolves only parameter names from that same interface declaration.",
+    ),
+    (
+        "spec/static-semantics.md",
+        "A determination edge is total: its nonempty, disjoint sides preserve declaration order and together name every interface parameter exactly once.",
+    ),
+    (
+        "spec/static-semantics.md",
+        "Snapshot eligibility\ngates only pending determined occurrence roots at their owning closure.",
+    ),
+    (
+        "spec/static-semantics.md",
+        "determined requirements for the same InterfaceId have no equal-key,\n    unequal-dependent pair",
+    ),
+    (
+        "spec/static-semantics.md",
+        "determined prerequisites for the same InterfaceId have no equal-key,\n    unequal-dependent pair",
+    ),
+    (
+        "spec/elaboration.md",
+        "Interface substitution is simultaneous and follows declaration order.",
+    ),
+    (
+        "spec/dynamic-semantics.md",
+        "Determination metadata erases before Core synthesis.",
+    ),
+    (
+        "spec/README.md",
+        "An interface declares one or more ordered, fixed-kinded type parameters",
     ),
 ];
 
@@ -827,6 +896,20 @@ fn static_semantics_generic_prerequisite_evidence_example_is_executable() {
     assert_documented(
         "spec/static-semantics.md",
         GENERIC_PREREQUISITE_EVIDENCE_MODULE,
+    );
+}
+
+#[test]
+fn static_semantics_determined_generic_prerequisite_uses_recursive_complete_selection() {
+    assert_observation(
+        "determined-generic-prerequisite.ash",
+        DETERMINED_GENERIC_PREREQUISITE_MODULE,
+        "42",
+        "Int",
+    );
+    assert_documented(
+        "spec/static-semantics.md",
+        DETERMINED_GENERIC_PREREQUISITE_MODULE,
     );
 }
 
@@ -1693,6 +1776,19 @@ fn explicit_kind_normative_rule_manifest_is_complete() {
 #[test]
 fn method_parameter_normative_rule_manifest_is_complete() {
     for &(path, fragment) in METHOD_PARAMETER_RULE_FRAGMENTS {
+        assert_normative_fragment(path, fragment);
+    }
+}
+
+#[test]
+fn relational_interface_overview_example_is_executable() {
+    assert_observation("main.ash", RELATIONAL_INTERFACE_MODULE, "42", "Int");
+    assert_documented("spec/README.md", RELATIONAL_INTERFACE_MODULE);
+}
+
+#[test]
+fn relational_interface_normative_rule_manifest_is_complete() {
+    for &(path, fragment) in RELATIONAL_INTERFACE_RULE_FRAGMENTS {
         assert_normative_fragment(path, fragment);
     }
 }

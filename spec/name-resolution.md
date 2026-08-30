@@ -146,8 +146,9 @@ the interface or implementation body.
 
 A public constrained global, public implementation, or re-exported fact may
 refer to declarations defined by an earlier module. The summary retains the
-foreign interface's checked parameter and method shape and any nominal or
-constructor identities needed to authenticate and type those public facts.
+foreign interface's checked ordered parameter records, optional determinant
+positions, and method shape, plus any nominal or constructor identities needed
+to authenticate and type those public facts.
 This hidden closure creates no source binding, cannot be qualified or targeted
 through the summary, and does not export a hidden spelling or constructor.
 Privacy and opacity therefore remain properties of source access even when a
@@ -237,6 +238,8 @@ a lexical term binding. The hidden binder names the checked method body for
 later compiler phases, not for Ash source.
 
 An interface application is valid only in a constraint or implementation head.
+It retains the complete ordered argument vector. Arity and positional kinds are
+checked later; resolution does not discard a dependent argument.
 Using an interface as an ordinary value type is `resolve.type-kind`. Naming a
 nominal type, type parameter, or other non-interface declaration where an
 interface is required is `resolve.interface-kind`.
@@ -263,45 +266,49 @@ prerequisite rules retain the same encounter order, but their allocation does
 not make them valid binders.
 
 Nominal parameters use their written set and order and may be phantom. An
-interface has exactly one written parameter. A kind annotation fixes that
-binder's kind; an omitted annotation fixes it at `Type`.
+interface has a nonempty ordered written parameter vector. A kind annotation
+fixes its binder's kind; an omitted annotation fixes it at `Type`.
 
 For an interface declaration, binder encounter order starts with the interface
-parameter, then visits methods in declaration order and each method's explicit
-parameters in written order. The interface parameter and one method's local
-parameters scope over that method signature only. An implementation equation
-does not inherit the method-parameter spellings from the interface it
-implements.
+parameters in written order, then visits methods in declaration order and each
+method's explicit parameters in written order. The interface parameters and
+one method's local parameters scope over that method signature only. The
+optional determination edge resolves only parameter names from that same interface declaration.
+Its names do not introduce binders. An implementation equation does not inherit
+the interface or method-parameter spellings from the interface it implements.
 
 An explicit global parameter list is an ordered bijection with the free type
 variables of the global's value type and requirements. The written order is
 the outer scheme order and scopes over the complete header, patterns, and body.
 An explicit implementation parameter list is an ordered bijection with the
-free variables of its head argument. Its written order is the implementation
-head-parameter order and scopes over the head, prerequisites, and method
-bodies. Every prerequisite variable must belong to that head set; a variable
+free variables across its complete head argument vector. Its written order is
+the implementation head-parameter order and scopes over the head,
+prerequisites, and method bodies. Every prerequisite variable must belong to
+that complete head set; a variable
 that is unlisted and occurs only in a prerequisite remains
 `impl.prerequisite-variable`. Listing such a variable does not add it to the
 head's free-variable set and instead makes that explicit binder unused.
 
 An absent method parameter list binds no method-local parameter.
-A present method parameter list is an ordered bijection with the method type's free variables other than the interface parameter. Its binders must be distinct
-from that parameter and one another, every listed binder must occur in the
-method type, and written order becomes method-scheme order.
+A present method parameter list is an ordered bijection with the method type's
+free variables other than the interface parameters. Its binders must be
+distinct from every interface parameter and one another, every listed binder
+must occur in the method type, and written order becomes method-scheme order.
 
-A duplicate explicit binder, including a method binder that repeats the
+A duplicate explicit binder, including a method binder that repeats an
 interface parameter, is `resolve.duplicate-type-parameter`; a listed binder
 absent from the global's value type and requirements, the implementation head,
 or its method type is `resolve.unused-type-parameter`; and an unlisted free
 header or method name under an explicit list is `resolve.unknown-type`. With an
 absent method list, another free type variable remains
-`interface.method-parameter`. The global determination rule still rejects a
-variable that occurs only in a requirement.
+`interface.method-parameter`. Requirement determination is a later static rule;
+resolution retains requirement-only variables admitted by a total interface
+edge.
 
 When a global omits its parameter list, first occurrences in its value type
 come first, followed by first occurrences found only in its requirements. When
-an implementation omits its list, first occurrences in its head argument
-become its parameters. A method list is never implicit. Every omitted
+an implementation omits its list, first occurrences across its complete head
+argument vector become its parameters. A method list is never implicit. Every omitted
 declaration kind annotation, and every binder introduced by an omitted global
 or implementation binder list, is fixed to `Type`. Ash does not infer a kind
 for those binders. This is the current phase-dependent language constraint, not
@@ -387,9 +394,9 @@ defining module. Individual constructors cannot have separate visibility.
 
 An `interface` declaration without `pub` is private. Its interface spelling and
 method spellings remain local to the defining module. `pub interface` exports
-the interface identity, parameter, ordered methods, ordered method-parameter
-records, checked method signatures, and their spellings as one declaration
-unit. A method cannot have visibility
+the interface identity, ordered parameter records, optional determinant
+positions, ordered methods, ordered method-parameter records, checked method
+signatures, and their spellings as one declaration unit. A method cannot have visibility
 separate from its interface. Public implementation facts are anonymous: `impl`
 keeps the fact local, while `pub impl` places the checked fact in its module's
 public implementation closure without creating an exported source name. A
