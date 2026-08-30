@@ -81,8 +81,8 @@ bounded increment is implemented and specified. Its complete relational
 applications, total forward determination, one-pass improvement, linked
 authentication, exact resources, and downstream exclusions are retained by the
 [relational-interface evidence](lib-ash/relational-interfaces-evidence.md).
-That product checkpoint defines the revised `lib-ash` goal; integration and
-transition-artifact cleanup remain lifecycle work. Associated outputs, general
+That product checkpoint defines the revised `lib-ash` goal; integration remains
+lifecycle work. Associated outputs, general
 determination graphs, and defaults are separate future features rather than
 requirements for this milestone.
 
@@ -129,7 +129,7 @@ narrow, reorder, or remove it.
    corpus, summary and identity audit, downstream-pressure review, exact
    resource verification, normative reconciliation, migration guards, and one
    retained linked Core program. The fourth increment supplies these product
-   facts; integration and transition cleanup complete the lifecycle.
+   facts; integration completes the lifecycle.
 
 The first increment establishes the visibility and coherence closure used by
 later multi-parameter and determination work. The second establishes fixed
@@ -353,9 +353,9 @@ specified retained semantics, positive and negative corpus evidence, separate
 dependent-module checking, linked evidence authentication, Core validation and
 transforms, one linked relational program, and no package resolver, persistent
 object format, universal evidence family, runtime registry, or dynamic
-interface lookup. The product checkpoint is complete on its branch. Integration,
-final transition-artifact removal, and any milestone tag are lifecycle actions,
-not additional language semantics.
+interface lookup. The product checkpoint and transition cleanup are complete on
+its branch. Integration and any milestone tag are lifecycle actions, not
+additional language semantics.
 
 ## `pack-ash` exact graph and identity
 

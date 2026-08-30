@@ -8,8 +8,8 @@ language. Git history retains the accepted proposal, implementation task, and
 execution plan after those transition-only artifacts leave the current tree.
 
 The revised `lib-ash` product goal consists of this increment and the three
-earlier retained increments. Integration, transition-artifact cleanup, and any
-milestone tag are lifecycle actions. Associated-output syntax, general
+earlier retained increments. Integration and any milestone tag are lifecycle
+actions. Associated-output syntax, general
 determination graphs, defaults, effects, proofs, existentials, packages, and
 persistent artifacts remain separate work.
 
@@ -257,11 +257,9 @@ still require separate scope, generativity, Core, and authority rules.
 
 ## Lifecycle state
 
-This report is the durable replacement for the transition proposal, task, and
-plan. During the retained Checkpoint 7 review those artifacts and their indexes
-remain present so reviewers can compare accepted intent, execution evidence,
-and normative truth. After the checkpoint is committed and independently
-approved, a separate cleanup first records the result in those artifacts, then
-removes the proposal, task, plan, and their index entries. Integration, repeated
-root verification, and any tag follow their owning lifecycle; none changes the
+This report is the durable replacement for the transition proposal, completed
+task, and execution plan. Commit `cf2c4b0` records their final 65/65 result and
+both independent approvals before the following cleanup removes those
+transition-only artifacts and their index entries. Integration, repeated root
+verification, and any tag follow their owning lifecycle; none changes the
 language boundary recorded here.
