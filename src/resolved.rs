@@ -1665,6 +1665,94 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
+    pub(crate) fn coherently_remove_first_interface_determination_for_test(
+        &mut self,
+        module: ModuleId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some(index) = group
+            .interfaces
+            .iter()
+            .position(|interface| interface.determination.is_some())
+        else {
+            return false;
+        };
+        if index >= group.checked_interfaces.len() || index >= group.interface_facts.len() {
+            return false;
+        }
+        group.interfaces[index].determination = None;
+        group.checked_interfaces[index].replace_determination_for_test(None);
+        group.interface_facts[index].determination = None;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn coherently_make_first_determined_global_key_only_unused_for_test(
+        &mut self,
+        module: ModuleId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some((scheme_index, scheme)) = group
+            .schemes
+            .iter_mut()
+            .enumerate()
+            .find(|(_, scheme)| !scheme.scheme.requirements.is_empty())
+        else {
+            return false;
+        };
+        let Some(requirement) = scheme.scheme.requirements.first() else {
+            return false;
+        };
+        let Some(interface) = group
+            .interface_facts
+            .iter()
+            .find(|interface| interface.id == requirement.interface())
+        else {
+            return false;
+        };
+        let Some(determination) = interface.determination() else {
+            return false;
+        };
+        let Some((dependent_position, _)) = requirement
+            .arguments()
+            .iter()
+            .enumerate()
+            .find(|(position, _)| !determination.positions().contains(position))
+        else {
+            return false;
+        };
+        let Some(Type::Variable(dependent)) = requirement.arguments().get(dependent_position)
+        else {
+            return false;
+        };
+        let dependent = *dependent;
+        let replacement =
+            || Type::Function(Box::new(Type::Variable(dependent)), Box::new(Type::Int));
+        discard_type_iteratively(std::mem::replace(
+            &mut scheme.scheme.value_type,
+            replacement(),
+        ));
+        let Some(definition) = group.definitions.get_mut(scheme_index) else {
+            return false;
+        };
+        let Some(source) = definition.source.as_mut() else {
+            return false;
+        };
+        let ResolvedDefinitionKind::Equational(global) = &mut source.kind else {
+            return false;
+        };
+        discard_type_iteratively(std::mem::replace(
+            &mut global.interface.annotation.ty,
+            replacement(),
+        ));
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn corrupt_linked_carrier_for_test(
         &mut self,
         module: ModuleId,
@@ -6345,6 +6433,7 @@ fn summary_key_has_local_outer_nominal(
 
 fn authenticate_exact_global_scheme_binders(
     scheme: &ConstrainedScheme,
+    interface_facts: &HashMap<InterfaceId, &CheckedInterfaceFact>,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<(), ResolvedBuildFailure> {
     let parameters = summary_parameter_id_set(
@@ -6357,24 +6446,74 @@ fn authenticate_exact_global_scheme_binders(
         &mut value_variables,
         constraint_work,
     )?;
-    if value_variables != parameters {
+    let mut required_variables = HashSet::new();
+    let mut dependent_variables = HashSet::new();
+    for requirement in &scheme.requirements {
+        let interface = interface_facts
+            .get(&requirement.interface())
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+        let determined = summary_determined_application_slices(
+            interface,
+            requirement.arguments(),
+            constraint_work,
+        )?;
+        if let Some(determined) = determined {
+            for argument in determined.key {
+                collect_summary_constraint_variables(
+                    argument,
+                    &mut required_variables,
+                    constraint_work,
+                )?;
+            }
+            for argument in determined.dependents {
+                collect_summary_constraint_variables(
+                    argument,
+                    &mut dependent_variables,
+                    constraint_work,
+                )?;
+            }
+        } else {
+            for argument in requirement.arguments() {
+                collect_summary_constraint_variables(
+                    argument,
+                    &mut required_variables,
+                    constraint_work,
+                )?;
+            }
+        }
+    }
+    constraint_work
+        .charge(required_variables.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    if required_variables
+        .iter()
+        .any(|identity| !value_variables.contains(identity))
+    {
         return Err(ResolvedBuildFailure::InvalidState);
     }
-    for requirement in &scheme.requirements {
-        let mut requirement_variables = HashSet::new();
-        for argument in requirement.arguments() {
-            collect_summary_constraint_variables(
-                argument,
-                &mut requirement_variables,
-                constraint_work,
-            )?;
-        }
-        constraint_work
-            .charge(requirement_variables.len())
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        if requirement_variables
-            .iter()
-            .any(|identity| !value_variables.contains(identity))
+    constraint_work
+        .charge(dependent_variables.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let expected_count = value_variables
+        .len()
+        .checked_add(
+            dependent_variables
+                .iter()
+                .filter(|identity| {
+                    !required_variables.contains(identity) && !value_variables.contains(identity)
+                })
+                .count(),
+        )
+        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+    if parameters.len() != expected_count {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    constraint_work
+        .charge(parameters.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    for identity in &parameters {
+        if !value_variables.contains(identity)
+            && (!dependent_variables.contains(identity) || required_variables.contains(identity))
         {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -6382,7 +6521,7 @@ fn authenticate_exact_global_scheme_binders(
     Ok(())
 }
 
-fn authenticate_exact_implementation_binders(
+fn authenticate_exact_implementation_head_binders(
     fact: &CheckedImplementationFact,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<(), ResolvedBuildFailure> {
@@ -6397,6 +6536,14 @@ fn authenticate_exact_implementation_binders(
     if head_variables != parameters {
         return Err(ResolvedBuildFailure::InvalidState);
     }
+    Ok(())
+}
+
+fn authenticate_implementation_prerequisite_binders(
+    fact: &CheckedImplementationFact,
+    canonical_variables: &HashMap<TypeVariableId, (&Kind, Span, SummaryBinderOwner)>,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
     for prerequisite in &fact.prerequisites {
         let mut prerequisite_variables = HashSet::new();
         for argument in prerequisite.arguments() {
@@ -6409,11 +6556,13 @@ fn authenticate_exact_implementation_binders(
         constraint_work
             .charge(prerequisite_variables.len())
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        if prerequisite_variables
-            .iter()
-            .any(|identity| !head_variables.contains(identity))
-        {
-            return Err(ResolvedBuildFailure::InvalidState);
+        for identity in &prerequisite_variables {
+            if !matches!(
+                canonical_variables.get(identity),
+                Some((_, _, SummaryBinderOwner::Implementation(owner))) if *owner == fact.id
+            ) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
     }
     Ok(())
@@ -7394,6 +7543,7 @@ impl<'fact> SummaryRequirementIndex<'fact> {
     fn observe(
         &mut self,
         requirement: &'fact CheckedRequirement,
+        determination: Option<&DeterminationKey>,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(), ResolvedBuildFailure> {
         if let Some(previous) = self.by_interface.get_mut(&requirement.interface()) {
@@ -7403,6 +7553,16 @@ impl<'fact> SummaryRequirementIndex<'fact> {
                     requirement.application(),
                     constraint_work,
                 )? {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                if let Some(determination) = determination
+                    && same_summary_requirement_key(
+                        previous,
+                        requirement,
+                        determination,
+                        constraint_work,
+                    )?
+                {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
             }
@@ -7432,6 +7592,39 @@ impl<'fact> SummaryRequirementIndex<'fact> {
     }
 }
 
+fn same_summary_requirement_key(
+    left: &CheckedRequirement,
+    right: &CheckedRequirement,
+    determination: &DeterminationKey,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    if left.interface() != right.interface() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    let mut previous = None;
+    for &position in determination.positions() {
+        constraint_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        if position >= left.arguments().len()
+            || previous.is_some_and(|previous| previous >= position)
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        previous = Some(position);
+        if !same_type_with_constraint_budget(
+            &left.arguments()[position],
+            &right.arguments()[position],
+            constraint_work,
+        )
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 fn authenticate_unique_summary_requirements(
     requirements: &[CheckedRequirement],
@@ -7439,7 +7632,7 @@ fn authenticate_unique_summary_requirements(
 ) -> Result<(), ResolvedBuildFailure> {
     let mut index = SummaryRequirementIndex::default();
     for requirement in requirements {
-        index.observe(requirement, constraint_work)?;
+        index.observe(requirement, None, constraint_work)?;
     }
     Ok(())
 }
@@ -8216,51 +8409,7 @@ impl ExportSummary {
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            let head_interface = interface_facts
-                .get(&fact.interface())
-                .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let determined = summary_determined_application_slices(
-                head_interface,
-                fact.arguments(),
-                constraint_work,
-            )?;
-            let selection_key_is_all_bare = if let Some(determined) = &determined {
-                summary_types_are_all_bare_variables(&determined.key, constraint_work)?
-            } else {
-                fact.arguments()
-                    .iter()
-                    .all(|argument| matches!(argument, Type::Variable(_)))
-            };
-            if selection_key_is_all_bare || fact.methods.is_empty() {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            if let Some(determined) = &determined
-                && !summary_dependents_are_covered_by_key(
-                    &determined.key,
-                    &determined.dependents,
-                    constraint_work,
-                )?
-            {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            if fact.interface().module() != fact.id.module() {
-                let has_local_outer_nominal = if let Some(determined) = &determined {
-                    summary_key_has_local_outer_nominal(
-                        &determined.key,
-                        fact.id.module(),
-                        constraint_work,
-                    )?
-                } else {
-                    fact.arguments().iter().any(|argument| {
-                        argument
-                            .outer_nominal()
-                            .is_some_and(|nominal| nominal.module() == fact.id.module())
-                    })
-                };
-                if !has_local_outer_nominal {
-                    return Err(ResolvedBuildFailure::InvalidState);
-                }
-            }
+            authenticate_exact_implementation_head_binders(fact, constraint_work)?;
             for method in &fact.methods {
                 if !term_binders.insert(method.binder) {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -8282,7 +8431,11 @@ impl ExportSummary {
             {
                 continue;
             }
-            authenticate_exact_global_scheme_binders(&global.scheme, constraint_work)?;
+            authenticate_exact_global_scheme_binders(
+                &global.scheme,
+                &interface_facts,
+                constraint_work,
+            )?;
             let parameter_ids = global
                 .scheme
                 .type_parameters
@@ -8308,7 +8461,14 @@ impl ExportSummary {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                requirement_index.observe(requirement, constraint_work)?;
+                let interface = interface_facts
+                    .get(&requirement.interface())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                requirement_index.observe(
+                    requirement,
+                    interface.determination(),
+                    constraint_work,
+                )?;
                 for argument in requirement.arguments() {
                     authenticate_summary_type_variables(
                         argument,
@@ -8524,8 +8684,13 @@ impl ExportSummary {
         }
         for implementation in &self.implementations {
             let fact = &implementation.fact;
-            authenticate_exact_implementation_binders(fact, constraint_work)?;
             let parameter_ids = fact.head_parameters.iter().map(|parameter| parameter.id);
+            let head_interface = interface_facts
+                .get(&fact.interface())
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if fact.arguments().len() != head_interface.parameters.len() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             for argument in fact.arguments() {
                 authenticate_summary_type_variables(argument, parameter_ids.clone(), type_work)?;
             }
@@ -8537,21 +8702,98 @@ impl ExportSummary {
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
-            let head_interface = interface_facts
-                .get(&fact.interface())
-                .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let head_key = if fact.prerequisites.is_empty() {
-                Vec::new()
-            } else {
-                summary_selection_key_types(head_interface, fact.arguments(), constraint_work)?
-            };
-            let mut prerequisite_index = SummaryRequirementIndex::default();
             for (index, prerequisite) in fact.prerequisites.iter().enumerate() {
                 if prerequisite.id.owner() != crate::interface::RequirementOwner::Impl(fact.id)
                     || usize::try_from(prerequisite.id.declaration()) != Ok(index)
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
+                let prerequisite_interface = interface_facts
+                    .get(&prerequisite.interface())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if prerequisite.arguments().len() != prerequisite_interface.parameters.len() {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                for argument in prerequisite.arguments() {
+                    authenticate_summary_type_variables(
+                        argument,
+                        parameter_ids.clone(),
+                        type_work,
+                    )?;
+                }
+                environments
+                    .expect_body_free_interface_argument_with_ledger(
+                        prerequisite.interface(),
+                        prerequisite.arguments(),
+                        prerequisite.span,
+                        type_work,
+                    )
+                    .map_err(map_summary_kind_failure)?;
+            }
+            let mut prerequisite_index = SummaryRequirementIndex::default();
+            for prerequisite in &fact.prerequisites {
+                let prerequisite_interface = interface_facts
+                    .get(&prerequisite.interface())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                prerequisite_index.observe(
+                    prerequisite,
+                    prerequisite_interface.determination(),
+                    constraint_work,
+                )?;
+            }
+            let determined = summary_determined_application_slices(
+                head_interface,
+                fact.arguments(),
+                constraint_work,
+            )?;
+            let selection_key_is_all_bare = if let Some(determined) = &determined {
+                summary_types_are_all_bare_variables(&determined.key, constraint_work)?
+            } else {
+                fact.arguments()
+                    .iter()
+                    .all(|argument| matches!(argument, Type::Variable(_)))
+            };
+            if selection_key_is_all_bare || fact.methods.is_empty() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            authenticate_implementation_prerequisite_binders(
+                fact,
+                &canonical_variables,
+                constraint_work,
+            )?;
+            if let Some(determined) = &determined
+                && !summary_dependents_are_covered_by_key(
+                    &determined.key,
+                    &determined.dependents,
+                    constraint_work,
+                )?
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if fact.interface().module() != fact.id.module() {
+                let has_local_outer_nominal = if let Some(determined) = &determined {
+                    summary_key_has_local_outer_nominal(
+                        &determined.key,
+                        fact.id.module(),
+                        constraint_work,
+                    )?
+                } else {
+                    fact.arguments().iter().any(|argument| {
+                        argument
+                            .outer_nominal()
+                            .is_some_and(|nominal| nominal.module() == fact.id.module())
+                    })
+                };
+                if !has_local_outer_nominal {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+            let head_key = if fact.prerequisites.is_empty() {
+                Vec::new()
+            } else {
+                summary_selection_key_types(head_interface, fact.arguments(), constraint_work)?
+            };
+            for prerequisite in &fact.prerequisites {
                 let prerequisite_arguments = type_references_with_constraint_budget(
                     prerequisite.arguments(),
                     constraint_work,
@@ -8574,22 +8816,6 @@ impl ExportSummary {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                prerequisite_index.observe(prerequisite, constraint_work)?;
-                for argument in prerequisite.arguments() {
-                    authenticate_summary_type_variables(
-                        argument,
-                        parameter_ids.clone(),
-                        type_work,
-                    )?;
-                }
-                environments
-                    .expect_body_free_interface_argument_with_ledger(
-                        prerequisite.interface(),
-                        prerequisite.arguments(),
-                        prerequisite.span,
-                        type_work,
-                    )
-                    .map_err(map_summary_kind_failure)?;
             }
             let interface = interface_facts
                 .get(&fact.interface())
@@ -19437,6 +19663,137 @@ mod tests {
     }
 
     #[test]
+    fn implementation_prerequisite_binder_containment_is_linear_exact_and_retryable() {
+        const WIDTH: usize = 32_768;
+        // Each distinct bare prerequisite variable owns one pending-root
+        // retention, one Type visit, one variable-set storage cell, and one
+        // canonical owner-index lookup: WIDTH * (1 + 1 + 1 + 1).
+        const EXACT_WORK: usize = 4 * WIDTH;
+
+        std::thread::Builder::new()
+            .name("wide-implementation-prerequisite-binders".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("wide-prerequisite-binders.ash", "prerequisite")
+                    .expect("the prerequisite-binder source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 12).expect("the prerequisite range should order"))
+                    .expect("the prerequisite-binder span should fit");
+                let module = ModuleId::new(9_819);
+                let implementation = ImplId::new(module, 0);
+                let interface = InterfaceId::new(module, 0);
+                let parameters = (0..WIDTH)
+                    .map(|position| ResolvedTypeVariable {
+                        id: TypeVariableId::resolved(
+                            module,
+                            u32::try_from(position).expect("the parameter ordinal should fit"),
+                        ),
+                        spelling: format!("T{position}"),
+                        kind: Kind::Type,
+                        origin: Origin::Source(span),
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let prerequisite_arguments = parameters
+                    .iter()
+                    .map(|parameter| Type::Variable(parameter.id))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let fact = CheckedImplementationFact {
+                    id: implementation,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Int])),
+                    head_parameters: parameters,
+                    prerequisites: Box::new([CheckedRequirement {
+                        id: RequirementId::new(
+                            crate::interface::RequirementOwner::Impl(implementation),
+                            0,
+                        ),
+                        application: InterfaceApplication::new(interface, prerequisite_arguments),
+                        origin: Origin::Source(span),
+                        span,
+                    }]),
+                    methods: Box::new([]),
+                    origin: Origin::Source(span),
+                    span,
+                };
+                let canonical_variables = fact
+                    .head_parameters
+                    .iter()
+                    .map(|parameter| {
+                        (
+                            parameter.id,
+                            (
+                                &parameter.kind,
+                                parameter.origin.primary_span(),
+                                SummaryBinderOwner::Implementation(implementation),
+                            ),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+
+                let mut one_short =
+                    crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+                assert_eq!(
+                    authenticate_implementation_prerequisite_binders(
+                        &fact,
+                        &canonical_variables,
+                        &mut one_short,
+                    ),
+                    Err(ResolvedBuildFailure::ConstraintResource),
+                );
+                assert_eq!(
+                    one_short.used(),
+                    3 * WIDTH,
+                    "the final WIDTH-cell owner-lookup batch must fail atomically",
+                );
+
+                for _ in 0..2 {
+                    let mut exact =
+                        crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+                    authenticate_implementation_prerequisite_binders(
+                        &fact,
+                        &canonical_variables,
+                        &mut exact,
+                    )
+                    .expect("the exact prerequisite-binder budget should remain reusable");
+                    assert_eq!(exact.used(), EXACT_WORK);
+                    assert_eq!(exact.charge(1), Err(()));
+                }
+
+                let foreign_implementation = ImplId::new(module, 1);
+                let foreign_variables = fact
+                    .head_parameters
+                    .iter()
+                    .map(|parameter| {
+                        (
+                            parameter.id,
+                            (
+                                &parameter.kind,
+                                parameter.origin.primary_span(),
+                                SummaryBinderOwner::Implementation(foreign_implementation),
+                            ),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                let mut invalid =
+                    crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+                assert_eq!(
+                    authenticate_implementation_prerequisite_binders(
+                        &fact,
+                        &foreign_variables,
+                        &mut invalid,
+                    ),
+                    Err(ResolvedBuildFailure::InvalidState),
+                    "a canonical variable owned by another implementation is not contained",
+                );
+                assert_eq!(invalid.used(), EXACT_WORK);
+            })
+            .expect("the wide prerequisite-binder worker should start")
+            .join()
+            .expect("wide prerequisite-binder containment must fit a 256 KiB stack");
+    }
+
+    #[test]
     fn summary_duplicate_indexes_are_linear_exact_and_stack_safe() {
         const WIDTH: usize = 32_768;
         std::thread::Builder::new()
@@ -19643,6 +20000,595 @@ mod tests {
         assert_eq!(exact.charge(1), Err(()));
         assert_eq!(facts[0].arguments(), &[Type::Int, Type::Int]);
         assert_eq!(facts[1].arguments(), &[Type::Int, Type::Bool]);
+    }
+
+    #[test]
+    fn detached_global_scheme_authenticates_only_dependent_only_binders() {
+        // Parameter-set retention (2), value-variable discovery (3),
+        // determinant slicing (5), key/dependent variable discovery (6),
+        // required-variable membership (1), dependent-variable admission (1),
+        // and exact parameter coverage (2).
+        const EXACT_WORK: usize = 20;
+        let source = SourceFile::new("determined-global-summary.ash", "global")
+            .expect("the detached-global source should fit");
+        let span = source
+            .span(ByteRange::new(0, 6).expect("the global range should be ordered"))
+            .expect("the detached-global span should fit");
+        let module = ModuleId::new(9_812);
+        let interface_id = InterfaceId::new(module, 0);
+        let key = TypeVariableId::resolved(module, 0);
+        let dependent = TypeVariableId::resolved(module, 1);
+        let bridge = TypeVariableId::resolved(module, 2);
+        let parameter = |id, spelling: &str| ResolvedTypeVariable {
+            id,
+            spelling: spelling.to_owned(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let determined = CheckedInterfaceFact::new(
+            interface_id,
+            "Relation".to_owned(),
+            Box::new([parameter(key, "Key"), parameter(dependent, "Value")]),
+            Some(DeterminationKey::new(Box::new([0]))),
+            Box::new([]),
+            Origin::Source(span),
+            span,
+        );
+        let ordinary_id = InterfaceId::new(module, 1);
+        let ordinary = CheckedInterfaceFact::new(
+            ordinary_id,
+            "Ordinary".to_owned(),
+            Box::new([parameter(key, "Key"), parameter(dependent, "Value")]),
+            None,
+            Box::new([]),
+            Origin::Source(span),
+            span,
+        );
+        let facts = HashMap::from([(interface_id, &determined), (ordinary_id, &ordinary)]);
+        let binder = BinderId::resolved(module, 0);
+        let scheme = |interface, value_type| ConstrainedScheme {
+            type_parameters: Box::new([(key, Kind::Type), (dependent, Kind::Type)]),
+            requirements: Box::new([CheckedRequirement {
+                id: RequirementId::new(crate::interface::RequirementOwner::Global(binder), 0),
+                application: InterfaceApplication::new(
+                    interface,
+                    Box::new([Type::Variable(key), Type::Variable(dependent)]),
+                ),
+                origin: Origin::Source(span),
+                span,
+            }]),
+            value_type,
+        };
+
+        let valid = scheme(interface_id, Type::Variable(key));
+        let mut one_short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            authenticate_exact_global_scheme_binders(&valid, &facts, &mut one_short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(one_short.used(), EXACT_WORK - 2);
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            authenticate_exact_global_scheme_binders(&valid, &facts, &mut exact)
+                .expect("the exact dependent-only summary binder budget should fit");
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
+
+        assert_eq!(
+            authenticate_exact_global_scheme_binders(
+                &scheme(ordinary_id, Type::Variable(key)),
+                &facts,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "a no-edge requirement must not admit a dependent-only binder",
+        );
+        assert_eq!(
+            authenticate_exact_global_scheme_binders(
+                &scheme(interface_id, Type::Variable(dependent)),
+                &facts,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "a determined key-only binder must still occur in the global value type",
+        );
+        let chained = ConstrainedScheme {
+            type_parameters: Box::new([
+                (key, Kind::Type),
+                (dependent, Kind::Type),
+                (bridge, Kind::Type),
+            ]),
+            requirements: Box::new([
+                CheckedRequirement {
+                    id: RequirementId::new(crate::interface::RequirementOwner::Global(binder), 0),
+                    application: InterfaceApplication::new(
+                        interface_id,
+                        Box::new([Type::Variable(key), Type::Variable(bridge)]),
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                CheckedRequirement {
+                    id: RequirementId::new(crate::interface::RequirementOwner::Global(binder), 1),
+                    application: InterfaceApplication::new(
+                        interface_id,
+                        Box::new([Type::Variable(bridge), Type::Variable(dependent)]),
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+            ]),
+            value_type: Type::Variable(key),
+        };
+        assert_eq!(
+            authenticate_exact_global_scheme_binders(
+                &chained,
+                &facts,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "one requirement's dependent must not close another requirement's missing key",
+        );
+    }
+
+    #[test]
+    fn detached_global_requirement_index_rejects_same_determined_key_exactly() {
+        // First-interface storage (2), full two-argument comparison (4), one
+        // determinant position (1), and the selected-key comparison (2).
+        const EXACT_WORK: usize = 9;
+        let source = SourceFile::new("determined-global-pair-summary.ash", "pair")
+            .expect("the detached pair source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the pair range should be ordered"))
+            .expect("the detached pair span should fit");
+        let module = ModuleId::new(9_813);
+        let interface = InterfaceId::new(module, 0);
+        let owner = crate::interface::RequirementOwner::Global(BinderId::resolved(module, 0));
+        let requirement = |declaration, dependent| CheckedRequirement {
+            id: RequirementId::new(owner, declaration),
+            application: InterfaceApplication::new(interface, Box::new([Type::Int, dependent])),
+            origin: Origin::Source(span),
+            span,
+        };
+        let requirements = [requirement(0, Type::Bool), requirement(1, Type::Unit)];
+        let determination = DeterminationKey::new(Box::new([0]));
+        let exercise = |budget: &mut crate::interface::InterfaceConstraintBudget| {
+            let mut index = SummaryRequirementIndex::default();
+            index.observe(&requirements[0], Some(&determination), budget)?;
+            index.observe(&requirements[1], Some(&determination), budget)
+        };
+
+        let mut one_short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            exercise(&mut one_short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(one_short.used(), EXACT_WORK - 1);
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            assert_eq!(
+                exercise(&mut exact),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
+
+        let duplicate = [requirement(0, Type::Bool), requirement(1, Type::Bool)];
+        let mut duplicate_index = SummaryRequirementIndex::default();
+        duplicate_index
+            .observe(
+                &duplicate[0],
+                Some(&determination),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the first complete requirement should index");
+        assert_eq!(
+            duplicate_index.observe(
+                &duplicate[1],
+                Some(&determination),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "a complete duplicate remains invalid before same-key classification",
+        );
+    }
+
+    fn implementation_summary_with_prerequisite_dependents(dependents: [Type; 2]) -> ExportSummary {
+        let source = SourceFile::new("implementation-prerequisite-summary.ash", "relation")
+            .expect("the detached implementation-prerequisite source should fit");
+        let span = source
+            .span(ByteRange::new(0, 8).expect("the relation range should be ordered"))
+            .expect("the detached implementation-prerequisite span should fit");
+        let module = ModuleId::new(9_814);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let implementation = ImplId::new(module, 0);
+        let key_parameter = TypeVariableId::resolved(module, 0);
+        let dependent_parameter = TypeVariableId::resolved(module, 1);
+        let parameter = |id, spelling: &str| ResolvedTypeVariable {
+            id,
+            spelling: spelling.to_owned(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let requirement = |declaration, dependent| CheckedRequirement {
+            id: RequirementId::new(
+                crate::interface::RequirementOwner::Impl(implementation),
+                declaration,
+            ),
+            application: InterfaceApplication::new(interface, Box::new([Type::Int, dependent])),
+            origin: Origin::Source(span),
+            span,
+        };
+
+        let mut summary = ExportSummary::empty(module);
+        summary.interfaces.push(CheckedInterfaceFact::new(
+            interface,
+            "Relation".to_owned(),
+            Box::new([
+                parameter(key_parameter, "Key"),
+                parameter(dependent_parameter, "Value"),
+            ]),
+            Some(DeterminationKey::new(Box::new([0]))),
+            Box::new([CheckedInterfaceMethodFact {
+                id: method,
+                spelling: "relate".to_owned(),
+                type_parameters: Box::new([]),
+                method_binder_authority: None,
+                value_type: Type::Function(
+                    Box::new(Type::Variable(key_parameter)),
+                    Box::new(Type::Int),
+                ),
+                origin: Origin::Source(span),
+                annotation_span: span,
+                span,
+            }]),
+            Origin::Source(span),
+            span,
+        ));
+        summary.interface_positions.insert(interface, 0);
+        summary.interface_name_order.push("Relation".to_owned());
+        summary
+            .interface_names
+            .insert("Relation".to_owned(), interface);
+        summary.method_name_order.push("relate".to_owned());
+        summary.method_names.insert("relate".to_owned(), method);
+
+        let [first_dependent, second_dependent] = dependents;
+        summary
+            .implementations
+            .push(AuthorizedImplementationFact::local_for_test(
+                CheckedImplementationFact {
+                    id: implementation,
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([Type::Int, Type::Bool]),
+                    ),
+                    head_parameters: Box::new([]),
+                    prerequisites: Box::new([
+                        requirement(0, first_dependent.clone()),
+                        requirement(1, second_dependent.clone()),
+                    ]),
+                    methods: Box::new([CheckedImplementationMethodFact {
+                        id: ImplMethodId::new(implementation, method),
+                        method,
+                        binder: BinderId::resolved(module, 0),
+                        scheme: ConstrainedScheme {
+                            type_parameters: Box::new([]),
+                            requirements: Box::new([
+                                requirement(0, first_dependent),
+                                requirement(1, second_dependent),
+                            ]),
+                            value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                        },
+                        head_type_parameter_count: 0,
+                        origin: Origin::Source(span),
+                        span,
+                    }]),
+                    origin: Origin::Source(span),
+                    span,
+                },
+            ));
+        summary.implementation_positions.insert(implementation, 0);
+        summary
+    }
+
+    fn implementation_summary_with_wrong_kind_prerequisites(dependents: &[Type]) -> ExportSummary {
+        let source = SourceFile::new("wrong-kind-implementation-prerequisite-summary.ash", "kind")
+            .expect("the detached wrong-kind prerequisite source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the kind range should be ordered"))
+            .expect("the detached wrong-kind prerequisite span should fit");
+        let module = ModuleId::new(9_816);
+        let relation = InterfaceId::new(module, 0);
+        let marker = InterfaceId::new(module, 1);
+        let relation_method = MethodId::new(relation, 0);
+        let marker_method = MethodId::new(marker, 0);
+        let implementation = ImplId::new(module, 0);
+        let key_parameter = TypeVariableId::resolved(module, 0);
+        let dependent_parameter = TypeVariableId::resolved(module, 1);
+        let marker_parameter = TypeVariableId::resolved(module, 2);
+        let parameter = |id, spelling: &str, kind| ResolvedTypeVariable {
+            id,
+            spelling: spelling.to_owned(),
+            kind,
+            origin: Origin::Source(span),
+        };
+        let requirement = |declaration, dependent| CheckedRequirement {
+            id: RequirementId::new(
+                crate::interface::RequirementOwner::Impl(implementation),
+                declaration,
+            ),
+            application: InterfaceApplication::new(relation, Box::new([Type::Int, dependent])),
+            origin: Origin::Source(span),
+            span,
+        };
+        let prerequisites = dependents
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(declaration, dependent)| {
+                requirement(
+                    u32::try_from(declaration).expect("the tiny declaration index should fit"),
+                    dependent,
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let method_requirements = dependents
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(declaration, dependent)| {
+                requirement(
+                    u32::try_from(declaration).expect("the tiny declaration index should fit"),
+                    dependent,
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        let mut summary = ExportSummary::empty(module);
+        summary.interfaces.push(CheckedInterfaceFact::new(
+            relation,
+            "Relation".to_owned(),
+            Box::new([
+                parameter(key_parameter, "Key", Kind::Type),
+                parameter(
+                    dependent_parameter,
+                    "ValueConstructor",
+                    Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                ),
+            ]),
+            Some(DeterminationKey::new(Box::new([0]))),
+            Box::new([CheckedInterfaceMethodFact {
+                id: relation_method,
+                spelling: "relate".to_owned(),
+                type_parameters: Box::new([]),
+                method_binder_authority: None,
+                value_type: Type::Function(
+                    Box::new(Type::Variable(key_parameter)),
+                    Box::new(Type::Application(
+                        Box::new(Type::Variable(dependent_parameter)),
+                        Box::new(Type::Variable(key_parameter)),
+                    )),
+                ),
+                origin: Origin::Source(span),
+                annotation_span: span,
+                span,
+            }]),
+            Origin::Source(span),
+            span,
+        ));
+        summary.interfaces.push(CheckedInterfaceFact::new(
+            marker,
+            "Marker".to_owned(),
+            Box::new([parameter(marker_parameter, "Value", Kind::Type)]),
+            None,
+            Box::new([CheckedInterfaceMethodFact {
+                id: marker_method,
+                spelling: "mark".to_owned(),
+                type_parameters: Box::new([]),
+                method_binder_authority: None,
+                value_type: Type::Function(
+                    Box::new(Type::Variable(marker_parameter)),
+                    Box::new(Type::Variable(marker_parameter)),
+                ),
+                origin: Origin::Source(span),
+                annotation_span: span,
+                span,
+            }]),
+            Origin::Source(span),
+            span,
+        ));
+        summary.interface_positions.insert(relation, 0);
+        summary.interface_positions.insert(marker, 1);
+        summary.interface_name_order.push("Relation".to_owned());
+        summary.interface_name_order.push("Marker".to_owned());
+        summary
+            .interface_names
+            .insert("Relation".to_owned(), relation);
+        summary.interface_names.insert("Marker".to_owned(), marker);
+        summary.method_name_order.push("relate".to_owned());
+        summary.method_name_order.push("mark".to_owned());
+        summary
+            .method_names
+            .insert("relate".to_owned(), relation_method);
+        summary
+            .method_names
+            .insert("mark".to_owned(), marker_method);
+
+        summary
+            .implementations
+            .push(AuthorizedImplementationFact::local_for_test(
+                CheckedImplementationFact {
+                    id: implementation,
+                    application: InterfaceApplication::new(marker, Box::new([Type::Int])),
+                    head_parameters: Box::new([]),
+                    prerequisites,
+                    methods: Box::new([CheckedImplementationMethodFact {
+                        id: ImplMethodId::new(implementation, marker_method),
+                        method: marker_method,
+                        binder: BinderId::resolved(module, 0),
+                        scheme: ConstrainedScheme {
+                            type_parameters: Box::new([]),
+                            requirements: method_requirements,
+                            value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                        },
+                        head_type_parameter_count: 0,
+                        origin: Origin::Source(span),
+                        span,
+                    }]),
+                    origin: Origin::Source(span),
+                    span,
+                },
+            ));
+        summary.implementation_positions.insert(implementation, 0);
+        summary
+    }
+
+    #[test]
+    fn detached_implementation_kind_preflight_precedes_prerequisite_pair_classification() {
+        // Three parameter records and two interface records cost eight
+        // TypeWork cells. The two interface-method kind checks cost thirty,
+        // the concrete head preflight costs five, and the first malformed
+        // prerequisite costs ten: 8 + 30 + 5 + 10 = 53. Constraint work owns
+        // twelve name/interface-index cells, two implementation-index cells,
+        // one authorization cell, two exact-head cells, and four interface
+        // parameter/determination cells: 12 + 2 + 1 + 2 + 4 = 21. Pair-index
+        // storage or comparison is outside both semantic prefixes.
+        const TYPE_WORK: usize = 53;
+        const CONSTRAINT_WORK: usize = 21;
+        // The constraint one-short stops after the eight environment cells and
+        // the twenty-cell `Relation` method kind check.
+        const CONSTRAINT_SHORT_TYPE_PREFIX: usize = 28;
+        for (label, dependents) in [
+            ("complete duplicate", [Type::Bool, Type::Bool]),
+            ("determined-key conflict", [Type::Bool, Type::Unit]),
+        ] {
+            let summary = implementation_summary_with_wrong_kind_prerequisites(&dependents);
+            let mut one_short_type = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+            let mut exact_constraint =
+                crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+            assert_eq!(
+                summary.authenticate(&mut one_short_type, &mut exact_constraint,),
+                Err(ResolvedBuildFailure::TypeResource),
+                "{label}: positional-kind preflight owns the TypeWork one-short failure",
+            );
+            assert_eq!(one_short_type.used(), TYPE_WORK - 1, "{label}");
+            assert_eq!(exact_constraint.used(), CONSTRAINT_WORK, "{label}");
+
+            let mut exact_type = TypeWorkBudget::with_limit(TYPE_WORK);
+            let mut one_short_constraint =
+                crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+            assert_eq!(
+                summary.authenticate(&mut exact_type, &mut one_short_constraint),
+                Err(ResolvedBuildFailure::ConstraintResource),
+                "{label}: the preflight prefix retains its exact constraint boundary",
+            );
+            assert_eq!(exact_type.used(), CONSTRAINT_SHORT_TYPE_PREFIX, "{label}");
+            assert_eq!(one_short_constraint.used(), CONSTRAINT_WORK - 1, "{label}");
+
+            for _ in 0..2 {
+                let mut exact_type = TypeWorkBudget::with_limit(TYPE_WORK);
+                let mut exact_constraint =
+                    crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+                assert_eq!(
+                    summary.authenticate(&mut exact_type, &mut exact_constraint),
+                    Err(ResolvedBuildFailure::InvalidState),
+                    "{label}: positional-kind preflight owns the semantic failure",
+                );
+                assert_eq!(exact_type.used(), TYPE_WORK, "{label}");
+                assert_eq!(exact_constraint.used(), CONSTRAINT_WORK, "{label}");
+            }
+        }
+    }
+
+    #[test]
+    fn detached_implementation_summary_rejects_both_invalid_prerequisite_relations() {
+        for (label, dependents) in [
+            ("complete duplicate", [Type::Bool, Type::Bool]),
+            ("determined-key conflict", [Type::Bool, Type::Unit]),
+        ] {
+            let summary = implementation_summary_with_prerequisite_dependents(dependents);
+            for _ in 0..2 {
+                assert_eq!(
+                    summary.authenticate(
+                        &mut TypeWorkBudget::default(),
+                        &mut crate::interface::InterfaceConstraintBudget::default(),
+                    ),
+                    Err(ResolvedBuildFailure::InvalidState),
+                    "{label}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn detached_implementation_prerequisite_index_has_exact_ordered_resource_boundaries() {
+        let source = SourceFile::new("implementation-prerequisite-index.ash", "relation")
+            .expect("the detached prerequisite-index source should fit");
+        let span = source
+            .span(ByteRange::new(0, 8).expect("the relation range should be ordered"))
+            .expect("the detached prerequisite-index span should fit");
+        let module = ModuleId::new(9_815);
+        let interface = InterfaceId::new(module, 0);
+        let implementation = ImplId::new(module, 0);
+        let owner = crate::interface::RequirementOwner::Impl(implementation);
+        let requirement = |declaration, dependent| CheckedRequirement {
+            id: RequirementId::new(owner, declaration),
+            application: InterfaceApplication::new(interface, Box::new([Type::Int, dependent])),
+            origin: Origin::Source(span),
+            span,
+        };
+        let determination = DeterminationKey::new(Box::new([0]));
+        let exercise =
+            |requirements: &[CheckedRequirement; 2],
+             budget: &mut crate::interface::InterfaceConstraintBudget| {
+                let mut index = SummaryRequirementIndex::default();
+                index.observe(&requirements[0], Some(&determination), budget)?;
+                index.observe(&requirements[1], Some(&determination), budget)
+            };
+
+        // First storage costs two and the complete comparison costs four. A
+        // duplicate stops there, before the three-cell determinant comparison.
+        const DUPLICATE_WORK: usize = 2 + 4;
+        let duplicate = [requirement(0, Type::Bool), requirement(1, Type::Bool)];
+        let mut duplicate_short =
+            crate::interface::InterfaceConstraintBudget::with_limit(DUPLICATE_WORK - 1);
+        assert_eq!(
+            exercise(&duplicate, &mut duplicate_short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(duplicate_short.used(), DUPLICATE_WORK - 1);
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(DUPLICATE_WORK);
+            assert_eq!(
+                exercise(&duplicate, &mut exact),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert_eq!(exact.used(), DUPLICATE_WORK);
+        }
+
+        // A distinct dependent tuple reaches the one-position, two-cell key
+        // comparison only after the complete comparison rejects identity.
+        const CONFLICT_WORK: usize = DUPLICATE_WORK + 1 + 2;
+        let conflict = [requirement(0, Type::Bool), requirement(1, Type::Unit)];
+        let mut conflict_short =
+            crate::interface::InterfaceConstraintBudget::with_limit(CONFLICT_WORK - 1);
+        assert_eq!(
+            exercise(&conflict, &mut conflict_short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(conflict_short.used(), CONFLICT_WORK - 1);
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(CONFLICT_WORK);
+            assert_eq!(
+                exercise(&conflict, &mut exact),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert_eq!(exact.used(), CONFLICT_WORK);
+        }
     }
 
     #[test]

@@ -19,9 +19,10 @@ use crate::{
     },
     diagnostic::{Diagnostic, SourceLabel},
     evidence::{
-        EvidenceSelector, MethodObligationMetadata, MethodRigidityCheck, MethodRigidityCondition,
-        MethodRigiditySite, MethodRigidityTarget, PendingEvidencePublication, SelectionCauseKind,
-        SelectionError, SelectionFailure, SelectionSite,
+        EvidenceSelector, ImprovementTask, MethodObligationMetadata, MethodRigidityCheck,
+        MethodRigidityCondition, MethodRigiditySite, MethodRigidityTarget,
+        PendingEvidencePublication, PendingObligationMarker, SelectionCauseKind, SelectionError,
+        SelectionFailure, SelectionSite,
     },
     evidence_audit::{EvidenceAuditFailure, audit_checked_body_evidence},
     evidence_validation::ValidatedInterfaceProgram,
@@ -325,6 +326,12 @@ struct LoweredInterfaceMethod {
     declaration_span: Span,
 }
 
+#[derive(Debug)]
+struct LoweredInterface {
+    methods: Box<[MethodId]>,
+    determination: Option<Box<[usize]>>,
+}
+
 impl Drop for LoweredInterfaceMethod {
     fn drop(&mut self) {
         discard_type_iteratively(std::mem::replace(&mut self.value_type, Type::Unit));
@@ -437,7 +444,7 @@ struct ScopedEvidenceBinder {
 
 #[derive(Debug)]
 struct EvidenceLowering {
-    interfaces: HashMap<InterfaceId, Box<[MethodId]>>,
+    interfaces: HashMap<InterfaceId, LoweredInterface>,
     interface_methods: HashMap<MethodId, LoweredInterfaceMethod>,
     global_schemes: HashMap<BinderId, LoweredScheme>,
     implementation_methods: HashMap<ImplMethodId, LoweredImplementationMethod>,
@@ -1732,8 +1739,28 @@ impl Elaborator {
                         return Err(invalid_state());
                     }
                 }
+                let determination = interface
+                    .determination()
+                    .map(|determination| {
+                        self.constraint_work
+                            .charge(determination.positions().len())
+                            .map_err(|()| constraint_resource())?;
+                        let mut positions = Vec::new();
+                        positions
+                            .try_reserve_exact(determination.positions().len())
+                            .map_err(|_| constraint_resource())?;
+                        positions.extend_from_slice(determination.positions());
+                        Ok::<_, TypeError>(positions.into_boxed_slice())
+                    })
+                    .transpose()?;
                 if interfaces
-                    .insert(interface.id, methods.into_boxed_slice())
+                    .insert(
+                        interface.id,
+                        LoweredInterface {
+                            methods: methods.into_boxed_slice(),
+                            determination,
+                        },
+                    )
                     .is_some()
                 {
                     return Err(invalid_state());
@@ -1854,15 +1881,15 @@ impl Elaborator {
             .try_reserve(scheme.requirements.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for requirement in &scheme.requirements {
-            let method_order = lowering
+            let lowered_interface = lowering
                 .interfaces
                 .get(&requirement.interface())
                 .ok_or_else(invalid_state)?;
             let mut methods = Vec::new();
             methods
-                .try_reserve(method_order.len())
+                .try_reserve(lowered_interface.methods.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for method in method_order {
+            for method in &lowered_interface.methods {
                 let method_fact = lowering
                     .interface_methods
                     .get(method)
@@ -2833,7 +2860,10 @@ impl Elaborator {
         result
     }
 
-    fn enter_global_evidence_scope(&mut self, binder: BinderId) -> Result<usize, TypeError> {
+    fn enter_global_evidence_scope(
+        &mut self,
+        binder: BinderId,
+    ) -> Result<PendingObligationMarker, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -2847,7 +2877,7 @@ impl Elaborator {
     fn enter_implementation_evidence_scope(
         &mut self,
         implementation: ImplId,
-    ) -> Result<usize, TypeError> {
+    ) -> Result<PendingObligationMarker, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -2862,7 +2892,7 @@ impl Elaborator {
         Ok(selector.pending_marker())
     }
 
-    fn evidence_marker(&self) -> Result<usize, TypeError> {
+    fn evidence_marker(&self) -> Result<PendingObligationMarker, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -2884,17 +2914,71 @@ impl Elaborator {
         Ok(())
     }
 
-    fn close_evidence_obligations(&mut self, marker: usize) -> Result<(), TypeError> {
+    fn close_evidence_obligations(
+        &mut self,
+        marker: PendingObligationMarker,
+    ) -> Result<(), TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
         let mut selector = self.selection.take().ok_or_else(invalid_state)?;
+        let mut snapshot = {
+            let solutions = &self.inference_solutions;
+            let inference_variables = &self.inference_variables;
+            let authenticated_solutions = &self.authenticated_inference_solutions;
+            selector
+                .prepare_determination_snapshot(
+                    &self.registry,
+                    marker,
+                    |argument, type_work| {
+                        let zonked =
+                            zonk_type_with_status_and_inference(&argument, solutions, |work| {
+                                match work {
+                                    ZonkWork::TypeCells(cells) => type_work
+                                        .charge(cells)
+                                        .map_err(|()| SelectionFailure::TypeResource),
+                                    ZonkWork::Inference(identity) => {
+                                        authenticate_zonk_inference_occurrence(
+                                            identity,
+                                            inference_variables,
+                                            solutions,
+                                            authenticated_solutions,
+                                            type_work,
+                                        )
+                                        .map_err(
+                                            |failure| match failure {
+                                                UnificationFailure::Resource => {
+                                                    SelectionFailure::TypeResource
+                                                }
+                                                UnificationFailure::Mismatch
+                                                | UnificationFailure::Infinite
+                                                | UnificationFailure::Invariant => {
+                                                    SelectionFailure::InvalidState
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                            });
+                        discard_type_iteratively(argument);
+                        zonked.map(|(ty, _)| ty)
+                    },
+                    &mut self.constraint_work,
+                    &mut self.type_work,
+                )
+                .map_err(|failure| selection_failure(failure, None))?
+        };
+        if let Err(error) = self.apply_improvement_tasks(snapshot.take_tasks()) {
+            self.selection = Some(selector);
+            return Err(error);
+        }
         let solutions = &self.inference_solutions;
         let inference_variables = &self.inference_variables;
         let authenticated_solutions = &self.authenticated_inference_solutions;
-        let result = selector.close_with_registry(
+        let result = selector.close_with_snapshot_and_registry(
             &self.registry,
             marker,
+            &snapshot,
             |argument, type_work| {
                 let zonked =
                     zonk_type_with_status_and_inference(&argument, solutions, |work| match work {
@@ -2937,21 +3021,124 @@ impl Elaborator {
         Ok(())
     }
 
+    fn apply_improvement_tasks(
+        &mut self,
+        tasks: impl IntoIterator<Item = ImprovementTask>,
+    ) -> Result<(), TypeError> {
+        for task in tasks {
+            let (key, expected, actual, obligation_span, source_span) = task.into_parts();
+            let key = IterativeTypeOwner::new(Type::Tuple(key));
+            let expected = IterativeTypeOwner::new(Type::Tuple(expected));
+            let actual = IterativeTypeOwner::new(Type::Tuple(actual));
+            match self.unify(&expected, &actual) {
+                Ok(()) => {}
+                Err(UnificationFailure::Resource) => {
+                    return Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ));
+                }
+                Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+                Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                    let key = IterativeTypeOwner::new(self.zonk(&key)?);
+                    let expected = IterativeTypeOwner::new(self.zonk(&expected)?);
+                    let actual = IterativeTypeOwner::new(self.zonk(&actual)?);
+                    self.constraint_work
+                        .charge(3)
+                        .map_err(|()| constraint_resource())?;
+                    let mut diagnostic = Diagnostic::new(
+                        InterfaceReason::DeterminationConflict,
+                        SourceLabel::new(
+                            obligation_span,
+                            "this dependent tuple conflicts with the tuple determined by the known key",
+                        ),
+                    );
+                    retain_interface_label(
+                        &mut diagnostic,
+                        source_span,
+                        "this source determines the expected dependent tuple",
+                        &mut self.constraint_work,
+                    )?;
+                    diagnostic.expected = Some(self.registry.display_source_type(&expected));
+                    diagnostic.found = Some(self.registry.display_source_type(&actual));
+                    diagnostic.help = Some(format!(
+                        "the known determinant key is {}",
+                        self.registry.display_source_type(&key)
+                    ));
+                    return Err(TypeError::Interface(Box::new(diagnostic)));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn close_method_rigidity_for_failed_body(
         &mut self,
-        marker: usize,
+        marker: PendingObligationMarker,
         failure_span: Span,
     ) -> Result<bool, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
         let mut selector = self.selection.take().ok_or_else(invalid_state)?;
+        let mut snapshot = {
+            let solutions = &self.inference_solutions;
+            let inference_variables = &self.inference_variables;
+            let authenticated_solutions = &self.authenticated_inference_solutions;
+            selector
+                .prepare_method_rigidity_determination(
+                    &self.registry,
+                    MethodRigidityTarget::new(marker, failure_span),
+                    |argument, type_work| {
+                        let zonked =
+                            zonk_type_with_status_and_inference(&argument, solutions, |work| {
+                                match work {
+                                    ZonkWork::TypeCells(cells) => type_work
+                                        .charge(cells)
+                                        .map_err(|()| SelectionFailure::TypeResource),
+                                    ZonkWork::Inference(identity) => {
+                                        authenticate_zonk_inference_occurrence(
+                                            identity,
+                                            inference_variables,
+                                            solutions,
+                                            authenticated_solutions,
+                                            type_work,
+                                        )
+                                        .map_err(
+                                            |failure| match failure {
+                                                UnificationFailure::Resource => {
+                                                    SelectionFailure::TypeResource
+                                                }
+                                                UnificationFailure::Mismatch
+                                                | UnificationFailure::Infinite
+                                                | UnificationFailure::Invariant => {
+                                                    SelectionFailure::InvalidState
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                            });
+                        discard_type_iteratively(argument);
+                        zonked.map(|(ty, _)| ty)
+                    },
+                    &mut self.constraint_work,
+                    &mut self.type_work,
+                )
+                .map_err(|failure| selection_failure(failure, None))?
+        };
+        if let Some(task) = snapshot.take_task()
+            && let Err(error) = self.apply_improvement_tasks(std::iter::once(task))
+        {
+            self.selection = Some(selector);
+            return Err(error);
+        }
         let solutions = &self.inference_solutions;
         let inference_variables = &self.inference_variables;
         let authenticated_solutions = &self.authenticated_inference_solutions;
-        let result = selector.close_method_rigidity_with_registry(
+        let result = selector.close_method_rigidity_with_snapshot_and_registry(
             &self.registry,
             MethodRigidityTarget::new(marker, failure_span),
+            &snapshot,
             |argument, type_work| {
                 let zonked =
                     zonk_type_with_status_and_inference(&argument, solutions, |work| match work {
@@ -3861,6 +4048,110 @@ impl Elaborator {
             application.interface(),
             instantiated.into_boxed_slice(),
         ))
+    }
+
+    fn replay_lowered_global_determination(
+        &mut self,
+        scheme: &LoweredScheme,
+        arguments: &[Type],
+        occurrence: &crate::resolved::ResolvedOccurrence,
+        lowering: &EvidenceLowering,
+    ) -> Result<(), TypeError> {
+        if occurrence.evidence.len() != scheme.requirements.len() {
+            return Err(invalid_state());
+        }
+        for (requirement, slot) in scheme.requirements.iter().zip(&occurrence.evidence) {
+            let source_application = requirement
+                .methods
+                .first()
+                .map(|method| &method.application)
+                .ok_or_else(invalid_state)?;
+            let lowered_interface = lowering
+                .interfaces
+                .get(&source_application.interface())
+                .ok_or_else(invalid_state)?;
+            let Some(determination) = lowered_interface.determination.as_deref() else {
+                continue;
+            };
+            let (checked_application, _) = slot.filled().ok_or_else(invalid_state)?;
+            let instantiated = self.instantiate_lowered_source_application(
+                scheme.binder_parameters(),
+                source_application,
+                arguments,
+            )?;
+            if checked_application.interface() != instantiated.interface()
+                || checked_application.arguments().len() != instantiated.arguments().len()
+            {
+                return Err(invalid_state());
+            }
+            let mut previous = None;
+            for &position in determination {
+                self.constraint_work
+                    .charge(1)
+                    .map_err(|()| constraint_resource())?;
+                if position >= instantiated.arguments().len()
+                    || previous.is_some_and(|previous| previous >= position)
+                {
+                    return Err(invalid_state());
+                }
+                previous = Some(position);
+            }
+            let dependent_count = instantiated
+                .arguments()
+                .len()
+                .checked_sub(determination.len())
+                .ok_or_else(invalid_state)?;
+            let dependent_storage_work = dependent_count
+                .checked_mul(2)
+                .and_then(|work| work.checked_add(1))
+                .ok_or_else(constraint_resource)?;
+            self.constraint_work
+                .charge(dependent_storage_work)
+                .map_err(|()| constraint_resource())?;
+            let mut expected = OwnedTypeBuffer(Vec::new());
+            let mut found = OwnedTypeBuffer(Vec::new());
+            expected
+                .try_reserve(dependent_count)
+                .map_err(|_| constraint_resource())?;
+            found
+                .try_reserve(dependent_count)
+                .map_err(|_| constraint_resource())?;
+            let mut next_key = determination.iter().copied().peekable();
+            for (position, (instantiated, checked)) in instantiated
+                .arguments()
+                .iter()
+                .zip(checked_application.arguments())
+                .enumerate()
+            {
+                if next_key.peek() == Some(&position) {
+                    next_key.next();
+                    continue;
+                }
+                expected.push(self.clone_type(instantiated)?);
+                found.push(self.clone_type(checked)?);
+            }
+            if next_key.next().is_some() || expected.len() != dependent_count {
+                return Err(invalid_state());
+            }
+            let expected = IterativeTypeOwner::new(Type::Tuple(expected.into_boxed_slice()));
+            let found = IterativeTypeOwner::new(Type::Tuple(found.into_boxed_slice()));
+            match self.unify(&expected, &found) {
+                Ok(()) => {}
+                Err(
+                    UnificationFailure::Mismatch
+                    | UnificationFailure::Infinite
+                    | UnificationFailure::Invariant,
+                ) => {
+                    return Err(invalid_state());
+                }
+                Err(UnificationFailure::Resource) => {
+                    return Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn unify_interface_applications(
@@ -6021,6 +6312,12 @@ impl Elaborator {
                                     for argument in arguments.iter() {
                                         current_arguments.push(self.clone_type(argument)?);
                                     }
+                                    self.replay_lowered_global_determination(
+                                        scheme,
+                                        &current_arguments,
+                                        occurrence,
+                                        &lowering,
+                                    )?;
                                     if !arguments.is_empty() {
                                         let core_ty = IterativeTypeOwner::new(
                                             self.instantiate_lowered_core_body(scheme, &arguments)?,
@@ -8782,16 +9079,36 @@ fn check_global_requirements(
         }
         for (index, requirement) in requirements.iter().enumerate() {
             let mut duplicate = None;
+            let mut determination_conflict = None;
+            let interface = checked_interface(
+                module,
+                checked_interfaces,
+                requirement.application.interface.id,
+                budget,
+            )?
+            .ok_or_else(invalid_state)?;
             for first in &requirements[..index] {
                 budget.charge(1).map_err(|()| constraint_resource())?;
-                if first.application.interface.id == requirement.application.interface.id
-                    && same_resolved_application_arguments(
+                if first.application.interface.id != requirement.application.interface.id {
+                    continue;
+                }
+                if same_resolved_application_arguments(
+                    &first.application.arguments,
+                    &requirement.application.arguments,
+                    budget,
+                )? {
+                    duplicate = Some(first);
+                    break;
+                }
+                if let Some(determination) = interface.determination()
+                    && same_resolved_application_key(
                         &first.application.arguments,
                         &requirement.application.arguments,
+                        determination,
                         budget,
                     )?
                 {
-                    duplicate = Some(first);
+                    determination_conflict = Some(first);
                     break;
                 }
             }
@@ -8809,15 +9126,62 @@ fn check_global_requirements(
                 ));
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
+            if let Some(first) = determination_conflict {
+                budget.charge(2).map_err(|()| constraint_resource())?;
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::DeterminationConflict,
+                    SourceLabel::new(
+                        requirement.application.span,
+                        "this requirement conflicts with the dependent tuple fixed for the same determinant key",
+                    ),
+                );
+                diagnostic
+                    .related
+                    .try_reserve(1)
+                    .map_err(|_| constraint_resource())?;
+                diagnostic.related.push(SourceLabel::new(
+                    first.application.span,
+                    "this earlier requirement fixes a different dependent tuple for that key",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
         }
         for requirement in requirements.iter() {
             budget.charge(1).map_err(|()| constraint_resource())?;
+            let interface = checked_interface(
+                module,
+                checked_interfaces,
+                requirement.application.interface.id,
+                budget,
+            )?
+            .ok_or_else(invalid_state)?;
             let mut absent = None;
-            for argument in &requirement.application.arguments {
-                absent = first_variable_absent_from_types(&argument.ty, &value_types, budget)
-                    .map_err(|()| constraint_resource())?;
-                if absent.is_some() {
-                    break;
+            if let Some(determination) = interface.determination() {
+                let mut previous_position = None;
+                for &position in determination.positions() {
+                    budget.charge(1).map_err(|()| constraint_resource())?;
+                    if previous_position.is_some_and(|previous| previous >= position) {
+                        return Err(invalid_state());
+                    }
+                    previous_position = Some(position);
+                    let argument = requirement
+                        .application
+                        .arguments
+                        .get(position)
+                        .ok_or_else(invalid_state)?;
+                    absent = first_variable_absent_from_types(&argument.ty, &value_types, budget)
+                        .map_err(|()| constraint_resource())?;
+                    if absent.is_some() {
+                        break;
+                    }
+                }
+            } else {
+                for argument in &requirement.application.arguments {
+                    absent = first_variable_absent_from_types(&argument.ty, &value_types, budget)
+                        .map_err(|()| constraint_resource())?;
+                    if absent.is_some() {
+                        break;
+                    }
                 }
             }
             if let Some(variable) = absent {
@@ -9287,6 +9651,13 @@ fn check_implementation_header(
         }
     }
 
+    check_implementation_prerequisite_relations(
+        module,
+        checked_interfaces,
+        implementation,
+        budget,
+    )?;
+
     if selection_key_is_all_bare_variables(head_interface, &implementation.head.arguments, budget)?
     {
         let mut diagnostic = Diagnostic::new(
@@ -9447,6 +9818,73 @@ fn check_implementation_header(
                     &mut diagnostic,
                     interface.span(),
                     "the private interface is declared here",
+                    budget,
+                )?;
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_implementation_prerequisite_relations(
+    module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    implementation: &crate::resolved::ResolvedImplementation,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    for (index, prerequisite) in implementation.prerequisites.iter().enumerate() {
+        let interface = checked_interface(
+            module,
+            checked_interfaces,
+            prerequisite.application.interface.id,
+            budget,
+        )?
+        .ok_or_else(invalid_state)?;
+        for earlier in &implementation.prerequisites[..index] {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            if earlier.application.interface.id != prerequisite.application.interface.id {
+                continue;
+            }
+            if same_resolved_application_arguments(
+                &earlier.application.arguments,
+                &prerequisite.application.arguments,
+                budget,
+            )? {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::DuplicateRequirement,
+                    SourceLabel::new(
+                        prerequisite.application.span,
+                        "this prerequisite is already declared",
+                    ),
+                );
+                retain_interface_label(
+                    &mut diagnostic,
+                    earlier.application.span,
+                    "the first identical prerequisite is here",
+                    budget,
+                )?;
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+            if let Some(determination) = interface.determination()
+                && same_resolved_application_key(
+                    &earlier.application.arguments,
+                    &prerequisite.application.arguments,
+                    determination,
+                    budget,
+                )?
+            {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::DeterminationConflict,
+                    SourceLabel::new(
+                        prerequisite.application.span,
+                        "this prerequisite conflicts with the dependent tuple fixed for the same determinant key",
+                    ),
+                );
+                retain_interface_label(
+                    &mut diagnostic,
+                    earlier.application.span,
+                    "this earlier prerequisite fixes a different dependent tuple for that key",
                     budget,
                 )?;
                 return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -9902,6 +10340,32 @@ fn same_resolved_application_arguments(
     }
     for (left, right) in left.iter().zip(right) {
         if !same_type_with_constraint_budget(&left.ty, &right.ty, budget)
+            .map_err(|()| constraint_resource())?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_resolved_application_key(
+    left: &[ResolvedType],
+    right: &[ResolvedType],
+    determination: &DeterminationKey,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, TypeError> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    let mut previous_position = None;
+    for &position in determination.positions() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        if position >= left.len() || previous_position.is_some_and(|previous| previous >= position)
+        {
+            return Err(invalid_state());
+        }
+        previous_position = Some(position);
+        if !same_type_with_constraint_budget(&left[position].ty, &right[position].ty, budget)
             .map_err(|()| constraint_resource())?
         {
             return Ok(false);
@@ -10740,7 +11204,7 @@ enum ElaborationTask<'a> {
     FinishBinding {
         binding: &'a ResolvedBinding,
         expected: Option<ProvenancedType>,
-        evidence_marker: Option<usize>,
+        evidence_marker: Option<PendingObligationMarker>,
     },
     CheckRecursiveMember(&'a crate::resolved::ResolvedRecursiveMember),
     BeginRecursiveGroup(&'a ResolvedRecursiveGroup),
@@ -14525,11 +14989,12 @@ mod tests {
 
     #[test]
     fn determined_non_decreasing_header_retains_its_label_at_an_exact_retryable_boundary() {
-        // Header staging and complete type authentication own 21 visits;
+        // Header staging and complete type authentication own 21 visits; the
+        // ordered prerequisite-relation scan owns one interface lookup;
         // variable-head selection owns two; determination coverage owns 13;
         // key/reference staging owns seven; complete-groundness plus the
         // aligned equality comparison own 15; the causal label owns one.
-        const EXACT_WORK: usize = 21 + 2 + 13 + 7 + 15 + 1;
+        const EXACT_WORK: usize = 21 + 1 + 2 + 13 + 7 + 15 + 1;
         let module = resolved_module_fixture(
             "determined-non-decreasing-header-budget.ash",
             concat!(
@@ -14573,6 +15038,60 @@ mod tests {
         assert_eq!(exact.charge(1), Err(()));
         assert_eq!(implementation.head.arguments.len(), 2);
         assert_eq!(implementation.prerequisites.len(), 1);
+    }
+
+    #[test]
+    fn determined_prerequisite_conflict_has_an_exact_retryable_header_boundary() {
+        // Header staging and complete type authentication own 17 visits. Two
+        // prerequisite-interface lookups, one pair visit, the four-cell full
+        // comparison, the three-cell determinant comparison, and one retained
+        // causal label add eleven more visits.
+        const EXACT_WORK: usize = 17 + 2 + 1 + 4 + 3 + 1;
+        let module = resolved_module_fixture(
+            "determined-prerequisite-conflict-budget.ash",
+            concat!(
+                "interface Relation<Key, Value> where Key -> Value {\n",
+                "relate : Key -> Int\n",
+                "}\n\n",
+                "interface Target<A> {\n",
+                "target : A -> A\n",
+                "}\n\n",
+                "impl Target<Int> where Relation<Int, Bool>, Relation<Int, Unit> {\n",
+                "target value = value\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let checked =
+            check_interface_declarations(&module, &mut InterfaceConstraintBudget::default())
+                .expect("both interfaces should admit their declarations");
+        let implementation = &module.implementations()[0];
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_implementation_header(&module, &checked, implementation, &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(implementation.prerequisites.len(), 2);
+
+        for _ in 0..2 {
+            let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            let error = check_implementation_header(&module, &checked, implementation, &mut exact)
+                .expect_err("the exact retry should publish the prerequisite-key conflict");
+            assert!(matches!(
+                error,
+                TypeError::Interface(diagnostic)
+                    if diagnostic.reason == InterfaceReason::DeterminationConflict
+                        && diagnostic.related.len() == 1
+            ));
+            assert_eq!(exact.used(), EXACT_WORK);
+            assert_eq!(exact.charge(1), Err(()));
+            assert_eq!(implementation.prerequisites.len(), 2);
+        }
     }
 
     #[test]
@@ -16238,6 +16757,80 @@ mod tests {
             Err(UnificationFailure::Invariant)
         );
         assert!(elaborator.inference_solutions.is_empty());
+    }
+
+    #[test]
+    fn determination_conflict_rolls_back_the_complete_dependent_tuple() {
+        // A two-dependent rejected tuple transaction costs `6D + 20 = 32`.
+        // Conflict reporting then zonks the two-cell key, the three-cell
+        // expected tuple, and the three-cell actual tuple plus one unresolved
+        // inference authentication: `32 + 2 + 3 + 4 = 41` type units. Three
+        // rendered fields and one retained source label cost four constraint
+        // units.
+        const CONSTRAINT_WORK: usize = 4;
+        const TYPE_WORK: usize = 41;
+        let run = |constraint_limit, type_limit| {
+            let source = SourceFile::new("determination-transaction.ash", "source goal")
+                .expect("the fixture source should fit");
+            let source_span = source
+                .span(ByteRange::new(0, 6).expect("the source range should be ordered"))
+                .expect("the source span should fit");
+            let obligation_span = source
+                .span(ByteRange::new(7, 11).expect("the goal range should be ordered"))
+                .expect("the goal span should fit");
+            let mut elaborator = Elaborator::new();
+            let inference = elaborator
+                .fresh_inference(&Kind::Type, obligation_span)
+                .expect("the dependent inference variable should register");
+            let Type::Inference(identity) = inference else {
+                unreachable!()
+            };
+            elaborator.constraint_work = InterfaceConstraintBudget::with_limit(constraint_limit);
+            elaborator.type_work = TypeWorkBudget::with_limit(type_limit);
+            let task = ImprovementTask::for_test(
+                Box::new([Type::Unit]),
+                Box::new([Type::Int, Type::Bool]),
+                Box::new([Type::Inference(identity), Type::Int]),
+                obligation_span,
+                source_span,
+            );
+            let result = elaborator.apply_improvement_tasks(std::iter::once(task));
+            assert!(
+                elaborator.inference_solutions.is_empty(),
+                "the first dependent must not publish when a later dependent conflicts"
+            );
+            assert!(elaborator.authenticated_inference_solutions.is_empty());
+            (elaborator, result)
+        };
+
+        let (constraint_short, result) = run(CONSTRAINT_WORK - 1, TYPE_WORK);
+        assert_eq!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            )),
+        );
+        assert_eq!(constraint_short.constraint_work.used(), CONSTRAINT_WORK - 1);
+
+        let (type_short, result) = run(CONSTRAINT_WORK, TYPE_WORK - 1);
+        assert_eq!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+        );
+        assert_eq!(type_short.type_work.used(), TYPE_WORK - 1);
+
+        for _ in 0..2 {
+            let (exact, result) = run(CONSTRAINT_WORK, TYPE_WORK);
+            assert!(matches!(
+                result,
+                Err(TypeError::Interface(diagnostic))
+                    if diagnostic.reason == InterfaceReason::DeterminationConflict
+            ));
+            assert_eq!(exact.constraint_work.used(), CONSTRAINT_WORK);
+            assert_eq!(exact.type_work.used(), TYPE_WORK);
+        }
     }
 
     #[test]

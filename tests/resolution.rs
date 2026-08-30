@@ -4,8 +4,8 @@ use std::{
 };
 
 use ash::{
-    elaborate::{ElaborationFailure, TypeError, check_module},
-    interface::RequirementOwner,
+    elaborate::{TypeError, check_module},
+    interface::{InterfaceReason, RequirementOwner},
     module::{ModuleRoots, load_module_graph},
     parser::STRUCTURAL_DEPTH_LIMIT,
     resolve::{ResolveReason, resolve_module},
@@ -1065,44 +1065,58 @@ fn resolved_determination_preserves_raw_occurrence_order_for_later_admission() {
 }
 
 #[test]
-fn relational_interfaces_bypass_unary_kind_work_without_hiding_later_errors() {
-    for text in [
-        concat!(
-            "type Carrier<A> = Carrier(A)\n\n",
-            "interface Deferred<F : Type -> Type, Ignored> {\n",
-            "deferred : F -> Unit\n",
-            "}\n\n",
-            "bad : Carrier -> Unit\n",
-            "bad value = ()\n",
-        ),
-        concat!(
-            "type Carrier<A> = Carrier(A)\n\n",
-            "interface Deferred<F : Type -> Type> where F -> F {\n",
-            "deferred : F -> Unit\n",
-            "}\n\n",
-            "bad : Carrier -> Unit\n",
-            "bad value = ()\n",
-        ),
-    ] {
-        let error = with_loaded(text, |loaded| {
-            resolve_module(loaded, &[]).expect_err("the later ordinary declaration is ill-kinded")
-        });
-        let ash::resolve::ResolveModuleError::Kind(ash::kind::KindFailure::Source(error)) = error
-        else {
-            panic!("the independent ordinary declaration should retain its source kind error");
-        };
-        let later = text.find("bad : Carrier").expect("the later header exists") + 6;
-        assert_eq!(error.primary.span().range().start(), later as u32, "{text}");
-        assert_eq!(
-            error.primary.span().range().end(),
-            later as u32 + 7,
-            "{text}"
-        );
-    }
+fn relational_interfaces_run_method_kind_checks_before_later_declarations() {
+    let text = concat!(
+        "type Carrier<A> = Carrier(A)\n\n",
+        "interface Deferred<F : Type -> Type, Ignored> {\n",
+        "deferred : F -> Unit\n",
+        "}\n\n",
+        "bad : Carrier -> Unit\n",
+        "bad value = ()\n",
+    );
+    let error = with_loaded(text, |loaded| {
+        resolve_module(loaded, &[]).expect_err("the relational method argument is ill-kinded")
+    });
+    let ash::resolve::ResolveModuleError::Kind(ash::kind::KindFailure::Source(error)) = error
+    else {
+        panic!("the relational method should retain its source kind error");
+    };
+    let method_argument = text
+        .find("deferred : F")
+        .expect("the relational method exists")
+        + "deferred : ".len();
+    assert_eq!(error.primary.span().range().start(), method_argument as u32,);
+    assert_eq!(
+        error.primary.span().range().end(),
+        method_argument as u32 + 1,
+    );
 }
 
 #[test]
-fn relational_applications_fail_closed_before_unary_checked_publication() {
+fn invalid_relational_determination_defers_later_kind_errors_to_its_interface_owner() {
+    let resolved = resolve_valid(concat!(
+        "type Carrier<A> = Carrier(A)\n\n",
+        "interface Deferred<F : Type -> Type> where F -> F {\n",
+        "deferred : F -> Unit\n",
+        "}\n\n",
+        "bad : Carrier -> Unit\n",
+        "bad value = ()\n",
+    ));
+    let TypeError::Interface(diagnostic) =
+        check_module(resolved).expect_err("the overlapping determination must reject")
+    else {
+        panic!("the invalid determination should retain interface failure ownership")
+    };
+    assert_eq!(diagnostic.reason, InterfaceReason::DeterminationParameter);
+    assert_eq!(diagnostic.primary.span().range().start(), 78);
+    assert_eq!(diagnostic.primary.span().range().end(), 79);
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(diagnostic.related[0].span().range().start(), 73);
+    assert_eq!(diagnostic.related[0].span().range().end(), 74);
+}
+
+#[test]
+fn incomplete_relational_method_seed_reports_a_source_diagnostic() {
     let resolved = resolve_valid(concat!(
         "interface Marker<A, B> {\n",
         "marker : A -> Bool\n",
@@ -1114,9 +1128,17 @@ fn relational_applications_fail_closed_before_unary_checked_publication() {
         "main () = marker 1\n",
     ));
 
-    let error = check_module(resolved)
-        .expect_err("a relational application must not enter unary checked publication");
-    assert_eq!(error, TypeError::Internal(ElaborationFailure::InvalidState));
+    let TypeError::Interface(diagnostic) = check_module(resolved)
+        .expect_err("an incomplete relational method seed must be source-invalid")
+    else {
+        panic!("the incomplete method seed should retain interface failure ownership")
+    };
+    assert_eq!(diagnostic.reason, InterfaceReason::MethodParameter);
+    assert_eq!(diagnostic.primary.span().range().start(), 25);
+    assert_eq!(diagnostic.primary.span().range().end(), 43);
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(diagnostic.related[0].span().range().start(), 20);
+    assert_eq!(diagnostic.related[0].span().range().end(), 21);
 }
 
 #[test]

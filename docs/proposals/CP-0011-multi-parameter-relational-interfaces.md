@@ -184,6 +184,11 @@ applications are `constraint.determination-conflict`. The checker does not
 equate two independently declared requirement outputs or compute
 cross-requirement closure.
 
+Within an implementation header, requirement checking visits each prerequisite
+in source order and compares it with earlier prerequisites in source order. For
+each pair, complete-application identity is classified before key identity; the
+first classified pair owns the failure.
+
 ### Implementations and coherence
 
 An implementation head supplies a complete interface application. Its explicit
@@ -306,9 +311,10 @@ Within one source unit, failures have this causal precedence:
 4. determination partition admission;
 5. existing method-binder and method-kind checks, then method seed and
    function-shape checks;
-6. implementation variable-head admission, prerequisite containment,
-   determination coverage, orphan ownership, prerequisite decrease, and
-   privacy in that order;
+6. implementation-header requirement checking for duplicate complete
+   applications and duplicate keys, then implementation variable-head
+   admission, prerequisite containment, determination coverage, orphan
+   ownership, prerequisite decrease, and privacy in that order;
 7. effective-environment pair coherence;
 8. implementation method membership and bodies;
 9. per-occurrence ordinary unification, unresolved-key ambiguity, atomic

@@ -1238,10 +1238,10 @@ mod tests {
         // It does not repeat the 3W complete interface mirror owned by the
         // consuming evidence validator.
         const LINKED: usize = 67 * WIDTH + 25;
-        // Validation owns a 51W+55 complete-application authentication suffix
+        // Validation owns a 49W+55 complete-application authentication suffix
         // and publishes one private method-evidence capability only after the
         // complete graph succeeds.
-        const VALIDATED: usize = 118 * WIDTH + 80;
+        const VALIDATED: usize = 116 * WIDTH + 80;
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
             "main : Unit -> Int\n",

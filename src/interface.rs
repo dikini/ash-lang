@@ -1490,6 +1490,8 @@ pub enum InterfaceReason {
     Unsatisfied,
     /// The obligation remains undetermined when evidence selection must begin.
     Ambiguous,
+    /// A determined source and the pending dependent tuple disagree.
+    DeterminationConflict,
     /// Selecting prerequisites re-entered an active obligation.
     Cycle,
     /// A public constrained global exposes a private interface.
@@ -1529,6 +1531,7 @@ impl fmt::Display for InterfaceReason {
             Self::UndeterminedParameter => "constraint.undetermined-parameter",
             Self::Unsatisfied => "constraint.unsatisfied",
             Self::Ambiguous => "constraint.ambiguous",
+            Self::DeterminationConflict => "constraint.determination-conflict",
             Self::Cycle => "constraint.cycle",
             Self::ConstraintPrivateInterface => "constraint.private-interface",
             Self::ImplPrivateInterface => "impl.private-interface",

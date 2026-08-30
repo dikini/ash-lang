@@ -885,6 +885,62 @@ fn rejects_undetermined_global_requirement_parameter() {
 }
 
 #[test]
+fn determined_global_retains_dependent_only_binder_in_scheme_order() {
+    let checked = checked_module(concat!(
+        "interface Iterator<I, Item> where I -> Item {\n",
+        "measure : I -> Int\n",
+        "}\n\n",
+        "size<I, Item> : I -> Int where Iterator<I, Item>\n",
+        "size value = measure value\n",
+    ));
+    let scheme = checked
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "size")
+        .expect("the determined constrained global should retain its scheme");
+    let [key, dependent] = scheme.scheme.type_parameters.as_ref() else {
+        panic!("the scheme should retain key then dependent binder order");
+    };
+    let [requirement] = scheme.scheme.requirements.as_ref() else {
+        panic!("the scheme should retain its complete abstract requirement");
+    };
+
+    assert!(
+        matches!(requirement.arguments(), [Type::Variable(found), Type::Variable(output)]
+        if *found == key.0 && *output == dependent.0)
+    );
+}
+
+#[test]
+fn determined_global_rejects_missing_key_even_when_another_requirement_supplies_it() {
+    let error = check_error(concat!(
+        "interface First<A, B> where A -> B {\nfirst : A -> Int\n}\n",
+        "interface Second<B, C> where B -> C {\nsecond : B -> Int\n}\n\n",
+        "chain<A, B, C> : A -> C where First<A, B>, Second<B, C>\n",
+        "chain value = value\n",
+    ));
+
+    assert_eq!(reason(&error), "constraint.undetermined-parameter");
+}
+
+#[test]
+fn determined_global_requirement_pair_classifies_full_duplicate_and_key_conflict() {
+    let duplicate = check_error(concat!(
+        "interface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\n\n",
+        "probe<A, B> : A -> Int where Relation<A, B>, Relation<A, B>\n",
+        "probe value = 0\n",
+    ));
+    assert_eq!(reason(&duplicate), "constraint.duplicate-requirement");
+
+    let conflict = check_error(concat!(
+        "interface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\n\n",
+        "probe<A, B, C> : A -> Int where Relation<A, B>, Relation<A, C>\n",
+        "probe value = 0\n",
+    ));
+    assert_eq!(reason(&conflict), "constraint.determination-conflict");
+}
+
+#[test]
 fn explicit_requirement_only_binder_keeps_determination_failure_ownership() {
     let error = check_error(
         "type Pair<Left, Right> = Pair(Left, Right)\n\ninterface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame<B : Type, A : Type> : A -> Bool where Equal<Pair<A, B>>\nsame value = true\n",

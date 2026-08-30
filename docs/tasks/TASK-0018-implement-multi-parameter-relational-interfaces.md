@@ -172,6 +172,55 @@ syntax, packages, runtime interface lookup, and evaluator changes.
   The specification remains unchanged through the later evidence checkpoint;
   normative reconciliation remains separately allocated. Neither lib-ash nor
   TASK-0018 is complete.
+- Checkpoint 5 snapshots the determined obligations whose keys are already
+  inference-free, improves that fixed set once in source order, and then uses
+  the existing full-application evidence-selection path. Improvement retains
+  abstract, exact-current, and unique-concrete source priority, unifies only
+  the dependent tuple atomically, and cannot unlock a later obligation. A
+  failed body still performs mandatory determination consistency without
+  publishing inference or evidence state.
+- Determined global requirements now require every key variable in the value
+  type while retaining dependent-only binders through checked schemes,
+  body-free summaries, linked authentication, and final synthesis. Complete
+  duplicates remain `constraint.duplicate-requirement`; equal keys with
+  distinct dependents are `constraint.determination-conflict`. Separate
+  requirements neither equate outputs nor propagate information.
+- The user approved one prerequisite-ordering amendment to CP-0011.
+  Implementation prerequisites now compare the current occurrence with earlier
+  occurrences in source order, classify complete identity before key identity,
+  and let the first classified pair own the failure. Arity and positional kinds
+  precede the check; variable-head, containment, coverage, orphan, decrease,
+  and privacy follow it. Detached summaries independently authenticate the
+  same order before later header relationships.
+- Exact amendment evidence records 28 constraint units for a source determined
+  conflict, 6 and 9 units for detached duplicate and same-key classification,
+  and a 53-type/21-constraint malformed-summary preflight prefix. Wide detached
+  prerequisite containment is `4W`; its one-short boundary rejects the final
+  lookup batch at `3W`. Existing no-edge zero work, improvement, linked, and
+  final-synthesis formulas remain within their production limits.
+- Semantic review found detached pair classification ahead of positional-kind
+  authentication and three now-invalid downstream fixtures. The phase split
+  now preflights every application before pair classification, and legal
+  distinct prerequisites retain linked and Core identity tampering evidence.
+  A follow-up evidence review required the linked tamper to vary only
+  `RequirementId` and the Core case to assert distinct identities with equal
+  method rows; semantic re-review approves the result.
+- Rust/resource review found an uncharged quadratic head-parameter scan in
+  detached prerequisite containment. The correction reuses the authenticated
+  canonical-variable owner index for one constant-time lookup per charged
+  variable. A source guard witnessed the defect, and wide exact, one-short,
+  retry, and foreign-owner cases retain the linear boundary. Rust/resource
+  re-review approves the correction without further findings.
+- Checkpoint 5 full verification passes 1,703 Ash tests, including 791 library
+  tests, implementations 78/78, interface diagnostics 9/9, interfaces 42/42,
+  selection 40/40,
+  polymorphism 42/42, resolution 57/57, resolved 98/98, evidence 52/52,
+  elaboration 132/132, linked validation 109/109, Core validation 90/90, and
+  architecture 27/27. The xtask self-test and four doctests also pass.
+  Formatting, workspace all-target checking, strict all-target/all-feature
+  Clippy, Rustdoc, Markdown lint, and diff hygiene pass.
+  Cumulative reserved use is 50/65; 15 units remain. The specification remains
+  unchanged through Checkpoint 6, and neither lib-ash nor TASK-0018 is complete.
 
 ## Verification
 
@@ -358,3 +407,26 @@ Checkpoint 4; the later normative reconciliation checkpoint remains the owner.
   assert behavior. Semantic re-review approves both final corrections, and the
   fresh whole Rust/resource review approves the complete checkpoint without
   findings.
+- Checkpoint 5 initially exposed uncharged determinant-snapshot scans and a
+  linked-validation traversal duplicated by an earlier validation phase. The
+  retained marker carries pending length and determined count, no-edge snapshot
+  preparation is constant-time and zero-work, and linked validation visits each
+  authenticated carrier once. Exact retry and wide formulas cover both
+  corrections without changing a production limit.
+- CP-0011 initially classified duplicate implementation prerequisites but did
+  not order that check against competing pairs or later header failures. Work
+  stopped until the user approved the minimal proposal amendment. The retained
+  implementation applies complete-before-key, current-before-earlier source
+  order at source and detached-summary boundaries without adding propagation or
+  selection behavior.
+- Semantic review of the amendment found detached summary pair classification
+  ahead of application kind authentication and obsolete downstream fixtures
+  with repeated identical prerequisites. Summary admission now establishes
+  exact binders and kinds before pair classification. The linked fixture forges
+  only a sibling requirement identity, and the Core fixture retains distinct
+  identities whose method rows become equal after a legal substitution.
+- Rust/resource review of the summary phase split found a charged outer visit
+  containing an uncharged scan of every head parameter. Containment now queries
+  the already authenticated canonical-variable owner index once per charged
+  variable. A narrow source guard and a `4W` exact/`3W` one-short wide test
+  prevent recurrence.

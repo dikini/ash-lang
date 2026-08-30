@@ -5862,8 +5862,8 @@ mod tests {
         )
     }
 
-    fn concrete_source_with_same_typed_sibling_prerequisites_fixture() -> LinkedCoreValidationFixture
-    {
+    fn concrete_source_with_distinct_keys_instantiated_to_same_type_fixture()
+    -> LinkedCoreValidationFixture {
         LinkedCoreValidationFixture::compile(
             "pub seed : Unit -> Unit\nseed value = value\n",
             concat!(
@@ -5871,20 +5871,20 @@ mod tests {
                 "interface Leaf<I> {\nfirst : I -> I\nsecond : I -> I\n}\n\n",
                 "interface Base<I> {\nbase : I -> I\n}\n\n",
                 "interface Convert<I> {\nconvert<X> : (I, X) -> I\n}\n\n",
-                "impl<A> Base<Wrap<A>> where Leaf<A>, Leaf<A> {\n",
-                "base (Wrap(value)) = Wrap(first(value))\n",
+                "impl<A, B> Base<Wrap<(A, B)>> where Leaf<A>, Leaf<B> {\n",
+                "base (Wrap((left, right))) = Wrap((first(left), first(right)))\n",
                 "}\n\n",
-                "impl<A> Convert<Wrap<Wrap<A>>> where Base<Wrap<A>> {\n",
+                "impl<A, B> Convert<Wrap<Wrap<(A, B)>>> where Base<Wrap<(A, B)>> {\n",
                 "convert (Wrap(value), ignored) = Wrap(base(value))\n",
                 "}\n\n",
-                "probe<A> : Wrap<Wrap<A>> -> Wrap<Wrap<A>> where Leaf<A>\n",
+                "probe<A, B> : Wrap<Wrap<(A, B)>> -> Wrap<Wrap<(A, B)>> where Leaf<A>, Leaf<B>\n",
                 "probe value = convert((value, true))\n\n",
                 "impl Leaf<Int> {\n",
                 "first value = value\n",
                 "second value = value\n",
                 "}\n\n",
-                "main : Unit -> Wrap<Wrap<Int>>\n",
-                "main () = probe(Wrap(Wrap(42)))\n",
+                "main : Unit -> Wrap<Wrap<(Int, Int)>>\n",
+                "main () = probe(Wrap(Wrap((42, 42))))\n",
             ),
             &[],
         )
@@ -5906,27 +5906,30 @@ mod tests {
                     return None;
                 };
                 let EvidenceNode::Abstract {
+                    requirement: first_requirement,
                     methods: first_methods,
-                    ..
                 } = occurrence.selection.node(*first_node)?
                 else {
                     return None;
                 };
                 let EvidenceNode::Abstract {
+                    requirement: sibling_requirement,
                     methods: sibling_methods,
-                    ..
                 } = occurrence.selection.node(*sibling_node)?
                 else {
                     return None;
                 };
-                (*first_node != *sibling_node && first_methods == sibling_methods).then_some((
-                    source.selection_node,
-                    source.implementation,
-                    *first_node,
-                    *sibling_node,
-                ))
+                (*first_node != *sibling_node
+                    && first_requirement != sibling_requirement
+                    && first_methods == sibling_methods)
+                    .then_some((
+                        source.selection_node,
+                        source.implementation,
+                        *first_node,
+                        *sibling_node,
+                    ))
             })
-            .expect("the fixture has distinct same-typed direct prerequisite nodes");
+            .expect("the fixture has distinct requirement identities on same-typed direct nodes");
         let concrete_sources = Arc::get_mut(&mut program.method_evidence)
             .expect("the rebuilt program uniquely owns its catalog")
             .concrete_sources_mut_for_core_test();
@@ -5946,9 +5949,9 @@ mod tests {
     }
 
     #[test]
-    fn concrete_source_prerequisites_match_direct_selection_nodes_after_every_rebuild() {
+    fn source_distinct_prerequisites_match_same_typed_nodes_after_every_rebuild() {
         for rebuild in 0..3 {
-            let fixture = concrete_source_with_same_typed_sibling_prerequisites_fixture();
+            let fixture = concrete_source_with_distinct_keys_instantiated_to_same_type_fixture();
             let LinkedCoreValidationFixture {
                 directory,
                 graph,

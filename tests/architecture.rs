@@ -731,12 +731,17 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/evidence.rs::EvidenceSelector.pending", FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTreeAndTransientWork),
     kind_site!("src/evidence.rs::EvidenceSelector.selected", FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTreeAndTransientWork),
     kind_site!("src/evidence.rs::EvidenceSelector.schemes", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/evidence.rs::DeterminationSnapshot.tasks", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::EvidenceTypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::Goal.application", FieldTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::ImplementationCandidateAuthentication.arguments", FieldBorrowedTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTypeTree),
     kind_site!("src/evidence.rs::ImplementationCandidateAuthentication.parameter_records", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeResolvedTreeAndCheckedTree),
     kind_site!("src/evidence.rs::ImplementationEntry.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::ImplementationEntry.prerequisites", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/evidence.rs::ImprovementTask.actual_dependents", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/evidence.rs::ImprovementTask.expected_dependents", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/evidence.rs::ImprovementTask.key", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/evidence.rs::ImprovementTaskParts.$alias", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::InterfaceEntry.parameters", FieldEvidenceDeclaredKindDeclaredEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::InterfaceEntry.methods", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::MethodEntry.value_type", FieldEvidenceValueTypeValueEvidenceSelectionEvidenceTypeEvidenceTree),
@@ -747,6 +752,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/evidence.rs::MethodRigidityCheck.method_arguments", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTypeTree),
     kind_site!("src/evidence.rs::MethodRigidityCheck.rigid_arguments", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTypeTree),
     kind_site!("src/evidence.rs::MethodRigidityCondition.rigid_arguments", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/evidence.rs::MethodRigidityDeterminationSnapshot.task", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::PendingEvidencePublication.occurrences", FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTreeAndTransientWork),
     kind_site!("src/evidence.rs::PendingObligation.application", FieldTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::PendingObligation.method_arguments", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
@@ -1025,6 +1031,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ResolvedTypeVariable.kind", FieldResolvedDeclaredKindDeclaredResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedTypedPattern.annotation", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::SummaryDeterminedApplicationSlices.dependents", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::SummaryDeterminedApplicationSlices.key", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::SummaryRequirementIndex.by_interface", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ValidatedCheckedRegistries.modules", FieldBorrowedTransientCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::ValidatedImportedNominalMerge.candidate", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
@@ -1899,6 +1907,12 @@ const METHOD_PARAMETER_CARRIERS: &[MethodParameterCarrier] = &[
         "src/evidence.rs",
         EVIDENCE_SOURCE,
         "pub(crate) struct MethodRigidityTarget"
+    ),
+    method_parameter_carrier!(
+        "occurrence.rigidity_determination_snapshot",
+        "src/evidence.rs",
+        EVIDENCE_SOURCE,
+        "pub(crate) struct MethodRigidityDeterminationSnapshot"
     ),
     method_parameter_carrier!(
         "occurrence.selected_rigidity",
@@ -4799,6 +4813,81 @@ fn goal_key_argument_markers_reserve_fallibly_before_every_push() {
             "every argument marker must reserve one cell and map allocation failure to ConstraintResource",
         );
     }
+}
+
+#[test]
+fn determination_snapshot_has_no_uncharged_pending_prescan() {
+    const FUNCTION: [&str; 3] = ["fn", "prepare_determination_snapshot", "<"];
+    const ITERATOR_PRESCAN: [&str; 7] = [".", "iter", "(", ")", ".", "any", "("];
+
+    let tokens = production_rust_code_tokens(EVIDENCE_SOURCE);
+    let function = tokens
+        .windows(FUNCTION.len())
+        .position(|window| window == FUNCTION)
+        .expect("determination snapshot preparation should exist");
+    let body_open = tokens[function..]
+        .iter()
+        .position(|token| *token == "{")
+        .map(|offset| function + offset)
+        .expect("determination snapshot preparation should have a body");
+    let body_close = matching_token(&tokens, body_open, "{", "}");
+    let body = &tokens[body_open + 1..body_close];
+
+    assert!(
+        !body
+            .windows(ITERATOR_PRESCAN.len())
+            .any(|window| window == ITERATOR_PRESCAN),
+        "determination snapshot eligibility must use the captured pending marker instead of an uncharged suffix pre-scan",
+    );
+}
+
+#[test]
+fn implementation_prerequisite_containment_uses_the_canonical_owner_index() {
+    const FUNCTION: [&str; 3] = [
+        "fn",
+        "authenticate_implementation_prerequisite_binders",
+        "(",
+    ];
+    const NESTED_HEAD_SCAN: [&str; 10] = [
+        "fact",
+        ".",
+        "head_parameters",
+        ".",
+        "iter",
+        "(",
+        ")",
+        ".",
+        "any",
+        "(",
+    ];
+    const CANONICAL_LOOKUP: [&str; 6] = ["canonical_variables", ".", "get", "(", "identity", ")"];
+
+    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/resolved.rs"))
+        .expect("resolved source should be readable");
+    let tokens = production_rust_code_tokens(&source);
+    let function = tokens
+        .windows(FUNCTION.len())
+        .position(|window| window == FUNCTION)
+        .expect("implementation prerequisite binder authentication should exist");
+    let body_open = tokens[function..]
+        .iter()
+        .position(|token| *token == "{")
+        .map(|offset| function + offset)
+        .expect("implementation prerequisite binder authentication should have a body");
+    let body_close = matching_token(&tokens, body_open, "{", "}");
+    let body = &tokens[body_open + 1..body_close];
+
+    assert!(
+        !body
+            .windows(NESTED_HEAD_SCAN.len())
+            .any(|window| window == NESTED_HEAD_SCAN),
+        "charged prerequisite variables must not trigger an uncharged scan of every implementation head parameter",
+    );
+    assert!(
+        body.windows(CANONICAL_LOOKUP.len())
+            .any(|window| window == CANONICAL_LOOKUP),
+        "prerequisite containment must use the canonical binder-owner index built during head setup",
+    );
 }
 
 #[test]

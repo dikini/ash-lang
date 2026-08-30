@@ -13,8 +13,8 @@ use crate::{
         CanonicalNominalKind, ResolvedConstructor, ResolvedDefinition, ResolvedDefinitionKind,
         ResolvedExpr, ResolvedExprKind, ResolvedImplementation, ResolvedInterfaceApplication,
         ResolvedInterfaceDeclaration, ResolvedLocalDeclaration, ResolvedModuleParts,
-        ResolvedRecursiveMember, ResolvedRegistry, ResolvedRequirement, ResolvedType,
-        ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        ResolvedRecursiveMember, ResolvedRegistry, ResolvedType, ResolvedTypeProvenance,
+        ResolvedTypeProvenanceNode,
     },
     source::Span,
     types::{
@@ -247,6 +247,13 @@ struct NominalKindFact {
 #[derive(Clone, Copy)]
 struct InterfaceKindFact<'a> {
     parameters: &'a [crate::resolved::ResolvedTypeVariable],
+    determination: Option<InterfaceKindDetermination<'a>>,
+}
+
+#[derive(Clone, Copy)]
+enum InterfaceKindDetermination<'a> {
+    Resolved(&'a crate::resolved::ResolvedInterfaceDetermination),
+    Checked(&'a crate::interface::DeterminationKey),
 }
 
 /// Fixed kind environments used by the total synthesis judgment.
@@ -922,6 +929,59 @@ impl<'a> KindEnvironments<'a> {
         }
     }
 
+    /// Checks a paired global value type while permitting only the
+    /// independently authenticated dependent-only binders supplied by the
+    /// caller to remain absent from that value type.
+    pub(crate) fn expect_body_free_paired_global_value_type_with_ledger(
+        &self,
+        checked: &Type,
+        source: &Type,
+        allowed_unused: &[TypeVariableId],
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        let mut visited = HashSet::new();
+        budget.charge(self.delta.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "linked owner-binder coverage exceeded its owning work budget",
+            )
+        })?;
+        visited.try_reserve(self.delta.len()).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "linked owner-binder coverage could not reserve storage",
+            )
+        })?;
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(
+            checked,
+            None,
+            Some(source),
+            None,
+            None,
+            Some(&mut visited),
+            span,
+            &mut ledger,
+        )?;
+        self.authenticate_global_owner_coverage(&visited, allowed_unused, span, &mut ledger)?;
+        let equal =
+            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free value kind checking exceeded its owning work budget",
+                )
+            })?;
+        if equal {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "a checked body-free value scheme does not end at kind Type",
+            ))
+        }
+    }
+
     /// Checks one checked value type and requires every installed Kind mirror
     /// to be exercised by an owner-binder occurrence.
     pub(crate) fn expect_body_free_exact_owner_value_type_with_ledger(
@@ -975,6 +1035,104 @@ impl<'a> KindEnvironments<'a> {
                 "a checked body-free value scheme does not end at kind Type",
             ))
         }
+    }
+
+    /// Checks an operational global value type with the same authenticated
+    /// dependent-only exception as the paired equational path.
+    pub(crate) fn expect_body_free_exact_global_value_type_with_ledger(
+        &self,
+        ty: &Type,
+        allowed_unused: &[TypeVariableId],
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        let mut visited = HashSet::new();
+        budget.charge(self.delta.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "linked owner-binder coverage exceeded its owning work budget",
+            )
+        })?;
+        visited.try_reserve(self.delta.len()).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "linked owner-binder coverage could not reserve storage",
+            )
+        })?;
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        let found = self.synthesize_with_ledger(
+            ty,
+            None,
+            None,
+            None,
+            None,
+            Some(&mut visited),
+            span,
+            &mut ledger,
+        )?;
+        self.authenticate_global_owner_coverage(&visited, allowed_unused, span, &mut ledger)?;
+        let equal =
+            same_kind_with_charge(&TYPE_KIND, found.kind, || ledger.charge(1)).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "body-free value kind checking exceeded its owning work budget",
+                )
+            })?;
+        if equal {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "a checked body-free value scheme does not end at kind Type",
+            ))
+        }
+    }
+
+    fn authenticate_global_owner_coverage(
+        &self,
+        visited: &HashSet<TypeVariableId>,
+        allowed_unused: &[TypeVariableId],
+        span: Span,
+        budget: &mut impl KindWorkLedger,
+    ) -> Result<(), KindFailure> {
+        budget.charge(allowed_unused.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "linked dependent-only binder retention exceeded its owning work budget",
+            )
+        })?;
+        let mut allowed = HashSet::new();
+        allowed.try_reserve(allowed_unused.len()).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "linked dependent-only binder retention could not reserve storage",
+            )
+        })?;
+        for identity in allowed_unused {
+            if !self.delta.contains_key(identity) || !allowed.insert(*identity) {
+                return Err(KindFailure::internal(
+                    span,
+                    "a linked global has an invalid dependent-only binder allowance",
+                ));
+            }
+        }
+        budget.charge(self.delta.len()).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "linked global owner-binder coverage exceeded its owning work budget",
+            )
+        })?;
+        if self
+            .delta
+            .keys()
+            .any(|identity| !visited.contains(identity) && !allowed.contains(identity))
+        {
+            return Err(KindFailure::internal(
+                span,
+                "a linked value scheme retains an unused owner binder",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn insert_nominal(
@@ -1057,6 +1215,17 @@ impl<'a> KindEnvironments<'a> {
         origin: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
+        self.insert_interface_with_determination(identity, parameters, None, origin, budget)
+    }
+
+    fn insert_interface_with_determination(
+        &mut self,
+        identity: InterfaceId,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        determination: Option<InterfaceKindDetermination<'a>>,
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
         if parameters.is_empty() {
             return Err(KindFailure::internal(
                 origin,
@@ -1102,7 +1271,13 @@ impl<'a> KindEnvironments<'a> {
                 "interface kind environment could not reserve storage",
             )
         })?;
-        self.iota.insert(identity, InterfaceKindFact { parameters });
+        self.iota.insert(
+            identity,
+            InterfaceKindFact {
+                parameters,
+                determination,
+            },
+        );
         Ok(())
     }
 
@@ -2203,9 +2378,13 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
             has_invalid_determination = true;
         }
         authenticate_owner_parameters(&module.registry, &interface.parameters, budget)?;
-        environments.insert_interface(
+        environments.insert_interface_with_determination(
             interface.id,
             &interface.parameters,
+            interface
+                .determination
+                .as_ref()
+                .map(InterfaceKindDetermination::Resolved),
             interface.span,
             budget,
         )?;
@@ -2433,9 +2612,12 @@ fn authenticate_imported_environments<'a>(
     }
     for imported_interface in imported.interface_imports() {
         let interface = &imported_interface.fact;
-        environments.insert_interface(
+        environments.insert_interface_with_determination(
             interface.id,
             &interface.parameters,
+            interface
+                .determination()
+                .map(InterfaceKindDetermination::Checked),
             interface.span,
             budget,
         )?;
@@ -2639,9 +2821,11 @@ fn interface_determination_is_total(
     })
 }
 
+#[derive(Clone, Copy)]
 struct CompleteInterfaceApplication<'application, 'kind> {
     arguments: &'application [ResolvedType],
     parameters: &'kind [crate::resolved::ResolvedTypeVariable],
+    determination: Option<InterfaceKindDetermination<'kind>>,
 }
 
 fn authenticate_interface_application<'application, 'kind>(
@@ -2676,6 +2860,7 @@ fn authenticate_interface_application<'application, 'kind>(
     Ok(Some(CompleteInterfaceApplication {
         arguments: &application.arguments,
         parameters: expected.parameters,
+        determination: expected.determination,
     }))
 }
 
@@ -2687,6 +2872,7 @@ fn check_interface_application_kinds(
     let CompleteInterfaceApplication {
         arguments,
         parameters,
+        ..
     } = application;
     for (argument, parameter) in arguments.iter().zip(parameters) {
         environments.expect_interface_argument(
@@ -2893,7 +3079,12 @@ fn check_definition<'a>(
                 else {
                     return Ok(DeclarationKindOutcome::Deferred);
                 };
-                if requirement_has_undetermined_variable(requirement, &determined, budget)? {
+                if requirement_has_undetermined_variable(
+                    checked,
+                    requirement.application.span,
+                    &determined,
+                    budget,
+                )? {
                     return Ok(DeclarationKindOutcome::Deferred);
                 }
                 check_interface_application_kinds(checked, environments, budget)?;
@@ -2931,7 +3122,12 @@ fn check_definition<'a>(
                 else {
                     return Ok(DeclarationKindOutcome::Deferred);
                 };
-                if requirement_has_undetermined_variable(requirement, &determined, budget)? {
+                if requirement_has_undetermined_variable(
+                    checked,
+                    requirement.application.span,
+                    &determined,
+                    budget,
+                )? {
                     return Ok(DeclarationKindOutcome::Deferred);
                 }
                 check_interface_application_kinds(checked, environments, budget)?;
@@ -3019,17 +3215,108 @@ fn push_determination_work<'a>(
 }
 
 fn requirement_has_undetermined_variable(
-    requirement: &ResolvedRequirement,
+    requirement: CompleteInterfaceApplication<'_, '_>,
+    span: Span,
     determined: &[TypeVariableId],
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, KindFailure> {
-    for argument in &requirement.application.arguments {
-        let mut variables = Vec::new();
-        collect_type_variables(&argument.ty, argument.span, &mut variables, budget)?;
-        for identity in variables {
-            if !contains_type_variable_with_budget(determined, identity, argument.span, budget)? {
-                return Ok(true);
+    match requirement.determination {
+        None => {
+            for position in 0..requirement.arguments.len() {
+                if requirement_argument_has_undetermined_variable(
+                    requirement.arguments,
+                    position,
+                    span,
+                    determined,
+                    budget,
+                )? {
+                    return Ok(true);
+                }
             }
+        }
+        Some(InterfaceKindDetermination::Resolved(determination)) => {
+            let mut next = 0;
+            for (position, parameter) in requirement.parameters.iter().enumerate() {
+                budget.charge(1).map_err(|()| {
+                    KindFailure::resource(
+                        span,
+                        "global determinant-position authentication exceeded its type-work budget",
+                    )
+                })?;
+                if determination
+                    .determinant
+                    .parameters
+                    .get(next)
+                    .is_some_and(|candidate| candidate.id == parameter.id)
+                {
+                    if requirement_argument_has_undetermined_variable(
+                        requirement.arguments,
+                        position,
+                        span,
+                        determined,
+                        budget,
+                    )? {
+                        return Ok(true);
+                    }
+                    next += 1;
+                }
+            }
+            if next != determination.determinant.parameters.len() {
+                return Err(KindFailure::internal(
+                    span,
+                    "an authenticated source determination has an invalid key",
+                ));
+            }
+        }
+        Some(InterfaceKindDetermination::Checked(determination)) => {
+            let mut previous = None;
+            for &position in determination.positions() {
+                budget.charge(1).map_err(|()| {
+                    KindFailure::resource(
+                        span,
+                        "global determinant-position authentication exceeded its type-work budget",
+                    )
+                })?;
+                if previous.is_some_and(|previous| previous >= position) {
+                    return Err(KindFailure::internal(
+                        span,
+                        "an authenticated summary determination has an invalid key",
+                    ));
+                }
+                previous = Some(position);
+                if requirement_argument_has_undetermined_variable(
+                    requirement.arguments,
+                    position,
+                    span,
+                    determined,
+                    budget,
+                )? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn requirement_argument_has_undetermined_variable(
+    arguments: &[ResolvedType],
+    position: usize,
+    span: Span,
+    determined: &[TypeVariableId],
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, KindFailure> {
+    let argument = arguments.get(position).ok_or_else(|| {
+        KindFailure::internal(
+            span,
+            "an authenticated determinant position is outside its complete application",
+        )
+    })?;
+    let mut variables = Vec::new();
+    collect_type_variables(&argument.ty, argument.span, &mut variables, budget)?;
+    for identity in variables {
+        if !contains_type_variable_with_budget(determined, identity, argument.span, budget)? {
+            return Ok(true);
         }
     }
     Ok(false)
@@ -3657,9 +3944,10 @@ mod tests {
         resolved::{
             Binder, BinderId, ImportedFacts, ResolvedApplicationExpr, ResolvedBlock,
             ResolvedConstructor, ResolvedDeclarationIndex, ResolvedDefinition,
-            ResolvedEquationalGlobal, ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind,
-            ResolvedExternalInterface, ResolvedImplementation, ResolvedInterfaceApplication,
-            ResolvedInterfaceDeclaration, ResolvedInterfaceMethod, ResolvedInterfaceOccurrence,
+            ResolvedDeterminationParameter, ResolvedDeterminationSide, ResolvedEquationalGlobal,
+            ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
+            ResolvedImplementation, ResolvedInterfaceApplication, ResolvedInterfaceDeclaration,
+            ResolvedInterfaceDetermination, ResolvedInterfaceMethod, ResolvedInterfaceOccurrence,
             ResolvedNominalType, ResolvedRegistry, ResolvedRequirement, ResolvedType,
             ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
             discard_resolved_expression_iteratively,
@@ -4086,6 +4374,105 @@ mod tests {
         assert_eq!(exact.used(), arity_work);
 
         assert_valid_application_preflight_has_an_exact_retryable_boundary();
+    }
+
+    #[test]
+    fn determined_global_deferral_reads_only_authenticated_key_positions() {
+        // The source-key path scans both canonical parameters (2), schedules
+        // and visits the selected variable (2), retains its discovered
+        // identity (1), and checks value-type membership (1).
+        const EXACT_WORK: usize = 6;
+        let span = span();
+        let module = ModuleId::new(9_811);
+        let key = TypeVariableId::resolved(module, 0);
+        let dependent = TypeVariableId::resolved(module, 1);
+        let parameters = [
+            ResolvedTypeVariable {
+                id: key,
+                spelling: "Key".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: dependent,
+                spelling: "Value".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+        ];
+        let occurrence = |parameter: &ResolvedTypeVariable| ResolvedDeterminationParameter {
+            id: parameter.id,
+            spelling: parameter.spelling.clone(),
+            origin: Origin::Source(span),
+        };
+        let determination = ResolvedInterfaceDetermination {
+            determinant: ResolvedDeterminationSide {
+                parameters: Box::new([occurrence(&parameters[0])]),
+                span,
+            },
+            dependent: ResolvedDeterminationSide {
+                parameters: Box::new([occurrence(&parameters[1])]),
+                span,
+            },
+            span,
+        };
+        let arguments = [
+            fact_type(Type::Variable(key), span),
+            fact_type(Type::Variable(dependent), span),
+        ];
+        let application = |determination| CompleteInterfaceApplication {
+            arguments: &arguments,
+            parameters: &parameters,
+            determination,
+        };
+
+        let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert!(matches!(
+            requirement_has_undetermined_variable(
+                application(Some(InterfaceKindDetermination::Resolved(&determination))),
+                span,
+                &[key],
+                &mut short,
+            ),
+            Err(KindFailure::Resource(_))
+        ));
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+            assert_eq!(
+                requirement_has_undetermined_variable(
+                    application(Some(InterfaceKindDetermination::Resolved(&determination))),
+                    span,
+                    &[key],
+                    &mut exact,
+                ),
+                Ok(false),
+                "a dependent-only binder must not defer a determined global",
+            );
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
+
+        assert_eq!(
+            requirement_has_undetermined_variable(
+                application(None),
+                span,
+                &[key],
+                &mut TypeWorkBudget::unbounded(),
+            ),
+            Ok(true),
+            "the no-edge predecessor must still require every argument variable",
+        );
+        assert_eq!(
+            requirement_has_undetermined_variable(
+                application(Some(InterfaceKindDetermination::Resolved(&determination))),
+                span,
+                &[dependent],
+                &mut TypeWorkBudget::unbounded(),
+            ),
+            Ok(true),
+            "an absent key binder must still defer the global",
+        );
     }
 
     #[test]

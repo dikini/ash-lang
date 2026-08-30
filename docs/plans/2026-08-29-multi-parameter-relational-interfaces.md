@@ -757,15 +757,22 @@ lib-ash is complete. `spec/` remains unchanged through Checkpoint 6; Checkpoint
 
 **Files:**
 
+- Modify: `src/core/validate.rs`
+- Modify: `src/driver.rs`
 - Modify: `src/interface.rs`
 - Modify: `src/evidence.rs`
+- Modify: `src/evidence_validation.rs`
 - Modify: `src/elaborate.rs`
+- Modify: `src/kind.rs`
 - Modify: `src/resolved.rs`
+- Modify: `tests/architecture.rs`
 - Modify: `tests/interfaces.rs`
 - Modify: `tests/interface_selection.rs`
 - Modify: `tests/implementations.rs`
 - Modify: `tests/polymorphism.rs`
 - Modify: `tests/interface_diagnostics.rs`
+- Modify: `tests/method_parameter_resources.rs`
+- Modify: `tests/resolution.rs`
 
 ### Step 1: Write and witness concrete improvement RED
 
@@ -859,6 +866,12 @@ dependents, and separate requirements that could form a chain. Reject the
 same-key pair as `constraint.determination-conflict`; do not equate outputs or
 perform cross-requirement improvement.
 
+Apply the same complete-before-key classification to implementation
+prerequisites after application arity and positional-kind preflight. Visit the
+current prerequisite and earlier prerequisites in source order; the first
+classified pair owns the failure before every later implementation-header
+rule. Detached summaries independently authenticate the same order.
+
 ### Step 5: Verify, review, and commit improvement
 
 Run:
@@ -877,11 +890,41 @@ git diff --check
 After both reviews and corrections, commit:
 
 ```text
-git add src tests
+git add docs/proposals/CP-0011-multi-parameter-relational-interfaces.md docs/tasks/TASK-0018-implement-multi-parameter-relational-interfaces.md docs/plans/2026-08-29-multi-parameter-relational-interfaces.md src tests
 git -c commit.gpgsign=false commit -m "feat: improve determined interface goals"
 ```
 
 Record cumulative reserved use as 50/65 and 15 units remaining.
+
+### Checkpoint 5 result
+
+- Improvement snapshots eligible determined obligations before mutation and
+  processes that snapshot once in source order. It retains abstract,
+  exact-current, and unique-concrete priority, transactionally unifies only the
+  dependent tuple, and leaves evidence selection to the complete-goal close
+  path. No-edge obligations use the predecessor path without added work.
+- Determined global requirements retain dependent-only binders while requiring
+  every key variable in the value type. Source, body-free summary, linked, and
+  final-synthesis checks authenticate the complete application without
+  propagating between requirements.
+- The approved prerequisite-ordering amendment classifies complete duplicates
+  before same-key conflicts in source order after arity and kinds and before
+  later implementation-header admission. Detached summaries preflight every
+  application before applying the same pair order.
+- Exact amendment boundaries are 28 constraint units for a source determined
+  conflict, 6 for a detached complete duplicate, and 9 for a detached same-key
+  conflict. The malformed detached preflight prefix is 53 type and 21
+  constraint units. Wide prerequisite containment is `4W`, with an atomic
+  one-short stop at `3W`; no production limit changed.
+- Semantic review corrected detached kind-preflight order and replaced invalid
+  repeated-prerequisite downstream fixtures with legal stable-identity cases.
+  Rust/resource review replaced an uncharged quadratic containment scan with
+  one canonical-owner lookup per charged variable. Both reviewers approve the
+  corrections on re-review.
+
+Cumulative reserved use is 50/65; 15 units remain. Neither TASK-0018 nor
+lib-ash is complete. `spec/` remains unchanged through Checkpoint 6; Checkpoint
+7 owns normative reconciliation.
 
 ## Checkpoint 6: Adversarial linking, resources, and downstream pressure — 8 units
 

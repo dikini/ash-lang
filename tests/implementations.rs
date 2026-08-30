@@ -6,8 +6,9 @@ use std::{
 
 use ash::{
     elaborate::{TypeError, check_module},
+    kind::KindFailure,
     module::{ModuleGraph, ModuleRoots, load_module_graph},
-    resolve::{DependencyExports, resolve_module},
+    resolve::{DependencyExports, ResolveModuleError, resolve_module},
     resolved::CheckedModule,
     types::{Kind, Type},
 };
@@ -82,6 +83,19 @@ fn check_error(text: &str) -> TypeError {
 fn check_error_with_dependencies(text: &str, dependencies: &[(&str, &str)]) -> TypeError {
     let fixture = ImplementationFixture::create(text, dependencies);
     check_fixture_error(&fixture)
+}
+
+fn kind_reason(text: &str) -> String {
+    let fixture = ImplementationFixture::create(text, &[]);
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the implementation kind fixture should load");
+    let loaded = graph
+        .module(graph.entry())
+        .expect("the implementation kind fixture should retain its entry");
+    match resolve_module(loaded, &[]).expect_err("the implementation kind fixture should fail") {
+        ResolveModuleError::Kind(KindFailure::Source(error)) => error.reason.to_string(),
+        other => panic!("expected a source kind failure, found {other:?}"),
+    }
 }
 
 fn check_fixture_error(fixture: &ImplementationFixture) -> TypeError {
@@ -215,6 +229,130 @@ fn source_reason(error: &TypeError) -> String {
         panic!("expected a typed source diagnostic, found {error:?}");
     };
     diagnostic.reason.to_string()
+}
+
+#[test]
+fn implementation_prerequisites_classify_complete_identity_before_determined_key() {
+    const DECLARATIONS: &str = concat!(
+        "interface Relation<Key, Value> where Key -> Value {\n",
+        "relate : Key -> Int\n",
+        "}\n\n",
+        "interface Target<A> {\n",
+        "target : A -> A\n",
+        "}\n\n",
+    );
+    for (label, prerequisites, expected) in [
+        (
+            "complete determined duplicate",
+            "Relation<Int, Bool>, Relation<Int, Bool>",
+            "constraint.duplicate-requirement",
+        ),
+        (
+            "same determined key with distinct dependents",
+            "Relation<Int, Bool>, Relation<Int, Unit>",
+            "constraint.determination-conflict",
+        ),
+    ] {
+        let error = check_error(&format!(
+            "{DECLARATIONS}impl Target<Int> where {prerequisites} {{\ntarget value = value\n}}\n"
+        ));
+        assert_eq!(reason(&error), expected, "{label}");
+    }
+}
+
+#[test]
+fn application_preflight_precedes_implementation_prerequisite_classification() {
+    let arity = check_error(concat!(
+        "interface Pair<Left, Right> {\npair : (Left, Right) -> Left\n}\n\n",
+        "interface Target<A> {\ntarget : A -> A\n}\n\n",
+        "impl Target<Int> where Pair<Int>, Pair<Int> {\n",
+        "target value = value\n",
+        "}\n",
+    ));
+    assert_eq!(reason(&arity), "interface.argument-count");
+
+    let kind = kind_reason(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n",
+        "interface Higher<F : Type -> Type, Value> {\n",
+        "higher : F<Value> -> Value\n",
+        "}\n\n",
+        "interface Target<A> {\ntarget : A -> A\n}\n\n",
+        "impl Target<Int> where Higher<Int, Bool>, Higher<Int, Bool> {\n",
+        "target value = value\n",
+        "}\n",
+    ));
+    assert_eq!(kind, "kind.argument");
+}
+
+#[test]
+fn no_edge_implementation_prerequisite_duplicates_retain_predecessor_behavior() {
+    let error = check_error(concat!(
+        "interface Inspect<A> {\ninspect : A -> A\n}\n\n",
+        "impl Inspect<Int> where Inspect<Bool>, Inspect<Bool> {\n",
+        "inspect value = value\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "constraint.duplicate-requirement");
+}
+
+#[test]
+fn distinct_implementation_prerequisite_keys_remain_valid_with_and_without_an_edge() {
+    check_valid(concat!(
+        "type Pair<A, B> = Pair(A, B)\n",
+        "interface Inspect<A> {\ninspect : A -> Int\n}\n\n",
+        "impl<A, B> Inspect<Pair<A, B>> where Inspect<A>, Inspect<B> {\n",
+        "inspect value = 0\n",
+        "}\n",
+    ));
+    check_valid(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "interface Relation<Key, Value> where Key -> Value {\n",
+        "relate : Key -> Int\n",
+        "}\n\n",
+        "impl<A> Relation<List<A>, A> where Relation<A, A>, Relation<Bool, Unit> {\n",
+        "relate value = 0\n",
+        "}\n",
+    ));
+}
+
+#[test]
+fn duplicate_prerequisites_precede_all_later_implementation_header_failures() {
+    let early_header_failures = check_error(concat!(
+        "interface Requirement<A> {\nrequirement : A -> Int\n}\n\n",
+        "interface Relation<Key, Value> where Key -> Value {\n",
+        "relate : Key -> Int\n",
+        "}\n\n",
+        "impl<Key, Value> Relation<Key, Value> ",
+        "where Requirement<Missing>, Requirement<Missing> {\n",
+        "relate value = 0\n",
+        "}\n",
+    ));
+    assert_eq!(
+        reason(&early_header_failures),
+        "constraint.duplicate-requirement",
+        "prerequisite classification must precede variable-head, containment, and coverage",
+    );
+
+    let later_header_failures = check_error_with_dependencies(
+        concat!(
+            "import dependency (Foreign, foreign)\n",
+            "interface Private<A> {\nprivate : A -> Int\n}\n\n",
+            "pub impl<A> Foreign<A -> A> ",
+            "where Private<A -> A>, Private<A -> A> {\n",
+            "foreign value = 0\n",
+            "}\n",
+        ),
+        &[(
+            "dependency.ash",
+            "pub interface Foreign<A> {\nforeign : A -> Int\n}\n",
+        )],
+    );
+    assert_eq!(
+        reason(&later_header_failures),
+        "constraint.duplicate-requirement",
+        "prerequisite classification must precede orphan ownership, decrease, and privacy",
+    );
 }
 
 #[test]
@@ -1241,6 +1379,16 @@ fn rejects_redundant_impl_method_equation() {
 
 #[test]
 fn failed_public_impl_stages_never_produce_a_checked_summary() {
+    public_impl_failure_does_not_publish(
+        concat!(
+            "pub interface Inspect<A> {\ninspect : A -> A\n}\n",
+            "pub impl Inspect<Int> where Inspect<Bool>, Inspect<Bool> {\n",
+            "inspect value = value\n",
+            "}\n",
+        ),
+        "constraint.duplicate-requirement",
+    );
+
     public_impl_failure_does_not_publish(
         concat!(
             "pub interface Equal<A> {\nequal : A -> A\n}\n",

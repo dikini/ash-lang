@@ -277,31 +277,31 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "occurrence publication type ledger",
             EVIDENCE_SOURCE,
             "fn pending_method_arguments_have_exact_atomic_publication_boundaries()",
-            "const EXACT_TYPE_WORK: usize = 2;",
+            "const EXACT_TYPE_WORK: usize = 1 + 2;",
         ),
         (
             "selected method rigidity",
             EVIDENCE_SOURCE,
             "fn isolated_method_rigidity_close_has_exact_atomic_retry_boundaries()",
-            "const EXACT_CONSTRAINT_WORK: usize = 25;",
+            "const EXACT_CONSTRAINT_WORK: usize = 25 + 3;",
         ),
         (
             "selected method rigidity type ledger",
             EVIDENCE_SOURCE,
             "fn isolated_method_rigidity_close_has_exact_atomic_retry_boundaries()",
-            "const EXACT_TYPE_WORK: usize = 3;",
+            "const EXACT_TYPE_WORK: usize = 3 + 4;",
         ),
         (
             "shifted method rigidity",
             EVIDENCE_SOURCE,
             "fn isolated_method_rigidity_close_charges_the_exact_removal_shift()",
-            "const EXACT_CONSTRAINT_WORK: usize = 27;",
+            "const EXACT_CONSTRAINT_WORK: usize = 27 + 3;",
         ),
         (
             "shifted method rigidity type ledger",
             EVIDENCE_SOURCE,
             "fn isolated_method_rigidity_close_charges_the_exact_removal_shift()",
-            "const EXACT_TYPE_WORK: usize = 3;",
+            "const EXACT_TYPE_WORK: usize = 3 + 4;",
         ),
         (
             "conditional rigidity ingress constraint ledger",
@@ -313,7 +313,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "conditional rigidity ingress type ledger",
             EVIDENCE_SOURCE,
             "fn conditional_method_rigidity_ingress_has_exact_atomic_retry_boundaries()",
-            "const EXACT_TYPE_WORK: usize = 1;",
+            "const EXACT_TYPE_WORK: usize = 1 + 1;",
         ),
         (
             "wide conditional rigidity ingress constraint ledger",
@@ -325,7 +325,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "wide conditional rigidity ingress type ledger",
             EVIDENCE_SOURCE,
             "fn wide_conditional_method_rigidity_ingress_is_exact_and_atomic()",
-            "const EXACT_TYPE_WORK: usize = 1;",
+            "const EXACT_TYPE_WORK: usize = 1 + 1;",
         ),
         (
             "method occurrence Kind copies",
@@ -337,7 +337,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "Core evidence-scope carriers",
             ELABORATE_SOURCE,
             "fn evidence_scope_entry_has_an_exact_carrier_boundary_and_fresh_retry()",
-            "const EXACT_WORK: usize = 4 + 2;",
+            "const EXACT_WORK: usize = 1 + 3 + 1 + 2;",
         ),
         (
             "selected rigidity traversal",
@@ -361,7 +361,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "linked catalog type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn linked_method_evidence_catalog_has_exact_independent_ledgers()",
-            "assert_eq!(type_work, 74);",
+            "assert_eq!(type_work, 79);",
         ),
         (
             "abstract producer catalog",
@@ -373,19 +373,19 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "abstract producer type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn widened_abstract_producer_lookup_has_an_exact_retry_boundary()",
-            "const TYPE_WORK: usize = 32;",
+            "const TYPE_WORK: usize = 38;",
         ),
         (
             "concrete source catalog",
             EVIDENCE_VALIDATION_SOURCE,
             "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "const CONSTRAINT_WORK: usize = 122 + 8 + 1 + 1 + 2 + 1 + 1 + 5;",
+            "const CONSTRAINT_WORK: usize = 122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4;",
         ),
         (
             "concrete source type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "const TYPE_WORK: usize = 36;",
+            "const TYPE_WORK: usize = 45;",
         ),
         (
             "Core Builder carriers",
@@ -397,13 +397,13 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "Core Builder anchor publication",
             CORE_DIALECT_SOURCE,
             "fn one_method_evidence_anchor_and_finish_have_an_exact_retry_boundary()",
-            "const AUTHENTICATE_AND_FINISH_WORK: usize = 14;",
+            "const AUTHENTICATE_AND_FINISH_WORK: usize = 16;",
         ),
         (
             "concrete Core validation",
             CORE_VALIDATE_SOURCE,
             "fn concrete_monomorphic_source_validation_has_an_exact_retry_boundary()",
-            "const EXACT_WORK: usize = 584 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;",
+            "const EXACT_WORK: usize = 632 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;",
         ),
         (
             "wide-prerequisite Core validation",
@@ -415,13 +415,13 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "monomorphic adapter producer validation",
             CORE_VALIDATE_SOURCE,
             "fn monomorphic_adapter_edge_identity_has_an_exact_validation_boundary()",
-            "const EXACT_WORK: usize = 646 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;",
+            "const EXACT_WORK: usize = 705 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;",
         ),
         (
             "independent Core validation",
             CORE_VALIDATE_SOURCE,
             "fn independent_method_evidence_authority_has_an_exact_retry_boundary()",
-            "2_197 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;",
+            "2_284 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;",
         ),
         (
             "checked type worklist",
@@ -433,7 +433,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "Core transform replay",
             CORE_TRANSFORM_SOURCE,
             "fn linked_method_transforms_have_exact_anchor_remap_and_arc_lifecycle_boundaries()",
-            "const CORE_WORK: usize = 673 + CONCRETE_SOURCE_LOOKUP_WORK;",
+            "const CORE_WORK: usize = 673\n            + COMPLETE_APPLICATION_WORK\n            + ALL_METHOD_CATALOG_LOOKUP_WORK\n            + CONCRETE_SOURCE_LOOKUP_WORK;",
         ),
         (
             "Core transform second Builder carrier",
@@ -490,12 +490,12 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
     assert_eq!(1 + 2, 3);
     assert_eq!(7 - 1, 6);
     assert_eq!(85 + 2 * 2, 89);
-    assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5, 141);
-    assert_eq!(584 + 1 + 1 + 1 + 1 + 45, 633);
-    assert_eq!(1_084 + 2 * 2 + 2 + 2, 1_092);
-    assert_eq!(646 + (49 + 5 + 1) + 45, 746);
-    assert_eq!(2_197 + 22 + 28 + 92, 2_339);
-    assert_eq!(673 + 4 + 4 + 1 + 4, 686);
+    assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4, 156);
+    assert_eq!(632 + 1 + 1 + 1 + 1 + 45, 681);
+    assert_eq!(1_175 + 2 * 2 + 2 + 2, 1_183);
+    assert_eq!(705 + (49 + 5 + 1) + 45, 805);
+    assert_eq!(2_284 + 22 + 28 + 92, 2_426);
+    assert_eq!(673 + (4 + 4 + 3 + 5) + 8 + 4 + 4 + 1 + 4, 710);
 }
 
 #[test]
