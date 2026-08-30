@@ -96,6 +96,31 @@ syntax, packages, runtime interface lookup, and evaluator changes.
 - Final semantic/authority review (`gpt-5.6-sol`, `xhigh`) and Rust/resource
   review (`gpt-5.6-sol`, `high`) approve Checkpoint 2 without findings after
   correction. Cumulative reserved use is 14/65; 51 units remain.
+- Checkpoint 3 carries one private complete ordered interface application and
+  ordered parameter records through checked requirements, implementation
+  facts, selections, summaries, linked validation, elaboration, Core sidecars,
+  independent Core validation, and both Core transforms. Core and the evaluator
+  retain no determination metadata or runtime interface mechanism.
+- Ordinary multi-parameter interfaces now require every interface parameter in
+  every method value type, substitute interface parameters before method-local
+  parameters, and use complete vectors for overlap, orphan ownership,
+  pointwise generic prerequisite decrease, ground cycles, and evidence
+  selection. Arity precedes positional kind checking at every source owner.
+- Summary, linked, and Core tampering matrices reject missing, extra,
+  reordered, wrong-kind, and wrong-identity relational carriers. Review also
+  corrected implementation failure precedence and added a charged linked
+  comparison between each checked implementation token and its complete fact.
+- Checkpoint 3 verification passes 741 library tests, interfaces 36/36,
+  implementations 55/55, selection 25/25, diagnostics 36/36, kind syntax
+  15/15, imported kinds 3/3, interface resources 5/5, generic summaries 2/2,
+  interface validation 2/2, linked-validation unit tests 101/101, Core
+  validation 63/63, interface modules 20/20, and architecture 25/25.
+  Formatting, all-target checking, strict workspace all-target/all-feature
+  Clippy, and diff hygiene pass.
+- Independent semantic/authority review (`gpt-5.6-sol`, `xhigh`) and
+  Rust/resource review (`gpt-5.6-sol`, `high`) approve Checkpoint 3 after their
+  findings were corrected and re-reviewed. Cumulative reserved use is 30/65;
+  35 units remain.
 
 ## Verification
 
@@ -161,3 +186,53 @@ producers, but do not justify implementing their semantics in this task.
   and probe name in `tests/method_parameter_resources.rs`. The rejection row
   was removed, the fixed carrier cost rose by two events, and the resource test
   is now an explicit Checkpoint 2 migration; no resource limit changed.
+- Checkpoint 3's initial file list omitted `src/kind.rs`, which owns imported
+  and body-free interface kind vectors, and `tests/interface_modules.rs`, which
+  asserts the checked implementation-head API. The plan now includes both as
+  compiler-owned complete-carrier migrations; this does not add determination
+  admission or change the checkpoint allocation.
+- Checkpoint 3's initial verification list also omitted direct diagnostic,
+  kind-syntax, imported-kind, and exact interface-resource consumers. The plan
+  now names `tests/diagnostics.rs`, `tests/kinds_syntax.rs`,
+  `tests/kind_modules.rs`, and `tests/interface_resources.rs`; these exercise
+  existing arity, positional kinding, import, and accounting obligations and
+  do not expand the checkpoint's semantics or allocation.
+- The Checkpoint 3 resource audit found scalar exact-work probes embedded in
+  driver phase calibration and the kind, resolved-summary, elaboration,
+  evidence, linked-validation, and Core modules. They are now explicit
+  remeasurement points with vector-container work kept separate from recursive
+  type traversal; exact, one-short, and retry behavior must be retained without
+  raising production limits.
+- Checkpoint 3's initial staging list named `src/resolve.rs` but omitted its
+  existing test submodule `src/resolve/module_tests.rs`, which owns body-free
+  summary mutation and authentication tests. The plan now names that file for
+  the required missing, extra, reordered, wrong-kind, and wrong-identity
+  complete-application matrix; no new semantic owner or production path is
+  introduced.
+- The CP3 all-target compile exposed three stale scalar getter uses in
+  `tests/library_imports.rs` and `tests/interface_identity_diamond.rs`, which
+  were absent from the initial staging list. They are mechanical checked-
+  carrier API migrations to `interface()` and add no new semantics or
+  checkpoint allocation.
+- Source arity ownership required the kind gate to authenticate interface
+  membership but defer an incomplete vector before positional kinding.
+  Elaboration therefore retains `interface.argument-count`, while an
+  arity-correct wrong-kind position retains `kind.argument`.
+- Generic prerequisite decrease initially compared widths before recognizing a
+  ground application. Reordering groundness ahead of the generic pointwise
+  rule preserves ground cross-width prerequisites and full-application cycle
+  detection while different-width non-ground prerequisites still fail.
+- Rust review found partially constructed type and parameter vectors whose
+  ordinary `Vec` destruction could recurse through deep retained prefixes.
+  Narrow iterative owners now cover those clone, substitution, rejection, and
+  retry paths without changing a production resource limit.
+- Semantic review found privacy checking ahead of implementation-header
+  validity and a linked checked-implementation token whose argument vector was
+  not compared with its checked fact. Failure precedence now places privacy
+  after decrease, and linked validation charges and authenticates the complete
+  token application; its unary exact boundary increased by two measured units.
+- Final resource review found an infallible GoalKey marker reallocation and
+  dead scalar Core allowlist exceptions. GoalKey now reserves fallibly before
+  each ordered argument marker, and architecture guards require that reserve
+  and reject the obsolete scalar exceptions. Resource formulas and production
+  limits are unchanged.

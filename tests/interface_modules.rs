@@ -583,7 +583,7 @@ fn public_impl_retains_its_private_head_identity_as_hidden_metadata() {
     let [implementation] = dependency_checked.implementation_facts() else {
         panic!("the dependency should retain its public implementation");
     };
-    let ash::types::Type::Nominal(hidden) = implementation.argument() else {
+    let [ash::types::Type::Nominal(hidden)] = implementation.arguments() else {
         panic!("the implementation head should retain the private nominal identity");
     };
     let entry = module_named(&graph, "entry.ash");

@@ -2387,7 +2387,7 @@ impl Resolver {
                     "implementation selector summary inspection exceeded its work budget",
                 )
             })?;
-            if implementation.fact().interface == selected_interface {
+            if implementation.fact().interface() == selected_interface {
                 self.retain_imported_implementation_fact(implementation, summary, selection)?;
             }
         }
@@ -2780,15 +2780,27 @@ impl Resolver {
                 authority_method_indices.push(methods.len() - 1);
             }
         }
-        let parameter = self.clone_type_variable_for_retention(
-            &exported.parameter,
-            span,
-            "imported interface parameter exceeded its type-work budget",
-        )?;
+        let mut parameters = ImportedTypeVariableBuffer(Vec::new());
+        parameters
+            .try_reserve(exported.parameters.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported interface parameters exceeded their work budget",
+                )
+            })?;
+        for parameter in &exported.parameters {
+            parameters.push(self.clone_type_variable_for_retention(
+                parameter,
+                span,
+                "imported interface parameter exceeded its type-work budget",
+            )?);
+        }
         let retained = CheckedInterfaceFact {
             id: exported.id,
             spelling: exported.spelling.clone(),
-            parameter,
+            parameters: parameters.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
             origin: exported.origin.clone(),
             span: exported.span,
@@ -3025,16 +3037,16 @@ impl Resolver {
                     "imported implementation retention exceeded its work budget",
                 )
             })?;
-        self.constraint_work
-            .charge_type(&fact.argument)
-            .map_err(|()| {
+        for argument in fact.arguments() {
+            self.constraint_work.charge_type(argument).map_err(|()| {
                 error(
                     ResolveReason::ConstraintResourceExhausted,
                     span,
                     "imported implementation head exceeded its work budget",
                 )
             })?;
-        self.retain_type_nominals(&fact.argument, summary, span)?;
+            self.retain_type_nominals(argument, summary, span)?;
+        }
 
         self.type_work
             .charge(fact.prerequisites.len().saturating_add(fact.methods.len()))
@@ -3065,20 +3077,21 @@ impl Resolver {
                     "an implementation summary contains an invalid prerequisite identity",
                 ));
             }
-            self.constraint_work
-                .charge_type(&prerequisite.argument)
-                .map_err(|()| {
+            for argument in prerequisite.arguments() {
+                self.constraint_work.charge_type(argument).map_err(|()| {
                     error(
                         ResolveReason::ConstraintResourceExhausted,
                         span,
                         "imported prerequisite exceeded its work budget",
                     )
                 })?;
-            self.retain_type_nominals(&prerequisite.argument, summary, span)?;
+                self.retain_type_nominals(argument, summary, span)?;
+            }
             prerequisites.push(CheckedRequirement {
                 id: prerequisite.id,
-                interface: prerequisite.interface,
-                argument: clone_type_with_budget(&prerequisite.argument, &mut self.type_work)
+                application: prerequisite
+                    .application()
+                    .clone_with_budget(&mut self.type_work)
                     .map_err(|()| {
                         error(
                             ResolveReason::TypeResourceExhausted,
@@ -3118,7 +3131,7 @@ impl Resolver {
         let defining_interface = summary
             .interfaces()
             .chain(summary.hidden_interfaces())
-            .find(|interface| interface.id == fact.interface)
+            .find(|interface| interface.id == fact.interface())
             .ok_or_else(|| {
                 error(
                     ResolveReason::InternalState,
@@ -3169,7 +3182,7 @@ impl Resolver {
                 })?;
             let method_identity_is_valid = method.id.implementation() == fact.id
                 && method.id.method() == method.method
-                && method.method.interface() == fact.interface
+                && method.method.interface() == fact.interface()
                 && usize::try_from(method.method.declaration()) == Ok(index)
                 && interface_method.id == method.method
                 && method.binder.module() == Some(fact.id.module())
@@ -3204,7 +3217,8 @@ impl Resolver {
                     .zip(&fact.prerequisites)
                     .all(|(requirement, prerequisite)| {
                         requirement.id == prerequisite.id
-                            && requirement.interface == prerequisite.interface
+                            && requirement.interface() == prerequisite.interface()
+                            && requirement.arguments().len() == prerequisite.arguments().len()
                     });
             if !method_identity_is_valid {
                 return Err(error(
@@ -3223,15 +3237,15 @@ impl Resolver {
                     )
                 })?;
             for requirement in &method.scheme.requirements {
-                self.constraint_work
-                    .charge_type(&requirement.argument)
-                    .map_err(|()| {
+                for argument in requirement.arguments() {
+                    self.constraint_work.charge_type(argument).map_err(|()| {
                         error(
                             ResolveReason::ConstraintResourceExhausted,
                             span,
                             "imported implementation method requirement exceeded its work budget",
                         )
                     })?;
+                }
             }
             self.retain_scheme_nominals(&method.scheme, summary, span)?;
             methods.push(crate::resolved::CheckedImplementationMethodFact {
@@ -3253,20 +3267,19 @@ impl Resolver {
                 span: method.span,
             });
         }
-        let argument = IterativeTypeOwner::new(
-            clone_type_with_budget(&fact.argument, &mut self.type_work).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    span,
-                    "imported implementation head exceeded its type-work budget",
-                )
-            })?,
-        );
         let cloned_fact = CheckedImplementationFact {
             id: fact.id,
-            interface: fact.interface,
+            application: fact
+                .application()
+                .clone_with_budget(&mut self.type_work)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "imported implementation head exceeded its type-work budget",
+                    )
+                })?,
             head_parameters: head_parameters.into_boxed_slice(),
-            argument: argument.into_inner(),
             prerequisites: prerequisites.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
             origin: fact.origin.clone(),
@@ -3390,15 +3403,15 @@ impl Resolver {
                     )
                 })?;
             for requirement in &exported.scheme.requirements {
-                self.constraint_work
-                    .charge_type(&requirement.argument)
-                    .map_err(|()| {
+                for argument in requirement.arguments() {
+                    self.constraint_work.charge_type(argument).map_err(|()| {
                         error(
                             ResolveReason::ConstraintResourceExhausted,
                             span,
                             "imported requirement type exceeded its work budget",
                         )
                     })?;
+                }
             }
         }
         let scheme = exported
@@ -3441,7 +3454,9 @@ impl Resolver {
     ) -> Result<(), ResolveError> {
         self.retain_type_nominals(&scheme.value_type, summary, span)?;
         for requirement in &scheme.requirements {
-            self.retain_type_nominals(&requirement.argument, summary, span)?;
+            for argument in requirement.arguments() {
+                self.retain_type_nominals(argument, summary, span)?;
+            }
         }
         Ok(())
     }
@@ -3454,7 +3469,9 @@ impl Resolver {
             charge_kind_nodes(kind, &mut work)?;
         }
         for requirement in &scheme.requirements {
-            charge_type_cells(requirement.argument(), &mut work)?;
+            for argument in requirement.arguments() {
+                charge_type_cells(argument, &mut work)?;
+            }
         }
         charge_type_cells(scheme.value_type(), &mut work)?;
         Ok(work.used())
@@ -3475,14 +3492,16 @@ impl Resolver {
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         for requirement in &exported.scheme.requirements {
-            collect_type_nominal_identities_with_constraint_budget(
-                requirement.argument(),
-                &mut self.constraint_work,
-                nominal_identities,
-            )
-            .map_err(|()| {
-                imported_fact_comparison_error(ResolvedBuildFailure::ConstraintResource, span)
-            })?;
+            for argument in requirement.arguments() {
+                collect_type_nominal_identities_with_constraint_budget(
+                    argument,
+                    &mut self.constraint_work,
+                    nominal_identities,
+                )
+                .map_err(|()| {
+                    imported_fact_comparison_error(ResolvedBuildFailure::ConstraintResource, span)
+                })?;
+            }
         }
         collect_type_nominal_identities_with_constraint_budget(
             exported.scheme.value_type(),
@@ -9656,8 +9675,8 @@ mod tests {
             let heads = resolver
                 .imported
                 .implementations()
-                .map(|implementation| match implementation.fact.argument {
-                    Type::Nominal(id) => id,
+                .map(|implementation| match implementation.fact.arguments() {
+                    [Type::Nominal(id)] => *id,
                     _ => panic!("each selected implementation should retain its nominal head"),
                 })
                 .collect::<Vec<_>>();
@@ -10465,16 +10484,19 @@ mod tests {
     #[test]
     fn imported_implementation_kinded_head_retention_is_exact_and_atomic() {
         const DEPTH: usize = 32_768;
-        // M is one method record, A is the argument, H is one head binder,
-        // K is its three-node Kind, and V is the three-cell method value type:
-        // M + A + (H + K) + V + (H + K + V) + A
-        // = 1 + 1 + 4 + 3 + 7 + 1 = 17.
+        // M is one method record, A is the argument, C is the complete
+        // application-vector carrier, H is one head binder, K is its
+        // three-node Kind, and V is the three-cell method value type:
+        // M + (C + A) + (H + K) + V + (H + K + V) + A
+        // = 1 + 2 + 4 + 3 + 7 + 1 = 18.
         const METHOD_RECORDS: usize = 1;
+        const APPLICATION_CARRIER_CELLS: usize = 1;
         const ARGUMENT_CELLS: usize = 1;
         const HEAD_RECORDS: usize = 1;
         const KIND_NODES: usize = 3;
         const VALUE_CELLS: usize = 3;
         const EXACT_WORK: usize = METHOD_RECORDS
+            + APPLICATION_CARRIER_CELLS
             + ARGUMENT_CELLS
             + (HEAD_RECORDS + KIND_NODES)
             + VALUE_CELLS
@@ -10534,14 +10556,16 @@ mod tests {
                 }
                 let fact = CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: crate::interface::InterfaceApplication::new(
+                        interface,
+                        Box::new([Type::Variable(parameter)]),
+                    ),
                     head_parameters: Box::new([ResolvedTypeVariable {
                         id: parameter,
                         spelling: "F".to_owned(),
                         kind: kind(),
                         origin: parameter_origin,
                     }]),
-                    argument: Type::Variable(parameter),
                     prerequisites: Box::new([]),
                     methods: Box::new([crate::resolved::CheckedImplementationMethodFact {
                         id: implementation_method,

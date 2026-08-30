@@ -22,7 +22,7 @@ use super::{
 };
 use crate::{
     core::{CorePattern, CorePatternKind},
-    interface::{EvidenceNode, ImplMethodId},
+    interface::{EvidenceNode, ImplMethodId, InterfaceApplication},
     module::ModuleId,
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::{
@@ -103,6 +103,30 @@ impl Drop for CorePatternRow {
 }
 
 struct OwnedTypeSequence(std::vec::IntoIter<Type>);
+
+struct OwnedTypeBuffer(Vec<Type>);
+
+impl OwnedTypeBuffer {
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn push(&mut self, ty: Type) {
+        self.0.push(ty);
+    }
+
+    fn into_boxed_slice(mut self) -> Box<[Type]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for OwnedTypeBuffer {
+    fn drop(&mut self) {
+        for ty in self.0.drain(..) {
+            discard_type_iteratively(ty);
+        }
+    }
+}
 
 impl OwnedTypeSequence {
     fn next(&mut self) -> Option<Type> {
@@ -468,6 +492,7 @@ impl<'program, 'source> Validator<'program, 'source> {
 
     fn validate_method_evidence_authority(&self) -> Result<HashSet<NodeId>, ValidationError> {
         let catalog = &self.program.method_evidence;
+        self.validate_method_evidence_catalog_applications()?;
         let per_anchor_lookup_work = catalog
             .method_count()
             .checked_add(
@@ -529,7 +554,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 anchor.owner,
                 anchor.requirement,
                 anchor.role,
-                &anchor.interface_argument,
+                &anchor.application,
                 &mut expectation_work,
             );
             self.charge_type_work(expectation_work.used())?;
@@ -888,6 +913,130 @@ impl<'program, 'source> Validator<'program, 'source> {
         }
         self.validate_method_evidence_carrier_incoming(&carriers)?;
         Ok(carriers)
+    }
+
+    fn validate_method_evidence_catalog_applications(&self) -> Result<(), ValidationError> {
+        let catalog = &self.program.method_evidence;
+        let empty_type_binders = CoreTypeBinders::new();
+        let mut previous_method = None;
+        let mut previous_interface_parameters = None;
+        for method in catalog.methods() {
+            self.charge_type_work(method.interface_parameters.len().saturating_add(1))?;
+            if previous_method.is_some_and(|previous| previous >= method.id)
+                || method.interface_parameters.is_empty()
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
+            previous_method = Some(method.id);
+            if let Some((interface, parameters)) = previous_interface_parameters
+                && interface == method.id.interface()
+                && parameters != method.interface_parameters.as_ref()
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
+            previous_interface_parameters =
+                Some((method.id.interface(), method.interface_parameters.as_ref()));
+            let mut previous_parameter = None;
+            for parameter in &method.interface_parameters {
+                let Some(canonical) = self.program.registry.type_variable(*parameter) else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                if parameter.module() != Some(method.id.interface().module())
+                    || previous_parameter.is_some_and(|previous| previous >= parameter.local())
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+                previous_parameter = Some(parameter.local());
+                self.charge_kind(&canonical.kind)?;
+            }
+        }
+
+        let validate_application = |validator: &Self,
+                                    method_id: crate::interface::MethodId,
+                                    application: &InterfaceApplication|
+         -> Result<(), ValidationError> {
+            let method = catalog
+                .method(method_id)
+                .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
+            if application.interface() != method_id.interface()
+                || application.arguments().len() != method.interface_parameters.len()
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
+            for (parameter, argument) in method
+                .interface_parameters
+                .iter()
+                .zip(application.arguments())
+            {
+                let canonical = validator
+                    .program
+                    .registry
+                    .type_variable(*parameter)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                let Some(actual_kind) = validator.synthesize_monotype_kind(
+                    argument,
+                    MonotypeVariableKinds::Core(&empty_type_binders),
+                )?
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                };
+                if !validator.same_kind_charged(&canonical.kind, &actual_kind)? {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+            }
+            Ok(())
+        };
+
+        for owner in catalog.implementation_owners() {
+            validate_application(self, owner.implementation.method(), &owner.application)?;
+        }
+        for domain in catalog.domains() {
+            validate_application(self, domain.method, &domain.application)?;
+        }
+        for occurrence in catalog.occurrences() {
+            let method = occurrence.checked_method.or_else(|| {
+                catalog
+                    .methods()
+                    .iter()
+                    .find(|method| {
+                        method.id.interface() == occurrence.checked_application.interface()
+                    })
+                    .map(|method| method.id)
+            });
+            let Some(method) = method else {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            };
+            validate_application(self, method, &occurrence.checked_application)?;
+            self.charge_type_work(1)?;
+            if occurrence.selection.interface() != occurrence.checked_application.interface()
+                || occurrence.selection.arguments().len()
+                    != occurrence.checked_application.arguments().len()
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
+            for (selected, checked) in occurrence
+                .selection
+                .arguments()
+                .iter()
+                .zip(occurrence.checked_application.arguments())
+            {
+                if !self.same_type_charged(selected, checked)? {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+            }
+        }
+        for adapter in catalog.adapters() {
+            for edge in &adapter.prerequisites {
+                validate_application(self, edge.method, &edge.application)?;
+                let method = catalog
+                    .method(edge.method)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
+                if edge.interface_parameters.as_ref() != method.interface_parameters.as_ref() {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn validate_method_evidence_carrier_incoming(
@@ -1281,13 +1430,13 @@ impl<'program, 'source> Validator<'program, 'source> {
         &self,
         anchor: &MethodEvidenceAnchor,
     ) -> Result<IterativeTypeOwner, ValidationError> {
-        self.expected_method_scheme_for(anchor.method, &anchor.interface_argument, anchor.node)
+        self.expected_method_scheme_for(anchor.method, &anchor.application, anchor.node)
     }
 
     fn expected_method_scheme_for(
         &self,
         method_id: crate::interface::MethodId,
-        interface_argument: &Type,
+        application: &InterfaceApplication,
         node: NodeId,
     ) -> Result<IterativeTypeOwner, ValidationError> {
         let method = self
@@ -1295,15 +1444,23 @@ impl<'program, 'source> Validator<'program, 'source> {
             .method_evidence
             .method(method_id)
             .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(node)))?;
+        if application.interface() != method_id.interface()
+            || application.arguments().len() != method.interface_parameters.len()
+        {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(node)));
+        }
         let mut replacements = TypeReplacementMap::new();
-        self.charge_type_work(1)?;
+        self.charge_type_work(method.interface_parameters.len())?;
         replacements
-            .try_reserve(1)
+            .try_reserve(method.interface_parameters.len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
-        replacements.insert_replacing(
-            method.interface_parameter,
-            self.clone_type_charged(interface_argument)?,
-        );
+        for (parameter, argument) in method
+            .interface_parameters
+            .iter()
+            .zip(application.arguments())
+        {
+            replacements.insert_replacing(*parameter, self.clone_type_charged(argument)?);
+        }
         let body =
             substitute_type_variables_with(&method.value_type, replacements.as_map(), |cells| {
                 self.charge_type_work(cells)
@@ -1505,11 +1662,12 @@ impl<'program, 'source> Validator<'program, 'source> {
             {
                 let replacements =
                     self.implementation_replacements(implementation, anchors, anchor.node, true)?;
-                Some(IterativeTypeOwner::new(substitute_type_variables_with(
-                    &anchor.interface_argument,
-                    replacements.as_map(),
-                    |cells| self.charge_type_work(cells),
-                )?))
+                Some(
+                    self.substitute_interface_application(
+                        &anchor.application,
+                        replacements.as_map(),
+                    )?,
+                )
             }
             Some(MethodEvidenceOwner::Implementation(_))
             | Some(MethodEvidenceOwner::Global(_))
@@ -1517,9 +1675,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         };
         let scheme = self.expected_method_scheme_for(
             anchor.method,
-            actual_interface
-                .as_deref()
-                .unwrap_or(&anchor.interface_argument),
+            actual_interface.as_ref().unwrap_or(&anchor.application),
             anchor.node,
         )?;
         let body = self.node(function.body())?;
@@ -1582,12 +1738,9 @@ impl<'program, 'source> Validator<'program, 'source> {
         {
             selected_replacements.insert_replacing(*parameter, self.clone_type_charged(argument)?);
         }
-        let selected_interface = IterativeTypeOwner::new(substitute_type_variables_with(
-            &owner.interface_argument,
-            selected_replacements.as_map(),
-            |cells| self.charge_type_work(cells),
-        )?);
-        if !self.same_type_charged(&selected_interface, &anchor.interface_argument)? {
+        let selected_application = self
+            .substitute_interface_application(&owner.application, selected_replacements.as_map())?;
+        if !self.same_interface_application(&selected_application, &anchor.application)? {
             return Ok(false);
         }
         let stored = self.node(anchor.node)?;
@@ -1661,11 +1814,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                     {
                         return Ok(false);
                     }
-                    let actual_interface = IterativeTypeOwner::new(substitute_type_variables_with(
-                        &anchor.interface_argument,
+                    let actual_interface = self.substitute_interface_application(
+                        &anchor.application,
                         scope_replacements.as_map(),
-                        |cells| self.charge_type_work(cells),
-                    )?);
+                    )?;
                     let canonical = self.expected_method_scheme_for(
                         anchor.method,
                         &actual_interface,
@@ -2346,30 +2498,38 @@ impl<'program, 'source> Validator<'program, 'source> {
             self.charge_type_work(1)?;
             anchor_source_replacements.insert_replacing(*parameter, Type::Variable(*fresh));
         }
-        let expected_anchor_interface = IterativeTypeOwner::new(substitute_type_variables_with(
-            &edge.interface_argument,
+        let expected_anchor_application = self.substitute_interface_application(
+            &edge.application,
             anchor_source_replacements.as_map(),
-            |cells| self.charge_type_work(cells),
-        )?);
-        if !self.same_type_charged(&anchor.interface_argument, &expected_anchor_interface)? {
+        )?;
+        if !self.same_interface_application(&anchor.application, &expected_anchor_application)? {
             return Err(ValidationError::new(
                 ValidationReason::ApplicationType,
                 Some(anchor.node),
             ));
         }
-        let expected_interface = IterativeTypeOwner::new(substitute_type_variables_with(
-            &edge.interface_argument,
+        let expected_application = self.substitute_interface_application(
+            &edge.application,
             core_source_replacements.as_map(),
-            |cells| self.charge_type_work(cells),
-        )?);
+        )?;
         let mut interface_replacement = TypeReplacementMap::new();
-        self.charge_type_work(1)?;
+        if edge.interface_parameters.len() != expected_application.arguments().len() {
+            return Err(ValidationError::new(
+                ValidationReason::ApplicationType,
+                Some(anchor.node),
+            ));
+        }
+        self.charge_type_work(edge.interface_parameters.len())?;
         interface_replacement
-            .try_reserve(1)
+            .try_reserve(edge.interface_parameters.len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(anchor.node)))?;
-        self.charge_type_structure(&expected_interface)?;
-        interface_replacement
-            .insert_replacing(edge.interface_parameter, expected_interface.into_inner());
+        for (parameter, argument) in edge
+            .interface_parameters
+            .iter()
+            .zip(expected_application.arguments())
+        {
+            interface_replacement.insert_replacing(*parameter, self.clone_type_charged(argument)?);
+        }
         let expected_body = substitute_type_variables_with(
             &edge.value_type,
             interface_replacement.as_map(),
@@ -3406,6 +3566,48 @@ impl<'program, 'source> Validator<'program, 'source> {
         let result = same_type_with_budget(left, right, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn same_interface_application(
+        &self,
+        left: &InterfaceApplication,
+        right: &InterfaceApplication,
+    ) -> Result<bool, ValidationError> {
+        self.charge_type_work(1)?;
+        if left.interface() != right.interface()
+            || left.arguments().len() != right.arguments().len()
+        {
+            return Ok(false);
+        }
+        for (left, right) in left.arguments().iter().zip(right.arguments()) {
+            if !self.same_type_charged(left, right)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn substitute_interface_application(
+        &self,
+        application: &InterfaceApplication,
+        replacements: &HashMap<crate::types::TypeVariableId, Type>,
+    ) -> Result<InterfaceApplication, ValidationError> {
+        self.charge_type_work(application.arguments().len())?;
+        let mut arguments = OwnedTypeBuffer(Vec::new());
+        arguments
+            .try_reserve(application.arguments().len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        for argument in application.arguments() {
+            arguments.push(substitute_type_variables_with(
+                argument,
+                replacements,
+                |cells| self.charge_type_work(cells),
+            )?);
+        }
+        Ok(InterfaceApplication::new(
+            application.interface(),
+            arguments.into_boxed_slice(),
+        ))
     }
 
     fn clone_type_charged(&self, ty: &Type) -> Result<Type, ValidationError> {
@@ -5569,6 +5771,29 @@ mod tests {
         )
     }
 
+    fn vector_method_evidence_validation_fixture() -> LinkedCoreValidationFixture {
+        LinkedCoreValidationFixture::compile(
+            "pub seed : Unit -> Unit\nseed value = value\n",
+            concat!(
+                "type Wrap<A> = Wrap(A)\n\n",
+                "interface Relate<Left, Right> {\n",
+                "relate<X> : (Left, Right, X) -> Bool\n",
+                "}\n\n",
+                "impl Relate<Int, Bool> {\n",
+                "relate (left, right, ignored) = right\n",
+                "}\n\n",
+                "impl<A, Right> Relate<Wrap<A>, Right> where Relate<A, Right> {\n",
+                "relate (Wrap(left), right, ignored) = relate((left, right, ignored))\n",
+                "}\n\n",
+                "forward<Left, Right> : (Left, Right) -> Bool where Relate<Left, Right>\n",
+                "forward (left, right) = relate((left, right, ()))\n\n",
+                "main : Unit -> Bool\n",
+                "main () = forward((Wrap(1), true))\n",
+            ),
+            &[],
+        )
+    }
+
     fn monomorphic_adapter_edge_fixture() -> LinkedCoreValidationFixture {
         LinkedCoreValidationFixture::compile(
             "pub seed : Unit -> Unit\nseed value = value\n",
@@ -6001,12 +6226,12 @@ mod tests {
         measured
             .validate_method_evidence_authority()
             .expect("the concrete source topology validates");
-        // The fixed authority graph costs 584 units. Its one concrete source
+        // The complete-application authority graph costs 632 units. Its one concrete source
         // adds S=1 catalog lookup, one fallible pending slot, and M=1 exact
         // selected-method membership cell. The checked type walkers reserve
         // 45 root/child stack slots separately from their existing visits.
         const CHECKED_STACK_CAPACITY_WORK: usize = 45;
-        const EXACT_WORK: usize = 584 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;
+        const EXACT_WORK: usize = 632 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(measured.type_work.get(), EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -6058,13 +6283,13 @@ mod tests {
             .validate_method_evidence_authority()
             .expect("the widened concrete source topology validates");
         // The owner, occurrence, carrier, source-chain, and checked-Type
-        // relations consume 1,084 units for this fixed graph. The concrete
+        // relations consume 1,175 units for this complete-application graph. The concrete
         // source has Q=2 retained prerequisite method rows, each of which
         // independently reads the W=2 abstract method list before membership.
         // Exact sequence comparison also visits R=2 retained rows and the W=2
         // methods of D=1 direct selected prerequisite:
-        // 1,084 + Q*W + R + D*W = 1,092.
-        const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_084;
+        // 1,175 + Q*W + R + D*W = 1,183.
+        const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_175;
         const PREREQUISITE_METHOD_LIST_WORK: usize = 2 * 2;
         const EXACT_PREREQUISITE_SEQUENCE_WORK: usize = 2 + 2;
         const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK
@@ -6255,14 +6480,14 @@ mod tests {
             .validate_method_evidence_authority()
             .expect("the exact monomorphic producer identity validates");
         let exact_work = measured.type_work.get();
-        // The fixed authenticated graph costs 646 units. The exact abstract
+        // The complete-application authenticated graph costs 705 units. The exact abstract
         // producer adds one owner-envelope pass: N=49 nodes, R=5 recursive
         // members, p=0 preceding evidence functions, and one selected binder.
         // Its checked type walks independently reserve 45 root/child stack
         // slots in addition to their existing visits.
         const EXACT_SOURCE_ENVELOPE_WORK: usize = 49 + 5 + 1;
         const CHECKED_STACK_CAPACITY_WORK: usize = 45;
-        const EXACT_WORK: usize = 646 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;
+        const EXACT_WORK: usize = 705 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -6307,7 +6532,7 @@ mod tests {
             .validate_method_evidence_authority()
             .expect("the measured linked authority should validate");
         let exact_work = measured.type_work.get();
-        // The predecessor authority walk costs 2,197 units. This fixture then
+        // The complete-application authority walk costs 2,284 units. This fixture then
         // exercises 22 independently retained replacement-map, fresh-ID-set,
         // source-map, and parameter-vector capacity rows which must be admitted
         // before their respective reserves. Its A=3 adapters and Q=2 edges add
@@ -6319,7 +6544,7 @@ mod tests {
         // stack slots independently from their already charged node visits.
         const CHECKED_STACK_CAPACITY_WORK: usize = 92;
         const EXACT_WORK: usize =
-            2_197 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;
+            2_284 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -6355,7 +6580,7 @@ mod tests {
             owner: anchor.owner,
             requirement: anchor.requirement,
             method: anchor.method,
-            interface_argument: anchor.interface_argument.clone(),
+            application: anchor.application.clone(),
             role: anchor.role,
             occurrence: anchor.occurrence,
             expectation: anchor.expectation,
@@ -6445,7 +6670,12 @@ mod tests {
                         anchor.method.declaration().saturating_add(1),
                     );
                 }
-                Case::WrongInterface => anchors[0].interface_argument = Type::Bool,
+                Case::WrongInterface => {
+                    anchors[0].application = InterfaceApplication::new(
+                        anchors[0].application.interface(),
+                        Box::new([Type::Bool]),
+                    );
+                }
                 Case::WrongOrdinal => {
                     let anchor = anchors
                         .iter_mut()
@@ -6576,7 +6806,10 @@ mod tests {
                             matches!(anchor.role, MethodEvidenceAnchorRole::Instantiation { .. })
                         })
                         .expect("the fixture has an instantiation");
-                    anchor.interface_argument = Type::Bool;
+                    anchor.application = InterfaceApplication::new(
+                        anchor.application.interface(),
+                        Box::new([Type::Bool]),
+                    );
                 }
                 Case::WrongApplicationOwner => {
                     let anchor = anchors
@@ -6603,7 +6836,10 @@ mod tests {
                             matches!(anchor.role, MethodEvidenceAnchorRole::Application { .. })
                         })
                         .expect("the fixture has an application");
-                    anchor.interface_argument = Type::Bool;
+                    anchor.application = InterfaceApplication::new(
+                        anchor.application.interface(),
+                        Box::new([Type::Bool]),
+                    );
                 }
             }
             fixture.program.method_evidence_anchors = anchors.into_boxed_slice();
@@ -6645,6 +6881,234 @@ mod tests {
                 "tampered linked method-evidence authority must reject: {mutation:?}",
             );
         }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum VectorApplicationMutation {
+        Missing,
+        Extra,
+        Reordered,
+        WrongKind,
+        WrongArgumentIdentity,
+        WrongInterface,
+    }
+
+    fn mutate_vector_application_for_test(
+        application: &mut InterfaceApplication,
+        mutation: VectorApplicationMutation,
+    ) -> bool {
+        let mut interface = application.interface();
+        let mut arguments = application.arguments().to_vec();
+        match mutation {
+            VectorApplicationMutation::Missing => {
+                if arguments.len() < 2 {
+                    return false;
+                }
+                arguments.pop();
+            }
+            VectorApplicationMutation::Extra => arguments.push(Type::Unit),
+            VectorApplicationMutation::Reordered => {
+                if arguments.len() < 2 {
+                    return false;
+                }
+                arguments.swap(0, 1);
+            }
+            VectorApplicationMutation::WrongKind => {
+                let Some(first) = arguments.first_mut() else {
+                    return false;
+                };
+                discard_type_iteratively(std::mem::replace(
+                    first,
+                    Type::Forall(Box::new([]), Box::new(Type::Unit)),
+                ));
+            }
+            VectorApplicationMutation::WrongArgumentIdentity => {
+                let Some(first) = arguments.first_mut() else {
+                    return false;
+                };
+                discard_type_iteratively(std::mem::replace(
+                    first,
+                    Type::Variable(crate::types::TypeVariableId::generated(u32::MAX)),
+                ));
+            }
+            VectorApplicationMutation::WrongInterface => {
+                interface = crate::interface::InterfaceId::new(ModuleId::new(u32::MAX - 1), 0);
+            }
+        }
+        *application = InterfaceApplication::new(interface, arguments.into_boxed_slice());
+        true
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum VectorApplicationTarget {
+        ImplementationOwner,
+        Domain,
+        Occurrence,
+        AdapterEdge,
+        Anchor,
+    }
+
+    #[test]
+    fn independent_core_rejects_every_complete_application_vector_tamper() {
+        let fixture = vector_method_evidence_validation_fixture();
+        let LinkedCoreValidationFixture {
+            directory,
+            graph,
+            program,
+            module_sources,
+            globals: _,
+        } = fixture;
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(program, &sources, &module_sources)
+            .expect("the complete-vector fixture should validate before tampering");
+
+        for target in [
+            VectorApplicationTarget::ImplementationOwner,
+            VectorApplicationTarget::Domain,
+            VectorApplicationTarget::Occurrence,
+            VectorApplicationTarget::AdapterEdge,
+            VectorApplicationTarget::Anchor,
+        ] {
+            for mutation in [
+                VectorApplicationMutation::Missing,
+                VectorApplicationMutation::Extra,
+                VectorApplicationMutation::Reordered,
+                VectorApplicationMutation::WrongKind,
+                VectorApplicationMutation::WrongArgumentIdentity,
+                VectorApplicationMutation::WrongInterface,
+            ] {
+                let mut tampered = identity_traversal(&validated)
+                    .expect("the validated vector fixture should rebuild independently");
+                let changed = match target {
+                    VectorApplicationTarget::ImplementationOwner => {
+                        let catalog = Arc::make_mut(&mut tampered.method_evidence);
+                        catalog
+                            .implementation_owners_mut_for_core_test()
+                            .iter_mut()
+                            .find(|row| row.application.arguments().len() == 2)
+                            .is_some_and(|row| {
+                                mutate_vector_application_for_test(&mut row.application, mutation)
+                            })
+                    }
+                    VectorApplicationTarget::Domain => {
+                        let catalog = Arc::make_mut(&mut tampered.method_evidence);
+                        catalog
+                            .domains_mut_for_core_test()
+                            .iter_mut()
+                            .find(|row| row.application.arguments().len() == 2)
+                            .is_some_and(|row| {
+                                mutate_vector_application_for_test(&mut row.application, mutation)
+                            })
+                    }
+                    VectorApplicationTarget::Occurrence => {
+                        let catalog = Arc::make_mut(&mut tampered.method_evidence);
+                        catalog
+                            .occurrences_mut_for_core_test()
+                            .iter_mut()
+                            .find(|row| row.checked_application.arguments().len() == 2)
+                            .is_some_and(|row| {
+                                mutate_vector_application_for_test(
+                                    &mut row.checked_application,
+                                    mutation,
+                                )
+                            })
+                    }
+                    VectorApplicationTarget::AdapterEdge => {
+                        let catalog = Arc::make_mut(&mut tampered.method_evidence);
+                        catalog
+                            .adapters_mut_for_core_test()
+                            .iter_mut()
+                            .flat_map(|adapter| &mut adapter.prerequisites)
+                            .find(|edge| edge.application.arguments().len() == 2)
+                            .is_some_and(|edge| {
+                                mutate_vector_application_for_test(&mut edge.application, mutation)
+                            })
+                    }
+                    VectorApplicationTarget::Anchor => tampered
+                        .method_evidence_anchors
+                        .iter_mut()
+                        .find(|anchor| anchor.application.arguments().len() == 2)
+                        .is_some_and(|anchor| {
+                            mutate_vector_application_for_test(&mut anchor.application, mutation)
+                        }),
+                };
+                assert!(
+                    changed,
+                    "the {target:?} fixture must expose a width-two carrier"
+                );
+                assert!(
+                    validate_modules(tampered, &sources, &module_sources).is_err(),
+                    "independent Core accepted {target:?} {mutation:?}",
+                );
+            }
+        }
+        drop(directory);
+    }
+
+    #[test]
+    fn independent_core_rejects_interface_parameter_vector_tampering() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            Missing,
+            Extra,
+            Reordered,
+            WrongIdentity,
+        }
+
+        let fixture = vector_method_evidence_validation_fixture();
+        let LinkedCoreValidationFixture {
+            directory,
+            graph,
+            program,
+            module_sources,
+            globals: _,
+        } = fixture;
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(program, &sources, &module_sources)
+            .expect("the complete-vector fixture should validate before parameter tampering");
+
+        for mutation in [
+            Mutation::Missing,
+            Mutation::Extra,
+            Mutation::Reordered,
+            Mutation::WrongIdentity,
+        ] {
+            let mut tampered = identity_traversal(&validated)
+                .expect("the validated vector fixture should rebuild independently");
+            let catalog = Arc::make_mut(&mut tampered.method_evidence);
+            let method = catalog
+                .methods_mut_for_core_test()
+                .iter_mut()
+                .find(|method| method.interface_parameters.len() == 2)
+                .expect("the fixture retains a width-two method parameter row");
+            let mut parameters = method.interface_parameters.to_vec();
+            match mutation {
+                Mutation::Missing => {
+                    parameters.pop();
+                }
+                Mutation::Extra => {
+                    parameters.push(crate::types::TypeVariableId::generated(u32::MAX));
+                }
+                Mutation::Reordered => parameters.swap(0, 1),
+                Mutation::WrongIdentity => {
+                    parameters[0] = crate::types::TypeVariableId::generated(u32::MAX);
+                }
+            }
+            method.interface_parameters = parameters.into_boxed_slice();
+            assert!(
+                validate_modules(tampered, &sources, &module_sources).is_err(),
+                "independent Core accepted {mutation:?} interface parameters",
+            );
+        }
+        drop(directory);
     }
 
     fn replace_recursive_initializer_for_method_evidence_test(
@@ -7084,10 +7548,10 @@ mod tests {
                         | MethodEvidenceAnchorRole::Instantiation { .. }
                 )
             {
-                discard_type_iteratively(std::mem::replace(
-                    &mut anchor.interface_argument,
-                    Type::Bool,
-                ));
+                anchor.application = InterfaceApplication::new(
+                    anchor.application.interface(),
+                    Box::new([Type::Bool]),
+                );
             }
         }
         let catalog = Arc::make_mut(&mut program.method_evidence);
@@ -7096,7 +7560,14 @@ mod tests {
             .iter_mut()
             .find(|row| row.slot == occurrence)
             .expect("the catalog retains the adapter occurrence");
-        rewrite_int_to_bool_for_test(&mut occurrence.checked_argument);
+        let mut rewritten_arguments = occurrence.checked_application.arguments().to_vec();
+        for argument in &mut rewritten_arguments {
+            rewrite_int_to_bool_for_test(argument);
+        }
+        occurrence.checked_application = InterfaceApplication::new(
+            occurrence.checked_application.interface(),
+            rewritten_arguments.into_boxed_slice(),
+        );
         if let Some(checked) = occurrence.checked_value_type.as_mut() {
             rewrite_int_to_bool_for_test(checked);
         }
@@ -7362,6 +7833,48 @@ mod tests {
             validate_modules(tampered, &sources, &module_sources).is_err(),
             "a freshly remapped sidecar must remain independently authenticated",
         );
+        drop(directory);
+    }
+
+    #[test]
+    fn complete_application_vectors_survive_both_core_transforms() {
+        let fixture = vector_method_evidence_validation_fixture();
+        let LinkedCoreValidationFixture {
+            directory,
+            graph,
+            program,
+            module_sources,
+            globals: _,
+        } = fixture;
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let original = validate_modules(program, &sources, &module_sources)
+            .expect("the authenticated vector fixture should validate");
+        let expected_widths = original
+            .method_evidence_anchors()
+            .iter()
+            .map(|anchor| anchor.application.arguments().len())
+            .collect::<Vec<_>>();
+        assert!(expected_widths.contains(&2));
+
+        for transformed in [
+            identity_traversal(&original).expect("identity vector rebuild"),
+            fold_literal_primitives(&original).expect("literal-fold vector rebuild"),
+        ] {
+            assert_eq!(
+                transformed
+                    .method_evidence_anchors
+                    .iter()
+                    .map(|anchor| anchor.application.arguments().len())
+                    .collect::<Vec<_>>(),
+                expected_widths,
+            );
+            validate_modules(transformed, &sources, &module_sources)
+                .expect("every transformed complete application should freshly validate");
+        }
         drop(directory);
     }
 
@@ -13806,12 +14319,18 @@ mod replacement_owner_api_tests {
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
+        let replacement_map = &source[source
+            .find("structTypeReplacementMap")
+            .expect("the replacement owner exists")
+            ..source
+                .find("implDropforTypeReplacementMap")
+                .expect("the replacement owner has iterative teardown")];
         let raw_field = ["replacements", ".0"].concat();
         assert!(!source.contains(&raw_field));
         let raw_insert = [".0", ".insert("].concat();
         let raw_reserve = [".0", ".try_reserve("].concat();
-        assert_eq!(source.matches(&raw_insert).count(), 1);
-        assert_eq!(source.matches(&raw_reserve).count(), 1);
+        assert_eq!(replacement_map.matches(&raw_insert).count(), 1);
+        assert_eq!(replacement_map.matches(&raw_reserve).count(), 1);
         let broad_mutation = ["impl", "DerefMut", "for", "TypeReplacementMap"].concat();
         assert!(!source.contains(&broad_mutation));
     }

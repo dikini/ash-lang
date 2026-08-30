@@ -294,9 +294,11 @@ Record cumulative reserved use as 14/65 and 51 units remaining.
 **Files:**
 
 - Modify: `src/interface.rs`
+- Modify as a compiler-owned checked kind boundary: `src/kind.rs`
 - Modify: `src/evidence.rs`
 - Modify: `src/resolved.rs`
 - Modify: `src/resolve.rs`
+- Modify as the existing summary-authentication test owner: `src/resolve/module_tests.rs`
 - Modify: `src/elaborate.rs`
 - Modify: `src/evidence_audit.rs`
 - Modify: `src/evidence_validation.rs`
@@ -306,11 +308,18 @@ Record cumulative reserved use as 14/65 and 51 units remaining.
 - Modify as required by compiler-owned consumers: `src/core/transform.rs`
 - Modify: `tests/interfaces.rs`
 - Modify: `tests/implementations.rs`
+- Modify: `tests/diagnostics.rs`
+- Modify: `tests/kinds_syntax.rs`
+- Modify: `tests/kind_modules.rs`
+- Modify: `tests/interface_resources.rs`
 - Modify: `tests/interface_selection.rs`
 - Modify: `tests/interface_generic_summary.rs`
 - Modify: `tests/interface_validation.rs`
 - Modify: `tests/core_validation.rs`
 - Modify: `tests/architecture.rs`
+- Modify as a compiler-owned checked-carrier API migration: `tests/interface_modules.rs`
+- Modify as compiler-owned checked-carrier API migrations: `tests/library_imports.rs`
+- Modify as compiler-owned checked-carrier API migrations: `tests/interface_identity_diamond.rs`
 
 ### Step 1: Write and witness ordinary relation RED
 
@@ -365,6 +374,11 @@ kinding, substitution, matching, cloning, equality, validation, and disposal.
 Never fold the argument vector into `Type::Tuple` or nested unary interface
 applications.
 
+Keep vector-container and recursive type work distinct. Charge complete-vector
+allocation and positional authentication at each owner before publication;
+retain exact, one-short, and retry witnesses for local checking, summary
+cloning and linking, evidence selection, elaboration, and Core authentication.
+
 ### Step 3: Generalize ordinary multi-parameter rules
 
 With no determinant key:
@@ -412,13 +426,19 @@ Run:
 
 ```text
 cargo test --locked --test interfaces --test implementations --test interface_selection
+cargo test --locked --test diagnostics --test kinds_syntax --test kind_modules
+cargo test --locked --test interface_resources
 cargo test --locked --test interface_generic_summary --test interface_validation
 cargo test --locked --test core_validation --test architecture
+cargo test --locked --test interface_modules
 cargo test --locked --lib -- interface
+cargo test --locked --lib -- kind
 cargo test --locked --lib -- evidence
 cargo test --locked --lib -- resolved
+cargo test --locked --lib -- elaborate
 cargo test --locked --lib -- evidence_validation
 cargo test --locked --lib -- core
+cargo test --locked --lib -- driver
 cargo fmt --check
 cargo check --locked --all-targets
 git diff --check
@@ -427,7 +447,7 @@ git diff --check
 After both reviews and corrections, commit:
 
 ```text
-git add src tests
+git add docs/plans/2026-08-29-multi-parameter-relational-interfaces.md docs/tasks/TASK-0018-implement-multi-parameter-relational-interfaces.md src tests
 git -c commit.gpgsign=false commit -m "feat: carry complete interface applications"
 ```
 

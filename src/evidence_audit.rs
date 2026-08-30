@@ -238,8 +238,8 @@ mod tests {
     use super::*;
     use crate::{
         interface::{
-            CheckedRequirement, EvidenceSelectionBuilder, EvidenceSlot, InterfaceId, RequirementId,
-            RequirementOwner,
+            CheckedRequirement, EvidenceSelectionBuilder, EvidenceSlot, InterfaceApplication,
+            InterfaceId, RequirementId, RequirementOwner,
         },
         module::ModuleId,
         resolved::{
@@ -269,10 +269,19 @@ mod tests {
             .push_abstract(requirement, &[], &mut InterfaceConstraintBudget::default())
             .expect("the tiny selection should fit");
         let selection = builder
-            .finish(root, InterfaceId::new(module, 0), Type::Int)
+            .finish(
+                root,
+                InterfaceApplication::new(InterfaceId::new(module, 0), Box::new([Type::Int])),
+            )
             .expect("the root should exist");
         slot.handle()
-            .fill(None, Type::Int, Box::new([]), None, selection)
+            .fill(
+                None,
+                InterfaceApplication::new(InterfaceId::new(module, 0), Box::new([Type::Int])),
+                Box::new([]),
+                None,
+                selection,
+            )
             .expect("the fresh slot should accept evidence");
         slot
     }
@@ -336,8 +345,7 @@ mod tests {
             type_parameters: Box::new([]),
             requirements: vec![CheckedRequirement {
                 id: RequirementId::new(RequirementOwner::Global(owner), 0),
-                interface,
-                argument: Type::Unit,
+                application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
                 origin: Origin::Source(span),
                 span,
             }]

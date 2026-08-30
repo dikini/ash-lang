@@ -235,6 +235,7 @@ define_kind_site_profiles! {
     FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree => (Field, Owned, Checked, InterfaceArgument, InterfaceParameter, InterfaceValidation, InterfaceType, CheckedTree),
     FieldCheckedSchemeSchemeValueInterfaceValidationInterfaceTypeCheckedTree => (Field, Owned, Checked, Scheme, SchemeValue, InterfaceValidation, InterfaceType, CheckedTree),
     FieldCheckedValueTypeValueInterfaceValidationInterfaceTypeCheckedTree => (Field, Owned, Checked, ValueType, Value, InterfaceValidation, InterfaceType, CheckedTree),
+    FieldTransientCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeTransientWork => (Field, Owned, Transient, CarrierRetention, PreservedCarrier, InterfaceValidation, InterfaceType, TransientWork),
     FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree => (Field, Owned, Core, CarrierRetention, PreservedCarrier, CoreAdmission, CoreType, CoreTree),
     FieldCoreCoreInstantiationInstantiationArgumentCoreAdmissionCoreTypeCoreTree => (Field, Owned, Core, CoreInstantiation, InstantiationArgument, CoreAdmission, CoreType, CoreTree),
     FieldCoreValueTypeValueCoreAdmissionCoreTypeCoreTree => (Field, Owned, Core, ValueType, Value, CoreAdmission, CoreType, CoreTree),
@@ -367,7 +368,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/kind.rs::BodyWork.Declaration.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/kind.rs::BodyWork.Expression.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/kind.rs::BodyWork.RecursiveMember.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
-    kind_site!("src/kind.rs::InterfaceKindFact.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::InterfaceKindFact.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::KindEnvironments.delta", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::KindEnvironments.iota", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::KindEnvironments.omega", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeKindTree),
@@ -380,8 +381,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/kind.rs::KindFact.retained_mirrors", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::KindFailure.Source.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::NominalKindFact.kind", FieldTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
-    kind_site!("src/kind.rs::PredecessorApplication.argument", FieldBorrowedTransientInterfaceArgumentInterfaceParameterResolvedKindResolutionTypeResolvedTree),
-    kind_site!("src/kind.rs::PredecessorApplication.expected_kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
+    kind_site!("src/kind.rs::CompleteInterfaceApplication.arguments", FieldBorrowedTransientInterfaceArgumentInterfaceParameterResolvedKindResolutionTypeResolvedTree),
+    kind_site!("src/kind.rs::CompleteInterfaceApplication.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::RetainedKindMirrors.Two.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::RetainedKindMirrors.Two.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/resolve.rs::ResolveModuleError.Kind.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
@@ -405,10 +406,13 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/dialect.rs::CoreBuilder.registry", FieldRegistryCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeRegistryTree, Shared),
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapter.head_arguments", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapter.prerequisites", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::IterativeTypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/dialect.rs::IterativeTypeMap.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/dialect.rs::IterativeTypeSequence.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.application", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.method_parameters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.value_type", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/dialect.rs::MethodEvidenceAnchor.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceAnchor.application", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.adapters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.concrete_sources", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.domains", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -416,12 +420,12 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.methods", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.occurrences", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Mixed),
     kind_site!("src/core/dialect.rs::MethodEvidenceConcreteSource.head_arguments", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/dialect.rs::MethodEvidenceDomain.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/dialect.rs::MethodEvidenceImplementationOwner.interface_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceDomain.application", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceImplementationOwner.application", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceImplementationOwner.source_parameters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceMethod.parameters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceMethod.value_type", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/dialect.rs::MethodEvidenceOccurrence.checked_argument", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceOccurrence.checked_application", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceOccurrence.checked_value_type", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceOccurrence.method_arguments", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceOccurrence.selection", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
@@ -514,6 +518,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/validate.rs::$impl_Validator::$fn_validate_pattern::Task.Visit.1", FieldMixedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTreeAndTransientWork),
     kind_site!("src/core/validate.rs::CoreTypeBinders.$alias", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
     kind_site!("src/core/validate.rs::MonotypeVariableKinds.Core.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/validate.rs::OwnedTypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/validate.rs::CorePatternMatrix.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/validate.rs::CorePatternRow.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/validate.rs::OwnedTypeSequence.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
@@ -551,7 +556,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::$fn_zonk_type_with_status_and_inference::ChargeTask.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_zonk_type_with_status_and_inference::ChargeTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::ActiveEvidenceBinder.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::ActiveEvidenceBinder.interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::ActiveEvidenceBinder.application", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CheckedBodyBuffers.definitions", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Mixed),
     kind_site!("src/elaborate.rs::CheckedBodyBuffers.implementations", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Mixed),
     kind_site!("src/elaborate.rs::CheckedImplementationFactBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -561,6 +566,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::CheckedInterfaceRef.Local.0", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
     kind_site!("src/elaborate.rs::CheckedPattern.pattern", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
     kind_site!("src/elaborate.rs::CheckedSchemeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::CheckedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreRecursiveMemberBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CorePatternBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CorePatternMatrixBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -638,14 +644,14 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::InferenceVariableRegistry.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::KindedTypeParameters.$alias", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredEvidenceMethod.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::LoweredEvidenceMethod.adapter_interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::LoweredImplementationMethod.interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::LoweredEvidenceMethod.adapter_application", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::LoweredImplementationMethod.application", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredImplementationMethod.scheme", FieldTransientSchemeSchemeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredInterfaceMethod.value_type", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredInterfaceMethod.type_parameters", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredRequirement.methods", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredRequirementMethod.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::LoweredRequirementMethod.interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::LoweredRequirementMethod.application", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredScheme.core_scheme", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredScheme.requirements", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::LoweredScheme.source_type_parameters", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
@@ -665,7 +671,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::PreparedGlobals.quantifiers", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::ProvenancedType.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::ScopedEvidenceBinder.binder", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::ScopedEvidenceBinder.interface_argument", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::ScopedEvidenceBinder.application", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::TypeContext.binders", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::TypeError.Mismatch.0", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
     kind_site!("src/elaborate.rs::TypeFact.quantified", FieldTransientDeclaredKindDeclaredElaborationInferenceTypeTransientWork),
@@ -725,12 +731,13 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/evidence.rs::EvidenceSelector.pending", FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTreeAndTransientWork),
     kind_site!("src/evidence.rs::EvidenceSelector.selected", FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTreeAndTransientWork),
     kind_site!("src/evidence.rs::EvidenceSelector.schemes", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
-    kind_site!("src/evidence.rs::Goal.argument", FieldTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTransientWork),
-    kind_site!("src/evidence.rs::ImplementationCandidateAuthentication.argument", FieldBorrowedTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTypeTree),
+    kind_site!("src/evidence.rs::EvidenceTypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/evidence.rs::Goal.application", FieldTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/evidence.rs::ImplementationCandidateAuthentication.arguments", FieldBorrowedTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTypeTree),
     kind_site!("src/evidence.rs::ImplementationCandidateAuthentication.parameter_records", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeResolvedTreeAndCheckedTree),
-    kind_site!("src/evidence.rs::ImplementationEntry.argument", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/evidence.rs::ImplementationEntry.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::ImplementationEntry.prerequisites", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
-    kind_site!("src/evidence.rs::InterfaceEntry.parameter_kind", FieldEvidenceDeclaredKindDeclaredEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/evidence.rs::InterfaceEntry.parameters", FieldEvidenceDeclaredKindDeclaredEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::InterfaceEntry.methods", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::MethodEntry.value_type", FieldEvidenceValueTypeValueEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::MethodEntry.type_parameters", FieldEvidenceDeclaredKindDeclaredEvidenceSelectionEvidenceTypeEvidenceTree),
@@ -741,28 +748,28 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/evidence.rs::MethodRigidityCheck.rigid_arguments", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTypeTree),
     kind_site!("src/evidence.rs::MethodRigidityCondition.rigid_arguments", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::PendingEvidencePublication.occurrences", FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTreeAndTransientWork),
-    kind_site!("src/evidence.rs::PendingObligation.argument", FieldTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/evidence.rs::PendingObligation.application", FieldTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::PendingObligation.method_arguments", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::PendingObligation.checked_value_type", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::PendingObligation.method_rigidity", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::PendingObligation.slot", FieldSharedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::ReplacementMap.values", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
-    kind_site!("src/evidence.rs::RequirementEntry.argument", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/evidence.rs::RequirementEntry.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::SchemeEntry.scheme", FieldEvidenceSchemeSchemeValueEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::SelectedMethodRigidity.condition", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
-    kind_site!("src/evidence.rs::SelectedOccurrence.checked_argument", FieldTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/evidence.rs::SelectedOccurrence.checked_application", FieldTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::SelectedOccurrence.checked_value_type", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::SelectedOccurrence.method_arguments", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::SelectedOccurrence.selection", FieldSharedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::SelectedOccurrence.slot", FieldSharedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
-    kind_site!("src/evidence.rs::SelectionMethod.interface_parameter_kind", FieldBorrowedEvidenceDeclaredKindDeclaredEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/evidence.rs::SelectionMethod.interface_parameters", FieldBorrowedEvidenceDeclaredKindDeclaredEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::SelectionMethod.type_parameters", FieldBorrowedEvidenceDeclaredKindDeclaredEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::SelectionMethod.value_type", FieldBorrowedEvidenceValueTypeValueEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::SelectionSite.slot", FieldSharedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::SelectionTask.Finish.substitution", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::SelectionTask.Select.goal", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/evidence.rs::SelectionWork.0", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
-    kind_site!("src/evidence_validation.rs::PendingGoal.argument", FieldTransientInterfaceArgumentInterfaceParameterEvidenceValidationEvidenceTypeTransientWork),
+    kind_site!("src/evidence_validation.rs::PendingGoal.application", FieldTransientInterfaceArgumentInterfaceParameterEvidenceValidationEvidenceTypeTransientWork),
     kind_site!("src/evidence_validation.rs::$fn_substitute_evidence_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTypeTree),
     kind_site!("src/evidence_validation.rs::$fn_substitute_evidence_type::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTypeTree),
     kind_site!("src/evidence_validation.rs::$fn_validate_type_with_application_policy::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTypeTree),
@@ -777,24 +784,27 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_equal_types::Task.Compare.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_equal_types::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::$local.charge_equal_kinds.pending", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
-    kind_site!("src/interface.rs::CheckedRequirement.argument", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
+    kind_site!("src/interface.rs::CheckedImplementation.application", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
+    kind_site!("src/interface.rs::CheckedRequirement.application", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::ConstrainedScheme.requirements", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::ConstrainedScheme.type_parameters", FieldCheckedDeclaredKindDeclaredInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::ConstrainedScheme.value_type", FieldCheckedValueTypeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::EvidenceNode.Implementation.substitution", FieldBorrowedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::EvidenceNodeData.Implementation.substitution", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
-    kind_site!("src/interface.rs::EvidencePlan.argument", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/interface.rs::EvidencePlan.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::EvidencePlan.nodes", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::EvidenceSelection.plan", FieldSharedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::EvidenceSelectionBuilder.nodes", FieldTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
     kind_site!("src/interface.rs::EvidenceSlot.filled", FieldSharedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::EvidenceSlotHandle.filled", FieldSharedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::EvidenceSubstitution.argument", FieldEvidenceDeclaredKindDeclaredEvidenceSelectionEvidenceTypeEvidenceTree),
-    kind_site!("src/interface.rs::FilledEvidenceSlot.checked_argument", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/interface.rs::FilledEvidenceSlot.checked_application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::FilledEvidenceSlot.checked_value_type", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::FilledEvidenceSlot.method_arguments", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::FilledEvidenceSlot.selection", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree, Shared),
     kind_site!("src/interface.rs::OverlapHead.ty", FieldBorrowedTransientCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeTypeTree),
+    kind_site!("src/interface.rs::InterfaceApplication.arguments", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
+    kind_site!("src/interface.rs::InterfaceArgumentBuffer.0", FieldTransientCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeTransientWork),
     kind_site!("src/module.rs::LoadedModule.surface", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
     kind_site!("src/module.rs::ModuleGraph.modules", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
     kind_site!("src/module.rs::StagedModule.surface", FieldSurfaceCarrierRetentionPreservedCarrierModuleStagingProjectionSurfaceTree),
@@ -869,17 +879,18 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::CheckedDefinition.source", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
     kind_site!("src/resolved.rs::CheckedGlobalScheme.scheme", FieldCheckedSchemeSchemeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationBody.source", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
-    kind_site!("src/resolved.rs::CheckedImplementationFact.argument", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
+    kind_site!("src/resolved.rs::CheckedImplementationFact.application", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationFact.head_parameters", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationFact.methods", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationFact.prerequisites", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationMethodFact.scheme", FieldCheckedSchemeSchemeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedInterfaceFact.methods", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
-    kind_site!("src/resolved.rs::CheckedInterfaceFact.parameter", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
+    kind_site!("src/resolved.rs::CheckedInterfaceFact.parameters", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedInterfaceMethodFact.method_binder_authority", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::CheckedInterfaceMethodFact.type_parameters", FieldCheckedDeclaredKindDeclaredInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedInterfaceMethodFact.value_type", FieldCheckedValueTypeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedModule.definitions", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
+    kind_site!("src/resolved.rs::CheckedModule.checked_implementations", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedModule.exports", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedModule.implementation_facts", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedModule.implementations", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
@@ -888,6 +899,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::CheckedModule.registry", FieldRegistryCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree, Shared),
     kind_site!("src/resolved.rs::CheckedModule.schemes", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedModuleParts.definitions", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
+    kind_site!("src/resolved.rs::CheckedModuleParts.checked_implementations", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedModuleParts.exports", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedModuleParts.implementation_facts", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedModuleParts.implementations", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
@@ -984,6 +996,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedModule.interfaces", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedModule.registry", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
     kind_site!("src/resolved.rs::ResolvedModuleGroup.definitions", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedModuleGroup.checked_implementations", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
     kind_site!("src/resolved.rs::ResolvedModuleGroup.implementation_facts", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::ResolvedModuleGroup.implementations", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedModuleGroup.interface_facts", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
@@ -4730,10 +4743,90 @@ fn core_and_evaluator_keep_interface_evidence_outside_their_closed_inventories()
     }
 }
 
+#[test]
+fn goal_key_argument_markers_reserve_fallibly_before_every_push() {
+    const FUNCTION: [&str; 3] = ["fn", "goal_key", "("];
+    const MARKER_PUSH: [&str; 11] = [
+        "cells", ".", "push", "(", "GoalCell", ":", ":", "Argument", "(", "position", ")",
+    ];
+    const RESERVE_PREFIX: [&str; 6] = ["cells", ".", "try_reserve", "(", "1", ")"];
+    const RESOURCE_MAPPING: [&str; 3] = ["SelectionFailure", ":", ":"];
+
+    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/evidence.rs"))
+        .expect("evidence source should be readable");
+    let tokens = production_rust_code_tokens(&source);
+    let function = tokens
+        .windows(FUNCTION.len())
+        .position(|window| window == FUNCTION)
+        .expect("goal_key should exist");
+    let body_open = tokens[function..]
+        .iter()
+        .position(|token| *token == "{")
+        .map(|offset| function + offset)
+        .expect("goal_key should have a body");
+    let body_close = matching_token(&tokens, body_open, "{", "}");
+    let body = &tokens[body_open + 1..body_close];
+    let marker_pushes = body
+        .windows(MARKER_PUSH.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == MARKER_PUSH).then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        marker_pushes.len(),
+        1,
+        "goal_key should retain one source insertion site for ordered argument markers",
+    );
+
+    for marker in marker_pushes {
+        let prefix = &body[..marker];
+        assert_eq!(
+            prefix.last(),
+            Some(&";"),
+            "the marker push must immediately follow its fallible reserve statement",
+        );
+        let statement_end = prefix.len() - 1;
+        let statement_start = prefix[..statement_end]
+            .iter()
+            .rposition(|token| matches!(*token, ";" | "{"))
+            .map_or(0, |position| position + 1);
+        let reserve = &prefix[statement_start..statement_end];
+        assert!(
+            reserve.starts_with(&RESERVE_PREFIX)
+                && reserve
+                    .windows(RESOURCE_MAPPING.len())
+                    .any(|window| window == RESOURCE_MAPPING)
+                && reserve.contains(&"ConstraintResource"),
+            "every argument marker must reserve one cell and map allocation failure to ConstraintResource",
+        );
+    }
+}
+
+#[test]
+fn private_core_allowlist_excludes_scalar_interface_carriers() {
+    for identifier in [
+        "expected_anchor_interface",
+        "expected_interface",
+        "interface_argument",
+        "interface_parameter",
+    ] {
+        for path in [
+            "src/core/dialect.rs",
+            "src/core/transform.rs",
+            "src/core/validate.rs",
+        ] {
+            assert!(
+                !is_allowed_private_core_method_evidence_identifier(path, identifier),
+                "the private Core allowlist must not retain dead scalar carrier {path}::{identifier}",
+            );
+        }
+    }
+}
+
 fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &str) -> bool {
     let shared = matches!(
         identifier,
-        "EvidenceNode"
+        "InterfaceApplication"
+            | "EvidenceNode"
             | "EvidenceNodeId"
             | "EvidenceSelection"
             | "Implementation"
@@ -4742,10 +4835,8 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
             | "ImplMethodId"
             | "RequirementId"
             | "actual_interface"
-            | "expected_anchor_interface"
-            | "expected_interface"
-            | "interface_argument"
-            | "interface_parameter"
+            | "checked_application"
+            | "interface_parameters"
             | "interface_replacement"
             | "interface"
             | "implementation"
@@ -4782,9 +4873,12 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "authenticate_method_evidence"
                     | "consumed_method_evidence"
                     | "concrete_sources"
+                    | "clone_interface_application_for_rebuild"
                     | "empty_method_evidence"
                     | "implementation_owner_count"
+                    | "implementation_owners_mut_for_core_test"
                     | "method_evidence"
+                    | "method_evidence_adapter_application_matches"
                     | "method_evidence_adapter_interface_matches"
                     | "method_evidence_anchor_matches_expectation"
                     | "method_evidence_anchor_identity_work"
@@ -4793,8 +4887,10 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "method_evidence_producer_matches"
                     | "requires_method_evidence_implementation_owner"
                     | "requirement_position"
+                    | "same_interface_application_with_budget"
                     | "target_requirement"
                     | "with_registry_and_method_evidence"
+                    | "with_registry_method_evidence_and_type_work"
             ),
             "src/core/validate.rs" => matches!(
                 identifier,
@@ -4813,9 +4909,13 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "method_evidence_anchors"
                     | "method_evidence_producer_matches"
                     | "method_evidence_scope_binder"
+                    | "previous_interface_parameters"
+                    | "same_interface_application"
+                    | "substitute_interface_application"
                     | "validate_concrete_adapter_source"
                     | "validate_implementation_owner_anchor"
                     | "validate_method_evidence_authority"
+                    | "validate_method_evidence_catalog_applications"
                     | "validate_method_evidence_carrier_incoming"
                     | "validate_method_evidence_domain"
                     | "validate_method_evidence_domain_order"
@@ -4826,7 +4926,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                 identifier,
                 "MethodEvidenceAnchorRole"
                     | "authenticate_method_evidence"
-                    | "interface_argument"
+                    | "clone_interface_application_for_rebuild"
                     | "method_evidence"
                     | "method_evidence_anchors"
                     | "requirement"

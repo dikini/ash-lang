@@ -240,8 +240,7 @@ struct NominalKindFact {
 
 #[derive(Clone, Copy)]
 struct InterfaceKindFact<'a> {
-    kind: &'a Kind,
-    origin: Span,
+    parameters: &'a [crate::resolved::ResolvedTypeVariable],
 }
 
 /// Fixed kind environments used by the total synthesis judgment.
@@ -700,7 +699,7 @@ impl<'a> KindEnvironments<'a> {
     pub(crate) fn expect_body_free_interface_method_with_ledger(
         &self,
         ty: &Type,
-        parameter: TypeVariableId,
+        interface_parameters: &[TypeVariableId],
         method_parameters: &[TypeVariableId],
         span: Span,
         budget: &mut impl KindWorkLedger,
@@ -711,12 +710,15 @@ impl<'a> KindEnvironments<'a> {
                 "a checked body-free interface method is not a function",
             ));
         }
-        let parameter_count = method_parameters.len().checked_add(1).ok_or_else(|| {
-            KindFailure::resource(
-                span,
-                "body-free interface-method variable count exceeded its owning work budget",
-            )
-        })?;
+        let parameter_count = method_parameters
+            .len()
+            .checked_add(interface_parameters.len())
+            .ok_or_else(|| {
+                KindFailure::resource(
+                    span,
+                    "body-free interface-method variable count exceeded its owning work budget",
+                )
+            })?;
         let retained_work = parameter_count.checked_mul(2).ok_or_else(|| {
             KindFailure::resource(
                 span,
@@ -736,7 +738,14 @@ impl<'a> KindEnvironments<'a> {
                 "body-free interface-method variable storage could not reserve capacity",
             )
         })?;
-        allowed.insert(parameter);
+        for parameter in interface_parameters {
+            if !allowed.insert(*parameter) {
+                return Err(KindFailure::internal(
+                    span,
+                    "a checked body-free interface repeats a type parameter",
+                ));
+            }
+        }
         for method_parameter in method_parameters {
             if !allowed.insert(*method_parameter) {
                 return Err(KindFailure::internal(
@@ -764,7 +773,9 @@ impl<'a> KindEnvironments<'a> {
             &mut ledger,
         )?;
         if visited.len() != parameter_count
-            || !visited.contains(&parameter)
+            || interface_parameters
+                .iter()
+                .any(|parameter| !visited.contains(parameter))
             || method_parameters
                 .iter()
                 .any(|method_parameter| !visited.contains(method_parameter))
@@ -980,10 +991,16 @@ impl<'a> KindEnvironments<'a> {
     pub(crate) fn insert_interface(
         &mut self,
         identity: InterfaceId,
-        kind: &'a Kind,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
         origin: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
+        if parameters.is_empty() {
+            return Err(KindFailure::internal(
+                origin,
+                "an interface has no canonical parameter records",
+            ));
+        }
         budget.charge(1).map_err(|()| {
             KindFailure::resource(
                 origin,
@@ -991,17 +1008,29 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         if let Some(existing) = self.iota.get(&identity) {
-            let equal = same_kind_with_budget(existing.kind, kind, budget).map_err(|()| {
-                KindFailure::resource(
-                    origin,
-                    "interface kind authentication exceeded its type-work budget",
-                )
-            })?;
-            if !equal || existing.origin != origin {
+            if existing.parameters.len() != parameters.len() {
                 return Err(KindFailure::internal(
                     origin,
-                    "an interface has conflicting canonical parameter kinds",
+                    "an interface has conflicting canonical parameter counts",
                 ));
+            }
+            for (existing, parameter) in existing.parameters.iter().zip(parameters) {
+                let equal = same_kind_with_budget(&existing.kind, &parameter.kind, budget)
+                    .map_err(|()| {
+                        KindFailure::resource(
+                            origin,
+                            "interface kind authentication exceeded its type-work budget",
+                        )
+                    })?;
+                if existing.id != parameter.id
+                    || existing.origin.primary_span() != parameter.origin.primary_span()
+                    || !equal
+                {
+                    return Err(KindFailure::internal(
+                        origin,
+                        "an interface has conflicting canonical parameter records",
+                    ));
+                }
             }
             return Ok(());
         }
@@ -1011,8 +1040,7 @@ impl<'a> KindEnvironments<'a> {
                 "interface kind environment could not reserve storage",
             )
         })?;
-        self.iota
-            .insert(identity, InterfaceKindFact { kind, origin });
+        self.iota.insert(identity, InterfaceKindFact { parameters });
         Ok(())
     }
 
@@ -1115,7 +1143,7 @@ impl<'a> KindEnvironments<'a> {
     pub(crate) fn expect_body_free_interface_argument_with_ledger(
         &self,
         interface: InterfaceId,
-        ty: &Type,
+        arguments: &[Type],
         span: Span,
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
@@ -1131,25 +1159,39 @@ impl<'a> KindEnvironments<'a> {
                 "a body-free interface occurrence has no canonical parameter kind",
             ));
         };
-        let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found =
-            self.synthesize_with_ledger(ty, None, None, None, None, None, span, &mut ledger)?;
-        let equal = same_kind_with_charge(expected.kind, found.kind, || ledger.charge(1)).map_err(
-            |()| {
-                KindFailure::resource(
-                    span,
-                    "body-free interface kind authentication exceeded its owning work budget",
-                )
-            },
-        )?;
-        if equal {
-            Ok(())
-        } else {
-            Err(KindFailure::internal(
+        if arguments.len() != expected.parameters.len() {
+            return Err(KindFailure::internal(
                 span,
-                "a checked body-free interface argument has the wrong kind",
-            ))
+                "a checked body-free interface application has the wrong argument count",
+            ));
         }
+        let mut ledger = SynthesisLedger::BodyFree(budget);
+        for (argument, parameter) in arguments.iter().zip(expected.parameters) {
+            let found = self.synthesize_with_ledger(
+                argument,
+                None,
+                None,
+                None,
+                None,
+                None,
+                span,
+                &mut ledger,
+            )?;
+            let equal = same_kind_with_charge(&parameter.kind, found.kind, || ledger.charge(1))
+                .map_err(|()| {
+                    KindFailure::resource(
+                        span,
+                        "body-free interface kind authentication exceeded its owning work budget",
+                    )
+                })?;
+            if !equal {
+                return Err(KindFailure::internal(
+                    span,
+                    "a checked body-free interface argument has the wrong kind",
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Checks an implementation head and proves that every installed rigid
@@ -1157,7 +1199,7 @@ impl<'a> KindEnvironments<'a> {
     pub(crate) fn expect_body_free_exact_owner_interface_argument_with_ledger(
         &self,
         interface: InterfaceId,
-        ty: &Type,
+        arguments: &[Type],
         span: Span,
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
@@ -1173,6 +1215,12 @@ impl<'a> KindEnvironments<'a> {
                 "a body-free interface occurrence has no canonical parameter kind",
             ));
         };
+        if arguments.len() != expected.parameters.len() {
+            return Err(KindFailure::internal(
+                span,
+                "a checked body-free interface application has the wrong argument count",
+            ));
+        }
         let mut visited = HashSet::new();
         budget.charge(self.delta.len()).map_err(|()| {
             KindFailure::resource(
@@ -1187,48 +1235,48 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         let mut ledger = SynthesisLedger::BodyFree(budget);
-        let found = self.synthesize_with_ledger(
-            ty,
-            None,
-            None,
-            None,
-            None,
-            Some(&mut visited),
-            span,
-            &mut ledger,
-        )?;
+        for (argument, parameter) in arguments.iter().zip(expected.parameters) {
+            let found = self.synthesize_with_ledger(
+                argument,
+                None,
+                None,
+                None,
+                None,
+                Some(&mut visited),
+                span,
+                &mut ledger,
+            )?;
+            let equal = same_kind_with_charge(&parameter.kind, found.kind, || ledger.charge(1))
+                .map_err(|()| {
+                    KindFailure::resource(
+                        span,
+                        "body-free interface kind authentication exceeded its owning work budget",
+                    )
+                })?;
+            if !equal {
+                return Err(KindFailure::internal(
+                    span,
+                    "a checked body-free interface argument has the wrong kind",
+                ));
+            }
+        }
         if visited.len() != self.delta.len() {
             return Err(KindFailure::internal(
                 span,
                 "a linked implementation head retains an unused rigid binder",
             ));
         }
-        let equal = same_kind_with_charge(expected.kind, found.kind, || ledger.charge(1)).map_err(
-            |()| {
-                KindFailure::resource(
-                    span,
-                    "body-free interface kind authentication exceeded its owning work budget",
-                )
-            },
-        )?;
-        if equal {
-            Ok(())
-        } else {
-            Err(KindFailure::internal(
-                span,
-                "a checked body-free interface argument has the wrong kind",
-            ))
-        }
+        Ok(())
     }
 
     fn expect_body_free_interface_argument(
         &self,
         interface: InterfaceId,
-        ty: &Type,
+        arguments: &[Type],
         span: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
-        self.expect_body_free_interface_argument_with_ledger(interface, ty, span, budget)
+        self.expect_body_free_interface_argument_with_ledger(interface, arguments, span, budget)
     }
 
     fn synthesize<'environment>(
@@ -2079,7 +2127,7 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
         budget.charge(1).map_err(|()| {
             KindFailure::resource(
                 interface.span,
-                "interface predecessor-shape authentication exceeded its type-work budget",
+                "interface declaration-shape authentication exceeded its type-work budget",
             )
         })?;
         if interface.parameters.is_empty() {
@@ -2088,14 +2136,14 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 "a resolved interface has no type parameters",
             ));
         }
-        if !interface.has_predecessor_shape() {
+        if interface.determination.is_some() {
             continue;
         }
         authenticate_owner_parameters(&module.registry, &interface.parameters, budget)?;
         environments.insert_interface(
             interface.id,
-            &interface.parameters[0].kind,
-            interface.parameters[0].origin.primary_span(),
+            &interface.parameters,
+            interface.span,
             budget,
         )?;
     }
@@ -2322,8 +2370,8 @@ fn authenticate_imported_environments<'a>(
         let interface = &imported_interface.fact;
         environments.insert_interface(
             interface.id,
-            &interface.parameter.kind,
-            interface.parameter.origin.primary_span(),
+            &interface.parameters,
+            interface.span,
             budget,
         )?;
     }
@@ -2336,8 +2384,7 @@ fn authenticate_imported_environments<'a>(
                 method.origin.primary_span(),
                 budget,
             )?;
-            environments
-                .install_owner_parameters(std::slice::from_ref(&interface.parameter), budget)?;
+            environments.install_owner_parameters(&interface.parameters, budget)?;
             for parameter in method.type_parameters() {
                 environments.insert_declared(
                     parameter.id,
@@ -2356,8 +2403,8 @@ fn authenticate_imported_environments<'a>(
         environments.expect_body_free_value_type(&global.scheme.value_type, span, budget)?;
         for requirement in &global.scheme.requirements {
             environments.expect_body_free_interface_argument(
-                requirement.interface,
-                requirement.argument(),
+                requirement.interface(),
+                requirement.arguments(),
                 requirement.span,
                 budget,
             )?;
@@ -2368,15 +2415,15 @@ fn authenticate_imported_environments<'a>(
         let fact = &implementation.fact;
         environments.install_owner_parameters(&fact.head_parameters, budget)?;
         environments.expect_body_free_interface_argument(
-            fact.interface,
-            fact.argument(),
+            fact.interface(),
+            fact.arguments(),
             fact.span,
             budget,
         )?;
         for prerequisite in &fact.prerequisites {
             environments.expect_body_free_interface_argument(
-                prerequisite.interface,
-                prerequisite.argument(),
+                prerequisite.interface(),
+                prerequisite.arguments(),
                 prerequisite.span,
                 budget,
             )?;
@@ -2394,8 +2441,8 @@ fn authenticate_imported_environments<'a>(
             )?;
             for requirement in &method.scheme.requirements {
                 environments.expect_body_free_interface_argument(
-                    requirement.interface,
-                    requirement.argument(),
+                    requirement.interface(),
+                    requirement.arguments(),
                     requirement.span,
                     budget,
                 )?;
@@ -2462,7 +2509,7 @@ fn check_interface<'a>(
     budget.charge(1).map_err(|()| {
         KindFailure::resource(
             interface.span,
-            "interface predecessor-shape authentication exceeded its type-work budget",
+            "interface declaration-shape authentication exceeded its type-work budget",
         )
     })?;
     if interface.parameters.is_empty() {
@@ -2471,7 +2518,7 @@ fn check_interface<'a>(
             "a resolved interface has no type parameters",
         ));
     }
-    if !interface.has_predecessor_shape() {
+    if interface.determination.is_some() {
         return Ok(DeclarationKindOutcome::Bypassed);
     }
     let mut interface_only = false;
@@ -2509,59 +2556,64 @@ fn check_interface<'a>(
     Ok(DeclarationKindOutcome::Checked)
 }
 
-struct PredecessorApplication<'application, 'kind> {
-    argument: &'application ResolvedType,
-    expected_kind: &'kind Kind,
-    expected_origin: Span,
+struct CompleteInterfaceApplication<'application, 'kind> {
+    arguments: &'application [ResolvedType],
+    parameters: &'kind [crate::resolved::ResolvedTypeVariable],
 }
 
-fn authenticate_predecessor_application<'application, 'kind>(
+fn authenticate_interface_application<'application, 'kind>(
     application: &'application ResolvedInterfaceApplication,
     environments: &KindEnvironments<'kind>,
     budget: &mut TypeWorkBudget,
-) -> Result<Option<PredecessorApplication<'application, 'kind>>, KindFailure> {
+) -> Result<Option<CompleteInterfaceApplication<'application, 'kind>>, KindFailure> {
     budget.charge(1).map_err(|()| {
         KindFailure::resource(
             application.span,
-            "interface-application predecessor-shape authentication exceeded its type-work budget",
+            "interface-application shape authentication exceeded its type-work budget",
         )
     })?;
-    let [argument] = application.arguments.as_ref() else {
-        if !application.arguments.is_empty() {
-            return Ok(None);
-        }
-        return Err(KindFailure::internal(
-            application.span,
-            "a resolved interface application has no type arguments",
-        ));
-    };
     budget.charge(1).map_err(|()| {
         KindFailure::resource(
             application.span,
             "interface kind membership authentication exceeded its type-work budget",
         )
     })?;
-    let Some(expected) = environments.iota.get(&application.interface.id) else {
+    let expected = environments
+        .iota
+        .get(&application.interface.id)
+        .ok_or_else(|| {
+            KindFailure::internal(
+                application.span,
+                "a resolved interface application has no canonical interface-kind entry",
+            )
+        })?;
+    if application.arguments.len() != expected.parameters.len() {
         return Ok(None);
-    };
-    Ok(Some(PredecessorApplication {
-        argument,
-        expected_kind: expected.kind,
-        expected_origin: expected.origin,
+    }
+    Ok(Some(CompleteInterfaceApplication {
+        arguments: &application.arguments,
+        parameters: expected.parameters,
     }))
 }
 
-fn check_predecessor_application(
-    application: PredecessorApplication<'_, '_>,
+fn check_interface_application_kinds(
+    application: CompleteInterfaceApplication<'_, '_>,
     environments: &KindEnvironments<'_>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
-    let PredecessorApplication {
-        argument,
-        expected_kind,
-        expected_origin,
+    let CompleteInterfaceApplication {
+        arguments,
+        parameters,
     } = application;
-    environments.expect_interface_argument(argument, expected_kind, expected_origin, budget)
+    for (argument, parameter) in arguments.iter().zip(parameters) {
+        environments.expect_interface_argument(
+            argument,
+            &parameter.kind,
+            parameter.origin.primary_span(),
+            budget,
+        )?;
+    }
+    Ok(())
 }
 
 fn check_definition<'a>(
@@ -2583,18 +2635,18 @@ fn check_definition<'a>(
                 budget,
             )?;
             for requirement in &global.interface.requirements {
-                let Some(checked) = authenticate_predecessor_application(
+                let Some(checked) = authenticate_interface_application(
                     &requirement.application,
                     environments,
                     budget,
                 )?
                 else {
-                    return Ok(DeclarationKindOutcome::Bypassed);
+                    return Ok(DeclarationKindOutcome::Deferred);
                 };
                 if requirement_has_undetermined_variable(requirement, &determined, budget)? {
                     return Ok(DeclarationKindOutcome::Deferred);
                 }
-                check_predecessor_application(checked, environments, budget)?;
+                check_interface_application_kinds(checked, environments, budget)?;
             }
             for equation in &global.equations {
                 check_expression_annotations(&equation.body, environments, budget)?;
@@ -2621,18 +2673,18 @@ fn check_definition<'a>(
                 budget,
             )?;
             for requirement in &global.header.requirements {
-                let Some(checked) = authenticate_predecessor_application(
+                let Some(checked) = authenticate_interface_application(
                     &requirement.application,
                     environments,
                     budget,
                 )?
                 else {
-                    return Ok(DeclarationKindOutcome::Bypassed);
+                    return Ok(DeclarationKindOutcome::Deferred);
                 };
                 if requirement_has_undetermined_variable(requirement, &determined, budget)? {
                     return Ok(DeclarationKindOutcome::Deferred);
                 }
-                check_predecessor_application(checked, environments, budget)?;
+                check_interface_application_kinds(checked, environments, budget)?;
             }
             check_block_annotations(&global.body, environments, budget)?;
         }
@@ -2721,17 +2773,13 @@ fn requirement_has_undetermined_variable(
     determined: &[TypeVariableId],
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, KindFailure> {
-    let [argument] = requirement.application.arguments.as_ref() else {
-        return Err(KindFailure::internal(
-            requirement.application.span,
-            "unary kind checking received a non-unary interface application",
-        ));
-    };
-    let mut variables = Vec::new();
-    collect_type_variables(&argument.ty, argument.span, &mut variables, budget)?;
-    for identity in variables {
-        if !contains_type_variable_with_budget(determined, identity, argument.span, budget)? {
-            return Ok(true);
+    for argument in &requirement.application.arguments {
+        let mut variables = Vec::new();
+        collect_type_variables(&argument.ty, argument.span, &mut variables, budget)?;
+        for identity in variables {
+            if !contains_type_variable_with_budget(determined, identity, argument.span, budget)? {
+                return Ok(true);
+            }
         }
     }
     Ok(false)
@@ -2764,9 +2812,9 @@ fn check_implementation<'a>(
     budget: &mut TypeWorkBudget,
 ) -> Result<DeclarationKindOutcome, KindFailure> {
     let Some(head) =
-        authenticate_predecessor_application(&implementation.head, environments, budget)?
+        authenticate_interface_application(&implementation.head, environments, budget)?
     else {
-        return Ok(DeclarationKindOutcome::Bypassed);
+        return Ok(DeclarationKindOutcome::Deferred);
     };
     authenticate_owner_parameters(registry, &implementation.head_parameters, budget)?;
     authenticate_owner_parameters(
@@ -2775,17 +2823,17 @@ fn check_implementation<'a>(
         budget,
     )?;
     environments.install_owner_parameters(&implementation.head_parameters, budget)?;
-    check_predecessor_application(head, environments, budget)?;
+    check_interface_application_kinds(head, environments, budget)?;
     if !implementation.prerequisite_only_parameters.is_empty() {
         return Ok(DeclarationKindOutcome::Deferred);
     }
     for prerequisite in &implementation.prerequisites {
         let Some(checked) =
-            authenticate_predecessor_application(&prerequisite.application, environments, budget)?
+            authenticate_interface_application(&prerequisite.application, environments, budget)?
         else {
-            return Ok(DeclarationKindOutcome::Bypassed);
+            return Ok(DeclarationKindOutcome::Deferred);
         };
-        check_predecessor_application(checked, environments, budget)?;
+        check_interface_application_kinds(checked, environments, budget)?;
     }
     for group in &implementation.method_groups {
         for equation in &group.equations {
@@ -3570,9 +3618,11 @@ mod tests {
         }];
         parts.declaration_order = vec![ResolvedDeclarationIndex::Interface(0)];
 
-        // Declaration order costs three cells. The environment-install and
-        // declaration-consumer passes each own one separate shape visit.
-        const EXACT_WORK: usize = 5;
+        // Declaration order costs three cells. Environment admission then
+        // owns one shape cell, two unique-binder cells, two canonical Kind
+        // comparisons, and one IOTA insertion. Declaration consumption owns
+        // one independent shape cell; successful indexed lookup is free.
+        const EXACT_WORK: usize = 3 + (1 + 2 + 2 + 1) + 1;
         let mut one_short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
         assert!(matches!(
             check_resolved_module_with_budget(&parts, &[], &mut one_short),
@@ -3582,7 +3632,7 @@ mod tests {
 
         let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
         check_resolved_module_with_budget(&parts, &[], &mut exact)
-            .expect("the exact two-pass relational shape budget should bypass kind work");
+            .expect("the exact two-pass relational shape and binder budget should fit");
         assert_eq!(exact.used(), EXACT_WORK);
     }
 
@@ -3592,6 +3642,32 @@ mod tests {
         let module = ModuleId::new(0);
         let binder = BinderId::resolved(module, 0);
         let interface = InterfaceId::new(module, 0);
+        let parameters = [
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 0),
+                spelling: "Left".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 1),
+                spelling: "Right".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+        ];
+        let install_relation = || {
+            let mut environments = KindEnvironments::new();
+            environments
+                .insert_interface(
+                    interface,
+                    &parameters,
+                    span,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("the two-position interface kind should install");
+            environments
+        };
         let base = equational_definition(binder, Vec::new(), span);
         let mut measured = TypeWorkBudget::unbounded();
         assert!(matches!(
@@ -3605,43 +3681,96 @@ mod tests {
         ));
         let base_work = measured.used();
 
-        for (argument_count, added_work) in [(2, 1), (1, 2)] {
-            let definition = equational_definition(
-                binder,
-                vec![requirement(
-                    RequirementOwner::Global(binder),
-                    0,
-                    interface,
-                    argument_count,
-                    span,
-                )],
+        let accepted = equational_definition(
+            binder,
+            vec![requirement(
+                RequirementOwner::Global(binder),
+                0,
+                interface,
+                2,
                 span,
-            );
-            let exact_work = base_work + added_work;
-            let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
-            assert!(matches!(
-                check_definition(
-                    &definition,
-                    &ResolvedRegistry::new(Vec::new(), Vec::new()),
-                    &mut KindEnvironments::new(),
-                    &mut one_short,
-                ),
-                Err(KindFailure::Resource(_))
-            ));
-            assert_eq!(one_short.used(), exact_work - 1);
+            )],
+            span,
+        );
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(matches!(
+            check_definition(
+                &accepted,
+                &ResolvedRegistry::new(Vec::new(), Vec::new()),
+                &mut install_relation(),
+                &mut measured,
+            ),
+            Ok(DeclarationKindOutcome::Checked)
+        ));
+        let accepted_work = measured.used();
+        assert!(accepted_work > base_work);
+        let mut one_short = TypeWorkBudget::with_limit(accepted_work - 1);
+        assert!(matches!(
+            check_definition(
+                &accepted,
+                &ResolvedRegistry::new(Vec::new(), Vec::new()),
+                &mut install_relation(),
+                &mut one_short,
+            ),
+            Err(KindFailure::Resource(_))
+        ));
+        assert_eq!(one_short.used(), accepted_work - 1);
+        let mut exact = TypeWorkBudget::with_limit(accepted_work);
+        assert!(matches!(
+            check_definition(
+                &accepted,
+                &ResolvedRegistry::new(Vec::new(), Vec::new()),
+                &mut install_relation(),
+                &mut exact,
+            ),
+            Ok(DeclarationKindOutcome::Checked)
+        ));
+        assert_eq!(exact.used(), accepted_work);
 
-            let mut exact = TypeWorkBudget::with_limit(exact_work);
-            assert!(matches!(
-                check_definition(
-                    &definition,
-                    &ResolvedRegistry::new(Vec::new(), Vec::new()),
-                    &mut KindEnvironments::new(),
-                    &mut exact,
-                ),
-                Ok(DeclarationKindOutcome::Bypassed)
-            ));
-            assert_eq!(exact.used(), exact_work);
-        }
+        let wrong_arity = equational_definition(
+            binder,
+            vec![requirement(
+                RequirementOwner::Global(binder),
+                0,
+                interface,
+                1,
+                span,
+            )],
+            span,
+        );
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(matches!(
+            check_definition(
+                &wrong_arity,
+                &ResolvedRegistry::new(Vec::new(), Vec::new()),
+                &mut install_relation(),
+                &mut measured,
+            ),
+            Ok(DeclarationKindOutcome::Deferred)
+        ));
+        let arity_work = measured.used();
+        let mut one_short = TypeWorkBudget::with_limit(arity_work - 1);
+        assert!(matches!(
+            check_definition(
+                &wrong_arity,
+                &ResolvedRegistry::new(Vec::new(), Vec::new()),
+                &mut install_relation(),
+                &mut one_short,
+            ),
+            Err(KindFailure::Resource(_))
+        ));
+        assert_eq!(one_short.used(), arity_work - 1);
+        let mut exact = TypeWorkBudget::with_limit(arity_work);
+        assert!(matches!(
+            check_definition(
+                &wrong_arity,
+                &ResolvedRegistry::new(Vec::new(), Vec::new()),
+                &mut install_relation(),
+                &mut exact,
+            ),
+            Ok(DeclarationKindOutcome::Deferred)
+        ));
+        assert_eq!(exact.used(), arity_work);
     }
 
     #[test]
@@ -3652,6 +3781,32 @@ mod tests {
         let interface = InterfaceId::new(module, 0);
         let implementation_id = ImplId::new(module, 0);
         let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        let relational_parameters = [
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 0),
+                spelling: "Left".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 1),
+                spelling: "Right".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+        ];
+        let install_relational_interface = || {
+            let mut environments = KindEnvironments::new();
+            environments
+                .insert_interface(
+                    interface,
+                    &relational_parameters,
+                    span,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("the two-position interface kind should install");
+            environments
+        };
 
         let relational_head = ResolvedImplementation {
             id: implementation_id,
@@ -3663,27 +3818,39 @@ mod tests {
             method_groups: Box::new([]),
             span,
         };
-        let mut one_short = TypeWorkBudget::with_limit(0);
+        let mut measured = TypeWorkBudget::unbounded();
         assert!(matches!(
             check_implementation(
                 &relational_head,
                 &registry,
-                &mut KindEnvironments::new(),
+                &mut install_relational_interface(),
+                &mut measured,
+            ),
+            Ok(DeclarationKindOutcome::Checked)
+        ));
+        let relational_head_work = measured.used();
+        let mut one_short = TypeWorkBudget::with_limit(relational_head_work - 1);
+        assert!(matches!(
+            check_implementation(
+                &relational_head,
+                &registry,
+                &mut install_relational_interface(),
                 &mut one_short,
             ),
             Err(KindFailure::Resource(_))
         ));
-        let mut exact = TypeWorkBudget::with_limit(1);
+        assert_eq!(one_short.used(), relational_head_work - 1);
+        let mut exact = TypeWorkBudget::with_limit(relational_head_work);
         assert!(matches!(
             check_implementation(
                 &relational_head,
                 &registry,
-                &mut KindEnvironments::new(),
+                &mut install_relational_interface(),
                 &mut exact,
             ),
-            Ok(DeclarationKindOutcome::Bypassed)
+            Ok(DeclarationKindOutcome::Checked)
         ));
-        assert_eq!(exact.used(), 1);
+        assert_eq!(exact.used(), relational_head_work);
 
         let make_implementation = |include_invalid: bool| ResolvedImplementation {
             id: implementation_id,
@@ -3714,12 +3881,18 @@ mod tests {
             method_groups: Box::new([]),
             span,
         };
+        let interface_parameter = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(interface.module(), 0),
+            spelling: "A".into(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
         let install_interface = || {
             let mut environments = KindEnvironments::new();
             environments
                 .insert_interface(
                     interface,
-                    &TYPE_KIND,
+                    std::slice::from_ref(&interface_parameter),
                     span,
                     &mut TypeWorkBudget::unbounded(),
                 )
@@ -3741,7 +3914,19 @@ mod tests {
         let prefix_work = measured.used();
 
         let late_invalid = make_implementation(true);
-        let mut one_short = TypeWorkBudget::with_limit(prefix_work);
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(matches!(
+            check_implementation(
+                &late_invalid,
+                &registry,
+                &mut install_interface(),
+                &mut measured,
+            ),
+            Ok(DeclarationKindOutcome::Deferred)
+        ));
+        let late_arity_work = measured.used();
+        assert!(late_arity_work > prefix_work);
+        let mut one_short = TypeWorkBudget::with_limit(late_arity_work - 1);
         assert!(matches!(
             check_implementation(
                 &late_invalid,
@@ -3751,9 +3936,9 @@ mod tests {
             ),
             Err(KindFailure::Resource(_))
         ));
-        assert_eq!(one_short.used(), prefix_work);
+        assert_eq!(one_short.used(), late_arity_work - 1);
 
-        let mut exact = TypeWorkBudget::with_limit(prefix_work + 1);
+        let mut exact = TypeWorkBudget::with_limit(late_arity_work);
         assert!(matches!(
             check_implementation(
                 &late_invalid,
@@ -3761,9 +3946,9 @@ mod tests {
                 &mut install_interface(),
                 &mut exact,
             ),
-            Ok(DeclarationKindOutcome::Bypassed)
+            Ok(DeclarationKindOutcome::Deferred)
         ));
-        assert_eq!(exact.used(), prefix_work + 1);
+        assert_eq!(exact.used(), late_arity_work);
     }
 
     #[test]
@@ -4063,8 +4248,19 @@ mod tests {
             )
             .expect("the exact XI retention budget should fit");
         assert_eq!(xi_exact.used(), 4);
+        let interface_parameter = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(interface.module(), 0),
+            spelling: "F".into(),
+            kind: kind.clone(),
+            origin: Origin::Source(span),
+        };
         environments
-            .insert_interface(interface, &kind, span, &mut TypeWorkBudget::unbounded())
+            .insert_interface(
+                interface,
+                std::slice::from_ref(&interface_parameter),
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            )
             .expect("the IOTA entry should install");
 
         for ty in [
@@ -4112,7 +4308,7 @@ mod tests {
         assert!(matches!(
             empty.expect_body_free_interface_argument(
                 InterfaceId::new(ModuleId::new(0), 9),
-                &Type::Int,
+                &[Type::Int],
                 span,
                 &mut iota_budget,
             ),

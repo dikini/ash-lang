@@ -447,8 +447,11 @@ fn detached_summaries_preserve_defining_kinds_across_every_import_route() {
                 let consumer = imported
                     .interface(identities.consumer)
                     .expect("the route must retain Consumer's defining identity");
+                let [consumer_parameter] = consumer.parameters.as_ref() else {
+                    panic!("the unary Consumer interface should retain one parameter");
+                };
                 assert_eq!(
-                    consumer.parameter.kind,
+                    consumer_parameter.kind,
                     Kind::Arrow(
                         Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))),
                         Box::new(Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)))

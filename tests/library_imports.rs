@@ -537,7 +537,7 @@ fn public_implementation_selector_crosses_a_three_module_facade() {
         .imported_facts()
         .implementation(implementation)
         .expect("the facade selector should retain the defining implementation");
-    assert_eq!(facade_imported.interface, interface);
+    assert_eq!(facade_imported.interface(), interface);
     assert_eq!(facade_imported.methods[0].id, implementation_method);
     assert_eq!(facade_imported.methods[0].method, method);
     assert_eq!(facade_imported.methods[0].binder, method_binder);
@@ -555,7 +555,7 @@ fn public_implementation_selector_crosses_a_three_module_facade() {
         .imported_facts()
         .implementation(implementation)
         .expect("the facade should publish the original implementation identity");
-    assert_eq!(entry_imported.interface, interface);
+    assert_eq!(entry_imported.interface(), interface);
     assert_eq!(entry_imported.methods[0].id, implementation_method);
     assert_eq!(entry_imported.methods[0].method, method);
     assert_eq!(entry_imported.methods[0].binder, method_binder);

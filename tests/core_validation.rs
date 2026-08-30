@@ -355,6 +355,107 @@ fn abstract_polymorphic_method_evidence_instantiates_at_retained_arguments() {
 }
 
 #[test]
+fn complete_interface_application_authenticates_before_method_arguments() {
+    let (program, graph) = validated_interface_core_with_graph(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "type Wrap<A> = Wrap(A)\n\n",
+        "interface Combine<F : Type -> Type, Item> {\n",
+        "combine<X> : (F<Item>, Item, X) -> Int\n",
+        "}\n\n",
+        "impl<F : Type -> Type, A> Combine<F, Wrap<A>> {\n",
+        "combine (container, item, ignored) = 42\n",
+        "}\n\n",
+        "use_combine<F : Type -> Type, A> : (F<Wrap<A>>, Wrap<A>) -> Int where Combine<F, Wrap<A>>\n",
+        "use_combine (container, item) = combine((container, item, true))\n\n",
+        "main : Unit -> Int\n",
+        "main () = use_combine((Some(Wrap(0)), Wrap(42)))\n",
+    ));
+
+    assert_integer_evaluation(&program, "42");
+    let option = program
+        .registry()
+        .nominals()
+        .iter()
+        .find(|nominal| nominal.spelling == "Option")
+        .expect("the higher-kinded interface argument should retain Option")
+        .id;
+    let mut aligned_adapter_application = None;
+    let mut method_local_application = None;
+    for id in reachable_nodes(&program) {
+        let node = program
+            .node(id)
+            .expect("the reachable Core node should exist");
+        let PureExprKind::Computation(PureComputation::TypeApplication(application)) = &node.kind
+        else {
+            continue;
+        };
+        let function = program
+            .node(application.function())
+            .expect("the aligned method application function should exist");
+        match application.arguments() {
+            [
+                Type::Nominal(actual_option),
+                Type::Int,
+                Type::Variable(method_argument),
+            ] if *actual_option == option => {
+                let Type::Forall(parameters, _) = &function.ty else {
+                    panic!("the aligned adapter application should consume one Core scheme");
+                };
+                assert_eq!(parameters.len(), 3);
+                assert_type_to_type(&parameters[0].1);
+                assert_eq!(parameters[1].1, Kind::Type);
+                assert_eq!(parameters[2].1, Kind::Type);
+                assert!(matches!(method_argument, TypeVariableId::Generated(_)));
+                assert!(
+                    aligned_adapter_application.replace(id).is_none(),
+                    "the adapter should apply the interface-derived head prefix once",
+                );
+            }
+            [Type::Bool] => {
+                let Type::Forall(parameters, _) = &function.ty else {
+                    continue;
+                };
+                if parameters.len() == 1 && parameters[0].1 == Kind::Type {
+                    assert!(
+                        method_local_application.replace(id).is_none(),
+                        "the method-local suffix should instantiate once",
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        aligned_adapter_application.is_some(),
+        "Core must apply interface-derived [F, A] before the forwarded method-local X",
+    );
+    assert!(
+        method_local_application.is_some(),
+        "the source call must instantiate method-local X only after the interface application",
+    );
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let identity = identity_traversal(&program)
+        .expect("identity traversal should preserve the complete interface application");
+    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+        .expect("identity traversal should independently revalidate complete authentication");
+    assert_integer_evaluation(&identity, "42");
+    let folded = fold_literal_primitives(&program)
+        .expect("literal folding should preserve the complete interface application");
+    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+        .expect("literal folding should independently revalidate complete authentication");
+    assert_integer_evaluation(&folded, "42");
+}
+
+#[test]
 fn concrete_method_evidence_uses_one_generated_adapter() {
     let program = validated_interface_core(concat!(
         "type Wrap<A> = Wrap(A)\n\n",
@@ -791,13 +892,16 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         panic!("the checked dependency should retain one interface fact");
     };
     assert_eq!(checked_observe.id, observe);
-    assert_type_to_type(&checked_observe.parameter.kind);
+    let [checked_observe_parameter] = checked_observe.parameters.as_ref() else {
+        panic!("the checked interface should retain one parameter");
+    };
+    assert_type_to_type(&checked_observe_parameter.kind);
     let [checked_implementation] = checked_dependency.implementation_facts() else {
         panic!("the checked dependency should retain one implementation fact");
     };
     assert_eq!(checked_implementation.id, implementation);
-    assert_eq!(checked_implementation.interface, observe);
-    assert_eq!(checked_implementation.argument(), &Type::Nominal(option));
+    assert_eq!(checked_implementation.interface(), observe);
+    assert_eq!(checked_implementation.arguments(), [Type::Nominal(option)]);
     let checked_relay = checked_dependency
         .schemes()
         .iter()
@@ -859,7 +963,10 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .interface(observe)
         .expect("the entry should import Observe's canonical fact");
     assert_eq!(imported_observe.id, observe);
-    assert_type_to_type(&imported_observe.parameter.kind);
+    let [imported_observe_parameter] = imported_observe.parameters.as_ref() else {
+        panic!("the imported interface should retain one parameter");
+    };
+    assert_type_to_type(&imported_observe_parameter.kind);
     let imported_relay = imported
         .global(relay)
         .expect("the entry should import relay's canonical scheme");
@@ -874,8 +981,8 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .implementation(implementation)
         .expect("the entry should import the selected Observe<Option> implementation");
     assert_eq!(imported_implementation.id, implementation);
-    assert_eq!(imported_implementation.interface, observe);
-    assert_eq!(imported_implementation.argument(), &Type::Nominal(option));
+    assert_eq!(imported_implementation.interface(), observe);
+    assert_eq!(imported_implementation.arguments(), [Type::Nominal(option)]);
     let checked_entry = check_module(resolved_entry)
         .expect("the entry should type-check from detached imported facts");
     let main = checked_entry
@@ -912,7 +1019,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .selection()
         .expect("entry checking should fill observe's evidence slot");
     assert_eq!(observe_selection.interface(), observe);
-    assert_eq!(observe_selection.argument(), &Type::Nominal(option));
+    assert_eq!(observe_selection.arguments(), [Type::Nominal(option)]);
     assert_eq!(observe_selection.node_count(), 1);
     let Some(EvidenceNode::Implementation {
         implementation: selected_implementation,
@@ -954,7 +1061,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         panic!("linked evidence should retain one implementation fact");
     };
     assert_eq!(linked_implementation.id, implementation);
-    assert_eq!(linked_implementation.interface, observe);
+    assert_eq!(linked_implementation.interface(), observe);
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("the linked binder namespace should fit");
     let typed = elaborator

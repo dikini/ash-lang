@@ -228,7 +228,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
                         panic!("the imported constrained global should retain one requirement");
                     };
                     assert_eq!(requirement.id, arm.requirement);
-                    assert_eq!(requirement.interface, identities.interface);
+                    assert_eq!(requirement.interface(), identities.interface);
                 }
             }
             other => panic!("unexpected fixture module {other}"),

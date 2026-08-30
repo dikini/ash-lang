@@ -171,13 +171,16 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     assert_eq!(defining_interface.id, expected_interface);
     assert_eq!(defining_implementation.id, expected_impl);
     assert_eq!(imported.id, defining_implementation.id);
-    assert_eq!(imported.interface, expected_interface);
+    assert_eq!(imported.interface(), expected_interface);
 
     let [head_parameter] = imported.head_parameters.as_ref() else {
         panic!("the generic implementation should bind one head parameter");
     };
     let parameter = head_parameter.id;
-    assert_option_of_parameter(imported.argument(), expected_option, parameter);
+    let [imported_argument] = imported.arguments() else {
+        panic!("the unary implementation should retain one head argument");
+    };
+    assert_option_of_parameter(imported_argument, expected_option, parameter);
 
     let [prerequisite] = imported.prerequisites.as_ref() else {
         panic!("the implementation should retain one prerequisite");
@@ -187,8 +190,8 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         RequirementOwner::Impl(expected_impl)
     );
     assert_eq!(prerequisite.id.declaration(), 0);
-    assert_eq!(prerequisite.interface, expected_interface);
-    assert_eq!(prerequisite.argument(), &Type::Variable(parameter));
+    assert_eq!(prerequisite.interface(), expected_interface);
+    assert_eq!(prerequisite.arguments(), &[Type::Variable(parameter)]);
 
     let [method] = imported.methods.as_ref() else {
         panic!("the implementation should retain one checked method scheme");
@@ -206,8 +209,8 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         panic!("the implementation method scheme should retain its prerequisite");
     };
     assert_eq!(method_requirement.id, prerequisite.id);
-    assert_eq!(method_requirement.interface, prerequisite.interface);
-    assert_eq!(method_requirement.argument(), &Type::Variable(parameter));
+    assert_eq!(method_requirement.interface(), prerequisite.interface());
+    assert_eq!(method_requirement.arguments(), &[Type::Variable(parameter)]);
 
     let Type::Function(domain, codomain) = method.scheme.value_type() else {
         panic!("the retained implementation method should have a function type");

@@ -11,9 +11,10 @@ use crate::{
     integer::Integer,
     interface::{
         CheckedImplementation, CheckedInterface, CheckedRequirement, ConstrainedScheme,
-        EvidenceSlot, ImplId, ImplMethodId, InterfaceId, MatchedNominalIdentities, MethodId,
-        OverlapFailure, RequirementId, implementation_heads_overlap_structurally,
-        implementation_prerequisite_terminates, same_type_with_constraint_budget,
+        EvidenceSlot, ImplId, ImplMethodId, InterfaceApplication, InterfaceId,
+        MatchedNominalIdentities, MethodId, OverlapFailure, RequirementId,
+        implementation_application_heads_overlap_structurally,
+        implementation_prerequisite_application_terminates, same_type_with_constraint_budget,
         same_type_with_constraint_budget_observing_nominals,
     },
     kind::{KindEnvironments, KindFailure},
@@ -29,6 +30,37 @@ use crate::{
 
 #[cfg(test)]
 use crate::interface::EvidenceSelection;
+
+#[cfg(test)]
+fn replace_unary_interface_application(application: &mut InterfaceApplication, argument: Type) {
+    let replacement = InterfaceApplication::new(application.interface(), Box::new([argument]));
+    drop(std::mem::replace(application, replacement));
+}
+
+#[cfg(test)]
+fn replace_interface_application_identity(
+    application: &mut InterfaceApplication,
+    interface: InterfaceId,
+) {
+    let previous = std::mem::replace(
+        application,
+        InterfaceApplication::new(interface, Box::new([])),
+    );
+    let (_, arguments) = previous.into_parts();
+    *application = InterfaceApplication::new(interface, arguments);
+}
+
+#[cfg(test)]
+fn mutate_interface_application_arguments(
+    application: &mut InterfaceApplication,
+    mutate: impl FnOnce(&mut Vec<Type>) -> bool,
+) -> bool {
+    let arguments = application.arguments_mut_for_summary_test();
+    let mut arguments = std::mem::take(arguments).into_vec();
+    let result = mutate(&mut arguments);
+    *application.arguments_mut_for_summary_test() = arguments.into_boxed_slice();
+    result
+}
 
 /// Stable identity of one resolved or compiler-generated term binder.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1094,6 +1126,16 @@ pub(crate) enum LinkedCarrierMutationForTest {
     InterfaceFactParameterOrigin,
     InterfaceMethodType,
     InterfaceMethodOrigin,
+    RelationalInterfaceParameterMissing,
+    RelationalInterfaceParameterExtra,
+    RelationalInterfaceParameterReordered,
+    RelationalInterfaceParameterWrongKind,
+    RelationalInterfaceParameterWrongIdentity,
+    RelationalApplicationArgumentMissing,
+    RelationalApplicationArgumentExtra,
+    RelationalApplicationArgumentReordered,
+    RelationalApplicationArgumentWrongKind,
+    RelationalApplicationArgumentWrongIdentity,
     ImplementationRegistryKind,
     ImplementationSourceParameterIdentity,
     ImplementationSourceParameterSpelling,
@@ -1746,7 +1788,7 @@ impl ResolvedModuleProgram {
                         let Some(parameter) = self.groups[group_index]
                             .interface_facts
                             .first()
-                            .map(|fact| fact.parameter.id)
+                            .map(|fact| fact.parameters[0].id)
                         else {
                             return false;
                         };
@@ -1766,21 +1808,21 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        fact.parameter.id = TypeVariableId::resolved(module, u32::MAX);
+                        fact.parameters[0].id = TypeVariableId::resolved(module, u32::MAX);
                     }
                     LinkedCarrierMutationForTest::InterfaceFactParameterSpelling => {
                         let Some(fact) = self.groups[group_index].interface_facts.first_mut()
                         else {
                             return false;
                         };
-                        fact.parameter.spelling.push_str("-forged");
+                        fact.parameters[0].spelling.push_str("-forged");
                     }
                     LinkedCarrierMutationForTest::InterfaceFactParameterKind => {
                         let Some(fact) = self.groups[group_index].interface_facts.first_mut()
                         else {
                             return false;
                         };
-                        fact.parameter.kind =
+                        fact.parameters[0].kind =
                             Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
                     }
                     LinkedCarrierMutationForTest::InterfaceHiddenFactParameterKind => {
@@ -1791,7 +1833,7 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        fact.parameter.kind =
+                        fact.parameters[0].kind =
                             Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
                     }
                     LinkedCarrierMutationForTest::InterfaceFactParameterOrigin => {
@@ -1799,7 +1841,7 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        wrap_origin(&mut fact.parameter.origin);
+                        wrap_origin(&mut fact.parameters[0].origin);
                     }
                     LinkedCarrierMutationForTest::InterfaceMethodType => {
                         let Some(method) = self.groups[group_index]
@@ -1826,6 +1868,122 @@ impl ResolvedModuleProgram {
                     }
                     _ => unreachable!(),
                 }
+                true
+            }
+            LinkedCarrierMutationForTest::RelationalInterfaceParameterMissing
+            | LinkedCarrierMutationForTest::RelationalInterfaceParameterExtra
+            | LinkedCarrierMutationForTest::RelationalInterfaceParameterReordered
+            | LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongKind
+            | LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongIdentity => {
+                let Some(fact) = self.groups[group_index]
+                    .interface_facts
+                    .iter_mut()
+                    .find(|fact| fact.parameters.len() == 2)
+                else {
+                    return false;
+                };
+                match mutation {
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterMissing => {
+                        let mut parameters = std::mem::take(&mut fact.parameters).into_vec();
+                        let Some(removed) = parameters.pop() else {
+                            return false;
+                        };
+                        discard_resolved_type_variable(removed);
+                        fact.parameters = parameters.into_boxed_slice();
+                    }
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterExtra => {
+                        let Some(mut extra) = fact.parameters.last().cloned() else {
+                            return false;
+                        };
+                        extra.id = TypeVariableId::resolved(module, u32::MAX - 1);
+                        extra.spelling = "Extra".to_owned();
+                        let mut parameters = std::mem::take(&mut fact.parameters).into_vec();
+                        parameters.push(extra);
+                        fact.parameters = parameters.into_boxed_slice();
+                    }
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterReordered => {
+                        fact.parameters.swap(0, 1);
+                    }
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongKind => {
+                        drop(std::mem::replace(
+                            &mut fact.parameters[1].kind,
+                            Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                        ));
+                    }
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongIdentity => {
+                        fact.parameters[1].id = TypeVariableId::resolved(module, u32::MAX);
+                    }
+                    _ => unreachable!(),
+                }
+                true
+            }
+            LinkedCarrierMutationForTest::RelationalApplicationArgumentMissing
+            | LinkedCarrierMutationForTest::RelationalApplicationArgumentExtra
+            | LinkedCarrierMutationForTest::RelationalApplicationArgumentReordered
+            | LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongKind
+            | LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongIdentity => {
+                let higher_kinded = self
+                    .registry
+                    .nominals
+                    .iter()
+                    .find(|nominal| {
+                        self.registry
+                            .nominal_parameters
+                            .get(&nominal.id)
+                            .is_some_and(|parameters| parameters.len() == 1)
+                    })
+                    .map(|nominal| nominal.id);
+                let Some(token) = self.groups[group_index]
+                    .checked_implementations
+                    .iter_mut()
+                    .find(|token| token.arguments().len() == 2)
+                else {
+                    return false;
+                };
+                let mut application = token.application().clone();
+                let changed = mutate_interface_application_arguments(
+                    &mut application,
+                    |arguments| match mutation {
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentMissing => {
+                            let Some(removed) = arguments.pop() else {
+                                return false;
+                            };
+                            discard_type_iteratively(removed);
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentExtra => {
+                            arguments.push(Type::Unit);
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentReordered => {
+                            arguments.swap(0, 1);
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongKind => {
+                            let Some(higher_kinded) = higher_kinded else {
+                                return false;
+                            };
+                            discard_type_iteratively(std::mem::replace(
+                                &mut arguments[1],
+                                Type::Nominal(higher_kinded),
+                            ));
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongIdentity => {
+                            discard_type_iteratively(std::mem::replace(
+                                &mut arguments[1],
+                                Type::Nominal(NominalTypeId::new(module, u32::MAX)),
+                            ));
+                            true
+                        }
+                        _ => unreachable!(),
+                    },
+                );
+                if !changed {
+                    return false;
+                }
+                let methods = std::mem::take(&mut token.methods);
+                *token = CheckedImplementation::new(token.source_index, token.id, application, methods);
                 true
             }
             LinkedCarrierMutationForTest::ImplementationRegistryKind
@@ -1926,8 +2084,14 @@ impl ResolvedModuleProgram {
                             ImplId::new(module, u32::MAX);
                     }
                     LinkedCarrierMutationForTest::ImplementationTokenInterface => {
-                        self.groups[group_index].checked_implementations[implementation_index]
-                            .interface = InterfaceId::new(module, u32::MAX);
+                        let token = &mut self.groups[group_index].checked_implementations
+                            [implementation_index];
+                        let application = InterfaceApplication::new(
+                            InterfaceId::new(module, u32::MAX),
+                            token.application().clone().into_parts().1,
+                        );
+                        let methods = std::mem::take(&mut token.methods);
+                        *token = CheckedImplementation::new(token.source_index, token.id, application, methods);
                     }
                     LinkedCarrierMutationForTest::ImplementationTokenSourceIndex => {
                         self.groups[group_index].checked_implementations[implementation_index]
@@ -2006,10 +2170,10 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        discard_type_iteratively(std::mem::replace(
-                            &mut prerequisite.argument,
+                        replace_unary_interface_application(
+                            &mut prerequisite.application,
                             Type::Int,
-                        ));
+                        );
                     }
                     LinkedCarrierMutationForTest::ImplementationMethodRequirement => {
                         let Some(requirement) = self.groups[group_index].implementation_facts
@@ -2020,19 +2184,19 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        discard_type_iteratively(std::mem::replace(
-                            &mut requirement.argument,
-                            Type::Int,
-                        ));
+                        replace_unary_interface_application(&mut requirement.application, Type::Int);
                     }
                     LinkedCarrierMutationForTest::ImplementationMethodIdentity => {
                         let fact = &mut self.groups[group_index].implementation_facts
                             [implementation_index];
+                        let interface = fact.interface();
                         let Some(method) = fact.methods.first_mut() else {
                             return false;
                         };
-                        method.id =
-                            ImplMethodId::new(fact.id, MethodId::new(fact.interface, u32::MAX));
+                        method.id = ImplMethodId::new(
+                            fact.id,
+                            MethodId::new(interface, u32::MAX),
+                        );
                     }
                     LinkedCarrierMutationForTest::ImplementationMethodBinder => {
                         let Some(method) = self.groups[group_index].implementation_facts
@@ -2779,9 +2943,7 @@ impl ResolvedModuleProgram {
         else {
             return false;
         };
-        let argument = group.implementation_facts[implementation_index]
-            .argument
-            .clone();
+        let argument = group.implementation_facts[implementation_index].arguments()[0].clone();
         let Some(source) = group
             .implementations
             .get_mut(implementation_index)
@@ -2810,20 +2972,14 @@ impl ResolvedModuleProgram {
             &mut source_prerequisite.application.arguments[0].ty,
             argument.clone(),
         ));
-        discard_type_iteratively(std::mem::replace(
-            &mut fact_prerequisite.argument,
-            argument.clone(),
-        ));
+        replace_unary_interface_application(&mut fact_prerequisite.application, argument.clone());
         for method in &mut fact.methods {
             let requirement = method
                 .scheme
                 .requirements
                 .get_mut(prerequisite_index)
                 .expect("the complete implementation method scheme was checked above");
-            discard_type_iteratively(std::mem::replace(
-                &mut requirement.argument,
-                argument.clone(),
-            ));
+            replace_unary_interface_application(&mut requirement.application, argument.clone());
         }
         discard_type_iteratively(argument);
         true
@@ -2972,7 +3128,7 @@ impl ResolvedModuleProgram {
         else {
             return false;
         };
-        discard_type_iteratively(std::mem::replace(&mut fact.argument, argument));
+        replace_unary_interface_application(&mut fact.application, argument);
         true
     }
 
@@ -3743,8 +3899,8 @@ pub struct CheckedInterfaceFact {
     pub id: InterfaceId,
     /// Exact defining source spelling.
     pub spelling: String,
-    /// The interface's single parameter with its defining identity.
-    pub parameter: ResolvedTypeVariable,
+    /// Ordered interface parameters with their defining identities.
+    pub parameters: Box<[ResolvedTypeVariable]>,
     /// Checked methods in semantic declaration order.
     pub methods: Box<[CheckedInterfaceMethodFact]>,
     /// Causal declaration provenance.
@@ -3783,14 +3939,14 @@ impl CheckedInterfaceFact {
     pub(crate) fn without_methods_for_test(
         id: InterfaceId,
         spelling: String,
-        parameter: ResolvedTypeVariable,
+        parameters: Box<[ResolvedTypeVariable]>,
         origin: Origin,
         span: Span,
     ) -> Self {
         Self {
             id,
             spelling,
-            parameter,
+            parameters,
             methods: Box::new([]),
             origin,
             span,
@@ -3800,10 +3956,9 @@ impl CheckedInterfaceFact {
 
 impl Drop for CheckedInterfaceFact {
     fn drop(&mut self) {
-        discard_origin_iteratively(std::mem::replace(
-            &mut self.parameter.origin,
-            Origin::Source(self.span),
-        ));
+        for parameter in std::mem::take(&mut self.parameters).into_vec() {
+            discard_resolved_type_variable(parameter);
+        }
         for method in std::mem::take(&mut self.methods).into_vec() {
             drop(method);
         }
@@ -3967,12 +4122,10 @@ impl CheckedInterfaceMethodFact {
 pub struct CheckedImplementationFact {
     /// Stable anonymous implementation identity.
     pub id: ImplId,
-    /// Stable implemented interface identity.
-    pub interface: InterfaceId,
+    /// Complete checked implementation head.
+    pub(crate) application: crate::interface::InterfaceApplication,
     /// Ordered rigid head parameters with defining identities.
     pub head_parameters: Box<[ResolvedTypeVariable]>,
-    /// Checked implementation head argument.
-    pub(crate) argument: Type,
     /// Ordered checked prerequisites.
     pub prerequisites: Box<[CheckedRequirement]>,
     /// Method mappings in interface declaration order.
@@ -3993,10 +4146,20 @@ pub struct ImportedImplementationFact {
 }
 
 impl CheckedImplementationFact {
-    /// Borrows the checked implementation head argument.
+    /// Returns the stable implemented interface identity.
     #[must_use]
-    pub const fn argument(&self) -> &Type {
-        &self.argument
+    pub const fn interface(&self) -> InterfaceId {
+        self.application.interface()
+    }
+
+    /// Borrows the checked implementation head arguments in declaration order.
+    #[must_use]
+    pub const fn arguments(&self) -> &[Type] {
+        self.application.arguments()
+    }
+
+    pub(crate) const fn application(&self) -> &crate::interface::InterfaceApplication {
+        &self.application
     }
 }
 
@@ -4019,7 +4182,6 @@ impl Drop for CheckedImplementationFact {
         for parameter in std::mem::take(&mut self.head_parameters).into_vec() {
             discard_origin_iteratively(parameter.origin);
         }
-        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
         for prerequisite in std::mem::take(&mut self.prerequisites).into_vec() {
             drop(prerequisite);
         }
@@ -4083,12 +4245,18 @@ fn clone_checked_requirement(
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<CheckedRequirement, ResolvedBuildFailure> {
     constraint_work
-        .charge_type(&requirement.argument)
+        .charge(requirement.arguments().len())
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    for argument in requirement.arguments() {
+        constraint_work
+            .charge_type(argument)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    }
     Ok(CheckedRequirement {
         id: requirement.id,
-        interface: requirement.interface,
-        argument: clone_type_with_budget(&requirement.argument, type_work)
+        application: requirement
+            .application()
+            .clone_with_budget(type_work)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?,
         origin: requirement.origin.clone(),
         span: requirement.span,
@@ -4165,8 +4333,10 @@ fn clone_checked_interface_fact(
     Ok(CheckedInterfaceFact {
         id: fact.id,
         spelling: fact.spelling.clone(),
-        parameter: clone_resolved_type_variable_with_budget(&fact.parameter, type_work)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+        parameters: clone_resolved_type_variable_buffer_with_budget(&fact.parameters, type_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+            .into_vec()
+            .into_boxed_slice(),
         methods: methods.into_boxed_slice(),
         origin: fact.origin.clone(),
         span: fact.span,
@@ -4188,8 +4358,13 @@ fn clone_checked_implementation_fact(
         )
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     constraint_work
-        .charge_type(&fact.argument)
+        .charge(fact.arguments().len())
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    for argument in fact.arguments() {
+        constraint_work
+            .charge_type(argument)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    }
 
     let mut head_parameters = ResolvedTypeVariableBuffer(Vec::new());
     head_parameters
@@ -4234,8 +4409,13 @@ fn clone_checked_implementation_fact(
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         for requirement in &method.scheme.requirements {
             constraint_work
-                .charge_type(&requirement.argument)
+                .charge(requirement.arguments().len())
                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            for argument in requirement.arguments() {
+                constraint_work
+                    .charge_type(argument)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            }
         }
         methods.push(CheckedImplementationMethodFact {
             id: method.id,
@@ -4251,15 +4431,13 @@ fn clone_checked_implementation_fact(
         });
     }
 
-    let argument = IterativeTypeOwner::new(
-        clone_type_with_budget(&fact.argument, type_work)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-    );
     Ok(CheckedImplementationFact {
         id: fact.id,
-        interface: fact.interface,
+        application: fact
+            .application()
+            .clone_with_budget(type_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
         head_parameters: head_parameters.into_boxed_slice(),
-        argument: argument.into_inner(),
         prerequisites: prerequisites.into_boxed_slice(),
         methods: methods.into_boxed_slice(),
         origin: fact.origin.clone(),
@@ -5233,6 +5411,11 @@ pub(crate) enum SummaryCarrierMutationForTest {
     PublicInterfaceKind,
     PublicInterfaceParameterIdentity,
     PublicInterfaceParameterOwner,
+    RelationalInterfaceParameterMissing,
+    RelationalInterfaceParameterExtra,
+    RelationalInterfaceParameterReordered,
+    RelationalInterfaceParameterIdentity,
+    RelationalInterfaceParameterWrongKind,
     HiddenInterfaceKind,
     HiddenInterfaceParameterIdentity,
     HiddenInterfaceParameterOwner,
@@ -5267,6 +5450,12 @@ pub(crate) enum SummaryCarrierMutationForTest {
     ImplementationArgument,
     ImplementationSemanticHead,
     ImplementationInterfaceIdentity,
+    RelationalImplementationArgumentMissing,
+    RelationalImplementationArgumentExtra,
+    RelationalImplementationArgumentReordered,
+    RelationalImplementationArgumentWrongKind,
+    RelationalImplementationArgumentExtraWithLateWrongKind,
+    RelationalImplementationInterfaceIdentity,
     ImplementationPrerequisiteIdentity,
     ImplementationPrerequisiteOrder,
     ImplementationPrerequisiteDuplicate,
@@ -5629,6 +5818,21 @@ fn summary_parameter_id_set(
     Ok(identities)
 }
 
+fn type_references_with_constraint_budget<'a>(
+    types: &'a [Type],
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<Vec<&'a Type>, ResolvedBuildFailure> {
+    constraint_work
+        .charge(types.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let mut references = Vec::new();
+    references
+        .try_reserve_exact(types.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    references.extend(types);
+    Ok(references)
+}
+
 fn authenticate_exact_global_scheme_binders(
     scheme: &ConstrainedScheme,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
@@ -5648,11 +5852,13 @@ fn authenticate_exact_global_scheme_binders(
     }
     for requirement in &scheme.requirements {
         let mut requirement_variables = HashSet::new();
-        collect_summary_constraint_variables(
-            requirement.argument(),
-            &mut requirement_variables,
-            constraint_work,
-        )?;
+        for argument in requirement.arguments() {
+            collect_summary_constraint_variables(
+                argument,
+                &mut requirement_variables,
+                constraint_work,
+            )?;
+        }
         constraint_work
             .charge(requirement_variables.len())
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -5675,17 +5881,21 @@ fn authenticate_exact_implementation_binders(
         constraint_work,
     )?;
     let mut head_variables = HashSet::new();
-    collect_summary_constraint_variables(fact.argument(), &mut head_variables, constraint_work)?;
+    for argument in fact.arguments() {
+        collect_summary_constraint_variables(argument, &mut head_variables, constraint_work)?;
+    }
     if head_variables != parameters {
         return Err(ResolvedBuildFailure::InvalidState);
     }
     for prerequisite in &fact.prerequisites {
         let mut prerequisite_variables = HashSet::new();
-        collect_summary_constraint_variables(
-            prerequisite.argument(),
-            &mut prerequisite_variables,
-            constraint_work,
-        )?;
+        for argument in prerequisite.arguments() {
+            collect_summary_constraint_variables(
+                argument,
+                &mut prerequisite_variables,
+                constraint_work,
+            )?;
+        }
         constraint_work
             .charge(prerequisite_variables.len())
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -5963,17 +6173,61 @@ fn same_constrained_schemes_with_constraint_budget(
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         if left.id != right.id
-            || left.interface != right.interface
             || left.span != right.span
             || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
-            || !same_type_with_constraint_budget(left.argument(), right.argument(), constraint_work)
-                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+            || !same_interface_application_with_constraint_budget(
+                left.application(),
+                right.application(),
+                constraint_work,
+            )?
         {
             return Ok(false);
         }
     }
     same_type_with_constraint_budget(left.value_type(), right.value_type(), constraint_work)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)
+}
+
+fn same_interface_application_with_constraint_budget(
+    left: &InterfaceApplication,
+    right: &InterfaceApplication,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    if left.interface() != right.interface() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    for (left, right) in left.arguments().iter().zip(right.arguments()) {
+        if !same_type_with_constraint_budget(left, right, constraint_work)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_interface_application_with_constraint_budget_observing_nominals(
+    left: &InterfaceApplication,
+    right: &InterfaceApplication,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    nominal_identities: &mut MatchedNominalIdentities,
+) -> Result<bool, ResolvedBuildFailure> {
+    if left.interface() != right.interface() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    for (left, right) in left.arguments().iter().zip(right.arguments()) {
+        if !same_type_with_constraint_budget_observing_nominals(
+            left,
+            right,
+            constraint_work,
+            nominal_identities,
+        )
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn same_constrained_schemes_with_constraint_budget_observing_nominals(
@@ -6006,16 +6260,14 @@ fn same_constrained_schemes_with_constraint_budget_observing_nominals(
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         if left.id != right.id
-            || left.interface != right.interface
             || left.span != right.span
             || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
-            || !same_type_with_constraint_budget_observing_nominals(
-                left.argument(),
-                right.argument(),
+            || !same_interface_application_with_constraint_budget_observing_nominals(
+                left.application(),
+                right.application(),
                 constraint_work,
                 nominal_identities,
-            )
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+            )?
         {
             return Ok(false);
         }
@@ -6277,8 +6529,8 @@ fn same_checked_interface_fact_with_optional_nominal_observer(
         .charge(metadata_work)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     if !same_summary_resolved_type_variables_with_constraint_budget(
-        std::slice::from_ref(&left.parameter),
-        std::slice::from_ref(&right.parameter),
+        &left.parameters,
+        &right.parameters,
         constraint_work,
     )? || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
     {
@@ -6358,7 +6610,8 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
     mut nominal_identities: Option<&mut MatchedNominalIdentities>,
 ) -> Result<bool, ResolvedBuildFailure> {
     if left.id != right.id
-        || left.interface != right.interface
+        || left.interface() != right.interface()
+        || left.arguments().len() != right.arguments().len()
         || left.span != right.span
         || left.prerequisites.len() != right.prerequisites.len()
         || left.methods.len() != right.methods.len()
@@ -6375,47 +6628,57 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
     constraint_work
         .charge(metadata_work)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let applications_match = left
+        .arguments()
+        .iter()
+        .zip(right.arguments())
+        .try_fold(true, |matches, (left, right)| {
+            if !matches {
+                return Ok(false);
+            }
+            match nominal_identities.as_deref_mut() {
+                Some(nominal_identities) => same_type_with_constraint_budget_observing_nominals(
+                    left,
+                    right,
+                    constraint_work,
+                    nominal_identities,
+                ),
+                None => same_type_with_constraint_budget(left, right, constraint_work),
+            }
+        })
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     if !same_summary_resolved_type_variables_with_constraint_budget(
         &left.head_parameters,
         &right.head_parameters,
         constraint_work,
-    )? || !match nominal_identities.as_deref_mut() {
-        Some(nominal_identities) => same_type_with_constraint_budget_observing_nominals(
-            left.argument(),
-            right.argument(),
-            constraint_work,
-            nominal_identities,
-        ),
-        None => {
-            same_type_with_constraint_budget(left.argument(), right.argument(), constraint_work)
-        }
-    }
-    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+    )? || !applications_match
         || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
     {
         return Ok(false);
     }
     for (left, right) in left.prerequisites.iter().zip(&right.prerequisites) {
         if left.id != right.id
-            || left.interface != right.interface
+            || left.interface() != right.interface()
+            || left.arguments().len() != right.arguments().len()
             || left.span != right.span
             || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
-            || !match nominal_identities.as_deref_mut() {
+        {
+            return Ok(false);
+        }
+        for (left, right) in left.arguments().iter().zip(right.arguments()) {
+            let same = match nominal_identities.as_deref_mut() {
                 Some(nominal_identities) => same_type_with_constraint_budget_observing_nominals(
-                    left.argument(),
-                    right.argument(),
+                    left,
+                    right,
                     constraint_work,
                     nominal_identities,
                 ),
-                None => same_type_with_constraint_budget(
-                    left.argument(),
-                    right.argument(),
-                    constraint_work,
-                ),
+                None => same_type_with_constraint_budget(left, right, constraint_work),
             }
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
-        {
-            return Ok(false);
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            if !same {
+                return Ok(false);
+            }
         }
     }
     for (left, right) in left.methods.iter().zip(&right.methods) {
@@ -6446,13 +6709,16 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
     Ok(true)
 }
 
-fn same_summary_type_after_single_substitution(
+fn same_summary_type_after_substitutions(
     source: &Type,
-    parameter: TypeVariableId,
-    argument: &Type,
+    parameters: &[ResolvedTypeVariable],
+    arguments: &[Type],
     actual: &Type,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
+    if parameters.len() != arguments.len() {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
     constraint_work
         .charge(1)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -6465,13 +6731,31 @@ fn same_summary_type_after_single_substitution(
         constraint_work
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        if matches!(source, Type::Variable(identity) if *identity == parameter) {
-            if !same_type_with_constraint_budget(argument, actual, constraint_work)
-                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
-            {
-                return Ok(false);
+        if let Type::Variable(identity) = source {
+            let mut replacement = None;
+            if let ([parameter], [argument]) = (parameters, arguments) {
+                if parameter.id == *identity {
+                    replacement = Some(argument);
+                }
+            } else {
+                for (parameter, argument) in parameters.iter().zip(arguments) {
+                    constraint_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                    if parameter.id == *identity {
+                        replacement = Some(argument);
+                        break;
+                    }
+                }
             }
-            continue;
+            if let Some(argument) = replacement {
+                if !same_type_with_constraint_budget(argument, actual, constraint_work)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+                {
+                    return Ok(false);
+                }
+                continue;
+            }
         }
         match (source, actual) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
@@ -6522,19 +6806,17 @@ fn authenticate_method_requirement_mirror(
         .charge(1)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     if method_requirement.id != prerequisite.id
-        || method_requirement.interface != prerequisite.interface
         || method_requirement.span != prerequisite.span
         || !same_origin_with_constraint_budget(
             &method_requirement.origin,
             &prerequisite.origin,
             constraint_work,
         )?
-        || !same_type_with_constraint_budget(
-            method_requirement.argument(),
-            prerequisite.argument(),
+        || !same_interface_application_with_constraint_budget(
+            method_requirement.application(),
+            prerequisite.application(),
             constraint_work,
-        )
-        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+        )?
     {
         return Err(ResolvedBuildFailure::InvalidState);
     }
@@ -6589,15 +6871,13 @@ impl<'fact> SummaryRequirementIndex<'fact> {
         requirement: &'fact CheckedRequirement,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(), ResolvedBuildFailure> {
-        if let Some(previous) = self.by_interface.get_mut(&requirement.interface) {
+        if let Some(previous) = self.by_interface.get_mut(&requirement.interface()) {
             for previous in previous.iter() {
-                if same_type_with_constraint_budget(
-                    previous.argument(),
-                    requirement.argument(),
+                if same_interface_application_with_constraint_budget(
+                    previous.application(),
+                    requirement.application(),
                     constraint_work,
-                )
-                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
-                {
+                )? {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
             }
@@ -6622,7 +6902,7 @@ impl<'fact> SummaryRequirementIndex<'fact> {
             .try_reserve_exact(1)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         first.push(requirement);
-        self.by_interface.insert(requirement.interface, first);
+        self.by_interface.insert(requirement.interface(), first);
         Ok(())
     }
 }
@@ -6646,16 +6926,35 @@ fn authenticate_nonoverlapping_summary_implementations<'fact>(
     let mut by_interface: HashMap<InterfaceId, Vec<&CheckedImplementationFact>> = HashMap::new();
     for implementation in implementations {
         let fact = implementation;
-        if let Some(previous) = by_interface.get_mut(&fact.interface) {
+        if let Some(previous) = by_interface.get_mut(&fact.interface()) {
             for previous in previous.iter() {
-                let overlaps = implementation_heads_overlap_structurally(
+                constraint_work
+                    .charge(
+                        previous
+                            .arguments()
+                            .len()
+                            .checked_add(fact.arguments().len())
+                            .ok_or(ResolvedBuildFailure::ConstraintResource)?,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                let mut previous_arguments = Vec::new();
+                let mut fact_arguments = Vec::new();
+                previous_arguments
+                    .try_reserve_exact(previous.arguments().len())
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                fact_arguments
+                    .try_reserve_exact(fact.arguments().len())
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                previous_arguments.extend(previous.arguments());
+                fact_arguments.extend(fact.arguments());
+                let overlaps = implementation_application_heads_overlap_structurally(
                     previous
                         .head_parameters
                         .iter()
                         .map(|parameter| parameter.id),
-                    previous.argument(),
+                    &previous_arguments,
                     fact.head_parameters.iter().map(|parameter| parameter.id),
-                    fact.argument(),
+                    &fact_arguments,
                     constraint_work,
                 )
                 .map_err(|failure| match failure {
@@ -6688,7 +6987,7 @@ fn authenticate_nonoverlapping_summary_implementations<'fact>(
             .try_reserve_exact(1)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         first.push(fact);
-        by_interface.insert(fact.interface, first);
+        by_interface.insert(fact.interface(), first);
     }
     Ok(())
 }
@@ -7106,7 +7405,7 @@ impl ExportSummary {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             register_summary_parameters(
-                std::slice::from_ref(&interface.parameter),
+                &interface.parameters,
                 SummaryBinderOwner::Interface(interface.id),
                 &mut canonical_variables,
                 &mut environments,
@@ -7125,8 +7424,8 @@ impl ExportSummary {
             environments
                 .insert_interface(
                     interface.id,
-                    &interface.parameter.kind,
-                    interface.parameter.origin.primary_span(),
+                    &interface.parameters,
+                    interface.span,
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
@@ -7138,7 +7437,7 @@ impl ExportSummary {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             register_summary_parameters(
-                std::slice::from_ref(&interface.parameter),
+                &interface.parameters,
                 SummaryBinderOwner::Interface(interface.id),
                 &mut canonical_variables,
                 &mut environments,
@@ -7157,8 +7456,8 @@ impl ExportSummary {
             environments
                 .insert_interface(
                     interface.id,
-                    &interface.parameter.kind,
-                    interface.parameter.origin.primary_span(),
+                    &interface.parameters,
+                    interface.span,
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
@@ -7266,17 +7565,21 @@ impl ExportSummary {
                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
             if self.implementation_positions.get(&fact.id) != Some(&position)
                 || !authorization_is_well_formed
-                || !interface_facts.contains_key(&fact.interface)
-                || matches!(fact.argument(), Type::Variable(_))
+                || !interface_facts.contains_key(&fact.interface())
+                || fact
+                    .arguments()
+                    .iter()
+                    .all(|argument| matches!(argument, Type::Variable(_)))
                 || fact.methods.is_empty()
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            if fact.interface.module() != fact.id.module()
-                && fact
-                    .argument()
-                    .outer_nominal()
-                    .is_none_or(|nominal| nominal.module() != fact.id.module())
+            if fact.interface().module() != fact.id.module()
+                && !fact.arguments().iter().any(|argument| {
+                    argument
+                        .outer_nominal()
+                        .is_some_and(|nominal| nominal.module() == fact.id.module())
+                })
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -7328,15 +7631,17 @@ impl ExportSummary {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
                 requirement_index.observe(requirement, constraint_work)?;
-                authenticate_summary_type_variables(
-                    requirement.argument(),
-                    parameter_ids.clone(),
-                    type_work,
-                )?;
+                for argument in requirement.arguments() {
+                    authenticate_summary_type_variables(
+                        argument,
+                        parameter_ids.clone(),
+                        type_work,
+                    )?;
+                }
                 environments
                     .expect_body_free_interface_argument_with_ledger(
-                        requirement.interface,
-                        requirement.argument(),
+                        requirement.interface(),
+                        requirement.arguments(),
                         requirement.span,
                         type_work,
                     )
@@ -7348,6 +7653,14 @@ impl ExportSummary {
             if interface.methods.is_empty() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
+            constraint_work
+                .charge(interface.parameters.len())
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            let mut interface_parameters = Vec::new();
+            interface_parameters
+                .try_reserve_exact(interface.parameters.len())
+                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+            interface_parameters.extend(interface.parameters.iter().map(|parameter| parameter.id));
             for (index, method) in interface.methods.iter().enumerate() {
                 if method.id.interface() != interface.id
                     || usize::try_from(method.id.declaration()) != Ok(index)
@@ -7370,7 +7683,7 @@ impl ExportSummary {
                 environments
                     .expect_body_free_interface_method_with_ledger(
                         method.value_type(),
-                        interface.parameter.id,
+                        &interface_parameters,
                         &method_parameters,
                         method.span,
                         type_work,
@@ -7528,11 +7841,13 @@ impl ExportSummary {
             let fact = &implementation.fact;
             authenticate_exact_implementation_binders(fact, constraint_work)?;
             let parameter_ids = fact.head_parameters.iter().map(|parameter| parameter.id);
-            authenticate_summary_type_variables(fact.argument(), parameter_ids.clone(), type_work)?;
+            for argument in fact.arguments() {
+                authenticate_summary_type_variables(argument, parameter_ids.clone(), type_work)?;
+            }
             environments
                 .expect_body_free_interface_argument_with_ledger(
-                    fact.interface,
-                    fact.argument(),
+                    fact.interface(),
+                    fact.arguments(),
                     fact.span,
                     type_work,
                 )
@@ -7544,9 +7859,15 @@ impl ExportSummary {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                if !implementation_prerequisite_terminates(
-                    prerequisite.argument(),
-                    fact.argument(),
+                let prerequisite_arguments = type_references_with_constraint_budget(
+                    prerequisite.arguments(),
+                    constraint_work,
+                )?;
+                let head_arguments =
+                    type_references_with_constraint_budget(fact.arguments(), constraint_work)?;
+                if !implementation_prerequisite_application_terminates(
+                    &prerequisite_arguments,
+                    &head_arguments,
                     constraint_work,
                 )
                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
@@ -7554,22 +7875,24 @@ impl ExportSummary {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
                 prerequisite_index.observe(prerequisite, constraint_work)?;
-                authenticate_summary_type_variables(
-                    prerequisite.argument(),
-                    parameter_ids.clone(),
-                    type_work,
-                )?;
+                for argument in prerequisite.arguments() {
+                    authenticate_summary_type_variables(
+                        argument,
+                        parameter_ids.clone(),
+                        type_work,
+                    )?;
+                }
                 environments
                     .expect_body_free_interface_argument_with_ledger(
-                        prerequisite.interface,
-                        prerequisite.argument(),
+                        prerequisite.interface(),
+                        prerequisite.arguments(),
                         prerequisite.span,
                         type_work,
                     )
                     .map_err(map_summary_kind_failure)?;
             }
             let interface = interface_facts
-                .get(&fact.interface)
+                .get(&fact.interface())
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             if fact.methods.len() != interface.methods.len() {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -7628,10 +7951,10 @@ impl ExportSummary {
                     method_parameter_ids.into_iter(),
                     type_work,
                 )?;
-                if !same_summary_type_after_single_substitution(
+                if !same_summary_type_after_substitutions(
                     interface_method.value_type(),
-                    interface.parameter.id,
-                    fact.argument(),
+                    &interface.parameters,
+                    fact.arguments(),
                     method.scheme.value_type(),
                     constraint_work,
                 )? {
@@ -8056,9 +8379,10 @@ impl ExportSummary {
                 .get(admitted.source_index)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             if implementation.id != admitted.id
-                || implementation.head.interface.id != admitted.interface
+                || implementation.head.interface.id != admitted.interface()
                 || checked.id != admitted.id
-                || checked.interface != admitted.interface
+                || checked.interface() != admitted.interface()
+                || checked.arguments() != admitted.arguments()
                 || checked.methods.len() != admitted.methods.len()
             {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -8171,7 +8495,7 @@ impl ExportSummary {
                     .ok_or(ResolvedBuildFailure::InvalidState)?;
                 for requirement in &exported.scheme.requirements {
                     retain_hidden_interface_reference(
-                        requirement.interface,
+                        requirement.interface(),
                         &summary.interface_positions,
                         &mut referenced_interfaces,
                         &mut referenced_interface_order,
@@ -8194,7 +8518,7 @@ impl ExportSummary {
             }
             for implementation in &summary.implementations {
                 retain_hidden_interface_reference(
-                    implementation.fact.interface,
+                    implementation.fact.interface(),
                     &summary.interface_positions,
                     &mut referenced_interfaces,
                     &mut referenced_interface_order,
@@ -8202,7 +8526,7 @@ impl ExportSummary {
                 )?;
                 for prerequisite in &implementation.fact.prerequisites {
                     retain_hidden_interface_reference(
-                        prerequisite.interface,
+                        prerequisite.interface(),
                         &summary.interface_positions,
                         &mut referenced_interfaces,
                         &mut referenced_interface_order,
@@ -8652,19 +8976,15 @@ impl ExportSummary {
             }
         }
         for implementation in &summary.implementations {
-            collect_nominal_identities(
-                &implementation.fact.argument,
-                &mut referenced_nominals,
-                type_work,
-            )
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            for argument in implementation.fact.arguments() {
+                collect_nominal_identities(argument, &mut referenced_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
             for prerequisite in &implementation.fact.prerequisites {
-                collect_nominal_identities(
-                    &prerequisite.argument,
-                    &mut referenced_nominals,
-                    type_work,
-                )
-                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                for argument in prerequisite.arguments() {
+                    collect_nominal_identities(argument, &mut referenced_nominals, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
             }
             for method in &implementation.fact.methods {
                 collect_scheme_nominal_identities(
@@ -9387,7 +9707,7 @@ impl ExportSummary {
                 let Some(interface) = self.interfaces.first_mut() else {
                     return false;
                 };
-                wrap_origin(&mut interface.parameter.origin);
+                wrap_origin(&mut interface.parameters[0].origin);
             }
             SummaryDuplicateFactForTest::InterfaceMethodSpan => {
                 let Some(interface) = self.interfaces.first_mut() else {
@@ -9403,7 +9723,7 @@ impl ExportSummary {
                 let implementation_interfaces = self
                     .implementations
                     .iter()
-                    .map(|implementation| implementation.fact.interface)
+                    .map(|implementation| implementation.fact.interface())
                     .collect::<HashSet<_>>();
                 let Some(interface) = self
                     .interfaces
@@ -9412,7 +9732,7 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                let parameter = interface.parameter.id;
+                let parameter = interface.parameters[0].id;
                 let Some(method) = interface.methods.first_mut() else {
                     return false;
                 };
@@ -9458,17 +9778,31 @@ impl ExportSummary {
             }
             SummaryDuplicateFactForTest::ImplementationHeadArgument => {
                 let Some(implementation) = self.implementations.iter_mut().find(|implementation| {
-                    matches!(implementation.fact.argument, Type::Application(_, _))
+                    matches!(implementation.fact.arguments()[0], Type::Application(_, _))
                         && implementation.fact.methods.first().is_some_and(|method| {
                             matches!(method.scheme.value_type, Type::Function(_, _))
                         })
                 }) else {
                     return false;
                 };
-                let Type::Application(_, argument) = &mut implementation.fact.argument else {
+                let application = &mut implementation.fact.application;
+                let interface = application.interface();
+                let original = std::mem::replace(
+                    application,
+                    InterfaceApplication::new(interface, Box::new([])),
+                );
+                let (_, arguments) = original.into_parts();
+                let arguments = arguments.into_vec();
+                let [Type::Application(head, _)] = arguments.as_slice() else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(argument.as_mut(), Type::Bool));
+                *application = InterfaceApplication::new(
+                    interface,
+                    Box::new([Type::Application(
+                        Box::new((**head).clone()),
+                        Box::new(Type::Bool),
+                    )]),
+                );
                 let Some(method) = implementation.fact.methods.first_mut() else {
                     return false;
                 };
@@ -9521,18 +9855,15 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
-                    &mut implementation.fact.prerequisites[0].argument,
+                replace_unary_interface_application(
+                    &mut implementation.fact.prerequisites[0].application,
                     Type::Bool,
-                ));
+                );
                 for method in &mut implementation.fact.methods {
                     let Some(requirement) = method.scheme.requirements.first_mut() else {
                         return false;
                     };
-                    discard_type_iteratively(std::mem::replace(
-                        &mut requirement.argument,
-                        Type::Bool,
-                    ));
+                    replace_unary_interface_application(&mut requirement.application, Type::Bool);
                 }
             }
             SummaryDuplicateFactForTest::ImplementationMethodSpan => {
@@ -9567,7 +9898,7 @@ impl ExportSummary {
                 };
                 drop(std::mem::replace(&mut parameter.kind, Kind::Type));
                 let Some(implementation) = self.implementations.iter_mut().find(|implementation| {
-                    implementation.fact.argument.outer_nominal() == Some(nominal_id)
+                    implementation.fact.arguments()[0].outer_nominal() == Some(nominal_id)
                 }) else {
                     return false;
                 };
@@ -10104,35 +10435,93 @@ impl ExportSummary {
             }
             SummaryCarrierMutationForTest::PublicInterfaceKind => {
                 self.interfaces.first_mut().is_some_and(|interface| {
-                    replace_parameter_kind(&mut interface.parameter);
+                    replace_parameter_kind(&mut interface.parameters[0]);
                     true
                 })
             }
             SummaryCarrierMutationForTest::PublicInterfaceParameterIdentity => {
                 self.interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameter.id = TypeVariableId::resolved(self.module, u32::MAX);
+                    interface.parameters[0].id = TypeVariableId::resolved(self.module, u32::MAX);
                     true
                 })
             }
             SummaryCarrierMutationForTest::PublicInterfaceParameterOwner => {
                 self.interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameter.id = TypeVariableId::resolved(
+                    interface.parameters[0].id = TypeVariableId::resolved(
                         ModuleId::new(u32::MAX - 1),
-                        interface.parameter.id.local(),
+                        interface.parameters[0].id.local(),
                     );
                     true
                 })
             }
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterMissing => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    let mut parameters = std::mem::take(&mut interface.parameters).into_vec();
+                    let Some(removed) = parameters.pop() else {
+                        return false;
+                    };
+                    discard_resolved_type_variable(removed);
+                    interface.parameters = parameters.into_boxed_slice();
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterExtra => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    let Some(mut extra) = interface.parameters.last().cloned() else {
+                        return false;
+                    };
+                    extra.id = TypeVariableId::resolved(self.module, u32::MAX - 1);
+                    extra.spelling = "Extra".to_owned();
+                    let mut parameters = std::mem::take(&mut interface.parameters).into_vec();
+                    parameters.push(extra);
+                    interface.parameters = parameters.into_boxed_slice();
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterReordered => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    interface.parameters.swap(0, 1);
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterIdentity => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    let Some(parameter) = interface.parameters.last_mut() else {
+                        return false;
+                    };
+                    parameter.id = TypeVariableId::resolved(self.module, u32::MAX);
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterWrongKind => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    let Some(parameter) = interface.parameters.get_mut(1) else {
+                        return false;
+                    };
+                    replace_parameter_kind(parameter);
+                    true
+                }),
             SummaryCarrierMutationForTest::HiddenInterfaceKind => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    replace_parameter_kind(&mut interface.parameter);
+                    replace_parameter_kind(&mut interface.parameters[0]);
                     true
                 })
             }
             SummaryCarrierMutationForTest::HiddenInterfaceParameterIdentity => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameter.id = TypeVariableId::resolved(
-                        interface.parameter.id.module().unwrap_or(self.module),
+                    interface.parameters[0].id = TypeVariableId::resolved(
+                        interface.parameters[0].id.module().unwrap_or(self.module),
                         u32::MAX,
                     );
                     true
@@ -10140,9 +10529,9 @@ impl ExportSummary {
             }
             SummaryCarrierMutationForTest::HiddenInterfaceParameterOwner => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameter.id = TypeVariableId::resolved(
+                    interface.parameters[0].id = TypeVariableId::resolved(
                         ModuleId::new(u32::MAX - 1),
-                        interface.parameter.id.local(),
+                        interface.parameters[0].id.local(),
                     );
                     true
                 })
@@ -10168,7 +10557,7 @@ impl ExportSummary {
                 let Some(interface) = self.interfaces.first_mut() else {
                     return false;
                 };
-                let parameter = interface.parameter.id;
+                let parameter = interface.parameters[0].id;
                 let Some(method) = interface.methods.first_mut() else {
                     return false;
                 };
@@ -10265,7 +10654,7 @@ impl ExportSummary {
                 let Some(interface) = interface else {
                     return false;
                 };
-                let parameter = interface.parameter.id;
+                let parameter = interface.parameters[0].id;
                 let Some(method) = interface.methods.first_mut() else {
                     return false;
                 };
@@ -10435,7 +10824,10 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                requirement.interface = InterfaceId::new(ModuleId::new(u32::MAX - 1), 0);
+                replace_interface_application_identity(
+                    &mut requirement.application,
+                    InterfaceId::new(ModuleId::new(u32::MAX - 1), 0),
+                );
                 true
             }
             SummaryCarrierMutationForTest::GlobalRequirementArgumentKind => {
@@ -10453,10 +10845,10 @@ impl ExportSummary {
                 let Some(requirement) = global.scheme.requirements.first_mut() else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
-                    &mut requirement.argument,
+                replace_unary_interface_application(
+                    &mut requirement.application,
                     Type::Application(Box::new(Type::Variable(parameter)), Box::new(Type::Int)),
-                ));
+                );
                 true
             }
             SummaryCarrierMutationForTest::GlobalParameterOwner => {
@@ -10524,10 +10916,10 @@ impl ExportSummary {
                 .implementations
                 .first_mut()
                 .is_some_and(|implementation| {
-                    discard_type_iteratively(std::mem::replace(
-                        &mut implementation.fact.argument,
+                    replace_unary_interface_application(
+                        &mut implementation.fact.application,
                         Type::Unit,
-                    ));
+                    );
                     true
                 }),
             SummaryCarrierMutationForTest::ImplementationSemanticHead => {
@@ -10554,18 +10946,114 @@ impl ExportSummary {
                         Box::new(Type::Variable(parameter.id)),
                     );
                 }
-                discard_type_iteratively(std::mem::replace(
-                    &mut implementation.fact.argument,
-                    argument,
-                ));
+                replace_unary_interface_application(&mut implementation.fact.application, argument);
                 true
             }
             SummaryCarrierMutationForTest::ImplementationInterfaceIdentity => self
                 .implementations
                 .first_mut()
                 .is_some_and(|implementation| {
-                    implementation.fact.interface =
-                        InterfaceId::new(ModuleId::new(u32::MAX - 1), 0);
+                    replace_interface_application_identity(
+                        &mut implementation.fact.application,
+                        InterfaceId::new(ModuleId::new(u32::MAX - 1), 0),
+                    );
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalImplementationArgumentMissing => self
+                .implementations
+                .iter_mut()
+                .find(|implementation| implementation.fact.arguments().len() >= 2)
+                .is_some_and(|implementation| {
+                    mutate_interface_application_arguments(
+                        &mut implementation.fact.application,
+                        |arguments| {
+                            let Some(removed) = arguments.pop() else {
+                                return false;
+                            };
+                            discard_type_iteratively(removed);
+                            true
+                        },
+                    )
+                }),
+            SummaryCarrierMutationForTest::RelationalImplementationArgumentExtra => self
+                .implementations
+                .iter_mut()
+                .find(|implementation| implementation.fact.arguments().len() >= 2)
+                .is_some_and(|implementation| {
+                    mutate_interface_application_arguments(
+                        &mut implementation.fact.application,
+                        |arguments| {
+                            if arguments.try_reserve(1).is_err() {
+                                return false;
+                            }
+                            arguments.push(Type::Unit);
+                            true
+                        },
+                    )
+                }),
+            SummaryCarrierMutationForTest::RelationalImplementationArgumentReordered => self
+                .implementations
+                .iter_mut()
+                .find(|implementation| implementation.fact.arguments().len() >= 2)
+                .is_some_and(|implementation| {
+                    mutate_interface_application_arguments(
+                        &mut implementation.fact.application,
+                        |arguments| {
+                            arguments.swap(0, 1);
+                            true
+                        },
+                    )
+                }),
+            SummaryCarrierMutationForTest::RelationalImplementationArgumentWrongKind
+            | SummaryCarrierMutationForTest::RelationalImplementationArgumentExtraWithLateWrongKind => {
+                let Some(higher_kinded) = self
+                    .nominals
+                    .values()
+                    .find(|nominal| nominal.parameters.len() == 1)
+                    .map(|nominal| nominal.id)
+                else {
+                    return false;
+                };
+                let Some(implementation) = self
+                    .implementations
+                    .iter_mut()
+                    .find(|implementation| implementation.fact.arguments().len() >= 2)
+                else {
+                    return false;
+                };
+                mutate_interface_application_arguments(
+                    &mut implementation.fact.application,
+                    |arguments| {
+                        let add_extra = matches!(
+                            mutation,
+                            SummaryCarrierMutationForTest::RelationalImplementationArgumentExtraWithLateWrongKind
+                        );
+                        if add_extra && arguments.try_reserve(1).is_err() {
+                            return false;
+                        }
+                        let Some(argument) = arguments.last_mut() else {
+                            return false;
+                        };
+                        discard_type_iteratively(std::mem::replace(
+                            argument,
+                            Type::Nominal(higher_kinded),
+                        ));
+                        if add_extra {
+                            arguments.push(Type::Unit);
+                        }
+                        true
+                    },
+                )
+            }
+            SummaryCarrierMutationForTest::RelationalImplementationInterfaceIdentity => self
+                .implementations
+                .iter_mut()
+                .find(|implementation| implementation.fact.arguments().len() >= 2)
+                .is_some_and(|implementation| {
+                    replace_interface_application_identity(
+                        &mut implementation.fact.application,
+                        InterfaceId::new(ModuleId::new(u32::MAX - 1), 0),
+                    );
                     true
                 }),
             SummaryCarrierMutationForTest::ImplementationPrerequisiteIdentity => self
@@ -10606,17 +11094,21 @@ impl ExportSummary {
                 };
                 let (first, rest) = implementation.fact.prerequisites.split_first_mut().unwrap();
                 let second = &mut rest[0];
-                second.interface = first.interface;
+                replace_interface_application_identity(&mut second.application, first.interface());
                 let mut type_work = TypeWorkBudget::unbounded();
-                let replacement = clone_type_with_budget(first.argument(), &mut type_work).unwrap();
-                discard_type_iteratively(std::mem::replace(&mut second.argument, replacement));
+                let replacement =
+                    clone_type_with_budget(&first.arguments()[0], &mut type_work).unwrap();
+                replace_unary_interface_application(&mut second.application, replacement);
                 for method in &mut implementation.fact.methods {
                     let (first, rest) = method.scheme.requirements.split_first_mut().unwrap();
                     let second = &mut rest[0];
-                    second.interface = first.interface;
+                    replace_interface_application_identity(
+                        &mut second.application,
+                        first.interface(),
+                    );
                     let replacement =
-                        clone_type_with_budget(first.argument(), &mut type_work).unwrap();
-                    discard_type_iteratively(std::mem::replace(&mut second.argument, replacement));
+                        clone_type_with_budget(&first.arguments()[0], &mut type_work).unwrap();
+                    replace_unary_interface_application(&mut second.application, replacement);
                 }
                 true
             }
@@ -10628,7 +11120,7 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                let Type::Application(partial_head, _) = implementation.fact.argument() else {
+                let Type::Application(partial_head, _) = &implementation.fact.arguments()[0] else {
                     return false;
                 };
                 let mut type_work = TypeWorkBudget::unbounded();
@@ -10640,16 +11132,17 @@ impl ExportSummary {
                     discard_type_iteratively(prerequisite);
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
-                    &mut implementation.fact.prerequisites[0].argument,
+                replace_unary_interface_application(
+                    &mut implementation.fact.prerequisites[0].application,
                     prerequisite,
-                ));
+                );
                 for method in &mut implementation.fact.methods {
-                    discard_type_iteratively(std::mem::replace(
-                        &mut method.scheme.requirements[0].argument,
-                        clone_type_with_budget(&method_requirement, &mut type_work)
-                            .expect("an in-memory prerequisite mirror should fit"),
-                    ));
+                    let replacement = clone_type_with_budget(&method_requirement, &mut type_work)
+                        .expect("an in-memory prerequisite mirror should fit");
+                    replace_unary_interface_application(
+                        &mut method.scheme.requirements[0].application,
+                        replacement,
+                    );
                 }
                 discard_type_iteratively(method_requirement);
                 true
@@ -10659,7 +11152,10 @@ impl ExportSummary {
                 .iter_mut()
                 .find_map(|implementation| implementation.fact.prerequisites.first_mut())
                 .is_some_and(|prerequisite| {
-                    prerequisite.interface = InterfaceId::new(ModuleId::new(u32::MAX - 1), 0);
+                    replace_interface_application_identity(
+                        &mut prerequisite.application,
+                        InterfaceId::new(ModuleId::new(u32::MAX - 1), 0),
+                    );
                     true
                 }),
             SummaryCarrierMutationForTest::ImplementationPrerequisiteArgument => {
@@ -10670,10 +11166,10 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
-                    &mut implementation.fact.prerequisites[0].argument,
+                replace_unary_interface_application(
+                    &mut implementation.fact.prerequisites[0].application,
                     Type::Int,
-                ));
+                );
                 true
             }
             SummaryCarrierMutationForTest::ImplementationPrerequisiteOriginMirror => {
@@ -10794,7 +11290,7 @@ impl ExportSummary {
                     return false;
                 }
                 let (first, rest) = self.implementations.split_first_mut().unwrap();
-                let first_outer = first.fact.argument().outer_nominal();
+                let first_outer = first.fact.arguments()[0].outer_nominal();
                 let Some(second) = rest.first_mut() else {
                     return false;
                 };
@@ -10813,7 +11309,7 @@ impl ExportSummary {
                 }
                 let method_type =
                     Type::Function(Box::new(argument.clone()), Box::new(argument.clone()));
-                discard_type_iteratively(std::mem::replace(&mut second.fact.argument, argument));
+                replace_unary_interface_application(&mut second.fact.application, argument);
                 let Some(method) = second.fact.methods.first_mut() else {
                     return false;
                 };
@@ -10836,7 +11332,7 @@ impl ExportSummary {
         let registered_foreign_parameter = self
             .interfaces
             .first()
-            .map(|interface| interface.parameter.id);
+            .map(|interface| interface.parameters[0].id);
         let Some(spelling) = self.constructor_order.first().cloned() else {
             return false;
         };
@@ -10908,8 +11404,7 @@ impl ExportSummary {
                         )),
                         0,
                     ),
-                    interface,
-                    argument: Type::Unit,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
                     origin: constructor.origin.clone(),
                     span: constructor.origin.primary_span(),
                 }]
@@ -11018,7 +11513,7 @@ impl ExportSummary {
             }
             SummaryHiddenDiamondMutationForTest::InterfaceParameterOrigin => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    wrap_origin(&mut interface.parameter.origin);
+                    wrap_origin(&mut interface.parameters[0].origin);
                     true
                 })
             }
@@ -11045,7 +11540,7 @@ impl ExportSummary {
                 let implementation_interfaces = self
                     .implementations
                     .iter()
-                    .map(|implementation| implementation.fact.interface)
+                    .map(|implementation| implementation.fact.interface())
                     .collect::<HashSet<_>>();
                 let Some(interface) = self
                     .hidden_interfaces
@@ -11054,7 +11549,7 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                let parameter = interface.parameter.id;
+                let parameter = interface.parameters[0].id;
                 let Some(method) = interface.methods.first_mut() else {
                     return false;
                 };
@@ -11235,7 +11730,7 @@ impl ExportSummary {
         let Some(interface) = self.interfaces.first_mut() else {
             return false;
         };
-        interface.parameter.id = identity;
+        interface.parameters[0].id = identity;
         true
     }
 
@@ -11273,10 +11768,7 @@ impl ExportSummary {
             return false;
         };
         let parameter = fact.head_parameters[0].id;
-        discard_type_iteratively(std::mem::replace(
-            &mut fact.argument,
-            Type::Variable(parameter),
-        ));
+        replace_unary_interface_application(&mut fact.application, Type::Variable(parameter));
         let Some(method) = fact.methods.first_mut() else {
             return false;
         };
@@ -11295,7 +11787,7 @@ impl ExportSummary {
             .implementations
             .iter()
             .map(|implementation| &implementation.fact)
-            .find(|fact| fact.interface.module() != fact.id.module())
+            .find(|fact| fact.interface().module() != fact.id.module())
             .map(|fact| fact.id)
         else {
             return false;
@@ -11317,10 +11809,7 @@ impl ExportSummary {
         else {
             return false;
         };
-        discard_type_iteratively(std::mem::replace(
-            &mut fact.argument,
-            Type::Nominal(foreign),
-        ));
+        replace_unary_interface_application(&mut fact.application, Type::Nominal(foreign));
         let Some(method) = fact.methods.first_mut() else {
             return false;
         };
@@ -11369,26 +11858,27 @@ impl ExportSummary {
             return false;
         };
         let mut type_work = TypeWorkBudget::unbounded();
-        let Ok(argument) = clone_type_with_budget(implementation.fact.argument(), &mut type_work)
+        let Ok(argument) =
+            clone_type_with_budget(&implementation.fact.arguments()[0], &mut type_work)
         else {
             return false;
         };
         let argument = IterativeTypeOwner::new(argument);
         let method_argument = IterativeTypeOwner::new(
-            clone_type_with_budget(implementation.fact.argument(), &mut type_work)
+            clone_type_with_budget(&implementation.fact.arguments()[0], &mut type_work)
                 .expect("an in-memory test prerequisite clone should fit"),
         );
-        discard_type_iteratively(std::mem::replace(
-            &mut implementation.fact.prerequisites[0].argument,
+        replace_unary_interface_application(
+            &mut implementation.fact.prerequisites[0].application,
             argument.into_inner(),
-        ));
+        );
         for method in &mut implementation.fact.methods {
             let Some(requirement) = method.scheme.requirements.first_mut() else {
                 return false;
             };
             let replacement = clone_type_with_budget(&method_argument, &mut type_work)
                 .expect("an in-memory test prerequisite clone should fit");
-            discard_type_iteratively(std::mem::replace(&mut requirement.argument, replacement));
+            replace_unary_interface_application(&mut requirement.application, replacement);
         }
         true
     }
@@ -11567,7 +12057,9 @@ fn collect_scheme_nominal_identities(
 ) -> Result<(), ()> {
     collect_nominal_identities(&scheme.value_type, output, budget)?;
     for requirement in &scheme.requirements {
-        collect_nominal_identities(&requirement.argument, output, budget)?;
+        for argument in requirement.arguments() {
+            collect_nominal_identities(argument, output, budget)?;
+        }
     }
     Ok(())
 }
@@ -11793,6 +12285,7 @@ struct CombinedRegistryCounts {
     constructors: usize,
     nominal_parameters: usize,
     interfaces: usize,
+    interface_parameters: usize,
     method_parameters: usize,
     schemes: usize,
     global_rows: usize,
@@ -12014,6 +12507,9 @@ fn checked_registry_counts(
         checked_accumulate(&mut counts.nominals, registry.nominals.len())?;
         checked_accumulate(&mut counts.constructors, registry.constructors.len())?;
         checked_accumulate(&mut counts.interfaces, checked.interface_facts().len())?;
+        for interface in checked.interface_facts() {
+            checked_accumulate(&mut counts.interface_parameters, interface.parameters.len())?;
+        }
         checked_accumulate(&mut counts.schemes, checked.schemes().len())?;
         checked_accumulate(
             &mut counts.implementations,
@@ -12068,7 +12564,7 @@ fn checked_registry_counts(
     }
     let non_method_type_variables = counts
         .nominal_parameters
-        .checked_add(counts.interfaces)
+        .checked_add(counts.interface_parameters)
         .and_then(|count| count.checked_add(counts.global_parameters))
         .and_then(|count| count.checked_add(counts.implementation_parameters))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
@@ -12110,7 +12606,7 @@ fn checked_registry_counts(
         )
         .and_then(|work| work.checked_add(counts.family_entries))
         .and_then(|work| work.checked_add(counts.constructors))
-        .and_then(|work| work.checked_add(counts.interfaces))
+        .and_then(|work| work.checked_add(counts.interface_parameters))
         .and_then(|work| work.checked_add(counts.schemes))
         .and_then(|work| work.checked_add(counts.implementations))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
@@ -12312,18 +12808,19 @@ fn validate_checked_registries<'a>(
             }
         }
         for interface in checked.interface_facts() {
-            let parameter = &interface.parameter;
-            if parameter.id.module() != Some(checked.module())
-                || !type_variable_ids.insert(parameter.id)
-            {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            let canonical = registry
-                .type_variables
-                .get(&parameter.id)
-                .ok_or(ResolvedBuildFailure::InvalidState)?;
-            if canonical.id != parameter.id {
-                return Err(ResolvedBuildFailure::InvalidState);
+            for parameter in &interface.parameters {
+                if parameter.id.module() != Some(checked.module())
+                    || !type_variable_ids.insert(parameter.id)
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                let canonical = registry
+                    .type_variables
+                    .get(&parameter.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if canonical.id != parameter.id {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
             }
             // The consuming linked-evidence validator authenticates the
             // interface carrier's complete spelling, Origin, and Kind mirror
@@ -12806,8 +13303,9 @@ impl ResolvedRegistry {
             registry.try_insert_checker_type_variable(parameter, budget)?;
         }
         for imported_interface in imported.interface_imports() {
-            registry
-                .try_insert_checker_type_variable(&imported_interface.fact.parameter, budget)?;
+            for parameter in &imported_interface.fact.parameters {
+                registry.try_insert_checker_type_variable(parameter, budget)?;
+            }
             for method in imported_interface.authority_methods() {
                 for parameter in method.authoritative_type_parameters() {
                     registry.try_insert_checker_type_variable(parameter, budget)?;
@@ -13677,14 +14175,6 @@ pub struct ResolvedInterfaceDeclaration {
     pub span: Span,
 }
 
-impl ResolvedInterfaceDeclaration {
-    /// Whether this declaration has the unary shape supported by the current
-    /// checked pipeline.
-    pub(crate) fn has_predecessor_shape(&self) -> bool {
-        self.parameters.len() == 1 && self.determination.is_none()
-    }
-}
-
 /// One resolved source determination edge owned by an interface declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedInterfaceDetermination {
@@ -13755,14 +14245,6 @@ pub struct ResolvedInterfaceApplication {
     pub arguments: Box<[ResolvedType]>,
     /// Complete interface application span.
     pub span: Span,
-}
-
-impl ResolvedInterfaceApplication {
-    /// Whether this application has the unary shape supported by the current
-    /// checked pipeline.
-    pub(crate) fn has_predecessor_shape(&self) -> bool {
-        self.arguments.len() == 1
-    }
 }
 
 /// One ordered resolved interface requirement outside the ordinary type algebra.
@@ -14796,12 +15278,12 @@ mod tests {
             CheckedInterfaceFact {
                 id,
                 spelling: spelling.to_owned(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: parameter,
                     spelling: "A".to_owned(),
                     kind: Kind::Type,
                     origin: Origin::Source(span),
-                },
+                }]),
                 methods: Box::new([CheckedInterfaceMethodFact {
                     id: MethodId::new(id, 0),
                     spelling: format!("{spelling}Method"),
@@ -14881,7 +15363,8 @@ mod tests {
         // method-owner relations. Each
         // method's free-variable closure, outer Function shape, and Kind are
         // authenticated on TypeWork.
-        const EXACT: usize = NAMES + METHODS + 2 * PUBLIC + HIDDEN + NAMES + METHODS;
+        const EXACT: usize =
+            NAMES + METHODS + 2 * PUBLIC + HIDDEN + NAMES + METHODS + PUBLIC + HIDDEN;
         let summary =
             interface_authentication_summary(InterfaceAuthenticationMutationForTest::None);
         let mut measured = crate::interface::InterfaceConstraintBudget::default();
@@ -14894,7 +15377,7 @@ mod tests {
             summary.authenticate(&mut TypeWorkBudget::default(), &mut short),
             Err(ResolvedBuildFailure::ConstraintResource),
         );
-        assert_eq!(short.used(), NAMES + METHODS + PUBLIC + HIDDEN + NAMES);
+        assert_eq!(short.used(), EXACT - 1);
         for _ in 0..2 {
             let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT);
             summary
@@ -14947,8 +15430,7 @@ mod tests {
                 crate::interface::RequirementOwner::Global(binder),
                 declaration,
             ),
-            interface,
-            argument: Type::Unit,
+            application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
             origin: Origin::Source(span),
             span,
         };
@@ -15026,12 +15508,12 @@ mod tests {
         summary.interfaces.push(CheckedInterfaceFact {
             id: interface,
             spelling: "Functor".to_owned(),
-            parameter: ResolvedTypeVariable {
+            parameters: Box::new([ResolvedTypeVariable {
                 id: interface_parameter,
                 spelling: "F".to_owned(),
                 kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
                 origin: Origin::Source(interface_span),
-            },
+            }]),
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method,
                 spelling: "map".to_owned(),
@@ -15120,7 +15602,7 @@ mod tests {
                 method.type_parameters[0].spelling = "Forged".to_owned();
             }
             Some(PolymorphicMethodSummaryMutationForTest::FreeBinder) => {
-                discard_type_iteratively(std::mem::replace(
+                drop(std::mem::replace(
                     &mut method.value_type,
                     Type::Function(
                         Box::new(Type::Variable(TypeVariableId::resolved(module, 99))),
@@ -15243,7 +15725,7 @@ mod tests {
         let checked = [CheckedInterfaceFact {
             id: interface,
             spelling: "Boxed".to_owned(),
-            parameter: resolved_interface.parameters[0].clone(),
+            parameters: Box::new([resolved_interface.parameters[0].clone()]),
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -15372,7 +15854,7 @@ mod tests {
         let mut checked = [CheckedInterfaceFact {
             id: interface,
             spelling: "Boxed".to_owned(),
-            parameter: resolved_interface.parameters[0].clone(),
+            parameters: Box::new([resolved_interface.parameters[0].clone()]),
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -15617,9 +16099,8 @@ mod tests {
             .push(AuthorizedImplementationFact::local_for_test(
                 CheckedImplementationFact {
                     id,
-                    interface: interface.id,
+                    application: InterfaceApplication::new(interface.id, Box::new([Type::Int])),
                     head_parameters: Box::new([]),
-                    argument: Type::Int,
                     prerequisites: Box::new([]),
                     methods: Box::new([CheckedImplementationMethodFact {
                         id: ImplMethodId::new(id, method),
@@ -15646,12 +16127,12 @@ mod tests {
 
     #[test]
     fn implementation_summary_authentication_has_exact_independent_ledgers() {
-        // The interface-only Constraint fixture costs 15. One implementation adds one
+        // The interface-only Constraint fixture costs 18. One implementation adds one
         // implementation-count scan, one G+M term-binder slot, one local
         // authorization method cell, two exact ground-head cells, ten fused
         // interface-method substitution cells, and two implementation-index
         // cells.
-        const EXACT: usize = 15 + 1 + 1 + 1 + 2 + 10 + 2;
+        const EXACT: usize = 35;
         const TYPE_WORK: usize = 58;
         let summary = interface_summary_with_local_implementation(false);
         let mut short_type = TypeWorkBudget::with_limit(TYPE_WORK);
@@ -15673,7 +16154,7 @@ mod tests {
         assert_eq!(type_short.used(), TYPE_WORK - 1);
         assert_eq!(
             type_short_constraint.used(),
-            30,
+            33,
             "Type failure follows every carrier comparison and precedes final index retention",
         );
         for _ in 0..2 {
@@ -15689,7 +16170,7 @@ mod tests {
         // Before method-shape checking, the two new aggregate cells and the
         // authorization cell are all charged. A malformed position then owns
         // InvalidState; one-short cannot reach that semantic check.
-        const BAD_POSITION_EXACT: usize = 15 + 1 + 1 + 1;
+        const BAD_POSITION_EXACT: usize = 18;
         let malformed = interface_summary_with_local_implementation(true);
         let mut short =
             crate::interface::InterfaceConstraintBudget::with_limit(BAD_POSITION_EXACT - 1);
@@ -16344,7 +16825,7 @@ mod tests {
                         span,
                     }]
                     .into_boxed_slice(),
-                    parameter,
+                    parameters: Box::new([parameter]),
                     origin: Origin::Source(span),
                     span,
                 }
@@ -16387,9 +16868,11 @@ mod tests {
             .expect("the wide method codomain should fit");
         let implementation = CheckedImplementationFact {
             id: implementation_id,
-            interface: interface_facts[0].id,
+            application: InterfaceApplication::new(
+                interface_facts[0].id,
+                Box::new([implementation_argument]),
+            ),
             head_parameters: implementation_parameters.into_boxed_slice(),
-            argument: implementation_argument,
             prerequisites: Box::new([]),
             methods: Box::new([CheckedImplementationMethodFact {
                 id: ImplMethodId::new(implementation_id, implementation_method),
@@ -16543,7 +17026,7 @@ mod tests {
         // carrier remains shallow for evidence validation to reject later.
         const TYPE_WORK: usize = 26;
         let mut modules = wide_combined_registry_fixture(4);
-        let interface_parameter = modules[0].interface_facts[0].parameter.id;
+        let interface_parameter = modules[0].interface_facts[0].parameters[0].id;
         Arc::get_mut(&mut modules[0].registry)
             .expect("the canonical interface registry should be uniquely owned")
             .type_variables
@@ -17176,7 +17659,7 @@ mod tests {
             let interface_parameter = modules[0]
                 .interface_facts
                 .first()
-                .map(|interface| interface.parameter.id);
+                .map(|interface| interface.parameters[0].id);
             let global_parameter = modules[0]
                 .schemes
                 .first()
@@ -17350,7 +17833,7 @@ mod tests {
                     parameters[1].id = parameters[0].id;
                 }
                 Mutation::InterfaceParameterOwner => {
-                    modules[0].interface_facts[0].parameter.id =
+                    modules[0].interface_facts[0].parameters[0].id =
                         TypeVariableId::resolved(ModuleId::new(99), 0);
                 }
                 Mutation::GlobalParameterOwner => {
@@ -17656,10 +18139,10 @@ mod tests {
                 let mut substitution_short =
                     crate::interface::InterfaceConstraintBudget::with_limit(SUBSTITUTION_WORK - 1);
                 assert_eq!(
-                    same_summary_type_after_single_substitution(
+                    same_summary_type_after_substitutions(
                         &expected,
-                        parameter_id,
-                        &Type::Unit,
+                        &parameters,
+                        &[Type::Unit],
                         &actual,
                         &mut substitution_short,
                     ),
@@ -17669,10 +18152,10 @@ mod tests {
                 let mut substitution_exact =
                     crate::interface::InterfaceConstraintBudget::with_limit(SUBSTITUTION_WORK);
                 assert_eq!(
-                    same_summary_type_after_single_substitution(
+                    same_summary_type_after_substitutions(
                         &expected,
-                        parameter_id,
-                        &Type::Unit,
+                        &parameters,
+                        &[Type::Unit],
                         &actual,
                         &mut substitution_exact,
                     ),
@@ -17701,15 +18184,19 @@ mod tests {
                 let interface = InterfaceId::new(module, 0);
                 let method_requirement = CheckedRequirement {
                     id: requirement_id,
-                    interface,
-                    argument: deep_type(Type::Unit),
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([deep_type(Type::Unit)]),
+                    ),
                     origin: deep_origin(),
                     span,
                 };
                 let prerequisite = CheckedRequirement {
                     id: requirement_id,
-                    interface,
-                    argument: deep_type(Type::Unit),
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([deep_type(Type::Unit)]),
+                    ),
                     origin: deep_origin(),
                     span,
                 };
@@ -17760,8 +18247,7 @@ mod tests {
                         crate::interface::RequirementOwner::Global(global),
                         u32::try_from(index).expect("the requirement ordinal should fit"),
                     ),
-                    interface,
-                    argument: Type::Unit,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
                     origin: Origin::Source(span),
                     span,
                 };
@@ -17771,9 +18257,8 @@ mod tests {
                             module,
                             u32::try_from(index).expect("the implementation ordinal should fit"),
                         ),
-                        interface,
+                        application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
                         head_parameters: Box::new([]),
-                        argument: Type::Unit,
                         prerequisites: Box::new([]),
                         methods: Box::new([]),
                         origin: Origin::Source(span),
@@ -17862,7 +18347,9 @@ mod tests {
 
                 let mut late_implementations = distinct_implementations;
                 late_implementations.push(implementation(WIDTH, InterfaceId::new(module, 0)));
-                let overlap_work = 2 * WIDTH + 4;
+                // The duplicate comparison materializes both complete argument
+                // vectors before structural overlap, adding one visit per side.
+                let overlap_work = 2 * WIDTH + 6;
                 let mut overlap_short =
                     crate::interface::InterfaceConstraintBudget::with_limit(overlap_work - 1);
                 assert_eq!(
@@ -17956,12 +18443,12 @@ mod tests {
         let interface_fact = || CheckedInterfaceFact {
             id: interface_id,
             spelling: "Observe".to_owned(),
-            parameter: ResolvedTypeVariable {
+            parameters: Box::new([ResolvedTypeVariable {
                 id: parameter,
                 spelling: "A".to_owned(),
                 kind: Kind::Type,
                 origin: Origin::Source(span),
-            },
+            }]),
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method_id,
                 spelling: "observe".to_owned(),
@@ -17986,14 +18473,13 @@ mod tests {
         };
         let implementation_fact = || CheckedImplementationFact {
             id: implementation_id,
-            interface: interface_id,
+            application: InterfaceApplication::new(interface_id, Box::new([head_argument()])),
             head_parameters: Box::new([ResolvedTypeVariable {
                 id: parameter,
                 spelling: "A".to_owned(),
                 kind: Kind::Type,
                 origin: Origin::Source(span),
             }]),
-            argument: head_argument(),
             prerequisites: Box::new([]),
             methods: Box::new([CheckedImplementationMethodFact {
                 id: ImplMethodId::new(implementation_id, method_id),
@@ -18402,12 +18888,12 @@ mod tests {
                 let interface_fact = || CheckedInterfaceFact {
                     id: interface,
                     spelling: "DeepInterface".to_owned(),
-                    parameter: ResolvedTypeVariable {
+                    parameters: Box::new([ResolvedTypeVariable {
                         id: parameter,
                         spelling: "F".to_owned(),
                         kind: deep_kind(),
                         origin: Origin::Source(span),
-                    },
+                    }]),
                     methods: Box::new([CheckedInterfaceMethodFact {
                         id: method,
                         spelling: "deep".to_owned(),
@@ -18453,14 +18939,16 @@ mod tests {
                 };
                 let implementation_fact = || CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([lifted_parameter()]),
+                    ),
                     head_parameters: Box::new([ResolvedTypeVariable {
                         id: parameter,
                         spelling: "F".to_owned(),
                         kind: deep_kind(),
                         origin: Origin::Source(span),
                     }]),
-                    argument: lifted_parameter(),
                     prerequisites: Box::new([]),
                     methods: Box::new([CheckedImplementationMethodFact {
                         id: ImplMethodId::new(implementation, method),
@@ -18525,7 +19013,9 @@ mod tests {
         const GLOBAL_FIRST_ARGUMENT_MISMATCH_WORK: usize = WIDTH + 6;
         const INTERFACE_FIRST_METHOD_MISMATCH_WORK: usize = WIDTH + 5;
         const PREREQUISITE_TOP_MISMATCH_WORK: usize = WIDTH + 13;
-        const PREREQUISITE_METHOD_MISMATCH_WORK: usize = 4 * WIDTH + 17;
+        // The late method requirement compares its complete checked application
+        // after all top-level prerequisites, including its positional argument.
+        const PREREQUISITE_METHOD_MISMATCH_WORK: usize = 4 * WIDTH + 18;
         const IMPLEMENTATION_FIRST_METHOD_MISMATCH_WORK: usize = WIDTH + 4;
 
         std::thread::Builder::new()
@@ -18611,8 +19101,10 @@ mod tests {
                     for ordinal in 0..WIDTH {
                         requirements.push(CheckedRequirement {
                             id: RequirementId::new(owner, ordinal as u32),
-                            interface: InterfaceId::new(module, ordinal as u32),
-                            argument: Type::Unit,
+                            application: InterfaceApplication::new(
+                                InterfaceId::new(module, ordinal as u32),
+                                Box::new([Type::Unit]),
+                            ),
                             origin: Origin::Source(span),
                             span,
                         });
@@ -18642,9 +19134,9 @@ mod tests {
                         constraint_work,
                     )
                 });
-                discard_type_iteratively(std::mem::replace(
-                    &mut exported_global.scheme.requirements[0].argument,
-                    Type::Bool,
+                drop(std::mem::replace(
+                    &mut exported_global.scheme.requirements[0].application,
+                    InterfaceApplication::new(InterfaceId::new(module, 0), Box::new([Type::Bool])),
                 ));
                 assert_prefix(
                     "global first requirement argument",
@@ -18686,12 +19178,12 @@ mod tests {
                     CheckedInterfaceFact {
                         id: interface,
                         spelling: "Wide".to_owned(),
-                        parameter: ResolvedTypeVariable {
+                        parameters: Box::new([ResolvedTypeVariable {
                             id: parameter,
                             spelling: "A".to_owned(),
                             kind: Kind::Type,
                             origin: Origin::Source(span),
-                        },
+                        }]),
                         methods: methods.into_boxed_slice(),
                         origin: Origin::Source(span),
                         span,
@@ -18738,8 +19230,10 @@ mod tests {
                                 RequirementOwner::Impl(implementation),
                                 ordinal as u32,
                             ),
-                            interface: InterfaceId::new(module, ordinal as u32 + 1),
-                            argument: Type::Variable(parameter),
+                            application: InterfaceApplication::new(
+                                InterfaceId::new(module, ordinal as u32 + 1),
+                                Box::new([Type::Variable(parameter)]),
+                            ),
                             origin: Origin::Source(span),
                             span,
                         });
@@ -18751,14 +19245,13 @@ mod tests {
                     let method_requirements = implementation_requirements();
                     CheckedImplementationFact {
                         id: implementation,
-                        interface,
+                        application: InterfaceApplication::new(interface, Box::new([head_type()])),
                         head_parameters: Box::new([ResolvedTypeVariable {
                             id: parameter,
                             spelling: "A".to_owned(),
                             kind: Kind::Type,
                             origin: Origin::Source(span),
                         }]),
-                        argument: head_type(),
                         prerequisites,
                         methods: Box::new([CheckedImplementationMethodFact {
                             id: ImplMethodId::new(implementation, MethodId::new(interface, 0)),
@@ -18795,9 +19288,15 @@ mod tests {
                     },
                 );
                 let replacement_interface = InterfaceId::new(module, u32::MAX);
-                right_prerequisites.prerequisites[0].interface = replacement_interface;
-                right_prerequisites.methods[0].scheme.requirements[0].interface =
-                    replacement_interface;
+                right_prerequisites.prerequisites[0].application = InterfaceApplication::new(
+                    replacement_interface,
+                    Box::new([Type::Variable(parameter)]),
+                );
+                right_prerequisites.methods[0].scheme.requirements[0].application =
+                    InterfaceApplication::new(
+                        replacement_interface,
+                        Box::new([Type::Variable(parameter)]),
+                    );
                 assert_prefix(
                     "implementation top prerequisite before method mirror",
                     PREREQUISITE_TOP_MISMATCH_WORK,
@@ -18811,9 +19310,15 @@ mod tests {
                     },
                 );
                 let original_interface = InterfaceId::new(module, 1);
-                right_prerequisites.prerequisites[0].interface = original_interface;
-                right_prerequisites.methods[0].scheme.requirements[0].interface =
-                    replacement_interface;
+                right_prerequisites.prerequisites[0].application = InterfaceApplication::new(
+                    original_interface,
+                    Box::new([Type::Variable(parameter)]),
+                );
+                right_prerequisites.methods[0].scheme.requirements[0].application =
+                    InterfaceApplication::new(
+                        replacement_interface,
+                        Box::new([Type::Variable(parameter)]),
+                    );
                 assert_prefix(
                     "implementation method requirement after top prerequisites",
                     PREREQUISITE_METHOD_MISMATCH_WORK,
@@ -18831,9 +19336,11 @@ mod tests {
 
                 let method_implementation = || CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([Type::Nominal(nominal)]),
+                    ),
                     head_parameters: Box::new([]),
-                    argument: Type::Nominal(nominal),
                     prerequisites: Box::new([]),
                     methods: {
                         let mut prerequisites = Vec::new();
@@ -20096,12 +20603,12 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Interface".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: parameter,
                     spelling: "F".into(),
                     kind: kind.clone(),
                     origin: Origin::Source(span),
-                },
+                }]),
                 methods: Box::new([]),
                 origin: Origin::Source(span),
                 span,
@@ -20120,7 +20627,7 @@ mod tests {
         assert_eq!(
             imported
                 .interface(interface)
-                .map(|fact| (&fact.parameter.kind, fact.parameter.id)),
+                .map(|fact| (&fact.parameters[0].kind, fact.parameters[0].id)),
             Some((&kind, parameter)),
             "failed checker-view construction must not mutate imported authority"
         );
@@ -20180,7 +20687,10 @@ mod tests {
                 imported.insert_implementation(
                     CheckedImplementationFact {
                         id: implementation,
-                        interface,
+                        application: InterfaceApplication::new(
+                            interface,
+                            Box::new([Type::Variable(first)]),
+                        ),
                         head_parameters: Box::new([
                             ResolvedTypeVariable {
                                 id: first,
@@ -20195,7 +20705,6 @@ mod tests {
                                 origin: Origin::Source(second_span),
                             },
                         ]),
-                        argument: Type::Variable(first),
                         prerequisites: Box::new([]),
                         methods: Box::new([]),
                         origin: Origin::Source(implementation_span),
@@ -20452,12 +20961,12 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Interface".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: collision,
                     spelling: "A".into(),
                     kind: Kind::Type,
                     origin: Origin::Source(interface_span),
-                },
+                }]),
                 methods: Box::new([]),
                 origin: Origin::Source(interface_span),
                 span: interface_span,
@@ -20472,14 +20981,16 @@ mod tests {
         imported.insert_implementation(
             CheckedImplementationFact {
                 id: implementation,
-                interface,
+                application: InterfaceApplication::new(
+                    interface,
+                    Box::new([Type::Variable(collision)]),
+                ),
                 head_parameters: Box::new([ResolvedTypeVariable {
                     id: collision,
                     spelling: "B".into(),
                     kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
                     origin: Origin::Source(implementation_span),
                 }]),
-                argument: Type::Variable(collision),
                 prerequisites: Box::new([]),
                 methods: Box::new([]),
                 origin: Origin::Source(implementation_span),
@@ -20500,7 +21011,7 @@ mod tests {
         assert_eq!(
             imported
                 .interface(interface)
-                .map(|fact| fact.parameter.spelling.as_str()),
+                .map(|fact| fact.parameters[0].spelling.as_str()),
             Some("A")
         );
         assert_eq!(
@@ -20711,12 +21222,12 @@ mod tests {
                         CheckedInterfaceFact {
                             id: interface,
                             spelling: spelling.into(),
-                            parameter: ResolvedTypeVariable {
+                            parameters: Box::new([ResolvedTypeVariable {
                                 id: TypeVariableId::resolved(module, declaration),
                                 spelling: "A".into(),
                                 kind: Kind::Type,
                                 origin,
-                            },
+                            }]),
                             methods: Box::new([]),
                             origin: Origin::Source(span),
                             span,
@@ -20736,7 +21247,7 @@ mod tests {
                 assert_eq!(
                     imported
                         .interface(InterfaceId::new(module, 0))
-                        .map(|fact| fact.parameter.origin.primary_span()),
+                        .map(|fact| fact.parameters[0].origin.primary_span()),
                     Some(deep_origin_span),
                     "late failure must leave source authority immutable"
                 );
@@ -21313,9 +21824,8 @@ mod tests {
         let method = MethodId::new(interface, 0);
         let fact = CheckedImplementationFact {
             id: implementation,
-            interface,
+            application: InterfaceApplication::new(interface, Box::new([Type::Int])),
             head_parameters: Box::new([]),
-            argument: Type::Int,
             prerequisites: Box::new([]),
             methods: vec![CheckedImplementationMethodFact {
                 id: ImplMethodId::new(implementation, method),
@@ -21343,11 +21853,11 @@ mod tests {
         );
 
         let mut type_work = TypeWorkBudget::default();
-        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(11);
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(12);
         let cloned = clone_checked_implementation_fact(&fact, &mut type_work, &mut exact)
             .expect("the exact summary budget should clone the checked fact");
         assert_eq!(cloned, fact);
-        assert_eq!(exact.used(), 11);
+        assert_eq!(exact.used(), 12);
         assert_eq!(exact.charge(1), Err(()));
     }
 
@@ -21355,7 +21865,7 @@ mod tests {
     fn checked_impl_clone_late_argument_failure_dismantles_deep_head_parameter_provenance() {
         const DEPTH: usize = 32_768;
         const PARAMETER_TYPE_WORK: usize = 2;
-        const EXACT_TYPE_WORK: usize = PARAMETER_TYPE_WORK + 1;
+        const EXACT_TYPE_WORK: usize = PARAMETER_TYPE_WORK + 2;
 
         std::thread::Builder::new()
             .name("checked-impl-deep-head-parameter-rejection".to_owned())
@@ -21372,14 +21882,13 @@ mod tests {
                 let parameter = TypeVariableId::resolved(module, 0);
                 let fact = CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
                     head_parameters: Box::new([ResolvedTypeVariable {
                         id: parameter,
                         spelling: "A".to_owned(),
                         kind: Kind::Type,
                         origin: generated_origin(&source, DEPTH),
                     }]),
-                    argument: Type::Unit,
                     prerequisites: Box::new([]),
                     methods: Box::new([]),
                     origin: Origin::Source(span),
@@ -21606,12 +22115,12 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Render".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
-                },
+                }]),
                 methods: Box::new([]),
                 origin: Origin::Source(interface_span),
                 span: interface_span,
@@ -21661,14 +22170,16 @@ mod tests {
             imported.insert_implementation(
                 CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([match index {
+                            0 => Type::Int,
+                            1 => Type::Bool,
+                            2 => Type::Unit,
+                            _ => Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice()),
+                        }]),
+                    ),
                     head_parameters: Box::new([]),
-                    argument: match index {
-                        0 => Type::Int,
-                        1 => Type::Bool,
-                        2 => Type::Unit,
-                        _ => Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice()),
-                    },
                     prerequisites: Box::new([]),
                     methods: Box::new([]),
                     origin: Origin::Source(implementation_span),
@@ -21715,7 +22226,7 @@ mod tests {
         // interface closure cells, including both transient hidden-identity
         // indexes. Authorization validity owns the route scan; the caller does
         // not charge those hops a second time.
-        const EXACT_WORK: usize = 2 + 1 + 2 + 3 + 1 + 6;
+        const EXACT_WORK: usize = 2 + 1 + 2 + 4 + 1 + 6;
         let (empty, empty_used) = freeze_public_implementation_summary_with_limit(false, 0);
         let empty = empty.expect("an unused imported interface should require no constraint work");
         assert_eq!(empty_used, 0);
@@ -21737,7 +22248,7 @@ mod tests {
 
     #[test]
     fn linked_public_authorization_move_has_an_exact_preflight_budget() {
-        const SUMMARY_FREEZE_WORK: usize = 2 + 1 + 2 + 3 + 1 + 6;
+        const SUMMARY_FREEZE_WORK: usize = 2 + 1 + 2 + 4 + 1 + 6;
         let (short_summary, _) =
             freeze_public_implementation_summary_with_limit(true, SUMMARY_FREEZE_WORK);
         let mut short_summary = short_summary.expect("the public summary should freeze");
@@ -21987,17 +22498,19 @@ mod tests {
             export_candidate: ResolvedExportCandidate::default(),
             span,
         });
-        let admitted = [CheckedImplementation {
-            source_index: 0,
-            id: ImplId::new(module, 0),
-            interface: InterfaceId::new(module, 0),
-            methods: Box::new([]),
-        }];
+        let admitted = [CheckedImplementation::new(
+            0,
+            ImplId::new(module, 0),
+            InterfaceApplication::new(InterfaceId::new(module, 0), Box::new([Type::Unit])),
+            Box::new([]),
+        )];
         let checked = [CheckedImplementationFact {
             id: ImplId::new(module, 0),
-            interface: InterfaceId::new(module, 0),
+            application: InterfaceApplication::new(
+                InterfaceId::new(module, 0),
+                Box::new([Type::Unit]),
+            ),
             head_parameters: Box::new([]),
-            argument: Type::Unit,
             prerequisites: Box::new([]),
             methods: Box::new([]),
             origin: Origin::Source(span),
@@ -22373,12 +22886,12 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Render".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
-                },
+                }]),
                 methods: vec![CheckedInterfaceMethodFact {
                     id: method,
                     spelling: "render".into(),
@@ -22428,8 +22941,7 @@ mod tests {
                 type_parameters: Box::new([]),
                 requirements: vec![CheckedRequirement {
                     id: RequirementId::new(RequirementOwner::Global(binder), 0),
-                    interface,
-                    argument: Type::Int,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Int])),
                     origin: Origin::Source(global_span),
                     span: global_span,
                 }]
@@ -22491,12 +23003,12 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Render".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(hidden_span),
-                },
+                }]),
                 methods: Box::new([]),
                 origin: Origin::Source(hidden_span),
                 span: hidden_span,
@@ -22539,12 +23051,12 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Render".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(first),
-                },
+                }]),
                 methods: Box::new([]),
                 origin: Origin::Source(first),
                 span: first,
@@ -22589,9 +23101,11 @@ mod tests {
                 imported.insert_implementation(
                     CheckedImplementationFact {
                         id: implementation,
-                        interface: InterfaceId::new(module, 0),
+                        application: InterfaceApplication::new(
+                            InterfaceId::new(module, 0),
+                            Box::new([argument]),
+                        ),
                         head_parameters: Box::new([]),
-                        argument,
                         prerequisites: Box::new([]),
                         methods: Box::new([]),
                         origin: Origin::Source(span),

@@ -298,7 +298,7 @@ fn assert_abstract_selection(
 ) {
     let selection = selection_for_occurrence(occurrence);
     assert_eq!(selection.interface(), methods[0].interface());
-    assert_eq!(selection.argument(), argument);
+    assert_eq!(selection.arguments(), std::slice::from_ref(argument));
     assert_eq!(selection.node_count(), 1);
     assert_eq!(
         selection.node(selection.root()),
@@ -377,12 +377,10 @@ fn higher_kinded_abstract_requirement_wins_before_a_matching_concrete_candidate(
         !checked.available_implementations().is_empty(),
         "the concrete Construct<Option> candidate must be available"
     );
-    assert_abstract_selection(
-        occurrence,
-        requirement.id,
-        &[method],
-        requirement.argument(),
-    );
+    let [requirement_argument] = requirement.arguments() else {
+        panic!("the unary requirement should retain one argument");
+    };
+    assert_abstract_selection(occurrence, requirement.id, &[method], requirement_argument);
 }
 
 #[test]
@@ -612,9 +610,12 @@ fn higher_kinded_concrete_candidate_retains_ordered_substitution_and_evidence() 
         panic!("the generic implementation should retain F then A substitutions");
     };
     assert_eq!(function_substitution.parameter(), function_parameter.id);
+    let [implementation_argument] = checked.implementation_facts()[0].arguments() else {
+        panic!("the unary implementation should retain one head argument");
+    };
     assert_eq!(
         function_substitution.argument(),
-        checked.implementation_facts()[0].argument(),
+        implementation_argument,
         "F should match the bare Option constructor"
     );
     assert_eq!(argument_substitution.parameter(), argument_parameter.id);
@@ -695,7 +696,7 @@ fn polymorphic_implementation_method_selects_exact_current_impl_and_retains_orde
         panic!("the recursive method occurrence should select its current implementation");
     };
     assert_eq!(actual_implementation, implementation);
-    assert_eq!(selection.argument(), &Type::Int);
+    assert_eq!(selection.arguments(), &[Type::Int]);
     assert_eq!(
         occurrence.evidence[0].method_arguments(),
         &[Type::Variable(method_parameter.id)]

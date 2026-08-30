@@ -15,7 +15,7 @@ use ash::{
     elaborate::{Elaborator, TypeError, check_module, link_modules},
     eval::{TraceEvent, evaluate},
     evidence_validation::validate_interface_evidence,
-    interface::{EvidenceSlot, InterfaceId, MethodId, RequirementOwner},
+    interface::{EvidenceNode, EvidenceSlot, InterfaceId, MethodId, RequirementOwner},
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{
@@ -275,6 +275,77 @@ fn rejects_interface_method_without_parameter_occurrence() {
 }
 
 #[test]
+fn ordinary_multi_parameter_relation_selects_and_evaluates() {
+    let source = concat!(
+        "interface Pairwise<Left, Right> {\n",
+        "pairwise : (Left, Right) -> Bool\n",
+        "}\n\n",
+        "impl Pairwise<Int, Bool> {\n",
+        "pairwise pair = true\n",
+        "}\n\n",
+        "main : Unit -> Bool\n",
+        "main () = pairwise((1, true))\n",
+    );
+    let checked = checked_module(source);
+    let [interface] = checked.interface_facts() else {
+        panic!("the ordinary relation should retain one checked interface");
+    };
+    assert_eq!(
+        interface
+            .parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["Left", "Right"],
+    );
+    let [implementation] = checked.implementation_facts() else {
+        panic!("the ordinary relation should retain one checked implementation");
+    };
+    assert_eq!(implementation.interface(), interface.id);
+    assert_eq!(implementation.arguments(), &[Type::Int, Type::Bool]);
+
+    let method = MethodId::new(interface.id, 0);
+    let main = checked
+        .definitions()
+        .iter()
+        .find(|definition| match definition.kind() {
+            ash::resolved::ResolvedDefinitionKind::Equational(global) => {
+                global.interface.name.spelling == "main"
+            }
+            ash::resolved::ResolvedDefinitionKind::InlineOperational(_) => false,
+        })
+        .expect("the checked main definition should remain available");
+    let occurrences = method_occurrences(main, method);
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("main should retain one relational method occurrence");
+    };
+    let selection = occurrence
+        .selection()
+        .expect("the complete ordinary application should select evidence");
+    assert_eq!(selection.interface(), interface.id);
+    assert_eq!(selection.arguments(), &[Type::Int, Type::Bool]);
+    assert!(matches!(
+        selection.node(selection.root()),
+        Some(EvidenceNode::Implementation { implementation: selected, .. })
+            if selected == implementation.id
+    ));
+
+    drop(validated_interface_core(source));
+    observe_source(source, "true", Type::Bool);
+}
+
+#[test]
+fn ordinary_multi_parameter_method_requires_every_parameter() {
+    let error = check_error(concat!(
+        "interface Pairwise<Left, Right> {\n",
+        "pairwise : Left -> Bool\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "interface.method-parameter");
+}
+
+#[test]
 fn rejects_duplicate_global_requirement_before_scheme_construction() {
     let error = check_error(
         "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame : A -> Bool where Equal<A>, Equal<A>\nsame value = true\n",
@@ -399,8 +470,11 @@ fn linked_polymorphic_method_evidence_evaluates() {
     let [functor] = checked_interface.interface_facts() else {
         panic!("the product should retain exactly one higher-kinded interface");
     };
+    let [functor_parameter] = functor.parameters.as_ref() else {
+        panic!("Functor should retain exactly one interface parameter");
+    };
     assert_eq!(
-        functor.parameter.kind,
+        functor_parameter.kind,
         Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
     );
     let [map_method] = functor.methods.as_ref() else {
@@ -762,8 +836,11 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
             RequirementOwner::Global(scheme.binder)
         );
         assert_eq!(requirement.id.declaration(), 0);
+        let [argument] = requirement.arguments() else {
+            panic!("the unary Equal requirement should retain one argument");
+        };
         assert_eq!(
-            requirement.argument(),
+            argument,
             &Type::Variable(scheme.scheme.type_parameters[0].0)
         );
     }

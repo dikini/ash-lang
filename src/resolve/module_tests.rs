@@ -622,6 +622,108 @@ fn exhaustive_public_and_hidden_summary_carriers_fail_before_local_checking() {
 }
 
 #[test]
+fn relational_summary_rejects_complete_parameter_and_application_tampering_matrix() {
+    const SOURCE: &str = concat!(
+        "pub type Option<A> =\nNone\n| Some(A)\n\n",
+        "pub interface Relation<Left, Right> {\n",
+        "relation : (Left, Right) -> Bool\n",
+        "}\n\n",
+        "pub impl Relation<Int, Bool> {\n",
+        "relation pair = true\n",
+        "}\n",
+    );
+    let mutations = [
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterMissing,
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterExtra,
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterReordered,
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterIdentity,
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterWrongKind,
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentMissing,
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentExtra,
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentReordered,
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentWrongKind,
+        SummaryCarrierMutationForTest::RelationalImplementationInterfaceIdentity,
+    ];
+
+    for mutation in mutations {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            "import dependency as Dependency\nmain : Unit -> Unit\nmain value = value\n",
+            &[("dependency.ash", SOURCE)],
+        );
+        let dependency = module_named(&graph, "dependency.ash");
+        let mut summary = check_module(
+            resolve_module(dependency, &[]).expect("the relational dependency should resolve"),
+        )
+        .expect("the relational dependency should check")
+        .into_exports();
+        assert!(
+            summary.corrupt_carrier_for_test(mutation),
+            "the relational carrier {mutation:?} should exist",
+        );
+        assert_eq!(
+            summary.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "the raw summary boundary must reject {mutation:?}",
+        );
+        let importer = module_named(&graph, "entry.ash");
+        let error = resolve_with(importer, &[&summary])
+            .expect_err("the forged relational summary must fail before local checking");
+        assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
+    }
+}
+
+#[test]
+fn relational_summary_application_arity_precedes_a_late_wrong_kind() {
+    const SOURCE: &str = concat!(
+        "pub type Option<A> =\nNone\n| Some(A)\n\n",
+        "pub interface Relation<Left, Right> {\n",
+        "relation : (Left, Right) -> Bool\n",
+        "}\n\n",
+        "pub impl Relation<Int, Bool> {\n",
+        "relation pair = true\n",
+        "}\n",
+    );
+    let measure = |mutation| {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            "import dependency as Dependency\nmain : Unit -> Unit\nmain value = value\n",
+            &[("dependency.ash", SOURCE)],
+        );
+        let dependency = module_named(&graph, "dependency.ash");
+        let mut summary = check_module(
+            resolve_module(dependency, &[]).expect("the relational dependency should resolve"),
+        )
+        .expect("the relational dependency should check")
+        .into_exports();
+        assert!(summary.corrupt_carrier_for_test(mutation));
+        let mut type_work = TypeWorkBudget::default();
+        assert_eq!(
+            summary.authenticate(
+                &mut type_work,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+        );
+        type_work.used()
+    };
+
+    let extra = measure(SummaryCarrierMutationForTest::RelationalImplementationArgumentExtra);
+    let extra_with_late_wrong_kind = measure(
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentExtraWithLateWrongKind,
+    );
+    assert_eq!(
+        extra_with_late_wrong_kind, extra,
+        "argument-count rejection must stop before positional kind authentication",
+    );
+}
+
+#[test]
 fn fused_constructor_scheme_authentication_rejects_every_independent_type_obligation() {
     let mutations = [
         SummaryConstructorFusionMutationForTest::UnboundPayloadVariable,
