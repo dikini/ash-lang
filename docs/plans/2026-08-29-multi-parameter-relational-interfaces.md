@@ -1219,11 +1219,12 @@ Record final reserved use as 65/65.
   existential equality pressure without adding existential semantics.
 - Root `README.md` remains unchanged because its method-only-interface summary
   is still exact. Cumulative reserved use is 65/65.
-- This is the update-before-removal boundary. CP-0011, TASK-0018, this plan, and
-  their index entries remain present and TASK-0018 remains active through final
-  review and verification. A later separate cleanup commit records the
-  approved result before removing them. No integration, push, tag, branch
-  deletion, or worktree removal occurs here.
+- Commit `87e6bcb` retains this specification and evidence checkpoint.
+  Independent semantic and documentation/resource/lifecycle reviews approve it
+  without findings after correction, and the complete verification gate passes.
+  CP-0011, TASK-0018, this plan, and their index entries remain present only for
+  this final transition record; the next separate commit removes them. No
+  integration, push, tag, branch deletion, or worktree removal occurs here.
 - Focused specification and corpus suites pass 64/64 and 11/11. The final
   authored tree passes `cargo xtask verify`, Markdown lint, and diff hygiene.
   Controller review corrections are applied; independent final review remains

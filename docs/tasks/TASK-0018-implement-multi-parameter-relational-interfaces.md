@@ -1,7 +1,7 @@
 # TASK-0018: Implement Multi-Parameter Relational Interfaces
 
 - ID: `TASK-0018`
-- Status: active
+- Status: complete
 - Related: [CP-0011: Multi-Parameter Relational Interfaces](../proposals/CP-0011-multi-parameter-relational-interfaces.md), [DN-0025: Library and Package Milestones](../design/DN-0025-library-and-package-milestones.md), and the [execution plan](../plans/2026-08-29-multi-parameter-relational-interfaces.md)
 
 > This task organizes work. It does not define Ash semantics.
@@ -281,12 +281,10 @@ syntax, packages, runtime interface lookup, and evaluator changes.
   `327655 < 327680 < 567320`. The earlier `577100` figure remains historical
   Checkpoint 4 evidence and is superseded by the final Checkpoint 6 validation
   measurement.
-- Cumulative reserved use is 65/65. TASK-0018 remains active during independent
-  Checkpoint 7 review and verification. This retained checkpoint does not
-  remove transition artifacts or index entries. After its commit and approval,
-  a separate cleanup must update these records first, then remove CP-0011,
-  TASK-0018, the execution plan, and their active index entries. Integration,
-  push, tagging, branch deletion, and worktree removal remain unauthorized.
+- Cumulative reserved use is 65/65. TASK-0018 remains present through the
+  retained checkpoint so its final result can be recorded before transition
+  cleanup. Integration, push, tagging, branch deletion, and worktree removal
+  remain unauthorized.
 - Checkpoint 7 focused specification and corpus tests pass 64/64 and 11/11.
   The final authored tree passes `cargo xtask verify`, including formatting,
   metadata, build, strict Clippy, 801 library tests, every integration suite,
@@ -294,7 +292,17 @@ syntax, packages, runtime interface lookup, and evaluator changes.
   also pass. Controller review corrections align dependent-only requirement
   wording, prerequisite conflict ownership, inert complete-application Core
   authority, DN-0025 simplification, and cleanup authorization with the
-  accepted boundary. Independent final review remains the next lifecycle gate.
+  accepted boundary.
+- Commit `87e6bcb` retains the reconciled specification, durable evidence,
+  executable examples, revised milestone boundary, and update-before-removal
+  records. Independent semantic review and documentation/resource/lifecycle
+  review approve the final diff without findings after correcting the root-only
+  determination snapshot gate and same-`InterfaceId` pair premises. Fresh
+  verification passes 64/64 specification examples, 11/11 corpus tests, 801
+  library tests, every integration suite, strict Clippy, Rustdoc, Markdown,
+  relative-link, and diff checks. TASK-0018 is complete at 65/65; only the
+  separate transition-artifact cleanup remains before integration direction is
+  requested.
 
 ## Verification
 

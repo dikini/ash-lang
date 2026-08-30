@@ -385,13 +385,15 @@ erased type operations, and evaluation remains free of interface state.
 The implementation checkpoints `ade65e6`, `aeb7b82`, `f9868ba`, `5b6acd2`,
 and `e660c17` retain the accepted syntax, complete carriers, total-key rules,
 improvement, linked product, authentication, resource, and review evidence. The
-Checkpoint 7 working tree reconciles the normative specification and creates
-the durable
+Checkpoint 7 commit `87e6bcb` reconciles the normative specification and
+creates the durable
 [relational-interface evidence report](../design/lib-ash/relational-interfaces-evidence.md).
-No semantic contradiction was found. CP-0011 remains present and accepted
-during retained-checkpoint review. After that checkpoint is committed and
-approved, a separate cleanup records the final result before removing this
-proposal, TASK-0018, their plan, and their active index entries.
+No semantic contradiction was found. Independent semantic and
+documentation/resource/lifecycle reviews approve the retained checkpoint
+without findings after their corrections, and the complete verification gate
+passes. CP-0011 remains present and accepted only long enough to retain this
+final transition record before the separate cleanup removes the proposal,
+TASK-0018, their plan, and their active index entries.
 
 ## Interactions
 

@@ -32,12 +32,12 @@ Its principal unsigned product checkpoints are:
   and
 - `e660c17`, which retains the compositional linked product, adversarial
   authentication matrix, downstream-pressure inventory, exact resource
-  formulas, independent reviews, and full implementation gate.
+  formulas, independent reviews, and full implementation gate; and
+- `87e6bcb`, which retains normative reconciliation, executable specification
+  and predecessor guards, this durable report, the simplified milestone
+  boundary, independent approvals, and the full documentation/product gate.
 
-The normative and documentation reconciliation after `e660c17` is the retained
-Checkpoint 7 working boundary. It has no commit identity until review and
-commit; this report does not invent one. Commit identities are evidence
-boundaries, not language authority.
+Commit identities are evidence boundaries, not language authority.
 
 ## Implemented boundary
 
@@ -239,10 +239,12 @@ interface-matching tests, 28 architecture tests, 64 Core-validation tests, 24
 interface-module tests, and four method-parameter resource tests, plus
 formatting, all-target checking, strict Clippy, and diff hygiene. Checkpoint 7
 adds executable normative and predecessor-corpus guards. Its focused
-specification and corpus suites pass 64/64 and 11/11. The final authored tree
-passes `cargo xtask verify`, including all integration suites, the xtask
-self-test, doctests, and Rustdoc; Markdown lint and diff hygiene also pass.
-Independent final review remains a lifecycle gate before the checkpoint commit.
+specification and corpus suites pass 64/64 and 11/11. Independent semantic and
+documentation/resource/lifecycle reviews approve without findings after
+correcting the pending-root snapshot boundary, same-`InterfaceId` pair
+premises, stale milestone prose, and suite counts. The retained tree passes
+`cargo xtask verify`, including all integration suites, the xtask self-test,
+doctests, and Rustdoc; Markdown lint, relative-link, and diff checks also pass.
 
 Closed inventory checks confirm that no effect row or handler, proof term or
 proof authority, existential binder or pack/unpack node, common universal
